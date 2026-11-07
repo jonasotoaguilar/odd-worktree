@@ -3695,11 +3695,11 @@ describe('round3 shared preview bindings and lossless comments', () => {
     assert.equal(view.state.query, 'J', 'search receives text, not preview paging');
   });
 
-  test('the legend always names ctrl+j/k doc, never a fabricated capability', async () => {
+  test('the legend always names ctrl+j/k scroll, never a fabricated capability', async () => {
     for (const active of [false, true]) {
       const { view } = await scrollingView({ helpers: { ...helpers, isKittyProtocolActive: () => active } });
       const footer = strip(view.render(220).at(-2));
-      assert.equal(footer.split('ctrl+j/k doc').length - 1, 1, `kitty ${active}: one labelled document token: ${footer}`);
+      assert.equal(footer.split('ctrl+j/k scroll').length - 1, 1, `kitty ${active}: one labelled scroll token: ${footer}`);
       assert.ok(!footer.includes('ctrl+shift'), `kitty ${active}: the shifted alternate leaves the legend: ${footer}`);
       assert.ok(!footer.includes('shift+j/k'), `kitty ${active}: the printable alternate leaves the legend: ${footer}`);
     }
@@ -3778,10 +3778,10 @@ describe('round3 shared preview bindings and lossless comments', () => {
 
 // S14: the user read the extra document-scroll tokens as noise — «alguna key
 // generidad como el page o half estan demas (nose para que es)». The footer now
-// spends ONE token per scroll target and names that target in the token
-// (`ctrl+j/k doc` for the reading pane, `]/[ pane` for the list beside it),
-// while every key whose hint left the row keeps the binding the old legend
-// advertised.
+// spends ONE token on the scroll interaction and says what it does
+// (`ctrl+j/k scroll`), while every key whose hint left the row keeps its
+// binding: `]`/`[` still scroll the list, they are simply not advertised
+// because the selection already drags the list window.
 describe('issues footer names each scroll target once (S14)', () => {
   const longBody = Array.from({ length: 100 }, (_, i) => `body line ${i + 1}`).join('\n');
 
@@ -3800,24 +3800,31 @@ describe('issues footer names each scroll target once (S14)', () => {
 
   const footerOf = (view, width) => strip(view.render(width).at(-2));
 
-  test('the document-scroll hints collapse to ONE token that names its target', async () => {
+  test('the scroll hints collapse to ONE token that says what it does', async () => {
     for (const active of [true, false]) {
       const { view } = scrollView({ helpers: { ...helpers, isKittyProtocolActive: () => active } });
       await tick();
       const footer = footerOf(view, 160);
-      assert.equal(footer.split('ctrl+j/k doc').length - 1, 1, `the document hint is named once with its target: ${footer}`);
-      for (const gone of ['PgUp', 'PgDn', 'PgUp/Dn', 'ctrl+d/u', 'half', 'ctrl+shift', 'shift+j/k doc']) {
+      assert.equal(footer.split('ctrl+j/k scroll').length - 1, 1, `the scroll hint is named once: ${footer}`);
+      for (const gone of ['PgUp', 'PgDn', 'PgUp/Dn', 'ctrl+d/u', 'half', 'ctrl+shift', 'shift+j/k']) {
         assert.ok(!footer.includes(gone), `the redundant "${gone}" token is gone: ${footer}`);
       }
     }
   });
 
-  test('list and document scrolling stay distinguishable, with no bare "scroll" left', async () => {
+  test('the list-scroll binding works but is not advertised', async () => {
     const { view } = scrollView();
     await tick();
     const footer = footerOf(view, 160);
-    assert.ok(footer.includes(']/[ pane'), `the list hint names the pane it scrolls: ${footer}`);
-    assert.ok(!footer.includes('scroll'), `no unlabelled scroll token is left to guess at: ${footer}`);
+    assert.ok(!footer.includes(']/['), `the list-scroll hint left the row: ${footer}`);
+    assert.equal(footer.split('scroll').length - 1, 1, `only the one scroll token is named: ${footer}`);
+    const start = view.state.listStart;
+    const scroll = view.state.scroll;
+    view.handleInput(']');
+    assert.ok(view.state.listStart > start, '] still scrolls the list a screenful');
+    assert.equal(view.state.scroll, scroll, '] never scrolls the document');
+    view.handleInput('[');
+    assert.equal(view.state.listStart, start, '[ still scrolls the list back');
   });
 
   test('every document-scroll binding keeps working after its hint left the row', async () => {
@@ -3936,13 +3943,14 @@ describe('issues continuous list scrolling instead of pages (S3)', () => {
     const footer = strip(view.render(200).at(-2));
     assert.ok(!/page/i.test(footer), `the legend drops the page hint: ${footer}`);
     // S10: the arrows switch buckets now, so the legend names THEM as the
-    // bucket key and keeps `]`/`[` as the list scroll.
+    // bucket key, while `]`/`[` keep scrolling the list without a token.
     assert.match(footer, /←→ bucket/, 'the bucket switch is still named, arrows only');
     assert.ok(!footer.includes('tab'), 'tab keeps working but leaves the legend');
-    // S14: the token names the pane it scrolls, and the document pane's aliases
-    // are collapsed into the one labelled token beside it.
-    assert.match(footer, /\]\/\[ pane/, 'the list scroll key is still named, with its target');
-    assert.match(footer, /ctrl\+j\/k doc/, 'the document scroll is named once with its target');
+    // S14: the scroll hints collapse into the ONE labelled token, and the list
+    // keys — whose hint was noise beside the selection that drags the window —
+    // cost no cells.
+    assert.ok(!footer.includes(']/['), `the list scroll keys name nothing: ${footer}`);
+    assert.match(footer, /ctrl\+j\/k scroll/, 'the scroll is named once with what it does');
   });
 
   test('a long list scrolls continuously: the window moves a screen at a time', async () => {
@@ -4173,13 +4181,14 @@ describe('issues view bucket arrows and palette (S10/S11)', () => {
     assert.equal(view.state.page, 0, 'shift+tab still switches back');
   });
 
-  test('the footer names the bucket arrows and keeps the list scroll keys (S10)', async () => {
+  test('the footer names the bucket arrows and no longer names the list scroll (S10)', async () => {
     const { view } = twoBucketView({ rows: 24 });
     await tick();
     const footer = strip(view.render(200).at(-2));
     assert.match(footer, /←→ bucket/, 'the arrows are named as the bucket switch');
     assert.ok(!footer.includes('tab'), 'tab keeps working but leaves the legend');
-    assert.match(footer, /\]\/\[ pane/, 'the list scroll keeps its own keys in the legend');
+    assert.ok(!footer.includes(']/['), `the list scroll hint left the row: ${footer}`);
+    assert.equal(footer.split('scroll').length - 1, 1, `the one scroll token is the surviving one: ${footer}`);
     assert.ok(!/←\/→ scroll/.test(footer), 'the old arrow-scroll hint is gone');
   });
 
@@ -4208,8 +4217,8 @@ describe('issues view bucket arrows and palette (S10/S11)', () => {
     assert.match(footer, /\x1b\[1m\x1b\[96m↑↓\x1b\[0m\x1b\[22m/, 'the key token is painted accent+bold');
     assert.match(footer, /\x1b\[90m move/, 'its description is painted muted');
     assert.match(footer, /\x1b\[1m\x1b\[96m←→\x1b\[0m\x1b\[22m/, 'a compound key token is ONE key run');
-    assert.match(footer, /\x1b\[90m doc/, 'the scroll hint target is muted, not accent');
-    assert.match(footer, /\x1b\[1m\x1b\[96mctrl\+j\/k\x1b\[0m\x1b\[22m\x1b\[90m doc/, 'the collapsed scroll hint paints key and target apart');
+    assert.match(footer, /\x1b\[90m scroll/, 'the scroll hint description is muted, not accent');
+    assert.match(footer, /\x1b\[1m\x1b\[96mctrl\+j\/k\x1b\[0m\x1b\[22m\x1b\[90m scroll/, 'the collapsed scroll hint paints key and description apart, as ONE key run');
     assert.ok(theme.calls.some((call) => call.role === 'accent' && call.text === '↑↓'),
       'the accent role is requested from the injected theme');
     assert.ok(theme.calls.some((call) => call.role === 'bold' && call.text.includes('↑↓')),

@@ -46,7 +46,6 @@ describe('manifest', () => {
   test('ships no module for the removed commands', () => {
     const shipped = fs.readdirSync(path.join(ROOT, 'lib')).sort();
     for (const gone of [
-      'gh-issues.js',
       'issues-cache.js',
       'issues-view.js',
       'herdr-plugin-check.js',
@@ -60,10 +59,11 @@ describe('manifest', () => {
     ]) {
       assert.equal(shipped.includes(gone), false, `lib/${gone} is not shipped`);
     }
-    // The issue preview formatter is the migrated unit (S1/S3): the reader and
-    // its cache are still gone, but the formatter `/issues` renders through is
-    // shipped, so its presence is asserted rather than forbidden.
-    for (const kept of ['issue-preview.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js']) {
+    // The issue reader and preview formatter are the migrated units (T2
+    // S1,S3): the cache and the view are still gone, but the `gh` client and
+    // the formatter `/issues` renders through are shipped, so their presence is
+    // asserted rather than forbidden.
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
   });

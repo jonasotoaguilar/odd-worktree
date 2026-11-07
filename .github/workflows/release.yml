@@ -1,0 +1,203 @@
+name: Release
+
+# Tag-only release, plus a manual dispatch that names an existing tag.
+# Flow: git tag -a vX.Y.Z + git push origin vX.Y.Z -> version parity + tests ->
+# GitHub Release -> npm publish over OIDC -> verify.
+#
+# Adapted from the release skill's release-npm asset. npm publication uses
+# Trusted Publishing: the release job holds `id-token: write`, npm exchanges
+# that OIDC assertion for a short-lived registry token, and the publish carries
+# a provenance attestation. No npm credential exists in this file or in the
+# protected environment — not NPM_TOKEN, not NODE_AUTH_TOKEN — so an unbound
+# trusted publisher fails this job loudly instead of silently skipping
+# publication.
+#
+# PREREQUISITES (README -> "CI and releases"): the package has no npm entry yet,
+# and OIDC cannot publish a package's first version. A version the registry does
+# not have is published here and fails until the package exists, the first
+# version was published by hand, the trusted publisher is bound to this workflow
+# file and the `release` environment, and package.json names a public
+# `repository` (provenance metadata).
+#
+# A version cannot be republished: fix the cause and cut the next patch tag.
+# Re-running on the same tag is safe — the publish step is idempotent per
+# version, so it reports the existing version and the release stands.
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "!v*-*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish (for example v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  # A tag push names the tag in ref_name; a dispatch names it in the input.
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  RELEASE_REPOSITORY: ${{ github.repository }}
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  # Publication is never cancelled midway: a cancel can leave npm published and
+  # the GitHub Release missing.
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Preflight and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+
+      - name: Require the tag and package.json version to agree
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          if [[ "$RELEASE_TAG" != "v${version}" ]]; then
+            echo "::error::tag ${RELEASE_TAG} does not match package.json version v${version}"
+            exit 1
+          fi
+          echo "::notice::releasing ${RELEASE_TAG} (package.json ${version})"
+
+      - name: Run the test suite
+        run: node --test tools/*.test.js
+
+  release:
+    name: GitHub Release and npm publication
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The npm trusted publisher binds to this workflow file and this environment
+    # name; reviewers attach here when a release should pause for approval.
+    environment: release
+    permissions:
+      contents: write
+      # Trusted publishing: the publish step exchanges this job's OIDC assertion
+      # for a short-lived registry token. Granted here and nowhere else.
+      id-token: write
+    env:
+      # Blank the runner's auto-injected token so no step receives it unless it
+      # opts back in through GH_TOKEN.
+      GITHUB_TOKEN: ""
+    steps:
+      - name: Checkout the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing requires npm >= 11.5.1, and setup-node's Node 22
+      # bundles npm 10, so a current major is installed before publishing.
+      - name: Install a current npm (trusted publishing requirement)
+        run: npm install -g npm@12
+
+      # Created before the publish step so a missing trusted-publisher binding
+      # fails visibly on the publish step without withholding the release.
+      # Base notes are generated here; the title and body are curated afterwards
+      # by editing the published release in place (gh release edit), never from a
+      # notes file in the repository.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::GitHub Release ${RELEASE_TAG} already exists; leaving it untouched"
+            exit 0
+          fi
+          gh release create "$RELEASE_TAG" \
+            --repo "$RELEASE_REPOSITORY" \
+            --target "$RELEASE_COMMIT" \
+            --title "$RELEASE_TAG" \
+            --generate-notes \
+            --verify-tag
+
+      # Idempotent per version: npm cannot republish, so a tag whose version the
+      # registry already has — the by-hand bootstrap of the first version, or a
+      # re-run after a later step failed — is reported and the release stands.
+      # A version the registry does NOT have is published here, with provenance,
+      # and this step fails when the trusted publisher is not bound to this
+      # workflow and environment.
+      - name: Publish to npm with provenance
+        run: |
+          set -euo pipefail
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "::notice::npm already has ${name}@${version}; publication is skipped"
+            exit 0
+          fi
+          # --access public is required for this scoped package.
+          npm publish --access public --provenance
+
+  verify:
+    name: Verify the published release
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+
+      # Reads the public registry from outside the publish job; no credential.
+      - name: Confirm the registry serves this exact version
+        run: |
+          set -euo pipefail
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          published=$(npm view "${name}@${version}" version)
+          if [[ "$published" != "$version" ]]; then
+            echo "::error::registry reports ${published}, expected ${version}"
+            exit 1
+          fi
+          echo "::notice::npm has ${name}@${version}"
+
+      - name: Confirm the GitHub Release is published for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" \
+            --repo "$RELEASE_REPOSITORY" \
+            --json tagName,isDraft \
+            --jq '"release " + .tagName + " draft=" + (.isDraft | tostring)'

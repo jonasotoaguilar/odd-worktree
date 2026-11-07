@@ -1,0 +1,44 @@
+name: CI
+
+# The package's only gate: `node --test tools/*.test.js` (package.json `test`).
+# The suite uses Node builtins only, so no install step and no lockfile are
+# needed. The matrix is the range `engines` declares (>=18), 18.x as its floor.
+# Pushes are covered by branch, PRs by every base: a same-repo branch push runs
+# once, through the PR, instead of twice.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18.x', '20.x', '22.x', '24.x']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Run the test suite
+        run: node --test tools/*.test.js

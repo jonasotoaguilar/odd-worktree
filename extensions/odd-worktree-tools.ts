@@ -2054,62 +2054,6 @@ function rankCandidates(query, entries) {
     .map((ranked) => ranked.entry);
 }
 
-// Resolve the Herdr workspace id for a checkout path from `herdr worktree
-// list` JSON (`{result: {worktrees: [{path, open_workspace_id, ...}]}}`,
-// with tolerant fallbacks). A workspace id is returned only when the list
-// entry's path resolves to exactly the close target: absolute entries
-// compare directly, relative entries resolve against the repository root
-// (never the process cwd) for the comparison only. Returns null when
-// herdr is unusable, no entry matches, or the checkout has no workspace
-// id — the caller then skips herdr entirely and falls back to git.
-function herdrWorkspaceId(stdout, resolvedTarget, repoRoot) {
-  let list = null;
-  try {
-    const doc = JSON.parse(stdout);
-    if (doc && doc.result && Array.isArray(doc.result.worktrees)) {
-      list = doc.result.worktrees;
-    } else if (doc && Array.isArray(doc.worktrees)) {
-      list = doc.worktrees;
-    } else if (doc && Array.isArray(doc.result)) {
-      list = doc.result;
-    }
-  } catch {
-    return null;
-  }
-  if (!list) return null;
-  const base = typeof repoRoot === "string" && repoRoot.length > 0 ? repoRoot : null;
-  // R4-1: more than one entry resolving to the target with DIFFERENT
-  // workspace ids is ambiguity — a first-match win could name a workspace
-  // that maps to another checkout, removing the wrong one. Collect every
-  // match: one entry, or several carrying the SAME id, still resolves;
-  // anything else (conflicting ids, or a match without an id) is null so
-  // the caller skips herdr entirely and uses the git path.
-  const matchedIds = new Set();
-  let matched = 0;
-  let missing = false;
-  for (const item of list) {
-    if (!item || typeof item.path !== "string" || item.path.length === 0) continue;
-    let resolved;
-    try {
-      if (path.isAbsolute(item.path)) resolved = path.resolve(item.path);
-      else if (base === null) continue;
-      else resolved = path.resolve(base, item.path);
-    } catch {
-      continue;
-    }
-    if (resolved !== resolvedTarget) continue;
-    matched += 1;
-    let id = null;
-    for (const key of ["open_workspace_id", "workspace_id", "workspace", "id"]) {
-      if (typeof item[key] === "string" && item[key].length > 0) { id = item[key]; break; }
-    }
-    if (id === null) missing = true;
-    else matchedIds.add(id);
-  }
-  if (matched === 0 || missing || matchedIds.size !== 1) return null;
-  return [...matchedIds][0];
-}
-
 // Checkouts from the pre-removal snapshot that are gone now, excluding
 // the target itself. A hostile or confused remover that deleted another
 // checkout fails loudly through this: the caller names the vanished path
@@ -2496,156 +2440,80 @@ function closeSessionString(ctx, method) {
   }
 }
 
-// S33/S34 pre-removal sequence for `worktree_close`, running after
-// approval and before the checkout removal:
-//  1. A foreign live session (a Pi session that is not ours, evidenced
-//     by `herdr agent list` agents cwd'd in the target checkout) refuses
-//     the close with an actionable message and changes nothing. A
-//     failing or unparseable agent list is NO evidence: Herdr being
-//     unavailable never blocks the removal.
-//  2. Our own session (the tool context's cwd inside the target) warps
-//     to the principal FIRST through the existing warp machinery, and
-//     the close continues only when that warp actually succeeded.
-//  3. Only after such a warp, the Herdr workspace that pointed at the
-//     removed checkout is closed and a normal workspace is opened at the
-//     principal, resuming the warped session (lib/worktree-close-herdr.js;
-//     Herdr offers no workspace path move). Without a warped session the
-//     removal below already retires the workspace with the checkout, so
-//     there is nothing to re-home and the step stays silent.
-// Returns {ok: true, warp, herdrWorkspace, notices} or {ok: false, text,
-// details}. Never throws: every failure mode is a value.
-async function closePreRemovalSequence({ git, repo, target, branch, force, ctx, opts, resolvedTarget }) {
-  const closeHerdr = libRequire("worktree-close-herdr.js");
-  // Subprocess cwd, re-anchored onto the principal after a warp (below)
-  // so no Herdr call ever runs inside the checkout being removed.
-  let runRoot = repo.root;
-  // S21: this sequence is reached by the interactive close (and by the
-  // `worktree_close` tool), so its Herdr children are awaited on the async
-  // runner: same binary, same argv, same timeouts, same `{status, stdout,
-  // stderr, error}` consumption — only the wait leaves the event loop.
-  const runHerdrAsync = (argv, timeoutMs) => git.runArgvAsync(herdrBinary(), argv, { cwd: runRoot, timeoutMs });
-  const ourSessionId = closeSessionString(ctx, "getSessionId");
-  let agents = [];
+// S7/S8/S9: the active-session refusal, shared by `worktree_close` and the warp
+// panel's Ctrl+D (lib/worktree-session-guard.js).
+//
+// The guard answers one question per checkout: is a live Pi session working
+// there? It reads Gentle Shell's published presence records (heartbeat +
+// workspace) and, deterministically, the checkout THIS session stands on. Both
+// callers run it, so the tool and the panel can never disagree.
+//
+// Two outcomes refuse with nothing mutated:
+//   - this session is in the checkout: the human is told to warp first
+//     (`/warp`), then close. The tool NEVER warps by itself and never closes or
+//     opens a Herdr pane/workspace: a destructive action that first moves the
+//     session would hide the state it was approved on;
+//   - another session is in the checkout: the refusal names its RAW session id,
+//     joined from the published transport record whose id hashes to that
+//     session's presence header, and asks the human to make sure it finished,
+//     then close or warp it away from that session. When no transport record
+//     joins, the refusal shows the presence hash and says the id could not be
+//     resolved — it never invents an id from a label.
+// A stale, unattributable or truncated record blocks nothing — it is disclosed
+// in `notices` — because the stores are bounded and can outlive a crashed
+// process (L13). The guard is BEST EFFORT and is never claimed to be
+// exhaustive.
+// Returns {refused, text, notices, guard}. A broken guard module fails closed:
+// the removal cannot run without the check that gates it.
+async function checkoutSessionGuard({ ctx, target }) {
+  let guardLib;
   try {
-    const listed = await runHerdrAsync(["agent", "list"], 60000);
-    if (listed && listed.status === 0) {
-      agents = closeHerdr.agentsInCheckout(listed.stdout, resolvedTarget, repo.root, ourSessionId);
-    }
-  } catch {
-    agents = [];
-  }
-  if (agents.length > 0) {
-    const named = agents.map((agent) => agent.cwd).join(", ");
-    return {
-      ok: false,
-      text: `cannot close the worktree at ${target}: another live Pi session is active in that checkout (${named}); warp it to the principal with /warp principal from that session and retry; the checkout and the registry were left untouched`,
-      details: { branch, path: target, force, agents },
-    };
-  }
-  let warp = null;
-  try {
-    const sessionState = checkoutState(toolCwd(ctx), repo.root);
-    const sessionId = sessionState.real !== null ? sessionState.real : sessionState.absolute;
-    if (sessionId !== null && (sessionId === resolvedTarget || sessionId.startsWith(resolvedTarget + path.sep))) {
-      const warpOpts = opts && typeof opts === "object" ? opts : undefined;
-      const moved = await executeWorktreeWarp("principal", ctx, warpOpts);
-      if (!moved || moved.isError) {
-        return {
-          ok: false,
-          text: `cannot close the worktree at ${target}: the session warp to the principal failed (${moved && moved.text ? moved.text : "the warp reported no result"}); the checkout and the registry were left untouched`,
-          details: { branch, path: target, force, warp: moved && moved.details ? moved.details : null },
-        };
-      }
-      warp = {
-        name: moved.details.name,
-        path: moved.details.path,
-        branch: moved.details.branch,
-        sessionFile: closeSessionString(ctx, "getSessionFile"),
-      };
-    }
+    guardLib = libRequire("worktree-session-guard.js");
   } catch (err) {
     return {
-      ok: false,
-      text: `cannot close the worktree at ${target}: the session warp to the principal failed (${(err && err.message) || err}); the checkout and the registry were left untouched`,
-      details: { branch, path: target, force, warp: null },
+      refused: true,
+      text: `cannot close the worktree at ${target}: the active-session guard is unavailable (${(err && err.message) || err}); the checkout and the registry were left untouched`,
+      notices: [],
+      guard: { status: "unavailable" },
     };
   }
-  let herdrWorkspace = null;
-  const notices = [];
-  // Subprocess anchor: the pre-warp repo.root names the caller's
-  // checkout, which after a warp is the doomed target itself. Re-anchor
-  // on the principal the warp just moved to (best-effort; the common
-  // dir — and therefore the registry — is shared either way), so the
-  // workspace reconcile and the removal below never run with a cwd
-  // inside the checkout being removed.
-  let anchorRoot = repo.root;
-  if (warp !== null) {
-    try {
-      anchorRoot = (await git.repoIdentityAsync(warp.path, { runAsync: libRunner(git) })).root;
-    } catch {
-      anchorRoot = repo.root;
-    }
-    runRoot = anchorRoot;
-    // S24: the reconcile runs when the session warped OUT of the doomed
-    // checkout (closing your OWN checkout), which is exactly when the reader
-    // is still watching: its Herdr children are awaited on the async runner
-    // with the same argv, order and timeouts, so the host never freezes on
-    // them. The sync twin remains for non-interactive callers.
-    const reconciled = typeof closeHerdr.reconcileHerdrWorkspaceAsync === "function"
-      ? await closeHerdr.reconcileHerdrWorkspaceAsync({
-        runAsync: (argv, timeoutMs) => git.runArgvAsync(herdrBinary(), argv, { cwd: runRoot, timeoutMs }),
-        repoRoot: anchorRoot,
-        resolvedTarget,
-        principalPath: warp.path,
-        session: { file: warp.sessionFile, id: ourSessionId },
-        force,
-      })
-      : closeHerdr.reconcileHerdrWorkspace({
-        run: (argv, timeoutMs) => git.runArgv(herdrBinary(), argv, { cwd: runRoot, timeoutMs }),
-        repoRoot: anchorRoot,
-        resolvedTarget,
-        principalPath: warp.path,
-        session: { file: warp.sessionFile, id: ourSessionId },
-        force,
-      });
-    if (reconciled.status === "reconciled") {
-      herdrWorkspace = {
-        status: "reconciled",
-        closedWorkspace: reconciled.closedWorkspace,
-        openedWorkspace: reconciled.openedWorkspace,
-        session: reconciled.session,
-      };
-      // S35: the group reconcile closes every member of the checkout's
-      // group (linked first, root last); carry the full list when present.
-      if (Array.isArray(reconciled.closedWorkspaces)) {
-        herdrWorkspace.closedWorkspaces = reconciled.closedWorkspaces;
-      }
-    } else if (reconciled.status !== "absent") {
-      // 'skipped' and 'reconciled-partial': a short visible notice
-      // travels with the success, and the removal below still proceeds.
-      herdrWorkspace = {
-        status: reconciled.status,
-        notice: reconciled.notice,
-      };
-      if (reconciled.closedWorkspace !== undefined && reconciled.closedWorkspace !== null) {
-        herdrWorkspace.closedWorkspace = reconciled.closedWorkspace;
-      }
-      if (Array.isArray(reconciled.closedWorkspaces)) {
-        herdrWorkspace.closedWorkspaces = reconciled.closedWorkspaces;
-      }
-      // S35: a failed member leaves the group half-closed: name it so no
-      // partial success is mistaken for a clean reconcile.
-      if (typeof reconciled.failedWorkspace === "string" && reconciled.failedWorkspace.length > 0) {
-        herdrWorkspace.failedWorkspace = reconciled.failedWorkspace;
-      }
-      if (reconciled.openedWorkspace !== undefined) {
-        herdrWorkspace.openedWorkspace = reconciled.openedWorkspace;
-      }
-      if (reconciled.session !== undefined) herdrWorkspace.session = reconciled.session;
-      notices.push(reconciled.notice);
-    }
+  if (typeof guardLib.readGentlePresence !== "function" || typeof guardLib.evaluateCheckoutSessions !== "function") {
+    return {
+      refused: true,
+      text: `cannot close the worktree at ${target}: the active-session guard is incomplete; the checkout and the registry were left untouched`,
+      notices: [],
+      guard: { status: "unavailable" },
+    };
   }
-  return { ok: true, warp, herdrWorkspace, notices, repoRoot: anchorRoot };
+  try {
+    // Read-only, bounded and awaited so a slow filesystem never freezes the
+    // host event loop the human is typing into. The transport registry is what
+    // turns a presence hash into the RAW session id a refusal names; when it is
+    // absent the guard says so instead of guessing one.
+    const presence = await guardLib.readGentlePresence();
+    const transport = typeof guardLib.readTransportSessions === "function"
+      ? await guardLib.readTransportSessions()
+      : null;
+    const result = guardLib.evaluateCheckoutSessions({
+      targetPath: target,
+      presence,
+      transport,
+      currentSessionId: closeSessionString(ctx, "getSessionId"),
+      currentCwd: toolCwd(ctx),
+    });
+    const notices = Array.isArray(result.notices) ? result.notices : [];
+    if (result.verdict !== "clear") {
+      return { refused: true, text: result.text, notices: [], guard: result.evidence };
+    }
+    return { refused: false, text: null, notices, guard: result.evidence };
+  } catch (err) {
+    return {
+      refused: true,
+      text: `cannot close the worktree at ${target}: the active-session check failed (${(err && err.message) || err}); the checkout and the registry were left untouched`,
+      notices: [],
+      guard: { status: "failed" },
+    };
+  }
 }
 
 // gentle-shell owns the live session's permission mode, and its YOLO grant is
@@ -2696,18 +2564,23 @@ async function yoloActiveFor(ctx) {
   }
 }
 
-// Core of `worktree_close` (S7, D6): remove the checkout and its Herdr
-// workspace, keep the branch, drop the registry entry. Exported for unit
-// tests; the registered tool calls it with the live Pi context.
+// Core of `worktree_close` (S7, D6, S6-S9): remove the checkout, keep the
+// branch, drop the registry entry. Exported for unit tests; the registered tool
+// calls it with the live Pi context, and the warp panel's Ctrl+D calls it with
+// `opts.approved` after its own question.
 //
 // The S7 rule is that the BRANCH IS KEPT: this function never deletes a
-// branch, never passes `--trust-repository`, and passes `--force` only
-// when the caller asked for it. Removal is herdr-first (workspace id
-// resolved from `herdr worktree list`) with a `git worktree remove` fixed
-// argv fallback when herdr is unavailable; a dirty checkout without
-// `force` fails with the backend's own reason and nothing is mutated. The
-// registry entry is dropped only after `listWorktrees` confirms the path
-// is gone.
+// branch, never passes `--trust-repository`, and passes `--force` only when the
+// caller asked for it. Removal is `git worktree remove` and nothing else (S6):
+// no Herdr workspace is closed, created or retired, and Herdr is never asked to
+// remove a checkout. A dirty checkout without `force` fails with the backend's
+// own reason and nothing is mutated. The registry entry is dropped only after
+// `listWorktrees` confirms the path is gone.
+//
+// S7-S9: a live Pi session working in the target refuses the close — before the
+// approval question and again immediately before the removal — through the
+// shared `checkoutSessionGuard`. Nothing is auto-warped and nothing is closed on
+// the human's behalf.
 async function executeWorktreeClose(params, ctx, opts) {
   const git = libRequire("worktree-git.js");
   const registry = libRequire("worktree-registry.js");
@@ -2919,6 +2792,18 @@ async function executeWorktreeClose(params, ctx, opts) {
     }
   }
 
+  // S7/S8/S9: a live Pi session working in the target is a REFUSAL, and it is
+  // decided BEFORE the approval question: the human is never asked to confirm a
+  // removal the guard would refuse, and nothing (checkout, branch, registry) is
+  // touched. This runs BEFORE the question so a blocked delete costs one read
+  // instead of a dialog that cannot be honored.
+  const sessionCheck = await checkoutSessionGuard({ ctx, target: resolvedTarget });
+  if (sessionCheck.refused) {
+    return errorResult(sessionCheck.text, {
+      branch, path: target, force, removed: false, sessionCheck: sessionCheck.guard,
+    });
+  }
+
   // Approval when the host offers dialog UI; non-interactive modes
   // proceed without it. A refusal mutates nothing and keeps the entry.
   //
@@ -2984,65 +2869,54 @@ async function executeWorktreeClose(params, ctx, opts) {
     }
   }
 
-  // S33/S34: warp a live session out and reconcile the Herdr workspace
-  // BEFORE the checkout removal below. A refusal here changes nothing:
-  // the checkout, the branch and the registry entry are left untouched.
-  const preRemoval = await closePreRemovalSequence({
-    git, repo, target, branch, force, ctx, opts, resolvedTarget,
-  });
-  if (!preRemoval.ok) {
-    return errorResult(preRemoval.text, preRemoval.details);
-  }
-  // S33/S34: after a warp the caller's checkout is the doomed target
-  // itself, so the removal and its verification run anchored on the
-  // principal the warp moved to. Without a warp this is repo.root and
-  // the removal below is exactly as before.
-  const effectiveRoot = preRemoval.repoRoot || repo.root;
-
-  // Remove herdr-first: resolve the workspace id from `herdr worktree
-  // list`, then `herdr worktree remove`. Fixed argv only, values as
-  // separate elements (herdr rejects --flag=value). Never
-  // --trust-repository: trusting a repository is a human decision these
-  // tools never take. `--force` only when the caller asked for it.
-  //
-  // ORDER IS PART OF THE PROTECTION, not an implementation detail. This
-  // listing is a child process, so it is an await, and an await is the
-  // longest window a swap gets between an identity check and a remover: a
-  // reproduced race replaced the approved path with a symbolic link to another
-  // detached checkout exactly while this listing ran, after the check that
-  // used to sit above it. So the listing resolves FIRST, and the final check
-  // runs after it with NO await between that check and the spawn below.
-  let removedBy = null;
-  let removeError = null;
-  let workspace = null;
-  // S21: herdr is an interactive child here — awaited on the async runner with
-  // the same argv order and the same timeouts.
-  const listed = await git.runArgvAsync(herdrBinary(), git.herdrArgv("list", { cwd: effectiveRoot }), {
-    cwd: effectiveRoot,
-    timeoutMs: 60000,
-  });
-  if (listed.status === 0) {
-    workspace = herdrWorkspaceId(listed.stdout, resolvedTarget, effectiveRoot);
+  // The removal module is a required control, so a copy that cannot load fails
+  // closed instead of falling back to a hand-rolled child.
+  let closeLib;
+  try {
+    closeLib = libRequire("worktree-close-herdr.js");
+  } catch (err) {
+    return errorResult(
+      `cannot remove the worktree at ${target}: the removal module is unavailable (${(err && err.message) || err}); the checkout and the registry were left untouched`,
+      { branch, path: target, force, removed: false },
+    );
   }
 
-  // The last possible check before a backend is asked to delete anything: the
-  // pre-removal sequence above may have warped a session and reconciled a
-  // workspace, and the listing just above is itself an await. Both are exactly
-  // the windows a swap exploits, so this check is the LAST thing that runs
-  // before the remover is launched — no await stands between the two.
+  // S7/S8/S9: rechecked immediately before the removal, after every
+  // confirmation and after the awaits above. A session that appeared while the
+  // human answered — or whose heartbeat became recent — refuses here, with the
+  // checkout, the branch and the registry entry untouched.
+  const sessionRecheck = await checkoutSessionGuard({ ctx, target: resolvedTarget });
+  if (sessionRecheck.refused) {
+    return errorResult(sessionRecheck.text, {
+      branch, path: target, force, removed: false, sessionCheck: sessionRecheck.guard,
+    });
+  }
+
+  // S6: git is the ONLY remover. The Herdr workspace reconcile (closing every
+  // workspace of the checkout's group and opening one at the principal) and
+  // `herdr worktree remove` are gone: a close never closes, opens or retires a
+  // Herdr panel, and it never asks Herdr to remove the checkout. `git worktree
+  // remove` runs with a fixed argv, the absolute verified path, and `--force`
+  // only when the caller asked for it; the branch is never deleted and
+  // --trust-repository is never passed.
   //
-  // LIMITATION, stated rather than papered over: `git worktree remove` and
-  // `herdr worktree remove` take a path (or a workspace id) and resolve it in
-  // ANOTHER process, so the check and the removal cannot be one atomic act —
-  // there is no handle-based removal available here (no `openat`/`O_NOFOLLOW`
-  // "remove this exact directory") and the filesystem offers no
-  // compare-and-swap. A swap landing between this check and the remover's own
-  // `stat` is
-  // therefore not impossible. What is closed: every await-sized window, plus
-  // any replacement of the path (a link, or a different directory at the same
-  // path caught by the pinned inode), so an attacker must win a race measured
-  // in microseconds inside another process instead of one measured in an
-  // arbitrarily slow child.
+  // ORDER IS PART OF THE PROTECTION, not an implementation detail. The
+  // active-session recheck just above is an await, and an await is the longest
+  // window a swap gets between an identity check and a remover. So the recheck
+  // resolves FIRST and the final identity check runs after it, with NO await
+  // between that check and the spawn (lib/worktree-close-herdr.js spawns the
+  // git child synchronously, before it returns its promise).
+  //
+  // LIMITATION, stated rather than papered over: `git worktree remove` takes a
+  // path and resolves it in ANOTHER process, so the check and the removal
+  // cannot be one atomic act — there is no handle-based removal available here
+  // (no `openat`/`O_NOFOLLOW` "remove this exact directory") and the filesystem
+  // offers no compare-and-swap. A swap landing between this check and the
+  // remover's own `stat` is therefore not impossible. What is closed: every
+  // await-sized window, plus any replacement of the path (a link, or a
+  // different directory at the same path caught by the pinned inode), so an
+  // attacker must win a race measured in microseconds inside another process
+  // instead of one measured in an arbitrarily slow child.
   if (expectedReal !== null) {
     const refusal = identityRefusal();
     if (refusal !== null) {
@@ -3050,42 +2924,20 @@ async function executeWorktreeClose(params, ctx, opts) {
     }
   }
 
-  if (workspace) {
-    const removeParams = { workspace };
-    if (force) removeParams.force = true;
-    const removed = await git.runArgvAsync(herdrBinary(), git.herdrArgv("remove", removeParams), {
-      cwd: effectiveRoot,
-      timeoutMs: 120000,
-    });
-    if (removed.status === 0) {
-      removedBy = "herdr";
-    } else {
-      removeError = ((removed.stderr || removed.error || "") + "").trim()
-        || "herdr worktree remove failed";
-    }
-  } else {
-    // Herdr is unavailable (missing binary, failed list, unparseable
-    // output) or the checkout has no workspace id: `git worktree remove`
-    // with fixed argv. It never deletes the branch either. The absolute
-    // entry path travels explicitly so the removal names the verified
-    // checkout however the process cwd is set.
-    const argv = ["worktree", "remove"];
-    if (force) argv.push("--force");
-    argv.push(resolvedTarget);
-    const fallen = await git.runArgvAsync("git", argv, { cwd: effectiveRoot, timeoutMs: 120000 });
-    if (fallen.status === 0) {
-      removedBy = "git";
-    } else {
-      removeError = ((fallen.stderr || fallen.error || "") + "").trim()
-        || "git worktree remove failed";
-    }
-  }
+  const removal = await closeLib.removeCheckout({
+    runAsync: (bin, argv, options) => git.runArgvAsync(bin, argv, options),
+    repoRoot: repo.root,
+    resolvedTarget,
+    force,
+  });
+  const removedBy = removal.removed ? removal.removedBy : null;
+  const removeError = removal.removed ? null : removal.error;
   if (!removedBy) {
     // The remover exited non-zero — but a lying backend may still have
     // deleted a checkout other than the target on its way out, so the
     // vanished comparison runs BEFORE this early return, never after it.
     // Either way the registry entry is kept; only the message differs.
-    const vanishedOnFailure = await vanishedCheckouts(git, effectiveRoot, live, resolvedTarget);
+    const vanishedOnFailure = await vanishedCheckouts(git, repo.root, live, resolvedTarget);
     if (vanishedOnFailure.length > 0) {
       return errorResult(
         `worktree removal failed (${removeError || "failed to remove worktree"}) and removed an unexpected checkout at ${vanishedOnFailure[0]}: expected only ${target} to be removed; the checkout and the registry entry were left for inspection`,
@@ -3106,9 +2958,9 @@ async function executeWorktreeClose(params, ctx, opts) {
   // unverifiable-removal message. Covers both the herdr and git paths.
   let after;
   try {
-    after = await git.listWorktreesAsync(effectiveRoot, { runAsync });
+    after = await git.listWorktreesAsync(repo.root, { runAsync });
   } catch (err) {
-    const vanishedWithoutList = await vanishedCheckouts(git, effectiveRoot, live, resolvedTarget, null);
+    const vanishedWithoutList = await vanishedCheckouts(git, repo.root, live, resolvedTarget, null);
     if (vanishedWithoutList.length > 0) {
       return errorResult(
         `worktree removal removed an unexpected checkout at ${vanishedWithoutList[0]}: expected only ${target} to be removed; the checkout and the registry entry were left for inspection`,
@@ -3126,7 +2978,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   // successful, and the registry entry is left in place. Covers both the
   // herdr and the git removal paths; a legitimate single-checkout removal
   // (only the target gone) never trips it.
-  const vanished = await vanishedCheckouts(git, effectiveRoot, live, resolvedTarget, after);
+  const vanished = await vanishedCheckouts(git, repo.root, live, resolvedTarget, after);
   if (vanished.length > 0) {
     return errorResult(
       `worktree removal removed an unexpected checkout at ${vanished[0]}: expected only ${target} to be removed; the checkout and the registry entry were left for inspection`,
@@ -3144,7 +2996,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   }
   let dropped;
   try {
-    dropped = registry.removeWorktreeByPath(effectiveRoot, resolvedTarget);
+    dropped = registry.removeWorktreeByPath(repo.root, resolvedTarget);
   } catch (err) {
     dropped = { ok: false, error: (err && err.message) || String(err) };
   }
@@ -3154,21 +3006,25 @@ async function executeWorktreeClose(params, ctx, opts) {
       { branch, path: target, force, removed: true, branchKept: true },
     );
   }
-  // S33/S34: the pre-removal sequence appends its own visible lines —
-  // the warp that moved this session out, and any skipped Herdr
-  // workspace step — while the removed/branch-kept contract stays
-  // byte-identical on every path that never warped.
+  // The removed/branch-kept contract is byte-identical on every path that was
+  // not refused.
   const successLines = [closeSuccessText(branch, true)];
-  if (preRemoval.warp !== null) successLines.push("session warped to principal");
-  for (const notice of preRemoval.notices) successLines.push(notice);
   // S1: a worktree carries no issue and no ODD document, so the close output
   // names no association — no association line, no association warning and no
   // dropped-document list. Nothing is lost either way: the registry writes
   // every row the close does not address back byte for byte, so there is no
   // collapse left to report.
-  const successDetails = { path: target, branch, removed: true, branchKept: true, thread: owner };
-  if (preRemoval.warp !== null) successDetails.warp = preRemoval.warp;
-  if (preRemoval.herdrWorkspace !== null) successDetails.herdrWorkspace = preRemoval.herdrWorkspace;
+  const successDetails = {
+    path: target, branch, removed: true, branchKept: true, thread: owner,
+    sessionCheck: sessionRecheck.guard,
+  };
+  // S7/S8/S9: stale, unattributable and truncated presence evidence is
+  // disclosed instead of silently ignored. `warnings` is the channel the
+  // model-result formatter keeps verbatim, so each caveat reaches both the human
+  // and the agent — and none of them ever blocks the removal.
+  if (sessionRecheck.notices.length > 0) {
+    successDetails.warnings = [...sessionRecheck.notices];
+  }
   return textResult(
     successLines.join("\n"),
     successDetails,
@@ -3192,7 +3048,7 @@ const worktreeCloseTool = withWorktreeCardRenderer(defineTool({
   name: "worktree_close",
   label: "Worktree Close",
   exposure: "codemode",
-  description: "Remove a registered agent worktree checkout (and its Herdr workspace, when Herdr is running) while keeping the branch. Pass the worktree name, path, or branch (only one), plus force:true to close a dirty checkout.",
+  description: "Remove a registered agent worktree checkout while keeping the branch. Pass the worktree name, path, or branch (only one), plus force:true to close a dirty checkout. A live Pi session working in that checkout — this session or another — refuses the close: warp to another checkout first, or let that session finish. The checkout is removed with git; no Herdr workspace is closed, opened or removed.",
   parameters: Type.Object({
     name: opt(Type.String({ description: "Name of the registered worktree to close (the flattened branch slug, or principal)" })),
     path: opt(Type.String({ description: "Path of the registered worktree to close" })),
@@ -6101,6 +5957,19 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     }
   }
 
+  // S7/S8/S9: the SAME active-session guard `worktree_close` runs, and it runs
+  // BEFORE anything reads the pending changes or builds the deletion question.
+  // A keypress may never turn into a confirmation dialog for a checkout a live
+  // Pi session is working in: the human is told to finish/warp that session
+  // first, and the checkout is left exactly as it was. `approvedReal` is the
+  // identity the panel listed, so the guard is asked about the same checkout the
+  // human is looking at.
+  const sessionCheck = await checkoutSessionGuard({ ctx, target: approvedReal });
+  if (sessionCheck.refused) {
+    notify?.(sessionCheck.text, 'error');
+    return;
+  }
+
   // 4. Only a REGISTERED worktree can be closed: the shared close resolves its
   // target through the registry, so a live checkout nobody registered would be
   // asked about and then refused. That is a question a human cannot act on, so
@@ -6222,7 +6091,10 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
   // comes only from positive dirty evidence. `expectedReal` carries the
   // approval into the removal itself: the close re-reads the identity right
   // before it names a checkout to a backend, so the narrowest possible window
-  // remains between that read and the remover.
+  // remains between that read and the remover. It also RE-RUNS the
+  // active-session guard immediately before the removal, so a session that
+  // started working in the checkout while the question was open refuses there
+  // (S8: the check precedes the question, and it is repeated after it).
   let result;
   try {
     result = await executeWorktreeClose({ path: target.path, force: prompt.force === true }, ctx, { approved: true, expectedReal: approvedReal, expectedPin: approvedPin });

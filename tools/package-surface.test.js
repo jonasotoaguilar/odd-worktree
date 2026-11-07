@@ -65,7 +65,7 @@ describe('manifest', () => {
     // S1,S3): the per-tab cache is still gone, but the `gh` client, the
     // formatter and the issues view `/issues` mounts are shipped, so their
     // presence is asserted rather than forbidden.
-    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js']) {
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
   });
@@ -91,6 +91,16 @@ describe('registration', () => {
     assert.deepEqual(summary('worktree_list'), { name: 'worktree_list', label: 'Worktree List' });
     assert.deepEqual(summary('worktree_close'), { name: 'worktree_close', label: 'Worktree Close' });
     assert.deepEqual(summary('worktree_warp'), { name: 'worktree_warp', label: 'Worktree Warp' });
+  });
+
+  test('the close help text names the active-session refusal and no Herdr workspace', async () => {
+    const { tools } = await loadExtension({});
+    const description = tools.get('worktree_close').description;
+    assert.match(description, /live Pi session working in that checkout/);
+    assert.match(description, /warp to another checkout first/i);
+    assert.match(description, /git/);
+    assert.equal(/and its Herdr workspace/i.test(description), false, 'no Herdr workspace removal is promised');
+    assert.match(description, /no Herdr workspace is closed, opened or removed/);
   });
 });
 

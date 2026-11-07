@@ -245,7 +245,7 @@ describe('createOddView read-only association (S10b)', () => {
     assert.ok(!body.includes('unsaved'), 'no unsaved indicator exists');
     assert.ok(!body.includes('space toggle'), 'the space toggle leaves the legend');
     assert.ok(!body.includes('ctrl+s'), 'the save key leaves the legend');
-    assert.match(body, /ctrl\+j\/k doc/, 'the reading keys stay in the legend, naming the default pair and its target (S14)');
+    assert.match(body, /ctrl\+j\/k scroll/, 'the reading keys stay in the legend, naming the default pair and what it does (S14)');
     assert.match(body, /esc close/, 'the close key stays in the legend');
   });
 
@@ -773,7 +773,7 @@ describe('createOddView warp usability (S13,S14,S23-S27,S29)', () => {
     assert.ok(!body.includes('space'), 'no space hint');
     assert.ok(!body.includes('ctrl+s'), 'no save hint');
     assert.ok(!body.includes('assigned'), 'no assigned count');
-    assert.match(body, /ctrl\+j\/k doc/, 'the scroll hint stays, naming the default pair');
+    assert.match(body, /ctrl\+j\/k scroll/, 'the scroll hint stays, naming the default pair');
     assert.match(body, /› Search/, 'the search row stays, without naming its key');
     assert.match(body, /o open/, 'the open hint stays');
     assert.match(body, /esc close/, 'the close hint stays');
@@ -1332,12 +1332,12 @@ describe('createOddView preview scroll bindings (S1)', () => {
     return { view, paints };
   }
 
-  test('the footer always names ctrl+j/k doc', async () => {
+  test('the footer always names ctrl+j/k scroll', async () => {
     for (const kitty of [true, false]) {
       const { view } = build({ helpers: host({ kitty }) });
       await tick();
       const footer = footerOf(view.render(120));
-      assert.match(footer, /ctrl\+j\/k doc/, `kitty ${kitty}: the default pair is named with its target: ${footer}`);
+      assert.match(footer, /ctrl\+j\/k scroll/, `kitty ${kitty}: the default pair is named: ${footer}`);
       for (const gone of ['ctrl+shift', 'shift+j/k']) {
         assert.ok(!footer.includes(gone), `kitty ${kitty}: the alternate "${gone}" leaves the legend: ${footer}`);
       }
@@ -1351,7 +1351,7 @@ describe('createOddView preview scroll bindings (S1)', () => {
       const { view } = build({ helpers });
       await tick();
       const footer = footerOf(view.render(120));
-      assert.match(footer, /ctrl\+j\/k doc/, `${label}: the default pair is named with its target: ${footer}`);
+      assert.match(footer, /ctrl\+j\/k scroll/, `${label}: the default pair is named: ${footer}`);
       assert.ok(!footer.includes('ctrl+shift'), `${label}: no fabricated extended support: ${footer}`);
     }
   });
@@ -1495,10 +1495,10 @@ describe('createOddView preview scroll bindings (S1)', () => {
 
 // ---------------------------------------------------------------------------
 // S14: «alguna key generidad como el page o half estan demas (nose para que
-// es)» — the ODD footer names each scroll TARGET once, exactly like the issues
-// reader: the document pane's page, half-page and printable hints collapse into
-// the ONE labelled token the reader is always shown, and every binding still
-// answers in the handler even after its hint leaves the row.
+// es)» — the ODD footer names the scroll interaction once, exactly like the
+// issues reader: the document pane's page, half-page and printable hints
+// collapse into the ONE labelled token the reader is always shown, and every
+// binding still answers in the handler even after its hint leaves the row.
 // ---------------------------------------------------------------------------
 describe('createOddView footer scroll targets (S14)', () => {
   const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -1539,31 +1539,34 @@ describe('createOddView footer scroll targets (S14)', () => {
       for (const width of [80, 120]) {
         const footer = footerOf(view.render(width));
         assert.ok(!GENERIC.test(footer), `kitty ${kitty}/${width}: no generic page or half token: ${footer}`);
-        assert.ok(!/\bscroll\b/.test(footer), `kitty ${kitty}/${width}: no bare unlabelled scroll token: ${footer}`);
+        // `scroll` is the label of the one surviving token, so it may only ever
+        // appear inside it: an unlabelled word would be the ambiguity S14 fixed.
+        const scrollTokens = tokensOf(footer).filter((token) => /\bscroll\b/.test(token));
+        assert.deepEqual(scrollTokens, ['ctrl+j/k scroll'], `kitty ${kitty}/${width}: the one scroll token is labelled: ${footer}`);
       }
     }
   });
 
-  test('the document pane is named once, by the default ctrl+j/k pair', async () => {
+  test('the scroll interaction is named once, by the default ctrl+j/k pair', async () => {
     const extended = build({ kitty: true });
     const printable = build({ kitty: false });
     await tick();
     const extendedFooter = footerOf(extended.render(120));
     const printableFooter = footerOf(printable.render(120));
-    assert.match(extendedFooter, /ctrl\+j\/k doc/, `the default pair is named with its target: ${extendedFooter}`);
-    assert.match(printableFooter, /ctrl\+j\/k doc/, `the same pair on a legacy terminal: ${printableFooter}`);
+    assert.match(extendedFooter, /ctrl\+j\/k scroll/, `the default pair is named: ${extendedFooter}`);
+    assert.match(printableFooter, /ctrl\+j\/k scroll/, `the same pair on a legacy terminal: ${printableFooter}`);
     for (const [label, footer] of [['extended', extendedFooter], ['fallback', printableFooter]]) {
-      const docTokens = tokensOf(footer).filter((token) => /(^|\s)doc$/.test(token));
-      assert.equal(docTokens.length, 1, `${label}: exactly one labelled document token: ${footer}`);
+      const scrollTokens = tokensOf(footer).filter((token) => /(^|\s)scroll$/.test(token));
+      assert.equal(scrollTokens.length, 1, `${label}: exactly one labelled scroll token: ${footer}`);
     }
   });
 
-  test('S8: the list scroll pair has no footer token, and the document token keeps its target', async () => {
+  test('S8: the list scroll pair has no footer token, and the scroll token keeps its label', async () => {
     const view = build();
     await tick();
     const footer = footerOf(view.render(120));
     assert.ok(!footer.includes('←/→'), `the redundant list scroll hint is gone: ${footer}`);
-    assert.match(footer, /ctrl\+j\/k doc/, 'the document scroll keeps its labelled token');
+    assert.match(footer, /ctrl\+j\/k scroll/, 'the scroll keeps its labelled token');
     assert.match(footer, /s sort: recent/, 'the sort token stays beside the remaining scroll hint');
   });
 
@@ -1627,8 +1630,8 @@ describe('createOddView footer scroll targets (S14)', () => {
     const view = build({ theme: recordingTheme(), kitty: true });
     await tick();
     const footer = view.render(160).at(-2);
-    assert.match(footer, /\x1b\[1m\x1b\[96mctrl\+j\/k\x1b\[0m\x1b\[22m\x1b\[90m doc/,
-      'the document hint paints its key accent+bold and its target muted');
+    assert.match(footer, /\x1b\[1m\x1b\[96mctrl\+j\/k\x1b\[0m\x1b\[22m\x1b\[90m scroll/,
+      'the scroll hint paints its key accent+bold, as ONE key run, and its description muted');
     assert.match(footer, /\x1b\[1m\x1b\[96mr\x1b\[0m\x1b\[22m\x1b\[90m reload/,
       'the reload hint keeps the key/description split');
     assert.ok(!strip(footer).includes('←/→'), 'S8: the list scroll pair is not painted at all');
@@ -1694,7 +1697,7 @@ describe('createOddView continuous list scrolling instead of pages (S3)', () => 
     const footer = footerOf(view.render(200));
     assert.ok(!/page/i.test(footer), `the legend drops the page hint: ${footer}`);
     assert.ok(!footer.includes('←/→'), `S8: the list scroll pair costs no cells: ${footer}`);
-    assert.match(footer, /ctrl\+j\/k doc/, 'the document scroll is named once with its target');
+    assert.match(footer, /ctrl\+j\/k scroll/, 'the scroll is named once with what it does');
   });
 
   test('a long list scrolls continuously: one screen at a time', async () => {

@@ -49,7 +49,6 @@ describe('manifest', () => {
       'gh-issues.js',
       'issues-cache.js',
       'issues-view.js',
-      'issue-preview.js',
       'herdr-plugin-check.js',
       'gentle-sidebar.js',
       'perf-trace.js',
@@ -61,7 +60,10 @@ describe('manifest', () => {
     ]) {
       assert.equal(shipped.includes(gone), false, `lib/${gone} is not shipped`);
     }
-    for (const kept of ['warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js']) {
+    // The issue preview formatter is the migrated unit (S1/S3): the reader and
+    // its cache are still gone, but the formatter `/issues` renders through is
+    // shipped, so its presence is asserted rather than forbidden.
+    for (const kept of ['issue-preview.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
   });

@@ -194,7 +194,7 @@ No workflow stores a registry credential: npm publication uses
 
 ### npm publication prerequisites
 
-`@jonasotoaguilar/odd-worktree` is not on npm yet, and OIDC cannot publish a
+`pi-odd-worktree` is not on npm yet, and OIDC cannot publish a
 package's first version, so the npm step of `release.yml` fails visibly until
 these are done by hand. It is never silently skipped.
 

@@ -34,7 +34,7 @@ const NO_HERDR = path.join(os.tmpdir(), 'odd-worktree-no-such-herdr-binary');
 
 describe('manifest', () => {
   test('declares one Pi extension entry point and ships only that surface', () => {
-    assert.equal(PKG.name, '@jonasotoaguilar/odd-worktree');
+    assert.equal(PKG.name, 'pi-odd-worktree');
     assert.ok(PKG.keywords.includes('pi-package'), 'keywords name the pi-package kind');
     assert.deepEqual(PKG.pi.extensions, ['./extensions/odd-worktree-tools.ts']);
     for (const entry of ['extensions', 'lib', 'tools', 'README.md']) {

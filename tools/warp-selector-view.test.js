@@ -1135,7 +1135,7 @@ describe('S1: no issue or ODD association is rendered', () => {
 
   test('the rendered line carries no association, even when the facts do', () => {
     const facts = line({ ...BASE, issues: [76, 77], assignedOdd: 'odd/tasks/alpha.md', odd: ['alpha', 'beta'] });
-    assert.equal(facts, 'branch feat/x · +1 −0 · ↑1 · created 28d ago · modified —');
+    assert.equal(facts, 'branch feat/x · +1 · ↑1 · created 28d ago · modified —');
     for (const word of ['issues', 'odd', 'alpha', 'beta', '#76']) {
       assert.ok(!facts.includes(word), `no association in the line (${word}): ${facts}`);
     }

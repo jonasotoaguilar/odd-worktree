@@ -371,8 +371,24 @@ describe('issues view search', () => {
     const body = bodyOf(view, 100);
     assert.ok(!body.includes('T// search'), 'the broken hint is gone');
     assert.match(body, /› Search/, 'the idle row names the Search widget');
-    assert.ok(!body.includes('(T)'), 'no (T) hint sits above the footer');
-    assert.match(bodyOf(view, 160), /T search/, 'the footer names the search key');
+    assert.ok(!body.includes('(T)') && !body.includes('(t)'), 'no parenthetical hint sits above the footer');
+    assert.match(bodyOf(view, 160), /t search/, 'the footer names the search key in lowercase');
+  });
+
+  test('lowercase t opens the search and uppercase T keeps working', async () => {
+    const rows = [issue(1)];
+    const { view } = makeView({
+      pages: pagesOf([rows, [], []]),
+      issues: rows,
+      loadIssue: (n) => ({ ok: true, issue: issue(n), comments: [] }),
+    });
+    await tick();
+    view.render(160);
+    view.handleInput('t');
+    assert.equal(view.state.searching, true, 'lowercase t opens the search box');
+    view.handleInput('escape');
+    view.handleInput('T');
+    assert.equal(view.state.searching, true, 'uppercase T still opens it');
   });
 
   test('Delete clears the whole active query, Backspace one character, and only typing advertises clearing', async () => {
@@ -675,7 +691,7 @@ describe('issues view read-only association (S10b)', () => {
       assert.match(left, /issue title 2/, 'the other row still renders');
       assert.ok(!/[✓✎]/.test(left), 'no assignment mark on the other row either');
     }
-    assert.match(bodyOf(view, 160), /x\/X close/, 'the footer legend stays');
+    assert.match(bodyOf(view, 160), /x close/, 'the footer legend stays');
   });
 
   test('space and ctrl+s change nothing: no save call, no state change, no repaint difference', async () => {
@@ -947,7 +963,7 @@ describe('issues view editors and confirmations', () => {
     assert.equal(after, before, '? repaints nothing: there is no overlay to open');
     assert.equal(view.state.help, undefined, 'no help state survives');
     assert.match(after, /esc close/, 'the footer shortcut legend survives');
-    assert.match(after, /x\/X close/, 'the footer documents the close key');
+    assert.match(after, /x close/, 'the footer documents the close key');
     assert.ok(!after.includes('f open/closed'), 'the removed state-toggle key is gone from the legend');
   });
 });
@@ -1705,7 +1721,7 @@ describe('issues view concise header (S25)', () => {
     assert.ok(!/#\d/.test(header), 'the header repeats no issue id the list or preview already shows');
     const body = bodyOf(view, 160);
     assert.match(body, /My issues \(1\)/, 'the tab count survives the trim');
-    assert.match(body, /x\/X close/, 'the close legend survives the trim');
+    assert.match(body, /x close/, 'the close legend survives the trim');
     assert.ok(!/page/i.test(body), 'no page marker is printed (S3)');
     assert.ok(!body.includes('f open/closed'), 'the removed state toggle legend stays gone');
     const beforeSpace = strip(view.render(80).join('\n'));
@@ -1946,7 +1962,7 @@ describe('S13: the issues frame repeats nothing', () => {
     assert.match(lines[1], /› Search/, 'the search row names the widget');
     assert.ok(!lines[1].includes('(T)'), 'no key hint rides the search row');
     assert.equal((lines.join('\n')).match(/\(T\)/g), null, 'no parenthesised T hint survives');
-    assert.ok(tokensOf(footer).some((token) => /^T( search)?$/.test(token)), `the footer owns the search key: ${footer}`);
+    assert.ok(tokensOf(footer).some((token) => /^t( search)?$/.test(token)), `the footer owns the search key: ${footer}`);
   });
 
   test('while searching the footer names the search keys once and the input carries only the query', async () => {
@@ -2188,7 +2204,7 @@ describe('issues close/reopen permission gate', () => {
       assert.equal(view.state.mode, 'list', `X opens no confirmation for ${JSON.stringify(permissions)}`);
       assert.deepEqual(calls, [], 'no state write was attempted');
       const body = bodyOf(view, 200);
-      assert.ok(!body.includes('x/X close'), 'the footer names no close key without the permission');
+      assert.ok(!body.includes('x close'), 'the footer names no close key without the permission');
       assert.match(bodyOf(view, 124), /permission/, 'the refusal names the missing permission');
     }
   });
@@ -2203,7 +2219,7 @@ describe('issues close/reopen permission gate', () => {
       actions: { setState: (n, state) => { calls.push([n, state]); return { ok: true }; } },
     });
     await tick();
-    assert.match(bodyOf(view, 200), /x\/X close/, 'the triage viewer is offered the close key');
+    assert.match(bodyOf(view, 200), /x close/, 'the triage viewer is offered the close key');
     view.handleInput('x');
     assert.equal(view.state.mode, 'confirm', 'the confirmation still asks first');
     view.handleInput('enter');
@@ -2268,14 +2284,14 @@ describe('issues close/reopen permission gate', () => {
       actions: { setState: () => ({ ok: true }) },
     });
     await tick();
-    assert.ok(!bodyOf(view, 200).includes('x/X close'), 'the read-only viewer has no close key');
+    assert.ok(!bodyOf(view, 200).includes('x close'), 'the read-only viewer has no close key');
     view.handleInput('x');
     assert.equal(view.state.mode, 'list');
     permissions = TRIAGE;
     view.handleInput('r');
     await tick();
     assert.deepEqual(loads[1], { refresh: true }, 'the refresh re-reads the detail that carries the permission');
-    assert.match(bodyOf(view, 200), /x\/X close/, 'the refreshed permission reaches the footer');
+    assert.match(bodyOf(view, 200), /x close/, 'the refreshed permission reaches the footer');
     view.handleInput('x');
     assert.equal(view.state.mode, 'confirm', 'and the key opens the confirmation');
   });
@@ -3639,7 +3655,7 @@ describe('round3 shared preview bindings and lossless comments', () => {
     return result;
   }
 
-  test('extended and printable keys page before a case-folding host can select', async () => {
+  test('ctrl+j/k and the extended pair page before a case-folding host can select', async () => {
     const { view, paints } = await scrollingView({ helpers: {
       ...helpers,
       matchesKey: (data, name) => name.length === 1
@@ -3648,36 +3664,93 @@ describe('round3 shared preview bindings and lossless comments', () => {
     view.handleInput('pagedown');
     const page = view.state.scroll;
     assert.ok(page > 0);
-    for (const key of ['ctrl+shift+j', 'shift+ctrl+j', '\x1b[106;6u', '\x1b[27;6;106~', 'J']) {
+    for (const key of ['ctrl+j', '\x1b[106;5u', '\x1b[27;5;106~', 'ctrl+shift+j', 'shift+ctrl+j', '\x1b[106;6u', '\x1b[27;6;106~', 'J']) {
       view.handleInput('home');
       view.handleInput(key);
-      assert.equal(view.state.scroll, page, key);
+      assert.equal(view.state.scroll, page, `${key} pages the document down`);
       assert.equal(view.state.index, 0, 'paging never selects');
-      view.handleInput('K');
-      assert.equal(view.state.scroll, 0, 'printable up is a full page');
     }
+    for (const key of ['ctrl+k', '\x1b[107;5u', '\x1b[27;5;107~', 'ctrl+shift+k', '\x1b[107;6u', 'K']) {
+      view.handleInput('home');
+      view.handleInput('pagedown');
+      const down = view.state.scroll;
+      view.handleInput(key);
+      assert.ok(view.state.scroll < down, `${key} pages the document up`);
+    }
+    view.handleInput('home');
     const before = paints.length;
     view.handleInput('\x1b[106;6:3u');
     assert.equal(view.state.scroll, 0);
     assert.equal(paints.length, before, 'release never repaints');
-    for (const key of ['ctrl+j', 'ctrl+k', '\n', '\r', '\x0b', '\x1b[106;5u']) view.handleInput(key);
-    assert.equal(view.state.scroll, 0, 'old Enter/ctrl+j aliases are inert');
+    for (const key of ['\n', '\r', '\x0b', 'enter']) {
+      view.handleInput(key);
+      assert.equal(view.state.scroll, 0, `${JSON.stringify(key)}: a bare newline and the legacy ctrl+k byte never scroll`);
+    }
     view.handleInput('ctrl+d');
     assert.equal(view.state.scroll, Math.max(1, Math.floor(page / 2)), 'half-page stays distinct');
     view.handleInput('j');
     assert.equal(view.state.index, 1, 'lowercase still selects');
-    view.handleInput('T');
+    view.handleInput('t');
     view.handleInput('J');
     assert.equal(view.state.query, 'J', 'search receives text, not preview paging');
   });
 
-  test('legend names negotiated capability, not platform or old ctrl+j', async () => {
+  test('the legend always names ctrl+j/k doc, never a fabricated capability', async () => {
     for (const active of [false, true]) {
       const { view } = await scrollingView({ helpers: { ...helpers, isKittyProtocolActive: () => active } });
       const footer = strip(view.render(220).at(-2));
-      assert.ok(footer.includes(active ? 'ctrl+shift+j/k doc' : 'shift+j/k doc'), footer);
-      assert.ok(!footer.includes('ctrl+j/k'), footer);
+      assert.equal(footer.split('ctrl+j/k doc').length - 1, 1, `kitty ${active}: one labelled document token: ${footer}`);
+      assert.ok(!footer.includes('ctrl+shift'), `kitty ${active}: the shifted alternate leaves the legend: ${footer}`);
+      assert.ok(!footer.includes('shift+j/k'), `kitty ${active}: the printable alternate leaves the legend: ${footer}`);
     }
+  });
+
+  test('a bare newline stays Enter: it confirms and never scrolls, even when the host calls it ctrl+j', async () => {
+    // The installed matcher reports the same 0x0a byte as BOTH `ctrl+j` and
+    // `enter` while no extended protocol is active. On that terminal Enter must
+    // keep its confirm meaning and the byte must never page the document.
+    const lfIsCtrlJ = {
+      ...helpers,
+      matchesKey: (data, name) => data === name || (data === '\n' && (name === 'enter' || name === 'ctrl+j')),
+      parseKey: (data) => (data === '\n' ? 'ctrl+j' : null),
+    };
+    const calls = [];
+    const rows = [issue(1), issue(2)];
+    const confirmView = makeView({
+      helpers: lfIsCtrlJ,
+      pages: pagesOf([rows, [], []]),
+      issues: rows,
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: EDITABLE }), comments: [] }),
+      actions: { setState: (n, state) => { calls.push([n, state]); return { ok: true }; } },
+    }).view;
+    confirmView.render(160);
+    await tick();
+    confirmView.handleInput('x');
+    assert.equal(confirmView.state.mode, 'confirm', 'x opens the close confirmation');
+    confirmView.handleInput('\n');
+    await tick();
+    assert.deepEqual(calls, [[1, 'closed']], 'the newline confirms the close instead of scrolling');
+    assert.equal(confirmView.state.scroll, 0, 'the newline never paged the document');
+
+    const commentView = makeView({
+      helpers: lfIsCtrlJ,
+      pages: pagesOf([rows, [], []]),
+      issues: rows,
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: EDITABLE }), comments: [] }),
+    }).view;
+    await tick();
+    commentView.render(160);
+    commentView.handleInput('c');
+    assert.equal(commentView.state.mode, 'comment');
+    commentView.handleInput('h');
+    commentView.handleInput('i');
+    commentView.handleInput('\n');
+    assert.equal(commentView.state.commentText, 'hi\n', 'the newline starts a comment line instead of scrolling');
+    assert.equal(commentView.state.scroll, 0, 'and the document never moved');
+
+    const { view: scrolling } = await scrollingView({ helpers: lfIsCtrlJ });
+    scrolling.handleInput('ctrl+j');
+    assert.ok(scrolling.state.scroll > 0, 'the distinguishable ctrl+j still pages the document');
   });
 
   test('the Issues preview keeps every character of an overlong comment token', async () => {
@@ -3706,9 +3779,9 @@ describe('round3 shared preview bindings and lossless comments', () => {
 // S14: the user read the extra document-scroll tokens as noise — «alguna key
 // generidad como el page o half estan demas (nose para que es)». The footer now
 // spends ONE token per scroll target and names that target in the token
-// (`ctrl+shift+j/k doc` for the reading pane, `]/[ list` for the list beside
-// it), while every key whose hint left the row keeps the binding the old
-// legend advertised.
+// (`ctrl+j/k doc` for the reading pane, `]/[ pane` for the list beside it),
+// while every key whose hint left the row keeps the binding the old legend
+// advertised.
 describe('issues footer names each scroll target once (S14)', () => {
   const longBody = Array.from({ length: 100 }, (_, i) => `body line ${i + 1}`).join('\n');
 
@@ -3732,9 +3805,8 @@ describe('issues footer names each scroll target once (S14)', () => {
       const { view } = scrollView({ helpers: { ...helpers, isKittyProtocolActive: () => active } });
       await tick();
       const footer = footerOf(view, 160);
-      const doc = active ? 'ctrl+shift+j/k doc' : 'shift+j/k doc';
-      assert.equal(footer.split(doc).length - 1, 1, `the document hint is named once with its target: ${footer}`);
-      for (const gone of ['PgUp', 'PgDn', 'PgUp/Dn', 'ctrl+d/u', 'half']) {
+      assert.equal(footer.split('ctrl+j/k doc').length - 1, 1, `the document hint is named once with its target: ${footer}`);
+      for (const gone of ['PgUp', 'PgDn', 'PgUp/Dn', 'ctrl+d/u', 'half', 'ctrl+shift', 'shift+j/k doc']) {
         assert.ok(!footer.includes(gone), `the redundant "${gone}" token is gone: ${footer}`);
       }
     }
@@ -3744,7 +3816,7 @@ describe('issues footer names each scroll target once (S14)', () => {
     const { view } = scrollView();
     await tick();
     const footer = footerOf(view, 160);
-    assert.ok(footer.includes(']/[ list'), `the list hint names the list it scrolls: ${footer}`);
+    assert.ok(footer.includes(']/[ pane'), `the list hint names the pane it scrolls: ${footer}`);
     assert.ok(!footer.includes('scroll'), `no unlabelled scroll token is left to guess at: ${footer}`);
   });
 
@@ -3752,7 +3824,7 @@ describe('issues footer names each scroll target once (S14)', () => {
     const { view } = scrollView();
     await tick();
     view.render(160);
-    for (const key of ['pagedown', '\x1b[6~', 'ctrl+shift+j', 'J']) {
+    for (const key of ['pagedown', '\x1b[6~', 'ctrl+j', '\x1b[106;5u', 'ctrl+shift+j', 'J']) {
       view.handleInput('home');
       assert.equal(view.state.scroll, 0, `home returns the document to the top: ${key}`);
       view.handleInput(key);
@@ -3768,7 +3840,7 @@ describe('issues footer names each scroll target once (S14)', () => {
     assert.ok(half > 0 && half < page, `ctrl+d is still half a page: ${half} of ${page}`);
     view.handleInput('ctrl+u');
     assert.equal(view.state.scroll, 0, 'ctrl+u is still half a page back up');
-    for (const key of ['pageup', '\x1b[5~', 'ctrl+shift+k', 'K']) {
+    for (const key of ['pageup', '\x1b[5~', 'ctrl+k', '\x1b[107;5u', 'ctrl+shift+k', 'K']) {
       view.handleInput('pagedown');
       const down = view.state.scroll;
       assert.ok(down > 0, `pagedown has somewhere to come back from: ${key}`);
@@ -3865,11 +3937,12 @@ describe('issues continuous list scrolling instead of pages (S3)', () => {
     assert.ok(!/page/i.test(footer), `the legend drops the page hint: ${footer}`);
     // S10: the arrows switch buckets now, so the legend names THEM as the
     // bucket key and keeps `]`/`[` as the list scroll.
-    assert.match(footer, /tab\/←→ bucket/, 'the bucket switch is still named, arrows included');
+    assert.match(footer, /←→ bucket/, 'the bucket switch is still named, arrows only');
+    assert.ok(!footer.includes('tab'), 'tab keeps working but leaves the legend');
     // S14: the token names the pane it scrolls, and the document pane's aliases
     // are collapsed into the one labelled token beside it.
-    assert.match(footer, /\]\/\[ list/, 'the list scroll key is still named, with its target');
-    assert.match(footer, /(ctrl\+shift\+j\/k|shift\+j\/k) doc/, 'the document scroll is named once with its target');
+    assert.match(footer, /\]\/\[ pane/, 'the list scroll key is still named, with its target');
+    assert.match(footer, /ctrl\+j\/k doc/, 'the document scroll is named once with its target');
   });
 
   test('a long list scrolls continuously: the window moves a screen at a time', async () => {
@@ -4104,8 +4177,9 @@ describe('issues view bucket arrows and palette (S10/S11)', () => {
     const { view } = twoBucketView({ rows: 24 });
     await tick();
     const footer = strip(view.render(200).at(-2));
-    assert.match(footer, /tab\/←→ bucket/, 'the arrows are named as the bucket switch');
-    assert.match(footer, /\]\/\[ list/, 'the list scroll keeps its own keys in the legend');
+    assert.match(footer, /←→ bucket/, 'the arrows are named as the bucket switch');
+    assert.ok(!footer.includes('tab'), 'tab keeps working but leaves the legend');
+    assert.match(footer, /\]\/\[ pane/, 'the list scroll keeps its own keys in the legend');
     assert.ok(!/←\/→ scroll/.test(footer), 'the old arrow-scroll hint is gone');
   });
 
@@ -4133,9 +4207,9 @@ describe('issues view bucket arrows and palette (S10/S11)', () => {
     const footer = view.render(200).at(-2);
     assert.match(footer, /\x1b\[1m\x1b\[96m↑↓\x1b\[0m\x1b\[22m/, 'the key token is painted accent+bold');
     assert.match(footer, /\x1b\[90m move/, 'its description is painted muted');
-    assert.match(footer, /\x1b\[1m\x1b\[96mtab\/←→\x1b\[0m\x1b\[22m/, 'a compound key token is ONE key run');
+    assert.match(footer, /\x1b\[1m\x1b\[96m←→\x1b\[0m\x1b\[22m/, 'a compound key token is ONE key run');
     assert.match(footer, /\x1b\[90m doc/, 'the scroll hint target is muted, not accent');
-    assert.match(footer, /\x1b\[1m\x1b\[96mshift\+j\/k\x1b\[0m\x1b\[22m\x1b\[90m doc/, 'the collapsed scroll hint paints key and target apart');
+    assert.match(footer, /\x1b\[1m\x1b\[96mctrl\+j\/k\x1b\[0m\x1b\[22m\x1b\[90m doc/, 'the collapsed scroll hint paints key and target apart');
     assert.ok(theme.calls.some((call) => call.role === 'accent' && call.text === '↑↓'),
       'the accent role is requested from the injected theme');
     assert.ok(theme.calls.some((call) => call.role === 'bold' && call.text.includes('↑↓')),

@@ -111,6 +111,26 @@ the host already owns. Nothing is written to user config.
   checkout's remote moves while the reader is open, mutations refuse and the
   reads keep the displayed repository, so an issue number on screen can never
   be sent to another repository.
+- `/issues` resolves the viewer's permission for that pinned repository before
+  an action editor opens, not when the write is sent. The evidence is the
+  repository role the issue detail already reads (`viewerPermission`), it is
+  cached for the panel session, and `r` re-reads it. Anything but a confirmed
+  capability fails closed — the footer hint is absent, the key refuses with the
+  reason on screen, and no editor opens and no mutation is attempted:
+
+  | Action | Minimum role |
+  | --- | --- |
+  | close / reopen an issue | triage |
+  | apply or remove an existing label | triage |
+  | assign or unassign | triage |
+  | create a repository label | write |
+  | comment | none beyond read access |
+
+  Creating a label is a SEPARATE, write-level capability, so a triage-only
+  viewer opens the labels editor normally and sees neither a create row nor its
+  `n` keybinding. Commenting is deliberately ungated: GitHub lets anyone with
+  read access to the repository comment, so demanding triage would hide an
+  action the viewer is allowed to take.
 - Refusals are reported, not swallowed: a rejected name, a dirty checkout, a
   failed move, or a denied GitHub capability names the reason and leaves the
   repository as it was.

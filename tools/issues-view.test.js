@@ -96,10 +96,10 @@ function recordingTheme() {
   };
 }
 
-// S16: every permission the editor gates on, confirmed true. Fixtures that
+// S16: every permission the editors gate on, confirmed true. Fixtures that
 // mean to open an editor carry this explicitly; a fixture without it is a
 // repository where editing is not permitted.
-const EDITABLE = { canEditLabels: true, canEditAssignees: true, canCreateLabels: true };
+const EDITABLE = { canEditLabels: true, canEditAssignees: true, canCreateLabels: true, canCloseIssues: true };
 
 function issue(number, overrides = {}) {
   return {
@@ -652,7 +652,7 @@ describe('issues view read-only association (S10b)', () => {
       issues: rows,
       assigned: ASSIGNED,
       saveAssignment: (nums) => { saves.push(nums); return { ok: true }; },
-      loadIssue: (n) => ({ ok: true, issue: issue(n), comments: [] }),
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: EDITABLE }), comments: [] }),
       ...overrides,
     });
     return { ...made, saves, rows };
@@ -887,7 +887,7 @@ describe('issues view editors and confirmations', () => {
       pages: pagesOf([openRows, [], []]),
       issues: openRows,
       actions: { setState: (number, state) => { calls.push([number, state]); return { ok: true }; } },
-      loadIssue: (n) => ({ ok: true, issue: issue(n), comments: [] }),
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: EDITABLE }), comments: [] }),
     });
     await tick();
     view.handleInput('x');
@@ -936,7 +936,7 @@ describe('issues view editors and confirmations', () => {
     const { view } = makeView({
       pages: pagesOf([[issue(1)], [], []]),
       issues: [issue(1)],
-      loadIssue: (n) => ({ ok: true, issue: issue(n), comments: [] }),
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: EDITABLE }), comments: [] }),
     });
     await tick();
     const before = bodyOf(view, 160);
@@ -1694,7 +1694,7 @@ describe('issues view concise header (S25)', () => {
       checkoutName: CHECKOUT,
       pages: pagesOf([[issue(1)], [], []]),
       issues: [issue(1)],
-      loadIssue: (n) => ({ ok: true, issue: issue(n), comments: [] }),
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: EDITABLE }), comments: [] }),
     });
     await tick();
     const header = strip(view.render(80)[0]);
@@ -2156,6 +2156,147 @@ describe('S16: repository permissions gate the label and assignee editors', () =
     await tick();
     assert.equal(view.state.mode, 'list', 'the key cannot enter the editor');
     assert.deepEqual(calls, [], 'no assignee loader ran');
+  });
+});
+
+// «igual en issues en los atajos … si intento darle a close debe revisar si
+// tengo permisos primero, si no tengo alerta y no me deja ni intentar cerrarla»
+// and «si no tengo permiso de crear label pero si de asignar deberia poder
+// entrar a labels pero no deberia aparecer opcion ni keybinding para crear
+// label». Closing (and reopening) is the same TRIAGE-level capability the label
+// and assignee editors need, so the key resolves the repository permission
+// BEFORE it opens the confirmation and never reaches the write without it.
+// Reading the issue detail is that evidence's cache, so `r` re-reads it.
+describe('issues close/reopen permission gate', () => {
+  const TRIAGE = { canEditLabels: true, canEditAssignees: true, canCloseIssues: true, canCreateLabels: false };
+  const READ_ONLY = { canEditLabels: false, canEditAssignees: false, canCloseIssues: false, canCreateLabels: false };
+
+  test('x and X open no confirmation and write nothing without canCloseIssues', async () => {
+    for (const permissions of [undefined, {}, READ_ONLY, { canCloseIssues: 'yes' }]) {
+      const calls = [];
+      const rows = [issue(1)];
+      const { view } = makeView({
+        pages: pagesOf([rows, [], []]),
+        issues: rows,
+        loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions }), comments: [] }),
+        actions: { setState: (n, state) => { calls.push([n, state]); return { ok: true }; } },
+      });
+      await tick();
+      view.handleInput('x');
+      assert.equal(view.state.mode, 'list', `x opens no confirmation for ${JSON.stringify(permissions)}`);
+      view.handleInput('X');
+      assert.equal(view.state.mode, 'list', `X opens no confirmation for ${JSON.stringify(permissions)}`);
+      assert.deepEqual(calls, [], 'no state write was attempted');
+      const body = bodyOf(view, 200);
+      assert.ok(!body.includes('x/X close'), 'the footer names no close key without the permission');
+      assert.match(bodyOf(view, 124), /permission/, 'the refusal names the missing permission');
+    }
+  });
+
+  test('with TRIAGE the close key is offered, confirms and then writes', async () => {
+    const calls = [];
+    const rows = [issue(1)];
+    const { view } = makeView({
+      pages: pagesOf([rows, [], []]),
+      issues: rows,
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: TRIAGE }), comments: [] }),
+      actions: { setState: (n, state) => { calls.push([n, state]); return { ok: true }; } },
+    });
+    await tick();
+    assert.match(bodyOf(view, 200), /x\/X close/, 'the triage viewer is offered the close key');
+    view.handleInput('x');
+    assert.equal(view.state.mode, 'confirm', 'the confirmation still asks first');
+    view.handleInput('enter');
+    await tick();
+    assert.deepEqual(calls, [[1, 'closed']], 'the close reaches the injected action');
+  });
+
+  test('with TRIAGE the labels editor opens and names no create keybinding', async () => {
+    const created = [];
+    const rows = [issue(1, { labels: [{ name: 'bug' }] })];
+    const { view } = makeView({
+      pages: pagesOf([rows, [], []]),
+      issues: rows,
+      labels: [{ name: 'bug' }, { name: 'docs' }],
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { labels: [{ name: 'bug' }], permissions: TRIAGE }), comments: [] }),
+      actions: { editLabels: (_n, add, remove, made) => { created.push([add, remove, made]); return { ok: true }; } },
+    });
+    await tick();
+    view.handleInput('l');
+    assert.equal(view.state.mode, 'labels', 'triage permission alone still opens the editor');
+    assert.match(bodyOf(view, 120), /Labels \(space toggle/, 'the existing labels are listed');
+    const editor = bodyOf(view, 120);
+    assert.ok(!editor.includes('n new'), 'the editor names no create keybinding');
+    assert.ok(!editor.includes('create new'), 'no create row is listed');
+    view.handleInput('n');
+    assert.equal(view.state.labelCreating, false, 'n starts no creation');
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.deepEqual(created, [[[], [], []]], 'no label creation was sent');
+  });
+
+  test('with WRITE the same editor offers the create row and the n keybinding', async () => {
+    const rows = [issue(1, { labels: [{ name: 'bug' }] })];
+    const { view } = makeView({
+      pages: pagesOf([rows, [], []]),
+      issues: rows,
+      labels: [{ name: 'bug' }],
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { labels: [{ name: 'bug' }], permissions: EDITABLE }), comments: [] }),
+      actions: { editLabels: () => ({ ok: true }) },
+    });
+    await tick();
+    view.handleInput('l');
+    assert.equal(view.state.mode, 'labels');
+    const editor = bodyOf(view, 120);
+    assert.match(editor, /n new/, 'the WRITE viewer is told how to create one');
+    assert.match(editor, /create new/, 'the create row is listed');
+    view.handleInput('n');
+    assert.equal(view.state.labelCreating, true, 'n starts the creation');
+  });
+
+  test('r re-reads the issue detail, so a granted permission reaches the keys', async () => {
+    let permissions = READ_ONLY;
+    const loads = [];
+    const rows = [issue(1)];
+    const { view } = makeView({
+      pages: pagesOf([rows, [], []]),
+      issues: rows,
+      loadIssue: (n, opts) => {
+        loads.push(opts || null);
+        return { ok: true, issue: issue(n, { permissions }), comments: [] };
+      },
+      actions: { setState: () => ({ ok: true }) },
+    });
+    await tick();
+    assert.ok(!bodyOf(view, 200).includes('x/X close'), 'the read-only viewer has no close key');
+    view.handleInput('x');
+    assert.equal(view.state.mode, 'list');
+    permissions = TRIAGE;
+    view.handleInput('r');
+    await tick();
+    assert.deepEqual(loads[1], { refresh: true }, 'the refresh re-reads the detail that carries the permission');
+    assert.match(bodyOf(view, 200), /x\/X close/, 'the refreshed permission reaches the footer');
+    view.handleInput('x');
+    assert.equal(view.state.mode, 'confirm', 'and the key opens the confirmation');
+  });
+
+  test('commenting stays ungated: c opens and posts on a read-only repository', async () => {
+    const posts = [];
+    const rows = [issue(1)];
+    const { view } = makeView({
+      pages: pagesOf([rows, [], []]),
+      issues: rows,
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: READ_ONLY }), comments: [] }),
+      actions: { postComment: (n, text) => { posts.push([n, text]); return { ok: true }; } },
+    });
+    await tick();
+    assert.match(bodyOf(view, 200), /c comment/, 'the comment key needs no repository capability');
+    view.handleInput('c');
+    assert.equal(view.state.mode, 'comment');
+    for (const ch of 'hi') view.handleInput(ch);
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.deepEqual(posts, [[1, 'hi']], 'the comment reaches the injected action');
   });
 });
 
@@ -2833,7 +2974,7 @@ describe('issues view pending writes and comment caret (S10/S11)', () => {
     const { view } = makeView({
       pages: pagesOf([rows, [], []]),
       issues: rows,
-      loadIssue: (n) => ({ ok: true, issue: issue(n), comments: [] }),
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: EDITABLE }), comments: [] }),
       actions: { setState: (n, state) => { calls.push([n, state]); return gate.promise; } },
     });
     await tick();

@@ -1,7 +1,9 @@
 'use strict';
-// S2/S4 surface: the standalone package registers exactly three commands
-// (/warp, /odd-list and /issues) and the four agent worktree tools, loads
-// without any Herdr binary, and ships none of the removed functionality
+// S2/S4 surface: the standalone package always registers /warp, /odd-list and
+// /issues plus the four agent worktree tools, loads without any Herdr binary,
+// and ships none of the removed functionality. S9 adds three /codegraph-*
+// commands that exist ONLY when the session gate finds the CLI, so the exact
+// command list depends on the machine and is asserted conditionally.
 // (customize panel, plugin-tools toggles, worktree mode file, perf tracing).
 // The issues reader, preview formatter and view are the migrated T2 units and
 // are shipped; `/issues` is the T3 command that mounts them, without any
@@ -76,7 +78,14 @@ describe('registration', () => {
     process.env.HERDR_BIN_PATH = NO_HERDR;
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
-    assert.deepEqual([...commands.keys()].sort(), ['issues', 'odd-list', 'warp']);
+    const registered = [...commands.keys()].sort();
+    const base = ['issues', 'odd-list', 'warp'];
+    const codegraph = ['codegraph-hook', 'codegraph-init', 'codegraph-sync'];
+    for (const name of base) assert.ok(registered.includes(name), `/${name} is registered`);
+    // S9: the codegraph triple is gated on the CLI, never on anything else.
+    const { hasCodegraph } = require('../lib/codegraph-session.js');
+    const expected = hasCodegraph(process.env) ? [...base, ...codegraph].sort() : base;
+    assert.deepEqual(registered, expected, 'the command list is the base three plus the codegraph triple exactly when the CLI is present');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_close', 'worktree_create', 'worktree_list', 'worktree_warp']);
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });

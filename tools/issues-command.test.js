@@ -633,7 +633,7 @@ describe('/issues actions (S3,S4)', () => {
     const triage = makeIssuesRunner({ role: 'TRIAGE' });
     const { component: triaged } = await openIssues(triageRoot, { runner: triage.runner });
     const triageFrame = () => clean(triaged.render(200).join('\n'));
-    assert.ok(await waitFor(() => triageFrame().includes('L labels')), 'triage may open the label editor');
+    assert.ok(await waitFor(() => triageFrame().includes('l labels')), 'triage may open the label editor');
 
     triaged.handleInput('L');
     assert.equal(triaged.state.mode, 'labels', 'the triage viewer reaches the editor');

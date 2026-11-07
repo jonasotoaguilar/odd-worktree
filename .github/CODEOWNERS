@@ -1,0 +1,4 @@
+# Reviews are requested from the repository owner automatically, and a
+# branch-protection "require review from code owners" rule has a real owner to
+# bind to. There is one maintainer, so every path maps to the same account.
+* @jonasotoaguilar

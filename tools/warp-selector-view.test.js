@@ -11,7 +11,9 @@
 // requested width; the panel is exactly as tall as its content and never
 // taller than the rows the host offers (S3: a bottom panel that computes its
 // own height, not a box with slack); the S4 order above is pinned; the current
-// worktree owns the header and is never one of the five rows (S4b); the
+// worktree owns the header and is never one of the five rows (S4b), and it is
+// never a DESTINATION either: `view all worktrees` lists every other checkout
+// and never the one the session already stands in; the
 // principal leads when it is not current, then the rows follow the most
 // recent activity; `view all worktrees` appears only when at least one
 // worktree is left out (S4c, reconciled in L2) and never when everything
@@ -44,6 +46,9 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const { createWarpSelectorView, formatFactsLine } = require('../lib/warp-selector-view.js');
 
@@ -144,6 +149,7 @@ function makeView(options = {}) {
       toggles.push(path);
       return options.onToggle(path);
     } : undefined,
+    canonicalPath: typeof options.canonicalPath === 'function' ? options.canonicalPath : undefined,
     helpers,
     theme: options.theme === undefined ? plainTheme : options.theme,
     now: options.now === undefined ? NOW : options.now,
@@ -489,8 +495,8 @@ describe('ordering and both ages (S12)', () => {
     assert.match(rows[2], /commit-fresh/);
     assert.match(rows[3], /dirty-fresh/);
     assert.match(rows[4], /stale/);
-    assert.match(rows[5], /cur/);
-    assert.match(rows[6], /open/);
+    assert.match(rows[5], /open/);
+    assert.equal(rows[6], '', 'the current checkout is not a row, so `open` is the last one');
   });
 
   test('renders both ages in the package style, from just now to years', () => {
@@ -596,7 +602,7 @@ describe('the create key and the retired edit key (S1, S4, S6)', () => {
 });
 
 describe('extended list (S1, S6)', () => {
-  test('v opens a paginated list of every checkout with an always-active filter row', async () => {
+  test('v opens a paginated list of every other checkout with an always-active filter row', async () => {
     const { view } = await opened();
     view.handleInput('v');
     assert.equal(view.state.view, 'list');
@@ -606,10 +612,10 @@ describe('extended list (S1, S6)', () => {
     assert.match(lines[0], /^╭─ Warp · all worktrees ─+ esc ─╮$/);
     assert.equal(rows[1], 'filter: type to search', 'the filter row is always present and never selectable');
     assert.equal(rows[2], '▸ main · use the local project', 'S6: the principal leads the list');
-    assert.equal(rows[3], '  feat-odd-viewer · current');
-    assert.equal(rows[4], '  feat-alpha');
-    assert.equal(rows[5], '  fix-beta');
-    assert.equal(rows[17], 'page 1/1 · 4 worktrees');
+    assert.equal(rows[3], '  feat-alpha');
+    assert.equal(rows[4], '  fix-beta');
+    assert.equal(rows[5], '', 'the checkout the session stands in is not a destination');
+    assert.equal(rows[17], 'page 1/1 · 3 worktrees');
     assert.match(rows[18], /enter warp/);
     assert.match(rows[18], /esc back/);
     assert.ok(!rows.slice(2, 17).join('\n').includes('current: '), 'the filter row is not a data row');
@@ -647,27 +653,29 @@ describe('extended list (S1, S6)', () => {
     assert.deepEqual(results, [], 'enter on an empty result warps nowhere');
   });
 
-  test('pgUp/pgDn page through every checkout', async () => {
+  test('pgUp/pgDn page through every other checkout', async () => {
     const many = Array.from({ length: 12 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/wt-${index + 1}`, branch: `feat/wt-${index + 1}` }));
     const { view } = await opened({ checkouts: many, current: { name: 'wt-1', path: '/w/wt-1' }, rows: 11 });
     view.handleInput('v');
     let { rows } = screen(view);
-    // 11 rows - 5 fixed rows = a 6-row page.
-    assert.match(rows[2], /wt-1/);
-    assert.match(rows[7], /wt-6/);
-    assert.equal(rows[8], 'page 1/2 · 12 worktrees', 'the page row sits right below the six rows');
+    // 11 rows - 5 fixed rows = a 6-row page, and wt-1 (the session's own
+    // checkout) is not one of the eleven destinations.
+    assert.equal(rows[2], '▸ wt-2');
+    assert.equal(rows[7], '  wt-7');
+    assert.equal(rows[8], 'page 1/2 · 11 worktrees', 'the page row sits right below the six rows');
     view.handleInput('pagedown');
     ({ rows } = screen(view));
     assert.equal(view.state.page, 1);
-    assert.match(rows[2], /wt-7/);
-    assert.match(rows[7], /wt-12/);
-    assert.equal(rows[8], 'page 2/2 · 12 worktrees');
+    assert.equal(rows[2], '▸ wt-8');
+    assert.equal(rows[6], '  wt-12');
+    assert.equal(rows[7], '', 'the second page holds the remaining five rows');
+    assert.equal(rows[8], 'page 2/2 · 11 worktrees');
     view.handleInput('pagedown');
     assert.equal(view.state.page, 1, 'the last page is a wall');
     view.handleInput('pageup');
     ({ rows } = screen(view));
     assert.equal(view.state.page, 0);
-    assert.match(rows[2], /wt-1/);
+    assert.equal(rows[2], '▸ wt-2');
   });
 
   test('esc closes the filter first and then steps back to the panel', async () => {
@@ -699,7 +707,7 @@ describe('extended list (S1, S6)', () => {
     view.handleInput('v');
     view.handleInput('down');
     view.handleInput('enter');
-    assert.deepEqual(results, [{ warp: '/w/feat-odd-viewer' }]);
+    assert.deepEqual(results, [{ warp: '/w/feat-alpha' }], 'the second row is feat-alpha: the current checkout is not listed');
   });
 });
 
@@ -711,7 +719,7 @@ describe('the S6 space rule', () => {
     assert.equal(view.state.listCursor, 1);
 
     view.handleInput(' ');
-    assert.deepEqual(toggles, ['/w/feat-odd-viewer'], 'space toggles the focused row while the filter is closed');
+    assert.deepEqual(toggles, ['/w/feat-alpha'], 'space toggles the focused row while the filter is closed');
     assert.equal(view.state.filterOpen, false, 'and never opens the filter');
     assert.equal(view.state.filter, '');
 
@@ -720,7 +728,7 @@ describe('the S6 space rule', () => {
     assert.equal(view.state.filter, 'z');
     view.handleInput(' ');
     assert.equal(view.state.filter, 'z ', 'once open, space goes to the text');
-    assert.deepEqual(toggles, ['/w/feat-odd-viewer'], 'and no longer toggles');
+    assert.deepEqual(toggles, ['/w/feat-alpha'], 'and no longer toggles');
 
     view.handleInput('escape');
     assert.equal(view.state.filterOpen, false);
@@ -731,7 +739,7 @@ describe('the S6 space rule', () => {
     view.handleInput('escape');
     view.handleInput('down');
     view.handleInput(' ');
-    assert.deepEqual(toggles, ['/w/feat-odd-viewer', '/w/feat-odd-viewer'], 'closing an empty filter restores the toggle');
+    assert.deepEqual(toggles, ['/w/feat-alpha', '/w/feat-alpha'], 'closing an empty filter restores the toggle');
   });
 
   test('without a toggle, space is a printable and opens the filter', async () => {
@@ -1080,9 +1088,8 @@ describe('S4: ctrl+d asks to delete the focused checkout', () => {
   test('ctrl+d in the extended list names the focused row and stays inert while the filter is open', async () => {
     const { view, results } = await opened();
     view.handleInput('v');
-    // The list is every checkout, principal first: main, the current one, then
-    // the rest — so the focused row after two moves is feat-alpha.
-    view.handleInput('down');
+    // The list is every OTHER checkout, principal first: main, then feat-alpha
+    // — so the focused row after one move is feat-alpha.
     view.handleInput('down');
     view.handleInput('\x04');
     assert.deepEqual(results, [{ delete: '/w/feat-alpha' }], 'the list speaks the same marker');
@@ -1227,7 +1234,7 @@ describe('S11: the shared palette', () => {
     const pageRow = view.render(WIDE).at(-3);
     assert.match(pageRow, /\x1b\[2mpage \x1b\[0m/, 'the `page` label is dim');
     assert.match(pageRow, /\x1b\[39m1\/1\x1b\[0m/, 'the page number is ordinary text');
-    assert.match(pageRow, /\x1b\[90m · 4 worktrees\x1b\[0m/, 'the worktree count is muted');
+    assert.match(pageRow, /\x1b\[90m · 3 worktrees\x1b\[0m/, 'the worktree count is muted');
   });
 
   test('the search row paints its static label dim and the live query as ordinary text', async () => {
@@ -1258,5 +1265,199 @@ describe('S11: the shared palette', () => {
     assert.equal(rows[4], '▸ main · use the local project', 'the focus marker survives monochrome');
     view.handleInput('v');
     assert.match(screen(view, WIDE).rows.at(-2), /pgUp\/pgDn page/, 'the list legend survives too');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Feedback: warping to the checkout the session already stands in is a move to
+// the same route, so `view all worktrees` never offers it. The exclusion is by
+// CHECKOUT IDENTITY, never by spelling or by string prefix: the fixtures below
+// are real directories with a real symlink alias, and the canonical reader the
+// wiring hands the view (fs.realpathSync) is what makes two spellings one
+// checkout, while `feat-x2` stays its own checkout even though it starts with
+// `feat-x`.
+// ---------------------------------------------------------------------------
+describe('the current checkout is never a destination', () => {
+  const realpath = (value) => {
+    try { return fs.realpathSync(value); } catch { return value; }
+  };
+
+  // A real temporary workspace: real checkout directories, real symlinks, and
+  // every scratch path removed when the test ends.
+  function workspace(t) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'warp-view-'));
+    t.after(() => {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* already gone */ }
+    });
+    return {
+      dir,
+      checkout(name) {
+        const full = path.join(dir, name);
+        fs.mkdirSync(full);
+        return full;
+      },
+      alias(name, target) {
+        const full = path.join(dir, name);
+        fs.symlinkSync(target, full);
+        return full;
+      },
+    };
+  }
+
+  test('the extended list drops the checkout the session is in and keeps the others', async (t) => {
+    const ws = workspace(t);
+    const principal = ws.checkout('herdr');
+    const feat = ws.checkout('feat-alpha');
+    const fix = ws.checkout('fix-beta');
+    const { view } = await opened({
+      checkouts: [
+        { name: 'feat-alpha', path: feat, branch: 'feat/alpha' },
+        { name: 'principal', path: principal, branch: 'main', isPrincipal: true },
+        { name: 'fix-beta', path: fix, branch: 'fix/beta' },
+      ],
+      current: { name: 'feat-alpha', path: feat },
+      canonicalPath: realpath,
+    });
+    view.handleInput('v');
+    const { lines, rows } = screen(view);
+    assertWidth(lines);
+    assert.equal(rows[2], '▸ principal · use the local project', 'the principal still leads the destinations');
+    assert.equal(rows[3], '  fix-beta');
+    assert.equal(rows[4], '', 'and nothing else follows');
+    assert.ok(!rows.join('\n').includes('feat-alpha'), 'the checkout the session is in is not a destination');
+    assert.equal(rows[17], 'page 1/1 · 2 worktrees');
+  });
+
+  test('a symlink spelling of the current checkout is the same checkout, in both directions', async (t) => {
+    const ws = workspace(t);
+    const feat = ws.checkout('feat-alpha');
+    const alias = ws.alias('alias-alpha', feat);
+    const principal = ws.checkout('herdr');
+
+    const listedByAlias = await opened({
+      checkouts: [
+        { name: 'principal', path: principal, branch: 'main', isPrincipal: true },
+        { name: 'alias-alpha', path: alias, branch: 'feat/alpha' },
+      ],
+      current: { name: 'feat-alpha', path: feat },
+      canonicalPath: realpath,
+    });
+    listedByAlias.view.handleInput('v');
+    assert.ok(!screen(listedByAlias.view).rows.join('\n').includes('alias-alpha'),
+      'the alias of the current checkout is not a destination');
+    assert.equal(screen(listedByAlias.view).rows[17], 'page 1/1 · 1 worktree');
+
+    const listedByReal = await opened({
+      checkouts: [
+        { name: 'principal', path: principal, branch: 'main', isPrincipal: true },
+        { name: 'feat-alpha', path: feat, branch: 'feat/alpha' },
+      ],
+      current: { name: 'alias-alpha', path: alias },
+      canonicalPath: realpath,
+    });
+    listedByReal.view.handleInput('v');
+    assert.ok(!screen(listedByReal.view).rows.join('\n').includes('feat-alpha'),
+      'the real path is the same checkout as the alias the session stands on');
+    assert.equal(screen(listedByReal.view).rows[17], 'page 1/1 · 1 worktree');
+  });
+
+  test('a checkout whose name merely starts with the current path is another checkout', async (t) => {
+    const ws = workspace(t);
+    const feat = ws.checkout('feat-x');
+    const featTwo = ws.checkout('feat-x2');
+    const { view } = await opened({
+      checkouts: [
+        { name: 'feat-x', path: feat, branch: 'feat/x' },
+        { name: 'feat-x2', path: featTwo, branch: 'feat/x2' },
+      ],
+      current: { name: 'feat-x', path: feat },
+      canonicalPath: realpath,
+    });
+    view.handleInput('v');
+    const { rows } = screen(view);
+    assert.equal(rows[2], '▸ feat-x2', 'a shared name prefix is not the same checkout');
+    assert.equal(rows[3], '', 'and the current checkout itself is still absent');
+    assert.equal(rows[17], 'page 1/1 · 1 worktree');
+  });
+
+  test('the panel and the list share one exclusion, so neither lists the current checkout', async (t) => {
+    const ws = workspace(t);
+    const feat = ws.checkout('feat-alpha');
+    const alias = ws.alias('alias-alpha', feat);
+    const principal = ws.checkout('herdr');
+    const { view } = await opened({
+      checkouts: [
+        { name: 'principal', path: principal, branch: 'main', isPrincipal: true },
+        { name: 'alias-alpha', path: alias, branch: 'feat/alpha' },
+      ],
+      current: { name: 'feat-alpha', path: feat },
+      canonicalPath: realpath,
+    });
+    const frame = panel(view, WIDE);
+    assert.deepEqual(frame.worktrees, ['▸ principal · use the local project'], 'the panel lists only the other checkout');
+    assert.equal(frame.viewAll, null, 'nothing is left out, so there is no offer row');
+    assert.equal(frame.height, 8, 'the panel shrinks to its content');
+  });
+
+  test('with nothing else to list, the extended list says so and resolves nothing', async (t) => {
+    const ws = workspace(t);
+    const feat = ws.checkout('feat-alpha');
+    const { view, results } = await opened({
+      checkouts: [{ name: 'feat-alpha', path: feat, branch: 'feat/alpha' }],
+      current: { name: 'feat-alpha', path: feat },
+      canonicalPath: realpath,
+    });
+    view.handleInput('v');
+    const { lines, rows } = screen(view);
+    assertWidth(lines);
+    assert.equal(rows[2], '(no other worktrees)', 'the list explains itself instead of naming the current checkout');
+    assert.equal(rows[17], 'page 1/1 · 0 worktrees');
+    view.handleInput('enter');
+    view.handleInput('ctrl+d');
+    assert.deepEqual(results, [], 'an empty destination list warps nowhere and deletes nothing');
+  });
+
+  test('a session standing outside every listed checkout keeps every row', async (t) => {
+    const ws = workspace(t);
+    const principal = ws.checkout('herdr');
+    const feat = ws.checkout('feat-alpha');
+    const { view } = await opened({
+      checkouts: [
+        { name: 'principal', path: principal, branch: 'main', isPrincipal: true },
+        { name: 'feat-alpha', path: feat, branch: 'feat/alpha' },
+      ],
+      current: { name: 'unknown', path: path.join(ws.dir, 'nowhere') },
+      canonicalPath: realpath,
+    });
+    view.handleInput('v');
+    const { rows } = screen(view);
+    assert.equal(rows[2], '▸ principal · use the local project');
+    assert.equal(rows[3], '  feat-alpha');
+    assert.equal(rows[17], 'page 1/1 · 2 worktrees', 'a current checkout outside the list excludes nothing');
+  });
+
+  test('a reload that re-lists the current checkout under another spelling still excludes it', async (t) => {
+    const ws = workspace(t);
+    const feat = ws.checkout('feat-alpha');
+    const alias = ws.alias('alias-alpha', feat);
+    const principal = ws.checkout('herdr');
+    const { view } = await opened({
+      checkouts: [
+        { name: 'principal', path: principal, branch: 'main', isPrincipal: true },
+        { name: 'feat-alpha', path: feat, branch: 'feat/alpha' },
+      ],
+      current: { name: 'feat-alpha', path: feat },
+      canonicalPath: realpath,
+      reloadTo: [
+        { name: 'principal', path: principal, branch: 'main', isPrincipal: true },
+        { name: 'alias-alpha', path: alias, branch: 'feat/alpha' },
+      ],
+    });
+    view.handleInput('v');
+    assert.ok(!screen(view).rows.join('\n').includes('alias-alpha'), 'the mount already excludes it');
+    view.handleInput('r');
+    await tick();
+    assert.ok(!screen(view).rows.join('\n').includes('alias-alpha'), 'the reloaded spelling is the same checkout');
+    assert.equal(screen(view).rows[17], 'page 1/1 · 1 worktree');
   });
 });

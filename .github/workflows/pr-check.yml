@@ -1,0 +1,119 @@
+name: PR Check
+
+# Review gates for a pull request. Adapted from the ci-cd-and-automation
+# pr-check asset: the asset's issue-approval, `type:*` label and 400-line gates
+# need labels and an approval process this repository does not have, so the
+# gates here are the ones its history actually follows — Conventional Commits
+# in the title and in every commit — plus one run of the suite so the PR shows
+# a single test status without reading the CI matrix.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check-pr-title:
+    name: Check PR Title
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify the PR title follows Conventional Commits
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          # The title reaches the script through the environment, never spliced
+          # into the script source.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        with:
+          script: |
+            // The title becomes the squash-merge subject, so it carries the same
+            // convention the commit check enforces.
+            const title = process.env.PR_TITLE || '';
+            const convention =
+              /^(feat|fix|docs|refactor|test|chore|perf|build|ci|style|revert)(\([a-z0-9._/-]+\))?!?: \S/;
+
+            if (!convention.test(title)) {
+              core.setFailed(
+                `❌ PR title does not follow Conventional Commits: "${title}"\n\n` +
+                  'Expected: <type>(<scope>): <subject>\n' +
+                  '  type:    feat, fix, docs, refactor, test, chore, perf, build, ci, style, revert\n' +
+                  '  scope:   optional and lowercase, e.g. feat(warp): ..., fix(issues): ...\n' +
+                  '  subject: one line, no trailing period\n\n' +
+                  'A breaking change marks the type with "!" — feat(warp)!: ...'
+              );
+              return;
+            }
+
+            console.log(`✅ PR title follows the convention: ${title}`);
+
+  check-commits:
+    name: Check Commit Messages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Verify every commit subject follows Conventional Commits
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        with:
+          script: |
+            const convention =
+              /^(feat|fix|docs|refactor|test|chore|perf|build|ci|style|revert)(\([a-z0-9._/-]+\))?!?: \S/;
+            const { owner, repo } = context.repo;
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner,
+              repo,
+              pull_number: Number(process.env.PR_NUMBER),
+              per_page: 100,
+            });
+
+            const invalid = [];
+            for (const { sha, commit } of commits) {
+              const subject = (commit.message || '').split('\n')[0];
+              // Merge commits are the platform's, not the author's.
+              if (/^Merge /.test(subject)) continue;
+              if (!convention.test(subject)) invalid.push(`${sha.slice(0, 7)} ${subject}`);
+            }
+
+            if (invalid.length > 0) {
+              core.setFailed(
+                `❌ ${invalid.length} commit subject(s) do not follow Conventional Commits:\n` +
+                  invalid.map((line) => `  ${line}`).join('\n') +
+                  '\n\nRewrite them locally (git rebase -i <base>) and force-push the branch.'
+              );
+              return;
+            }
+
+            console.log(`✅ ${commits.length} commit(s) checked, all subjects follow the convention.`);
+
+  test:
+    name: Test (Node 22.x)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22.x
+
+      - name: Run the test suite
+        run: node --test tools/*.test.js

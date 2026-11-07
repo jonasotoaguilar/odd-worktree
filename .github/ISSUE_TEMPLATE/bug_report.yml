@@ -1,0 +1,136 @@
+name: Bug Report
+description: Report a bug
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## How this works
+
+        1. **Submit** this bug report → it gets the `bug` label automatically
+        2. A **maintainer reviews** it, asks for missing detail, or closes it as a duplicate
+        3. A fix lands as a PR that references this issue
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-flight Checklist
+      options:
+        - label: I checked existing issues and this is not a duplicate
+          required: true
+        - label: I read the README requirements (Node.js, Pi, optional `herdr`/`codegraph`/`gh`)
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: Describe the bug clearly and concisely.
+      placeholder: Describe the bug...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: The exact commands, tool calls, or key presses that trigger it.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What happened instead? Include any refusal or error text verbatim.
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        ## Environment
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / Commit
+      description: The package version or commit SHA of this checkout.
+      placeholder: "e.g. 0.1.0 or 2a19f4c"
+    validations:
+      required: true
+
+  - type: input
+    id: pi-version
+    attributes:
+      label: Pi Version
+      description: The host Pi version (`pi --version`), and Herdr / codegraph versions when they are part of the report.
+      placeholder: "e.g. Pi 1.5.0, herdr 0.3.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - macOS
+        - Linux (Ubuntu/Debian)
+        - Linux (Arch/Manjaro)
+        - Linux (Fedora/RHEL)
+        - Linux (Other)
+        - Windows
+        - Windows (WSL)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      description: Which part of this package does it impact?
+      options:
+        - worktree_create
+        - worktree_list
+        - worktree_close
+        - worktree_warp
+        - /warp panel (create, list, delete)
+        - /odd-list viewer
+        - /issues reader
+        - Registry and session state
+        - CI / Build
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Error Output
+      description: Paste the relevant output. Remove tokens, private paths, and repository names you do not want public.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Registry contents, session setup, screenshots, or anything else that narrows the cause.
+    validations:
+      required: false

@@ -164,6 +164,92 @@ describe('happy path over captured real gh JSON', () => {
   });
 });
 
+// Closing/reopening, editing labels and assigning are ONE triage-level
+// capability; creating a repository label is the distinct WRITE one. The
+// evidence is `repository.viewerPermission`, and only a literally permitting
+// role yields `true` — an unknown role, a missing field or a failed read all
+// fail closed, so the view never offers a capability this client cannot prove.
+describe('repository permissions from viewerPermission', () => {
+  const PINNED = { scope: 'github.com/o/r' };
+
+  // The detail read plus the metadata reads `includeMetadata` issues, answered
+  // by role. `access` lets a caller fail the viewerPermission read instead.
+  function roleRunner(role, { access = null } = {}) {
+    const calls = [];
+    const graphql = (query) => {
+      if (query.includes('viewerPermission')) {
+        if (access) return access;
+        return okJson(JSON.stringify({ data: { repository: {
+          viewerPermission: role,
+          issue: {
+            assignees: { nodes: [], pageInfo: { hasNextPage: false } },
+            closedByPullRequestsReferences: { totalCount: 0 },
+          },
+        } } }));
+      }
+      if (query.includes('projectItems')) {
+        return okJson(JSON.stringify({ data: { repository: { issue: {
+          projectItems: { nodes: [], pageInfo: { hasNextPage: false } },
+        } } } }));
+      }
+      return { status: 1, stdout: '', stderr: 'unexpected query', error: null };
+    };
+    const runner = (bin, argv) => {
+      calls.push(argv.slice());
+      if (argv[0] === 'issue' && argv[1] === 'view') return okJson(fixture('gh-issue-view.json'));
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        const query = argv.filter((value) => value.startsWith('query='))[0] || '';
+        return graphql(query);
+      }
+      return { status: 1, stdout: '', stderr: 'unexpected command', error: null };
+    };
+    return { runner, calls };
+  }
+
+  async function permissionsFor(viewerPermission, options = {}) {
+    const { runner } = roleRunner(viewerPermission, options);
+    ghIssues.setGhRunner(runner);
+    const res = await ghIssues.getIssue(76, { ...PINNED, includeMetadata: true });
+    assert.equal(res.ok, true, res.error);
+    return res.issue;
+  }
+
+  test('TRIAGE may close, label and assign but may not create a label', async () => {
+    const issue = await permissionsFor('TRIAGE');
+    assert.deepEqual(issue.permissions, {
+      canEditLabels: true,
+      canEditAssignees: true,
+      canCloseIssues: true,
+      canCreateLabels: false,
+    }, 'triage carries every existing-label capability and no creation right');
+  });
+
+  test('WRITE and above add the label-creation right', async () => {
+    for (const role of ['WRITE', 'MAINTAIN', 'ADMIN']) {
+      const issue = await permissionsFor(role);
+      assert.deepEqual(issue.permissions, {
+        canEditLabels: true,
+        canEditAssignees: true,
+        canCloseIssues: true,
+        canCreateLabels: true,
+      }, `${role} may create a label`);
+    }
+  });
+
+  test('READ, NONE, an unknown role and a failed read all leave every capability false', async () => {
+    const nobody = { canEditLabels: false, canEditAssignees: false, canCloseIssues: false, canCreateLabels: false };
+    for (const role of ['READ', 'NONE', 'write', 'TRIAGE ', undefined]) {
+      const issue = await permissionsFor(role);
+      assert.deepEqual(issue.permissions, nobody, `${JSON.stringify(role)} permits nothing`);
+    }
+    const failed = await permissionsFor(null, {
+      access: { status: 1, stdout: '', stderr: 'permission read failed', error: null },
+    });
+    assert.deepEqual(failed.permissions, nobody, 'an unreadable permission fails closed');
+    assert.match(String(failed.metadataError), /permission read failed/, 'and the failure is reported');
+  });
+});
+
 describe('failure shapes: nothing throws', () => {
   test('missing gh binary (ENOENT) fails closed on every read call', async () => {
     const { runner } = makeRunner({ status: null, stdout: '', stderr: '', error: 'spawn gh ENOENT' });

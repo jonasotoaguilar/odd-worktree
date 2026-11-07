@@ -608,6 +608,51 @@ describe('/issues actions (S3,S4)', () => {
     assert.equal(ghCalls().some((call) => call.argv[1] === 'reopen'), false, 'the view has no reopen path');
   });
 
+  test('the mounted view refuses close, labels and assign on READ, and offers no label creation on TRIAGE', async () => {
+    const mutations = (calls) => calls.filter((call) => call.argv[0] === 'issue'
+      && ['edit', 'close', 'reopen'].includes(call.argv[1]))
+      .concat(calls.filter((call) => call.argv[0] === 'label' && call.argv[1] === 'create'));
+
+    const readRoot = makeRepo({ tag: 'issues-role-read' });
+    const read = makeIssuesRunner({ role: 'READ' });
+    const { component: readOnly } = await openIssues(readRoot, { runner: read.runner });
+    const readFrame = () => clean(readOnly.render(200).join('\n'));
+    assert.ok(await waitFor(() => readFrame().includes('c comment')), 'the reader is painted');
+    assert.ok(!readFrame().includes('L labels'), 'a read-only viewer is offered no label editor');
+    assert.ok(!readFrame().includes('a assign'), 'no assignee editor either');
+    assert.ok(!readFrame().includes('x/X close'), 'and no close key');
+
+    for (const key of ['x', 'X', 'L', 'a']) readOnly.handleInput(key);
+    await tick();
+    assert.equal(readOnly.state.mode, 'list', 'no editor opens without the capability');
+    assert.equal(readOnly.state.confirm, null, 'no close confirmation is staged');
+    assert.match(readFrame(), /permission/, 'the refusal names the missing permission');
+    assert.deepEqual(mutations(read.calls), [], 'no mutation was even attempted');
+
+    const triageRoot = makeRepo({ tag: 'issues-role-triage' });
+    const triage = makeIssuesRunner({ role: 'TRIAGE' });
+    const { component: triaged } = await openIssues(triageRoot, { runner: triage.runner });
+    const triageFrame = () => clean(triaged.render(200).join('\n'));
+    assert.ok(await waitFor(() => triageFrame().includes('L labels')), 'triage may open the label editor');
+
+    triaged.handleInput('L');
+    assert.equal(triaged.state.mode, 'labels', 'the triage viewer reaches the editor');
+    await tick();
+    assert.ok(!triageFrame().includes('create new'), 'no create row without the WRITE right');
+    assert.ok(!triageFrame().includes('n new'), 'and no create keybinding either');
+    triaged.handleInput('n');
+    assert.equal(triaged.state.labelCreating, false, 'n starts no creation');
+    triaged.handleInput('escape');
+    assert.equal(triaged.state.mode, 'list');
+
+    triaged.handleInput('x');
+    assert.equal(triaged.state.mode, 'confirm', 'triage may close');
+    triaged.handleInput('enter');
+    assert.ok(await waitFor(() => triage.calls.some((call) => call.argv[1] === 'close')), 'the close reached gh');
+    assert.deepEqual(triage.calls.filter((call) => call.argv[1] === 'close').map((call) => call.argv),
+      [['issue', 'close', '76']], 'one fixed-argv close, and no label creation');
+  });
+
   test('the browser opener runs fixed argv and suspends the terminal for the open', async () => {
     const root = makeRepo({ tag: 'issues-open-browser' });
     const { runner } = makeIssuesRunner();

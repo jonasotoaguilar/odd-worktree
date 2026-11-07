@@ -107,13 +107,14 @@ test('permission and relation metadata is explicit and omits absent project/PR d
   runner(() => ok({ data: { repository: { viewerPermission: 'TRIAGE', issue: { assignees: { nodes: [{ login: 'alice' }, { login: 'bob' }] }, projectItems: { nodes: [{ project: { title: 'Roadmap', url: 'https://example.invalid/project' } }] }, closedByPullRequestsReferences: { totalCount: 2 } } } } }));
   const result = await gh.getIssueMetadata(3);
   assert.equal(result.ok, true);
-  assert.deepEqual(result.permissions, { canEditLabels: true, canEditAssignees: true, canCreateLabels: false });
+  assert.deepEqual(result.permissions, { canEditLabels: true, canEditAssignees: true, canCreateLabels: false, canCloseIssues: true });
   assert.deepEqual(result.assignees, ['alice', 'bob']);
   assert.equal(result.projects[0].title, 'Roadmap');
   assert.equal(result.linkedPullRequestCount, 2);
   runner(() => ok({ data: { repository: { viewerPermission: 'READ', issue: { assignees: { nodes: [] }, projectItems: { nodes: [] }, closedByPullRequestsReferences: { totalCount: 0 } } } } }));
   const empty = await gh.getIssueMetadata(3);
   assert.equal(empty.permissions.canEditLabels, false);
+  assert.equal(empty.permissions.canCloseIssues, false);
   assert.equal('projects' in empty, false);
   assert.equal('linkedPullRequestCount' in empty, false);
 });

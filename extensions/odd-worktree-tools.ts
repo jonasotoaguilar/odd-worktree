@@ -7560,6 +7560,21 @@ export default function (pi) {
   });
   pi.on("tool_call", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi));
   pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
+  // S1/S3: a successful edit or write asks for ONE background `codegraph sync`
+  // of that file's checkout. The call is fire-and-forget — never awaited, its
+  // decision never reaches the tool result, and a failure here is swallowed
+  // instead of surfacing as a broken edit.
+  pi.on("tool_result", (event) => {
+    try {
+      if (!event || (event.toolName !== "edit" && event.toolName !== "write")) return;
+      if (event.isError) return;
+      const filePath = event.input && event.input.path;
+      if (typeof filePath !== "string" || filePath.length === 0) return;
+      libRequire("codegraph-session.js").scheduleSync(filePath);
+    } catch {
+      // Index freshness is best effort and never touches the tool result.
+    }
+  });
   // Register every live checkout the registry does not own yet. Dispatched here
   // and awaited by the barrier below: the host runs session_start handlers one
   // at a time, so awaiting the scan inside this handler would put the session's

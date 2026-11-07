@@ -1,8 +1,11 @@
 'use strict';
-// S2/S4 surface: the standalone package registers exactly two commands
-// (/warp and /odd-list) and the four agent worktree tools, loads without any
-// Herdr binary, and ships none of the removed functionality (customize panel,
-// issues reader, plugin-tools toggles, worktree mode file, perf tracing).
+// S2/S4 surface: the standalone package registers exactly three commands
+// (/warp, /odd-list and /issues) and the four agent worktree tools, loads
+// without any Herdr binary, and ships none of the removed functionality
+// (customize panel, plugin-tools toggles, worktree mode file, perf tracing).
+// The issues reader, preview formatter and view are the migrated T2 units and
+// are shipped; `/issues` is the T3 command that mounts them, without any
+// worktree↔issue association.
 //
 // Everything here reads the observable surface: the registered command and
 // tool objects, the manifest, the files on disk. No internal state is read.
@@ -69,11 +72,11 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd-list and the four worktree tools', async () => {
+  test('registers /warp, /odd-list, /issues and the four worktree tools', async () => {
     process.env.HERDR_BIN_PATH = NO_HERDR;
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
-    assert.deepEqual([...commands.keys()].sort(), ['odd-list', 'warp']);
+    assert.deepEqual([...commands.keys()].sort(), ['issues', 'odd-list', 'warp']);
     assert.deepEqual([...tools.keys()].sort(), ['worktree_close', 'worktree_create', 'worktree_list', 'worktree_warp']);
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
@@ -92,22 +95,31 @@ describe('registration', () => {
 });
 
 describe('removed surface', () => {
-  test('the extension names no command outside /warp and /odd-list', () => {
+  test('the extension names no customize or Herdr-panel surface', () => {
     const source = stubbedSource();
     assert.equal(/herdr-gentle:/.test(source), false, 'no herdr-gentle: command name survives');
-    for (const gone of ['registerCustomizeCommand', 'registerIssuesCommand', 'executeWorktreeSessionOpen', 'startAgentSessionWatcher']) {
+    for (const gone of ['registerCustomizeCommand', 'executeWorktreeSessionOpen', 'startAgentSessionWatcher', 'customizePluginToolEnabled']) {
       assert.equal(source.includes(gone), false, `${gone} is gone`);
     }
-    for (const lib of ['worktree-mode.js', 'gh-issues.js', 'issues-view.js', 'herdr-plugin-check.js', 'perf-trace.js']) {
+    for (const lib of ['worktree-mode.js', 'herdr-plugin-check.js', 'perf-trace.js']) {
       assert.equal(source.includes(`libRequire("${lib}")`), false, `${lib} is not required`);
     }
   });
 
+  test('the /issues command keeps its migrated client and view', () => {
+    const source = stubbedSource();
+    assert.ok(source.includes('pi.registerCommand("issues"'), 'the /issues command is registered');
+    assert.ok(source.includes('function registerIssuesCommand'), 'its registration is a named step');
+    assert.ok(source.includes('libRequire("gh-issues.js")'), 'the reader uses the migrated gh client');
+    assert.ok(source.includes('libRequire("issues-view.js")'), 'the reader mounts the migrated view');
+  });
+
   test('the loaded extension holds no reference to the removed packages', async () => {
     const { commands } = await loadExtension({});
-    for (const gone of ['customize', 'issues', 'odd', 'herdr-gentle:warp']) {
+    for (const gone of ['customize', 'odd', 'herdr-gentle:warp']) {
       assert.equal(commands.has(gone), false, `no /${gone} command`);
     }
+    assert.equal(commands.has('issues'), true, '/issues is the migrated command');
     for (const file of fs.readdirSync(path.join(ROOT, 'lib'))) {
       const text = fs.readFileSync(path.join(LIB_DIR, file), 'utf8');
       assert.equal(/require\(['"]\.\/gh-issues\.js['"]\)/.test(text), false, `lib/${file} does not pull the issues reader`);

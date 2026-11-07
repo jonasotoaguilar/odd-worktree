@@ -4,9 +4,11 @@
 // One package, one surface: the agent worktree tools (create, list, close,
 // warp) and the two read/inspect panels they belong to.
 //
-// Registers two commands:
+// Registers three commands:
 //   /warp      move this session to another checkout of the project
 //   /odd-list  read this checkout's odd/ documents
+//   /issues    read this checkout's GitHub issues, with label/assignee,
+//              comment and close actions when the repository permits them
 //
 // and four tools: worktree_create, worktree_list, worktree_close,
 // worktree_warp. Create and close prompt for approval when the host offers
@@ -7113,6 +7115,537 @@ function registerOddCommand(pi) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// `/issues` (T3 S1,S3): a full-screen four-bucket overlay (My issues /
+// Assigned / Involved / All) over the CURRENT checkout's repository issues,
+// through this package's own migrated pieces (lib/gh-issues.js for `gh`,
+// lib/issues-view.js for the pure view).
+//
+// GATED INVOCATION: the command is registered eagerly at load so it is always
+// discoverable; the session-start `gh` check only decides whether it may open.
+// Without an authenticated `gh`, one notification per session names what is
+// missing and the command that fixes it, and the handler re-emits it instead
+// of opening. The scoped tabs read cursor search pages (author:@me,
+// assignee:@me, involves:@me -author:@me), `All` reads the repository's own
+// open issue connection, the detail asks for authoritative metadata, and the
+// `o` key opens `gh issue view <n> --web -R <pinned>` through a fixed argv
+// (never a shell, never an invented opener), with the TUI suspended for the
+// open. Assignment to a checkout is deliberately absent: this reader is
+// read-only about the worktree↔issue association (S1/S4).
+// ---------------------------------------------------------------------------
+
+let issuesTuiLoader = () => import("@earendil-works/pi-tui");
+
+function setIssuesTuiLoader(loader) {
+  issuesTuiLoader = loader;
+}
+
+// The three scoped buckets are disjoint at the source: `involved` excludes the
+// viewer's own issues (they already own a row in `mine`). Each query asks gh
+// for last-update ordering so no client re-sorts. `All` is the interactive
+// reader's fourth tab: every open issue of the repository, with nothing
+// inferred or deduplicated against the three scoped ones.
+const ISSUES_PAGE_QUERIES = [
+  { id: "mine", label: "My issues", query: "author:@me sort:updated-desc" },
+  { id: "assigned", label: "Assigned", query: "assignee:@me sort:updated-desc" },
+  { id: "involved", label: "Involved", query: "involves:@me -author:@me sort:updated-desc" },
+];
+
+const ISSUES_INTERACTIVE_BUCKETS = [
+  ...ISSUES_PAGE_QUERIES,
+  // `connection: true` marks the ONE bucket read from the repository's issue
+  // connection instead of the search API: GitHub refuses to page a search
+  // past 1000 matches, while `repository.issues` walks to its end with an
+  // exact total. `query` stays the bucket's search scope for a typed reader
+  // query; it is never forwarded to the connection, which takes no text.
+  { id: "all", label: "All", query: "sort:updated-desc", connection: true },
+];
+
+const ISSUES_FETCH_PAGE_SIZE = 30;
+
+// A failed gate notifies once per session (module lifetime == session). The
+// flag flips only when an alert is handed to notify, so a startup without UI
+// never consumes the session's single alert.
+let issuesGateNotified = false;
+// `null` = not probed yet, `true` = gh was usable this session, `false` = the
+// last probe failed. Registration is eager; this state gates ONLY the open.
+let issuesGateOpen = null;
+
+function issuesPageQuery(spec, rawQuery) {
+  const extra = typeof rawQuery === "string" ? rawQuery.trim() : "";
+  return extra === "" ? spec.query : `${spec.query} ${extra}`;
+}
+
+function issuesListArgs(query, state) {
+  return {
+    query,
+    state: state === "closed" ? "closed" : "open",
+    page: 1,
+    pageSize: ISSUES_FETCH_PAGE_SIZE,
+  };
+}
+
+function issuesScopeLabel(name) {
+  return typeof name === "string" && name.length > 0 ? name : "gh's default repository";
+}
+
+function issuesScopeDriftLine(currentName, pinnedName) {
+  return `the checkout's repository changed since this issue list loaded (now ${issuesScopeLabel(currentName)} instead of ${issuesScopeLabel(pinnedName)}); reopen /issues`;
+}
+
+// The TUI hands the terminal to another process: a browser open must give it up
+// first, exactly like the odd viewer's editor open, or the child's own output
+// and the overlay fight over the same stdin/renderer. `stop()` is the host's
+// own suspend; `start()` plus a forced repaint take the terminal back once the
+// child has been waited for.
+function withSuspendedTerminal(hostTui, run) {
+  let suspended = false;
+  try {
+    if (hostTui && typeof hostTui.stop === "function") {
+      hostTui.stop();
+      suspended = true;
+    }
+  } catch {
+    suspended = false;
+  }
+  const resume = () => {
+    if (!suspended) return;
+    suspended = false;
+    try {
+      if (hostTui && typeof hostTui.start === "function") hostTui.start();
+    } catch {
+      // A host that cannot restart still gets the repaint attempt below.
+    }
+    try {
+      if (hostTui && typeof hostTui.requestRender === "function") hostTui.requestRender(true);
+    } catch {
+      // A repaint failure never breaks the open.
+    }
+  };
+  return Promise.resolve()
+    .then(run)
+    .catch((err) => ({ ok: false, error: (err && err.message) || "open failed" }))
+    .finally(resume);
+}
+
+// The `o`-key browser opener: `gh issue view <n> --web` through the file's own
+// fixed-argv runner (never a shell, never xdg-open). `-R <owner/name>` is the
+// repository the LIST was loaded from, bound when the list loads and passed at
+// press time — an issue number on screen always opens the issue it was read
+// from, even if the checkout's remote moved while the reader is open.
+function issuesOpenInBrowser(hostTui, cwd, number, pinnedIdentity) {
+  try {
+    const gh = libRequire("gh-issues.js");
+    const git = libRequire("worktree-git.js");
+    if (!git || typeof git.runArgvAsync !== "function") {
+      return Promise.resolve({ ok: false, error: "cannot open the browser: no fixed-argv runner" });
+    }
+    if (typeof pinnedIdentity !== "string" || pinnedIdentity.length === 0) {
+      return Promise.resolve({ ok: false, error: "the issue list has not loaded a repository yet" });
+    }
+    const bin = gh && typeof gh.ghBinary === "function" ? gh.ghBinary({}) : "gh";
+    const argv = ["issue", "view", String(number), "--web", "-R", pinnedIdentity];
+    return withSuspendedTerminal(hostTui, async () => {
+      const res = await git.runArgvAsync(bin, argv, { cwd, timeoutMs: 30000 });
+      if (!res) return { ok: false, error: `cannot open issue #${number} in the browser` };
+      if (res.error) return { ok: false, error: res.error };
+      if (typeof res.status === "number" && res.status !== 0) {
+        const stderr = (res.stderr || "").trim().split("\n")[0];
+        return { ok: false, error: stderr || `cannot open issue #${number} in the browser (gh exited with status ${res.status})` };
+      }
+      return { ok: true };
+    });
+  } catch (err) {
+    return Promise.resolve({ ok: false, error: (err && err.message) || `cannot open issue #${number} in the browser` });
+  }
+}
+
+function issuesWrapFailure(promise, what) {
+  return Promise.resolve(promise).then((res) => {
+    if (res && typeof res === "object") return res;
+    return { ok: false, error: `${what}: unexpected result` };
+  }).catch((err) => ({ ok: false, error: (err && err.message) || `${what}: failed` }));
+}
+
+// The no-UI fallback: the three bucket reads happen together, in order, for
+// one state. Partial failure keeps the successful pages and reports the first
+// error; when every bucket fails the result is `{ok:false}` so the caller
+// never reports fake rows.
+async function issuesFetchPages(gh, cwd, state, scope) {
+  const outcomes = await Promise.all(ISSUES_PAGE_QUERIES.map(async (spec) => {
+    const empty = { id: spec.id, label: spec.label, issues: [], total: 0, truncated: false };
+    try {
+      const res = await gh.listIssues(issuesListArgs(spec.query, state), { cwd, scope });
+      if (res && res.ok === true) {
+        return {
+          ok: true,
+          error: null,
+          page: {
+            id: spec.id,
+            label: spec.label,
+            issues: res.issues,
+            total: res.total,
+            truncated: res.truncated === true,
+          },
+        };
+      }
+      return { ok: false, error: (res && res.error) || "gh issue list failed", page: empty };
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || "gh issue list failed", page: empty };
+    }
+  }));
+  const pages = outcomes.map((outcome) => outcome.page);
+  const firstError = outcomes.find((outcome) => outcome.ok !== true);
+  if (!outcomes.some((outcome) => outcome.ok === true)) {
+    return { ok: false, error: (firstError && firstError.error) || "gh issue list failed", pages };
+  }
+  return { ok: true, pages, loadError: firstError ? firstError.error : null };
+}
+
+async function executeIssues(rawArgs, ctx) {
+  const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
+  const raw = String(rawArgs ?? "").trim();
+  if (raw !== "") {
+    if (typeof notify === "function") notify(`Unknown option "${raw}". Use /issues.`, "error");
+    return;
+  }
+  const cwd = toolCwd(ctx);
+  // The reader belongs to the checkout the session runs in: inside a worktree
+  // that is the worktree, never the principal. Anything that cannot resolve to
+  // a Git root fails closed instead of guessing.
+  const checkoutRoot = await oddCheckoutRootAsync(cwd);
+  if (!checkoutRoot) {
+    if (typeof notify === "function") notify(notGitRepositoryLine(cwd), "info");
+    return;
+  }
+  let gh = null;
+  try {
+    gh = libRequire("gh-issues.js");
+  } catch (err) {
+    if (typeof notify === "function") notify(`issues: cannot load the gh client: ${(err && err.message) || err}`, "error");
+    return;
+  }
+  // The repository identity is PINNED when the list loads, as ONE
+  // HOST-QUALIFIED string (`<host>/<owner>/<repo>`, the form gh accepts for
+  // GH_REPO and `-R`). The host is part of the identity: the same owner/name on
+  // a fork's server and on an enterprise server are different repositories.
+  // Every later read, every action and the `o` opener bind exactly that string.
+  const ghRepoEnv = () => (typeof process.env.GH_REPO === "string" && process.env.GH_REPO.trim() !== ""
+    ? process.env.GH_REPO.trim()
+    : null);
+  const effectiveRepo = async (fresh) => {
+    const envRepo = ghRepoEnv();
+    if (envRepo !== null) {
+      const normalized = gh.normalizeScopeIdentity(envRepo, process.env);
+      if (!normalized || normalized.ok !== true) {
+        return { ok: false, error: (normalized && normalized.error) || "cannot normalize the GH_REPO identity" };
+      }
+      return { ok: true, identity: normalized.identity };
+    }
+    let scope = null;
+    try {
+      scope = await gh.checkoutRepoScope({ cwd: checkoutRoot, fresh: fresh === true });
+    } catch {
+      scope = null;
+    }
+    if (!scope || scope.ok !== true) {
+      return { ok: false, error: (scope && scope.error) || "cannot resolve this checkout's own repository" };
+    }
+    if (typeof scope.identity === "string" && scope.identity.length > 0) {
+      return { ok: true, identity: scope.identity };
+    }
+    // A checkout with one remote has nothing to disambiguate, so gh resolves
+    // it; the answer is qualified with the host gh itself would use (GH_HOST,
+    // else github.com), never left as a host-less name.
+    let reported = null;
+    try {
+      reported = await gh.reportedRepoName({ cwd: checkoutRoot, scope: null });
+    } catch {
+      reported = null;
+    }
+    if (!reported || reported.ok !== true
+      || typeof reported.nameWithOwner !== "string" || reported.nameWithOwner.length === 0) {
+      return { ok: false, error: (reported && reported.error) || "cannot resolve this checkout's repository" };
+    }
+    const normalized = gh.normalizeScopeIdentity(reported.nameWithOwner, process.env);
+    if (!normalized || normalized.ok !== true) {
+      return { ok: false, error: (normalized && normalized.error) || "cannot normalize the repository identity" };
+    }
+    return { ok: true, identity: normalized.identity };
+  };
+  let pinnedRepo;
+  let pinnedPromise = null;
+  const pinRepo = async () => {
+    if (pinnedRepo !== undefined) return pinnedRepo;
+    if (pinnedPromise === null) {
+      // A FRESH read at open: the identity the list displays is the one the
+      // checkout has now, never a scope cached moments before a move.
+      pinnedPromise = effectiveRepo(true)
+        .catch(() => ({ ok: false, error: "cannot resolve this checkout's own repository" }))
+        .then((pin) => {
+          pinnedRepo = pin;
+          return pin;
+        });
+    }
+    return pinnedPromise;
+  };
+  const pinnedReadArgs = async () => {
+    const pinned = await pinRepo();
+    if (!pinned || pinned.ok !== true) {
+      return { ok: false, error: (pinned && pinned.error) || "cannot resolve this checkout's own repository" };
+    }
+    return { ok: true, args: { cwd: checkoutRoot, scope: pinned.identity } };
+  };
+  // An action runs only while the checkout still resolves to the displayed
+  // repository — a resolution failure (including a corrupt configuration)
+  // refuses — and then BINDS the pinned name, so it can never send a displayed
+  // issue number to another repository.
+  const scopeDrift = async () => {
+    const pinned = await pinRepo();
+    if (!pinned || pinned.ok !== true) {
+      return { ok: false, error: (pinned && pinned.error) || "cannot resolve this checkout's own repository" };
+    }
+    const current = await effectiveRepo(true);
+    if (!current || current.ok !== true) {
+      return { ok: false, error: (current && current.error) || "cannot verify this checkout's own repository" };
+    }
+    if (current.identity !== pinned.identity) {
+      return { ok: false, error: issuesScopeDriftLine(current.identity, pinned.identity) };
+    }
+    return { ok: true, scope: pinned.identity };
+  };
+  // One page per request, straight through the real client. The bucket id
+  // selects the EXACT source query; an unknown bucket is an explicit failure
+  // and never reaches a subprocess. A typed query rides along as additional
+  // search text, so the read searches the COMPLETE bucket. A client error
+  // (including the GitHub 1000-match search cap) passes through unchanged.
+  const loadIssuePage = (request = {}) => {
+    const spec = ISSUES_INTERACTIVE_BUCKETS.find((bucket) => bucket.id === request.bucketId);
+    if (!spec) return { ok: false, error: `unknown issues bucket "${String(request.bucketId)}"` };
+    const asked = Number(request.limit);
+    const limit = Number.isFinite(asked) ? Math.min(1000, Math.max(1, Math.floor(asked))) : 1;
+    const cursor = request.cursor == null || request.cursor === "" ? null : String(request.cursor);
+    const typed = typeof request.query === "string" ? request.query.trim() : "";
+    return issuesWrapFailure((async () => {
+      const pinned = await pinnedReadArgs();
+      if (pinned.ok !== true) return pinned;
+      // The unfiltered `All` bucket reads the repository's issue CONNECTION:
+      // cursor-paged to its end with an exact total, instead of a search capped
+      // at 1000 matches. It takes NO search text, so only an EMPTY reader query
+      // takes this path; a typed query stays on the search API, whose cap is
+      // reported honestly rather than routed around.
+      if (spec.connection === true && typed === "") {
+        if (typeof gh.getIssueConnectionPage !== "function") {
+          return { ok: false, error: "cannot read issues: the gh client has no unfiltered issue connection reader" };
+        }
+        return await gh.getIssueConnectionPage({ after: cursor, first: limit }, pinned.args);
+      }
+      return await gh.getIssuePage(
+        { query: issuesPageQuery(spec, request.query), after: cursor, first: limit },
+        pinned.args,
+      );
+    })(), "cannot read issues");
+  };
+  const loadLabels = async () => {
+    const pinned = await pinnedReadArgs();
+    if (pinned.ok !== true) return pinned;
+    return await gh.listLabels(pinned.args);
+  };
+  // The assignee editor's candidates are the repository's assignable users,
+  // read lazily on the editor's first open and scoped to this checkout.
+  const loadAssignees = async () => {
+    const pinned = await pinnedReadArgs();
+    if (pinned.ok !== true) return pinned;
+    return await gh.listAssignableUsers(pinned.args);
+  };
+  const checkoutName = path.basename(checkoutRoot);
+  // Pin the identity before the overlay mounts, so the first screenful is not
+  // a git probe per gh call and every row is read from that one repository.
+  await pinRepo();
+  let helpers = null;
+  try {
+    helpers = await issuesTuiLoader();
+  } catch {
+    helpers = null;
+  }
+  if (!helpers || !ctx || !ctx.ui || typeof ctx.ui.custom !== "function") {
+    // No interactive host: read once so the one-line notice states a real
+    // total, then say the viewer needs an interactive session.
+    const pinned = await pinnedReadArgs();
+    const loaded = pinned.ok === true
+      ? await issuesFetchPages(gh, checkoutRoot, "open", pinned.args.scope)
+      : { ok: false, error: pinned.error, pages: [] };
+    const pages = Array.isArray(loaded.pages) ? loaded.pages : [];
+    if (typeof notify === "function") {
+      if (loaded.ok !== true) {
+        notify(`issues: ${loaded.error || "gh issue list failed"}`, "info");
+      } else {
+        const total = pages.reduce((sum, page) => sum + (Array.isArray(page.issues) ? page.issues.length : 0), 0);
+        notify(`issues: ${total} issue(s) across ${pages.length} pages (the viewer needs an interactive session)`, "info");
+      }
+    }
+    return;
+  }
+  // The overlay factory's own host object is what the browser opener suspends.
+  // Set just before the factory runs so no action can reach a stale host.
+  let hostTuiRef = null;
+  const actions = {
+    // Created names go through `gh label create` first, then the whole delta
+    // through `gh issue edit`. A failure at either step returns honestly and
+    // the view keeps the editor open with local state unchanged.
+    editLabels: (number, add, remove, created) => issuesWrapFailure((async () => {
+      const gate = await scopeDrift();
+      if (gate.ok !== true) return gate;
+      const args = { cwd: checkoutRoot, scope: gate.scope };
+      for (const name of Array.isArray(created) ? created : []) {
+        if (typeof name !== "string" || name === "") continue;
+        const made = await gh.createLabel({ name }, args);
+        if (!made || made.ok !== true) return { ok: false, error: (made && made.error) || `cannot create label ${name}` };
+      }
+      return await gh.editLabels(number, { add, remove }, args);
+    })(), "cannot edit labels"),
+    postComment: (number, text) => issuesWrapFailure((async () => {
+      const gate = await scopeDrift();
+      if (gate.ok !== true) return gate;
+      return await gh.commentIssue(number, text, { cwd: checkoutRoot, scope: gate.scope });
+    })(), "cannot comment"),
+    // Assignee toggles save only the add/remove delta through one fixed-argv
+    // `gh issue edit`; the repository role check inside the client is the final
+    // authority, so a refused save is reported, never assumed.
+    editAssignees: (number, { add, remove }) => issuesWrapFailure((async () => {
+      const gate = await scopeDrift();
+      if (gate.ok !== true) return gate;
+      return await gh.editAssignees(number, { add, remove }, { cwd: checkoutRoot, scope: gate.scope });
+    })(), "cannot edit assignees"),
+    setState: (number, state) => issuesWrapFailure((async () => {
+      const gate = await scopeDrift();
+      if (gate.ok !== true) return gate;
+      return await gh.setIssueState(number, state, { cwd: checkoutRoot, scope: gate.scope });
+    })(), "cannot change the issue state"),
+    openBrowser: (number) => {
+      if (pinnedRepo === undefined) return { ok: false, error: "the issue list has not loaded a repository yet" };
+      if (pinnedRepo.ok !== true) {
+        return { ok: false, error: pinnedRepo.error || "cannot resolve this checkout's own repository" };
+      }
+      return issuesOpenInBrowser(hostTuiRef, checkoutRoot, number, pinnedRepo.identity);
+    },
+  };
+  try {
+    await ctx.ui.custom(
+      (hostTui, theme, _keybindings, done) => {
+        hostTuiRef = hostTui;
+        return libRequire("issues-view.js").createIssuesView({
+          // Bucket metadata only: the rows arrive page by page through
+          // `loadIssuePage`, so no accumulated list is handed over. All four
+          // tabs are prefetched once at open, so no tab sits at a false zero.
+          pages: ISSUES_INTERACTIVE_BUCKETS.map((spec) => ({ id: spec.id, label: spec.label, issues: null })),
+          loadIssuePage,
+          loadLabels,
+          loadAssignees,
+          checkoutName,
+          prefetchBuckets: true,
+          // `includeMetadata` carries the authoritative repository role, the
+          // current assignees and the linked PR count into the view; without
+          // it the view sees no confirmed capability and offers no editors.
+          loadIssue: async (number) => {
+            const pinned = await pinnedReadArgs();
+            if (pinned.ok !== true) return pinned;
+            return await gh.getIssue(number, { ...pinned.args, includeMetadata: true });
+          },
+          // No association props: a checkout carries no issue list, so nothing
+          // is marked as assigned and nothing is saved.
+          actions,
+          helpers,
+          theme,
+          rowsAvailable: () => oddTerminalRows(hostTui),
+          requestRender: () => {
+            try {
+              if (hostTui && typeof hostTui.requestRender === "function") hostTui.requestRender();
+            } catch {
+              // A repaint failure never breaks navigation.
+            }
+          },
+          done,
+        });
+      },
+      // Full screen like the odd viewer: the point of this surface is reading
+      // long issues with their comments.
+      { overlay: true, overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%", margin: 0 } },
+    );
+  } catch {
+    // A host that rejects the overlay degrades to one muted line.
+    if (typeof notify === "function") notify("issues: the viewer could not open in this session", "info");
+  }
+}
+
+// A missing binary needs an install plus login; anything else already carries
+// gh's own `gh auth login` wording. The note says the command cannot OPEN,
+// never that it is unregistered, because registration is eager.
+function issuesGateMessage(error) {
+  const text = String(error || "gh check failed");
+  if (/ENOENT|not available|not found/i.test(text)) {
+    return "issues: the gh CLI is not available; install it (https://cli.github.com) and run `gh auth login` — /issues cannot open until then";
+  }
+  return `issues: ${text} — /issues cannot open until then`;
+}
+
+async function checkIssuesGate(_pi, ctx) {
+  try {
+    const gh = libRequire("gh-issues.js");
+    const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
+    const res = await gh.ghStatus({ cwd });
+    issuesGateOpen = !!(res && res.ok === true);
+    if (issuesGateOpen) return { ok: true };
+    const error = (res && res.error) || "gh check failed";
+    if (!issuesGateNotified && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
+      try {
+        ctx.ui.notify(issuesGateMessage(error), "info");
+        issuesGateNotified = true;
+      } catch {
+        // Notifying never breaks startup.
+      }
+    }
+    return { ok: false, error };
+  } catch (err) {
+    // The gate must never break startup.
+    return { ok: false, error: (err && err.message) || String(err) };
+  }
+}
+
+// The command stays discoverable even before the session gate resolves, so
+// running it probes `gh` on demand. A session that already answered `ok` never
+// re-probes; a failure notifies the same honest fix every time it is asked.
+async function probeIssuesGate(ctx) {
+  if (issuesGateOpen === true) return { ok: true };
+  let gate;
+  try {
+    const gh = libRequire("gh-issues.js");
+    const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
+    const res = await gh.ghStatus({ cwd });
+    gate = res && res.ok === true ? { ok: true } : { ok: false, error: (res && res.error) || "gh check failed" };
+  } catch (err) {
+    gate = { ok: false, error: (err && err.message) || String(err) };
+  }
+  issuesGateOpen = gate.ok === true;
+  return gate;
+}
+
+function registerIssuesCommand(pi) {
+  if (typeof pi?.registerCommand !== "function") return;
+  pi.registerCommand("issues", {
+    description: "Browse fresh GitHub issue pages and details; edit labels/assignees, comment or close when permitted",
+    handler: async (args, ctx) => {
+      const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
+      const gate = await probeIssuesGate(ctx);
+      if (gate.ok !== true) {
+        if (typeof notify === "function") notify(issuesGateMessage(gate.error), "error");
+        return;
+      }
+      await executeIssues(args, ctx);
+    },
+  });
+}
+
 export default function (pi) {
   // A TOOL context has no session control, so `worktree_warp` queues the
   // `/warp` COMMAND through this handle (`sendUserMessage` with
@@ -7121,6 +7654,7 @@ export default function (pi) {
   registerWarpMessageRenderer(pi);
   registerWarpCommand(pi);
   registerOddCommand(pi);
+  registerIssuesCommand(pi);
   pi.registerTool(worktreeCreateTool);
   pi.registerTool(worktreeListTool);
   pi.registerTool(worktreeCloseTool);
@@ -7130,6 +7664,11 @@ export default function (pi) {
   // session start and drop it on shutdown, so no render path ever reaches a
   // context the runtime has invalidated.
   pi.on("session_start", rememberWorktreeCardUi);
+  // The session-start `gh` check only gates whether `/issues` may open; the
+  // command itself is registered eagerly above.
+  pi.on("session_start", async (event, ctx) => {
+    await checkIssuesGate(pi, ctx);
+  });
   pi.on("session_shutdown", forgetWorktreeCardUi);
   // Nothing deferred survives its session: shutdown advances the startup epoch,
   // so work still in flight drops instead of writing into the session that
@@ -7169,4 +7708,4 @@ export default function (pi) {
   });
 }
 
-export { executeWorktreeCreate, executeWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, executeWorktreeWarpTool, emitOsc7, awaitPendingCreationSetups, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setWorktreeCardHelpers, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable };
+export { executeWorktreeCreate, executeWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, executeWorktreeWarpTool, emitOsc7, awaitPendingCreationSetups, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable };

@@ -131,8 +131,18 @@ jobs:
           RELEASE_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
-            echo "::notice::GitHub Release ${RELEASE_TAG} already exists; leaving it untouched"
+          # A DRAFT release is not a published release: gh release view succeeds for
+          # it, so treating "exists" as "done" would let npm publish an immutable
+          # version while the release stays a draft. Publish the draft instead, and
+          # fail before npm publish when that is not possible.
+          if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json isDraft --jq '.isDraft' >/dev/null 2>&1; then
+            is_draft=$(gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json isDraft --jq '.isDraft')
+            if [ "$is_draft" = "true" ]; then
+              echo "::notice::GitHub Release ${RELEASE_TAG} is a draft; publishing it now"
+              gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --draft=false
+            else
+              echo "::notice::GitHub Release ${RELEASE_TAG} is already published; leaving it untouched"
+            fi
             exit 0
           fi
           gh release create "$RELEASE_TAG" \

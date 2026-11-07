@@ -137,9 +137,9 @@ malformed and linked records), `tools/worktree-close-herdr-async.test.js` pins
 that a close removes with git and spawns no Herdr at all, and
 `tools/warp-delete-confirm.test.js` drives the real `/warp` command to prove the
 session check runs before the deletion question and again after it. The
-remaining suites cover the shared `lib/` modules (warp selector view, ODD viewer
-and document reader, the GitHub issue client and view, delete evidence, change
-transfer, registry, session bookkeeping).
+remaining suites cover the shared `lib/` modules (the warp create panel, warp
+selector view, ODD viewer and document reader, the GitHub issue client and
+view, delete evidence, change transfer, registry, session bookkeeping).
 
 Tests keep every temporary repository, stub binary and extension copy under the
 system temp directory and remove them on exit.

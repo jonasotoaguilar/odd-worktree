@@ -1,0 +1,34 @@
+{
+  "name": "@jonasotoaguilar/odd-worktree",
+  "version": "0.1.0",
+  "description": "Pi package for odd-worktree: the Agent Worktree tools (create, list, close, warp), the /warp worktree panel, and the /odd-list ODD viewer. Works in Pi alone; Herdr is optional.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "worktree",
+    "odd"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "files": [
+    "extensions",
+    "lib",
+    "tools",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/odd-worktree-tools.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test tools/*.test.js"
+  }
+}

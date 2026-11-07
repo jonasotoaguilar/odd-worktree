@@ -1,0 +1,115 @@
+'use strict';
+// S2/S4 surface: the standalone package registers exactly two commands
+// (/warp and /odd-list) and the four agent worktree tools, loads without any
+// Herdr binary, and ships none of the removed functionality (customize panel,
+// issues reader, plugin-tools toggles, worktree mode file, perf tracing).
+//
+// Everything here reads the observable surface: the registered command and
+// tool objects, the manifest, the files on disk. No internal state is read.
+const { test, describe, after } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { LIB_DIR, SRC, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
+
+const ROOT = path.resolve(__dirname, '..');
+const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+
+const savedEnv = { ...process.env };
+after(() => {
+  for (const key of Object.keys(process.env)) {
+    if (!(key in savedEnv)) delete process.env[key];
+  }
+  for (const [key, value] of Object.entries(savedEnv)) process.env[key] = value;
+});
+
+// A nonexistent absolute path is provably not a live Herdr binary, so the
+// shared resolver returns it and every Herdr call fails instead of reaching a
+// real workspace.
+const NO_HERDR = path.join(os.tmpdir(), 'odd-worktree-no-such-herdr-binary');
+
+describe('manifest', () => {
+  test('declares one Pi extension entry point and ships only that surface', () => {
+    assert.equal(PKG.name, '@jonasotoaguilar/odd-worktree');
+    assert.ok(PKG.keywords.includes('pi-package'), 'keywords name the pi-package kind');
+    assert.deepEqual(PKG.pi.extensions, ['./extensions/odd-worktree-tools.ts']);
+    for (const entry of ['extensions', 'lib', 'tools', 'README.md']) {
+      assert.ok(PKG.files.includes(entry), `files ships ${entry}`);
+    }
+    assert.equal(PKG.peerDependencies['@earendil-works/pi-coding-agent'], '*');
+    assert.equal(PKG.peerDependencies['@earendil-works/pi-tui'], '*');
+    assert.ok(!('dependencies' in PKG), 'no runtime dependencies are installed');
+    assert.ok(!JSON.stringify(PKG).includes('herdr'), 'the manifest never requires Herdr');
+  });
+
+  test('ships no module for the removed commands', () => {
+    const shipped = fs.readdirSync(path.join(ROOT, 'lib')).sort();
+    for (const gone of [
+      'gh-issues.js',
+      'issues-cache.js',
+      'issues-view.js',
+      'issue-preview.js',
+      'herdr-plugin-check.js',
+      'gentle-sidebar.js',
+      'perf-trace.js',
+      'perf-analyze.js',
+      'host-settings.js',
+      'worktree-mode.js',
+      'moshi-prereq.js',
+      'live-session-changes.js',
+    ]) {
+      assert.equal(shipped.includes(gone), false, `lib/${gone} is not shipped`);
+    }
+    for (const kept of ['warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js']) {
+      assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
+    }
+  });
+});
+
+describe('registration', () => {
+  test('registers /warp, /odd-list and the four worktree tools', async () => {
+    process.env.HERDR_BIN_PATH = NO_HERDR;
+    delete process.env.GENTLE_WORKTREE_THREAD;
+    const { commands, tools, messageRenderers } = await loadExtension({});
+    assert.deepEqual([...commands.keys()].sort(), ['odd-list', 'warp']);
+    assert.deepEqual([...tools.keys()].sort(), ['worktree_close', 'worktree_create', 'worktree_list', 'worktree_warp']);
+    assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
+  });
+
+  test('every tool keeps its declared name and description', async () => {
+    const { tools } = await loadExtension({});
+    const summary = (name) => {
+      const tool = tools.get(name);
+      return { name: tool.name, label: tool.label };
+    };
+    assert.deepEqual(summary('worktree_create'), { name: 'worktree_create', label: 'Worktree Create' });
+    assert.deepEqual(summary('worktree_list'), { name: 'worktree_list', label: 'Worktree List' });
+    assert.deepEqual(summary('worktree_close'), { name: 'worktree_close', label: 'Worktree Close' });
+    assert.deepEqual(summary('worktree_warp'), { name: 'worktree_warp', label: 'Worktree Warp' });
+  });
+});
+
+describe('removed surface', () => {
+  test('the extension names no command outside /warp and /odd-list', () => {
+    const source = stubbedSource();
+    assert.equal(/herdr-gentle:/.test(source), false, 'no herdr-gentle: command name survives');
+    for (const gone of ['registerCustomizeCommand', 'registerIssuesCommand', 'executeWorktreeSessionOpen', 'startAgentSessionWatcher']) {
+      assert.equal(source.includes(gone), false, `${gone} is gone`);
+    }
+    for (const lib of ['worktree-mode.js', 'gh-issues.js', 'issues-view.js', 'herdr-plugin-check.js', 'perf-trace.js']) {
+      assert.equal(source.includes(`libRequire("${lib}")`), false, `${lib} is not required`);
+    }
+  });
+
+  test('the loaded extension holds no reference to the removed packages', async () => {
+    const { commands } = await loadExtension({});
+    for (const gone of ['customize', 'issues', 'odd', 'herdr-gentle:warp']) {
+      assert.equal(commands.has(gone), false, `no /${gone} command`);
+    }
+    for (const file of fs.readdirSync(path.join(ROOT, 'lib'))) {
+      const text = fs.readFileSync(path.join(LIB_DIR, file), 'utf8');
+      assert.equal(/require\(['"]\.\/gh-issues\.js['"]\)/.test(text), false, `lib/${file} does not pull the issues reader`);
+    }
+  });
+});

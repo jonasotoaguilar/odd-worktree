@@ -245,7 +245,7 @@ describe('createOddView read-only association (S10b)', () => {
     assert.ok(!body.includes('unsaved'), 'no unsaved indicator exists');
     assert.ok(!body.includes('space toggle'), 'the space toggle leaves the legend');
     assert.ok(!body.includes('ctrl+s'), 'the save key leaves the legend');
-    assert.match(body, /shift\+j\/k doc/, 'the reading keys stay in the legend, naming a usable pair and its target (S14)');
+    assert.match(body, /ctrl\+j\/k doc/, 'the reading keys stay in the legend, naming the default pair and its target (S14)');
     assert.match(body, /esc close/, 'the close key stays in the legend');
   });
 
@@ -430,7 +430,7 @@ describe('createOddView key consistency (K3)', () => {
     await tick();
     const body = strip(view.render(80).join('\n'));
     assert.match(body, /› Search/, 'the search row is the search widget');
-    assert.match(body, /T/, 'the footer names the filter key (S4)');
+    assert.match(body, /t search|(^|· )t( ·|$)/, 'the footer names the filter key (S4)');
     assert.match(body, /o open/, 'the footer names the external-open key');
     assert.ok(!body.includes('? help'), 'the footer no longer hints the removed help key');
   });
@@ -773,7 +773,7 @@ describe('createOddView warp usability (S13,S14,S23-S27,S29)', () => {
     assert.ok(!body.includes('space'), 'no space hint');
     assert.ok(!body.includes('ctrl+s'), 'no save hint');
     assert.ok(!body.includes('assigned'), 'no assigned count');
-    assert.match(body, /shift\+j\/k/, 'the scroll hint stays, naming a usable pair');
+    assert.match(body, /ctrl\+j\/k doc/, 'the scroll hint stays, naming the default pair');
     assert.match(body, /› Search/, 'the search row stays, without naming its key');
     assert.match(body, /o open/, 'the open hint stays');
     assert.match(body, /esc close/, 'the close hint stays');
@@ -852,7 +852,7 @@ describe('S13: the odd frame repeats nothing', () => {
     const footer = footerOf(lines);
     assert.match(lines[1], /› Search/, 'the search row carries the query only');
     assert.ok(!lines[1].includes('(T)'), 'no parenthetical key above the footer');
-    assert.ok(tokensOf(footer).some((token) => /^T/.test(token)), `the footer names T: ${footer}`);
+    assert.ok(tokensOf(footer).some((token) => /^t/.test(token)), `the footer names t: ${footer}`);
   });
 
   test('while searching the footer names the search keys once and the input carries only the query', async () => {
@@ -930,11 +930,11 @@ describe('createOddView feedback round (S1,S3,S4,S5,D3)', () => {
     .slice(2, -2)
     .map((line) => strip(line).split('│')[1] || '');
 
-  test('S1: ctrl+shift+j/k scrolls the preview and the legacy ctrl+j byte does not', { skip: realTui ? false : 'requires @earendil-works/pi-tui' }, () => {
+  test('S1: ctrl+j/k scroll the preview, ctrl+shift+j/k stay an alternative, and the legacy ctrl+j byte does not', { skip: realTui ? false : 'requires @earendil-works/pi-tui' }, () => {
     // The installed 1.4 matcher reports the same 0x0a as BOTH `ctrl+j` and
     // `enter` while the Kitty protocol is inactive, which is the terminal the
-    // user reported. That byte must stay Enter, and the page pair the user
-    // asked for is the SHIFTED one the extended protocol reports.
+    // user reported. That byte must stay Enter; only a payload the host can
+    // tell apart from Enter pages.
     assert.equal(realTui.matchesKey('\n', 'ctrl+j'), true, 'the host byte is ctrl+j');
     assert.equal(realTui.matchesKey('\n', 'enter'), true, 'and the host also calls it enter');
     assert.equal(realTui.matchesKey('j', 'J'), true, 'the host matcher folds letter case, so the helper never asks it about a bare letter');
@@ -942,6 +942,10 @@ describe('createOddView feedback round (S1,S3,S4,S5,D3)', () => {
     view.render(80);
     view.handleInput('\n');
     assert.equal(view.state.scroll, 0, 'the legacy ctrl+j byte never scrolls');
+    view.handleInput('\x1b[106;5u'); // Kitty ctrl+j press
+    assert.ok(view.state.scroll > 0, 'an extended ctrl+j scrolls where the host reports it');
+    view.handleInput('\x1b[107;5u'); // Kitty ctrl+k press
+    assert.equal(view.state.scroll, 0, 'the extended ctrl+k scrolls back');
     view.handleInput('\x1b[106;6u'); // Kitty ctrl+shift+j press
     assert.ok(view.state.scroll > 0, 'ctrl+shift+j scrolls the preview through the real matcher');
     view.handleInput('\x1b[107;6u'); // Kitty ctrl+shift+k press
@@ -1018,7 +1022,7 @@ describe('createOddView feedback round (S1,S3,S4,S5,D3)', () => {
     assert.match(searchRowOf(view.render(80)), /› Search\b/, 'the search row still reads as the search widget');
   });
 
-  test('S4: T is named by the footer only, never above it', async () => {
+  test('S4: t is named by the footer only, and both cases open the box', async () => {
     const { view } = build();
     await tick();
     // S12 added one legend token, so the FULL spelling needs the wider row;
@@ -1026,15 +1030,24 @@ describe('createOddView feedback round (S1,S3,S4,S5,D3)', () => {
     // so the compact tier now starts below 120.
     const lines = view.render(160);
     assert.equal(searchRowOf(lines).includes('(T)'), false, 'the search row names no key');
+    assert.equal(searchRowOf(lines).includes('(t)'), false, 'in either case');
     assert.ok(!searchRowOf(lines).includes('T to edit'), 'leaving the box never re-adds the parenthetical key');
-    assert.match(footerOf(lines), /T search/, 'the footer names the search key');
-    assert.match(footerOf(view.render(80)), /(^|· )T( ·|$)/, 'the compact legend still names the search key');
-    view.handleInput('T');
+    assert.match(footerOf(lines), /t search/, 'the footer names the search key in lowercase');
+    assert.match(footerOf(view.render(80)), /(^|· )t( ·|$)/, 'the compact legend still names the search key');
+    view.handleInput('t');
+    assert.equal(view.state.searching, true, 'lowercase t opens the search box');
     view.handleInput('a');
     const typing = view.render(80);
     assert.match(searchRowOf(typing), /› a█/, 'the input row carries the query only');
     assert.match(footerOf(typing), /del clear/, 'the footer advertises Delete while the box is open');
     assert.match(footerOf(typing), /bksp/, 'and Backspace for one character');
+  });
+
+  test('uppercase T keeps opening the search', async () => {
+    const { view } = build();
+    await tick();
+    view.handleInput('T');
+    assert.equal(view.state.searching, true, 'T still opens the box');
   });
 
   test('S4: Delete clears the whole query, Backspace deletes one character', async () => {
@@ -1261,10 +1274,10 @@ describe('createOddView round-3 geometry, capacity and page marker (S5,S8,S14,S1
 
 // ---------------------------------------------------------------------------
 // round-3 T3 S1: the preview scroll bindings ODD shares through
-// lib/preview-scroll-keys.js. The user asked for ctrl+shift+j/k and for a
-// footer that names the usable pair instead of always printing ctrl+j/k; the
-// native Pi full-screen default is PgUp/PgDn, and ctrl+shift+j/k only exists
-// once the terminal negotiates an extended keyboard protocol.
+// lib/preview-scroll-keys.js. The default pair is ctrl+j/k — the one the user
+// asked for, printed whatever the terminal reports — while ctrl+shift+j/k and
+// the printable J/K stay working alternates whose hints leave the row. A bare
+// LF byte is Enter on a legacy terminal and never pages.
 // ---------------------------------------------------------------------------
 describe('createOddView preview scroll bindings (S1)', () => {
   const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -1319,15 +1332,17 @@ describe('createOddView preview scroll bindings (S1)', () => {
     return { view, paints };
   }
 
-  test('the footer names ctrl+shift+j/k doc only when the host confirms the extended protocol', async () => {
-    const confirmed = build({ helpers: host({ kitty: true }) });
-    await tick();
-    const extendedFooter = footerOf(confirmed.view.render(120));
-    assert.match(extendedFooter, /ctrl\+shift\+j\/k doc/, `the confirmed pair is named with its target: ${extendedFooter}`);
-    assert.ok(!extendedFooter.includes('ctrl+j/k'), 'the removed binding is never printed');
-
+  test('the footer always names ctrl+j/k doc', async () => {
+    for (const kitty of [true, false]) {
+      const { view } = build({ helpers: host({ kitty }) });
+      await tick();
+      const footer = footerOf(view.render(120));
+      assert.match(footer, /ctrl\+j\/k doc/, `kitty ${kitty}: the default pair is named with its target: ${footer}`);
+      for (const gone of ['ctrl+shift', 'shift+j/k']) {
+        assert.ok(!footer.includes(gone), `kitty ${kitty}: the alternate "${gone}" leaves the legend: ${footer}`);
+      }
+    }
     const cases = [
-      ['inactive', host({ kitty: false })],
       ['unknown namespace', {}],
       ['no helpers', null],
       ['throwing getter', { isKittyProtocolActive: () => { throw new Error('no tty'); } }],
@@ -1336,9 +1351,8 @@ describe('createOddView preview scroll bindings (S1)', () => {
       const { view } = build({ helpers });
       await tick();
       const footer = footerOf(view.render(120));
-      assert.match(footer, /(^|· )shift\+j\/k doc/, `${label}: the printable fallback is named with its target: ${footer}`);
+      assert.match(footer, /ctrl\+j\/k doc/, `${label}: the default pair is named with its target: ${footer}`);
       assert.ok(!footer.includes('ctrl+shift'), `${label}: no fabricated extended support: ${footer}`);
-      assert.ok(!footer.includes('ctrl+j/k'), `${label}: the removed binding is never printed: ${footer}`);
     }
   });
 
@@ -1360,19 +1374,27 @@ describe('createOddView preview scroll bindings (S1)', () => {
     }
   });
 
-  test('ctrl+shift+j/k page the preview, and ctrl+j never does', async () => {
+  test('ctrl+j/k page the preview where the host reports them, and a bare LF never does', async () => {
     const { view } = build({ helpers: host({ kitty: true }) });
     await tick();
     view.render(80);
-    view.handleInput('\x1b[106;6u');
+    view.handleInput('\x1b[106;5u');
     const paged = view.state.scroll;
-    assert.ok(paged > 1, 'ctrl+shift+j pages the preview');
+    assert.ok(paged > 1, 'ctrl+j pages the preview');
+    view.handleInput('\x1b[107;5u');
+    assert.equal(view.state.scroll, 0, 'ctrl+k pages back up');
+    view.handleInput('\x1b[27;5;106~');
+    assert.equal(view.state.scroll, paged, 'the xterm ctrl+j sequence pages too');
+    view.handleInput('\x1b[27;5;107~');
+    assert.equal(view.state.scroll, 0, 'and the xterm ctrl+k pages back');
+    view.handleInput('\x1b[106;6u');
+    assert.ok(view.state.scroll > 1, 'ctrl+shift+j stays a working alternative');
     view.handleInput('\x1b[107;6u');
-    assert.equal(view.state.scroll, 0, 'ctrl+shift+k pages back up');
-    for (const data of ['\x1b[106;5u', '\x1b[27;5;106~', '\n', '\x0b']) {
+    assert.equal(view.state.scroll, 0, 'ctrl+shift+k stays a working alternative');
+    for (const data of ['\n', '\x0b']) {
       view.render(80);
       view.handleInput(data);
-      assert.equal(view.state.scroll, 0, `${JSON.stringify(data)}: the old ctrl+j/ctrl+k contract is gone`);
+      assert.equal(view.state.scroll, 0, `${JSON.stringify(data)}: the legacy byte stays Enter, never a scroll`);
       assert.equal(view.state.index, 0, `${JSON.stringify(data)}: no selection movement either`);
     }
     assert.equal(view.state.index, 0);
@@ -1402,8 +1424,13 @@ describe('createOddView preview scroll bindings (S1)', () => {
     assert.equal(view.state.scroll, repeated, 'the release of that key is ignored');
   });
 
-  test('Enter and the LF byte keep their meaning in content mode', async () => {
-    const { view, paints } = build();
+  test('Enter and the LF byte keep their meaning even when the host calls the byte ctrl+j', async () => {
+    const lfIsCtrlJ = {
+      ...helpers,
+      matchesKey: (data, name) => data === name || (data === '\n' && (name === 'enter' || name === 'ctrl+j')),
+      parseKey: (data) => (data === '\n' ? 'ctrl+j' : null),
+    };
+    const { view, paints } = build({ helpers: lfIsCtrlJ });
     await tick();
     view.render(80);
     const before = paints.length;
@@ -1413,6 +1440,8 @@ describe('createOddView preview scroll bindings (S1)', () => {
       assert.equal(view.state.index, 0, `${JSON.stringify(data)}: Enter never moves the selection`);
     }
     assert.equal(paints.length, before, 'Enter requests no repaint: nothing changed');
+    view.handleInput('ctrl+j');
+    assert.ok(view.state.scroll > 0, 'the distinguishable ctrl+j still pages the preview');
   });
 
   test('a search session keeps the scroll keys out of the preview', async () => {
@@ -1468,9 +1497,8 @@ describe('createOddView preview scroll bindings (S1)', () => {
 // S14: «alguna key generidad como el page o half estan demas (nose para que
 // es)» — the ODD footer names each scroll TARGET once, exactly like the issues
 // reader: the document pane's page, half-page and printable hints collapse into
-// the ONE labelled token the terminal can deliver, the list keeps its own
-// labelled token so the two can never be read as the same binding, and every
-// binding still answers in the handler even after its hint leaves the row.
+// the ONE labelled token the reader is always shown, and every binding still
+// answers in the handler even after its hint leaves the row.
 // ---------------------------------------------------------------------------
 describe('createOddView footer scroll targets (S14)', () => {
   const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -1516,14 +1544,14 @@ describe('createOddView footer scroll targets (S14)', () => {
     }
   });
 
-  test('the document pane is named once, by the pair this terminal delivers', async () => {
+  test('the document pane is named once, by the default ctrl+j/k pair', async () => {
     const extended = build({ kitty: true });
     const printable = build({ kitty: false });
     await tick();
     const extendedFooter = footerOf(extended.render(120));
     const printableFooter = footerOf(printable.render(120));
-    assert.match(extendedFooter, /ctrl\+shift\+j\/k doc/, `the confirmed pair is named with its target: ${extendedFooter}`);
-    assert.match(printableFooter, /shift\+j\/k doc/, `the fallback pair is named with its target: ${printableFooter}`);
+    assert.match(extendedFooter, /ctrl\+j\/k doc/, `the default pair is named with its target: ${extendedFooter}`);
+    assert.match(printableFooter, /ctrl\+j\/k doc/, `the same pair on a legacy terminal: ${printableFooter}`);
     for (const [label, footer] of [['extended', extendedFooter], ['fallback', printableFooter]]) {
       const docTokens = tokensOf(footer).filter((token) => /(^|\s)doc$/.test(token));
       assert.equal(docTokens.length, 1, `${label}: exactly one labelled document token: ${footer}`);
@@ -1535,7 +1563,7 @@ describe('createOddView footer scroll targets (S14)', () => {
     await tick();
     const footer = footerOf(view.render(120));
     assert.ok(!footer.includes('←/→'), `the redundant list scroll hint is gone: ${footer}`);
-    assert.match(footer, /(ctrl\+shift\+j\/k|shift\+j\/k) doc/, 'the document scroll keeps its labelled token');
+    assert.match(footer, /ctrl\+j\/k doc/, 'the document scroll keeps its labelled token');
     assert.match(footer, /s sort: recent/, 'the sort token stays beside the remaining scroll hint');
   });
 
@@ -1599,7 +1627,7 @@ describe('createOddView footer scroll targets (S14)', () => {
     const view = build({ theme: recordingTheme(), kitty: true });
     await tick();
     const footer = view.render(160).at(-2);
-    assert.match(footer, /\x1b\[1m\x1b\[96mctrl\+shift\+j\/k\x1b\[0m\x1b\[22m\x1b\[90m doc/,
+    assert.match(footer, /\x1b\[1m\x1b\[96mctrl\+j\/k\x1b\[0m\x1b\[22m\x1b\[90m doc/,
       'the document hint paints its key accent+bold and its target muted');
     assert.match(footer, /\x1b\[1m\x1b\[96mr\x1b\[0m\x1b\[22m\x1b\[90m reload/,
       'the reload hint keeps the key/description split');
@@ -1666,7 +1694,7 @@ describe('createOddView continuous list scrolling instead of pages (S3)', () => 
     const footer = footerOf(view.render(200));
     assert.ok(!/page/i.test(footer), `the legend drops the page hint: ${footer}`);
     assert.ok(!footer.includes('←/→'), `S8: the list scroll pair costs no cells: ${footer}`);
-    assert.match(footer, /(ctrl\+shift\+j\/k|shift\+j\/k) doc/, 'the document scroll is named once with its target');
+    assert.match(footer, /ctrl\+j\/k doc/, 'the document scroll is named once with its target');
   });
 
   test('a long list scrolls continuously: one screen at a time', async () => {
@@ -1769,8 +1797,8 @@ describe('odd view palette (S11)', () => {
     const footer = view.render(160).at(-2);
     assert.match(footer, /\x1b\[1m\x1b\[96m↑↓\x1b\[0m\x1b\[22m/, 'the key token is painted accent+bold');
     assert.match(footer, /\x1b\[90m select/, 'its description is painted muted');
-    assert.match(footer, /\x1b\[1m\x1b\[96mshift\+j\/k\x1b\[0m\x1b\[22m/, 'the document scroll key is a key run');
-    assert.match(footer, /\x1b\[1m\x1b\[96mT\x1b\[0m\x1b\[22m/, 'a single-letter key is painted the same way');
+    assert.match(footer, /\x1b\[1m\x1b\[96mctrl\+j\/k\x1b\[0m\x1b\[22m/, 'the document scroll key is a key run');
+    assert.match(footer, /\x1b\[1m\x1b\[96mt\x1b\[0m\x1b\[22m/, 'a single-letter key is painted the same way');
     assert.ok(theme.calls.some((call) => call.role === 'accent' && call.text === '↑↓'),
       'the accent role comes from the injected theme');
     assert.ok(theme.calls.some((call) => call.role === 'bold' && call.text.includes('↑↓')),

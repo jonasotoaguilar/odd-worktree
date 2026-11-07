@@ -1,8 +1,9 @@
 'use strict';
-// S4 commands: `/warp` and `/odd-list` are the only two commands, and both are
-// driven here through the registered handlers. The warp case also proves the
-// agent route end to end: `worktree_warp` queues the move as `/warp @<token>`
-// and that exact argument is the handoff the command decodes.
+// S4 commands: `/warp` and `/odd-list` are driven here through the registered
+// handlers. `/issues` has its own suite (tools/issues-command.test.js), where
+// the `gh` runner is injected. The warp case also proves the agent route end to
+// end: `worktree_warp` queues the move as `/warp @<token>` and that exact
+// argument is the handoff the command decodes.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

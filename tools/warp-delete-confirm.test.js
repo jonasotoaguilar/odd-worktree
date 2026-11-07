@@ -16,7 +16,7 @@
 // Every fixture is a throwaway Git repository under the system temp directory:
 // nothing here deletes a real checkout, and no test touches a real registry.
 
-const { test, describe, after } = require('node:test');
+const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -467,5 +467,150 @@ describe('A2: ignored files are disclosed, never silently deleted', () => {
     });
     assert.equal(unreadable.ignored.status, 'unknown');
     assert.match(unreadable.ignored.reason, /ls-files exploded/);
+  });
+});
+
+// S7/S8: the warp panel's Ctrl+D runs the SAME active-session guard as the
+// `worktree_close` tool, and it runs it BEFORE the pending-change question.
+// These cases drive the real `/warp` command with a host double: `ui.custom`
+// answers the marker the selector's `ctrl+d` emits, `ui.confirm` records the
+// one dialog, and every temp worktree is created through the registered tool.
+describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () => {
+  const crypto = require('node:crypto');
+  const { loadExtension } = require('./fixtures/load-extension.js');
+
+  const NO_HERDR = path.join(os.tmpdir(), 'odd-worktree-no-such-herdr-binary');
+  const HOOK_BIN = track(fs.mkdtempSync(path.join(os.tmpdir(), 'wt-confirm-hookbin-')));
+  fs.writeFileSync(path.join(HOOK_BIN, 'codegraph'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const AGENT_HOME = track(fs.mkdtempSync(path.join(os.tmpdir(), 'wt-confirm-agent-home-')));
+  const PRESENCE = path.join(AGENT_HOME, 'gentle-agents', 'presence');
+
+  const savedEnv = { ...process.env };
+  let commands;
+  let tools;
+  let restorePath = null;
+
+  before(async () => {
+    process.env.HERDR_BIN_PATH = NO_HERDR;
+    delete process.env.GENTLE_PI_AGENT_HOME;
+    process.env.PI_CODING_AGENT_DIR = AGENT_HOME;
+    restorePath = process.env.PATH;
+    process.env.PATH = `${HOOK_BIN}${path.delimiter}${process.env.PATH || ''}`;
+    ({ commands, tools } = await loadExtension({}));
+  });
+
+  after(() => {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in savedEnv)) delete process.env[key];
+    }
+    for (const [key, value] of Object.entries(savedEnv)) process.env[key] = value;
+  });
+
+  function publishSession({ sessionId, label = 'Worker', workspace, heartbeat = Date.now(), incarnationIndex = 1 }) {
+    fs.mkdirSync(PRESENCE, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(PRESENCE, 0o700); } catch { /* best effort */ }
+    const sessionHash = crypto.createHash('sha256').update(sessionId).digest('hex');
+    const incarnation = `2000000${incarnationIndex}-0000-4000-8000-00000000000${incarnationIndex}`;
+    fs.writeFileSync(path.join(PRESENCE, `${sessionHash}.${incarnation}.header.json`), JSON.stringify({
+      schema: 1,
+      sessionHash,
+      incarnation,
+      label,
+      heartbeat,
+      generation: 1,
+      counts: { running: 0, queued: 0, waiting: 0, finished: 0 },
+      digest: 'a'.repeat(64),
+      unavailable: null,
+    }));
+    fs.writeFileSync(path.join(PRESENCE, `${sessionHash}.${incarnation}.discovery.json`), JSON.stringify({
+      schema: 1,
+      sessionHash,
+      incarnation,
+      generation: 1,
+      metadata: { activation: 'b'.repeat(64), workspace, tasks: [], omitted: 0 },
+    }));
+    return sessionHash;
+  }
+
+  // One registered worktree plus the host double that presses Ctrl+D on it.
+  async function panelFixture(tag, { confirm } = {}) {
+    const repo = makeRepo(`ctrl-d-${tag}`);
+    git(repo, ['branch', 'main', 'HEAD']);
+    const created = await tools.get('worktree_create').execute(
+      `create-${tag}`, { branch: `feat/${tag}`, changes: 'none' }, undefined, undefined,
+      {
+        cwd: repo,
+        hasUI: false,
+        mode: 'tui',
+        sessionManager: { getSessionId: () => 'panel-session' },
+        ui: { confirm: async () => false, notify: () => {} },
+      },
+    );
+    assert.notEqual(created.isError, true, JSON.stringify(created));
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, `feat-${tag}`);
+    const notifications = [];
+    const confirmations = [];
+    let mounts = 0;
+    const ctx = {
+      cwd: repo,
+      hasUI: true,
+      mode: 'tui',
+      sessionManager: { getSessionId: () => 'panel-session' },
+      ui: {
+        // The selector's `ctrl+d` emits the delete marker once; the loop then
+        // reopens the panel, and closing it (undefined) ends the flow.
+        custom: async () => (mounts++ === 0 ? { delete: target } : undefined),
+        confirm: async (title, body) => {
+          confirmations.push({ title, body });
+          if (typeof confirm === 'function') return confirm({ title, body, target });
+          return true;
+        },
+        notify: (text, level) => { notifications.push([level, text]); },
+      },
+    };
+    return { repo, target, notifications, confirmations, ctx };
+  }
+
+  test('a live session in the target refuses before the pending-change question', async () => {
+    const { target, notifications, confirmations, ctx } = await panelFixture('busy');
+    const sessionHash = publishSession({ sessionId: 'panel-busy-worker', label: 'Busy', workspace: target, incarnationIndex: 5 });
+    await commands.get('warp').handler('', ctx);
+    assert.equal(confirmations.length, 0, 'no deletion question is asked for a checkout a session is working in');
+    const refusal = notifications.find(([level]) => level === 'error');
+    assert.ok(refusal, JSON.stringify(notifications));
+    assert.match(refusal[1], /working in that checkout/);
+    assert.ok(refusal[1].includes(sessionHash.slice(0, 12)), refusal[1]);
+    assert.ok(fs.existsSync(target), 'the checkout survives the refusal');
+  });
+
+  test('Ctrl+D still asks the pending-change question for a clear checkout and removes it after approval', async () => {
+    const { repo, target, notifications, confirmations, ctx } = await panelFixture('clear');
+    await commands.get('warp').handler('', ctx);
+    assert.equal(confirmations.length, 1, 'exactly one deletion question');
+    assert.match(confirmations[0].title, /^Delete worktree '/);
+    assert.match(confirmations[0].body, /Delete worktree checkout at /);
+    assert.match(confirmations[0].body, /keeps the branch/);
+    assert.equal(fs.existsSync(target), false, 'the approved checkout is removed');
+    assert.ok(notifications.some(([level, text]) => level === 'info' && /worktree deleted/.test(text)), JSON.stringify(notifications));
+    assert.equal(
+      git(repo, ['branch', '--format=%(refname:short)']).split('\n').includes('feat/clear'),
+      true,
+      'the branch is kept',
+    );
+  });
+
+  test('a session that appears while the question is open refuses the removal after approval', async () => {
+    const { target, notifications, confirmations, ctx } = await panelFixture('late', {
+      confirm: ({ target: doomed }) => {
+        publishSession({ sessionId: 'late-worker', label: 'Late', workspace: doomed, incarnationIndex: 6 });
+        return true;
+      },
+    });
+    await commands.get('warp').handler('', ctx);
+    assert.equal(confirmations.length, 1, 'the human was asked exactly once');
+    const failure = notifications.find(([level]) => level === 'error');
+    assert.ok(failure, JSON.stringify(notifications));
+    assert.match(failure[1], /working in that checkout/);
+    assert.ok(fs.existsSync(target), 'the post-approval recheck refuses the removal');
   });
 });

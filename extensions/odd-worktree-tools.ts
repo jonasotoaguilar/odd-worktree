@@ -4,9 +4,11 @@
 // One package, one surface: the agent worktree tools (create, list, close,
 // warp) and the two read/inspect panels they belong to.
 //
-// Registers two commands:
+// Registers three commands:
 //   /warp      move this session to another checkout of the project
 //   /odd-list  read this checkout's odd/ documents
+//   /issues    read this checkout's GitHub issues, with label/assignee,
+//              comment and close actions when the repository permits them
 //
 // and four tools: worktree_create, worktree_list, worktree_close,
 // worktree_warp. Create and close prompt for approval when the host offers
@@ -2052,62 +2054,6 @@ function rankCandidates(query, entries) {
     .map((ranked) => ranked.entry);
 }
 
-// Resolve the Herdr workspace id for a checkout path from `herdr worktree
-// list` JSON (`{result: {worktrees: [{path, open_workspace_id, ...}]}}`,
-// with tolerant fallbacks). A workspace id is returned only when the list
-// entry's path resolves to exactly the close target: absolute entries
-// compare directly, relative entries resolve against the repository root
-// (never the process cwd) for the comparison only. Returns null when
-// herdr is unusable, no entry matches, or the checkout has no workspace
-// id — the caller then skips herdr entirely and falls back to git.
-function herdrWorkspaceId(stdout, resolvedTarget, repoRoot) {
-  let list = null;
-  try {
-    const doc = JSON.parse(stdout);
-    if (doc && doc.result && Array.isArray(doc.result.worktrees)) {
-      list = doc.result.worktrees;
-    } else if (doc && Array.isArray(doc.worktrees)) {
-      list = doc.worktrees;
-    } else if (doc && Array.isArray(doc.result)) {
-      list = doc.result;
-    }
-  } catch {
-    return null;
-  }
-  if (!list) return null;
-  const base = typeof repoRoot === "string" && repoRoot.length > 0 ? repoRoot : null;
-  // R4-1: more than one entry resolving to the target with DIFFERENT
-  // workspace ids is ambiguity — a first-match win could name a workspace
-  // that maps to another checkout, removing the wrong one. Collect every
-  // match: one entry, or several carrying the SAME id, still resolves;
-  // anything else (conflicting ids, or a match without an id) is null so
-  // the caller skips herdr entirely and uses the git path.
-  const matchedIds = new Set();
-  let matched = 0;
-  let missing = false;
-  for (const item of list) {
-    if (!item || typeof item.path !== "string" || item.path.length === 0) continue;
-    let resolved;
-    try {
-      if (path.isAbsolute(item.path)) resolved = path.resolve(item.path);
-      else if (base === null) continue;
-      else resolved = path.resolve(base, item.path);
-    } catch {
-      continue;
-    }
-    if (resolved !== resolvedTarget) continue;
-    matched += 1;
-    let id = null;
-    for (const key of ["open_workspace_id", "workspace_id", "workspace", "id"]) {
-      if (typeof item[key] === "string" && item[key].length > 0) { id = item[key]; break; }
-    }
-    if (id === null) missing = true;
-    else matchedIds.add(id);
-  }
-  if (matched === 0 || missing || matchedIds.size !== 1) return null;
-  return [...matchedIds][0];
-}
-
 // Checkouts from the pre-removal snapshot that are gone now, excluding
 // the target itself. A hostile or confused remover that deleted another
 // checkout fails loudly through this: the caller names the vanished path
@@ -2494,156 +2440,80 @@ function closeSessionString(ctx, method) {
   }
 }
 
-// S33/S34 pre-removal sequence for `worktree_close`, running after
-// approval and before the checkout removal:
-//  1. A foreign live session (a Pi session that is not ours, evidenced
-//     by `herdr agent list` agents cwd'd in the target checkout) refuses
-//     the close with an actionable message and changes nothing. A
-//     failing or unparseable agent list is NO evidence: Herdr being
-//     unavailable never blocks the removal.
-//  2. Our own session (the tool context's cwd inside the target) warps
-//     to the principal FIRST through the existing warp machinery, and
-//     the close continues only when that warp actually succeeded.
-//  3. Only after such a warp, the Herdr workspace that pointed at the
-//     removed checkout is closed and a normal workspace is opened at the
-//     principal, resuming the warped session (lib/worktree-close-herdr.js;
-//     Herdr offers no workspace path move). Without a warped session the
-//     removal below already retires the workspace with the checkout, so
-//     there is nothing to re-home and the step stays silent.
-// Returns {ok: true, warp, herdrWorkspace, notices} or {ok: false, text,
-// details}. Never throws: every failure mode is a value.
-async function closePreRemovalSequence({ git, repo, target, branch, force, ctx, opts, resolvedTarget }) {
-  const closeHerdr = libRequire("worktree-close-herdr.js");
-  // Subprocess cwd, re-anchored onto the principal after a warp (below)
-  // so no Herdr call ever runs inside the checkout being removed.
-  let runRoot = repo.root;
-  // S21: this sequence is reached by the interactive close (and by the
-  // `worktree_close` tool), so its Herdr children are awaited on the async
-  // runner: same binary, same argv, same timeouts, same `{status, stdout,
-  // stderr, error}` consumption — only the wait leaves the event loop.
-  const runHerdrAsync = (argv, timeoutMs) => git.runArgvAsync(herdrBinary(), argv, { cwd: runRoot, timeoutMs });
-  const ourSessionId = closeSessionString(ctx, "getSessionId");
-  let agents = [];
+// S7/S8/S9: the active-session refusal, shared by `worktree_close` and the warp
+// panel's Ctrl+D (lib/worktree-session-guard.js).
+//
+// The guard answers one question per checkout: is a live Pi session working
+// there? It reads Gentle Shell's published presence records (heartbeat +
+// workspace) and, deterministically, the checkout THIS session stands on. Both
+// callers run it, so the tool and the panel can never disagree.
+//
+// Two outcomes refuse with nothing mutated:
+//   - this session is in the checkout: the human is told to warp first
+//     (`/warp`), then close. The tool NEVER warps by itself and never closes or
+//     opens a Herdr pane/workspace: a destructive action that first moves the
+//     session would hide the state it was approved on;
+//   - another session is in the checkout: the refusal names its RAW session id,
+//     joined from the published transport record whose id hashes to that
+//     session's presence header, and asks the human to make sure it finished,
+//     then close or warp it away from that session. When no transport record
+//     joins, the refusal shows the presence hash and says the id could not be
+//     resolved — it never invents an id from a label.
+// A stale, unattributable or truncated record blocks nothing — it is disclosed
+// in `notices` — because the stores are bounded and can outlive a crashed
+// process (L13). The guard is BEST EFFORT and is never claimed to be
+// exhaustive.
+// Returns {refused, text, notices, guard}. A broken guard module fails closed:
+// the removal cannot run without the check that gates it.
+async function checkoutSessionGuard({ ctx, target }) {
+  let guardLib;
   try {
-    const listed = await runHerdrAsync(["agent", "list"], 60000);
-    if (listed && listed.status === 0) {
-      agents = closeHerdr.agentsInCheckout(listed.stdout, resolvedTarget, repo.root, ourSessionId);
-    }
-  } catch {
-    agents = [];
-  }
-  if (agents.length > 0) {
-    const named = agents.map((agent) => agent.cwd).join(", ");
-    return {
-      ok: false,
-      text: `cannot close the worktree at ${target}: another live Pi session is active in that checkout (${named}); warp it to the principal with /warp principal from that session and retry; the checkout and the registry were left untouched`,
-      details: { branch, path: target, force, agents },
-    };
-  }
-  let warp = null;
-  try {
-    const sessionState = checkoutState(toolCwd(ctx), repo.root);
-    const sessionId = sessionState.real !== null ? sessionState.real : sessionState.absolute;
-    if (sessionId !== null && (sessionId === resolvedTarget || sessionId.startsWith(resolvedTarget + path.sep))) {
-      const warpOpts = opts && typeof opts === "object" ? opts : undefined;
-      const moved = await executeWorktreeWarp("principal", ctx, warpOpts);
-      if (!moved || moved.isError) {
-        return {
-          ok: false,
-          text: `cannot close the worktree at ${target}: the session warp to the principal failed (${moved && moved.text ? moved.text : "the warp reported no result"}); the checkout and the registry were left untouched`,
-          details: { branch, path: target, force, warp: moved && moved.details ? moved.details : null },
-        };
-      }
-      warp = {
-        name: moved.details.name,
-        path: moved.details.path,
-        branch: moved.details.branch,
-        sessionFile: closeSessionString(ctx, "getSessionFile"),
-      };
-    }
+    guardLib = libRequire("worktree-session-guard.js");
   } catch (err) {
     return {
-      ok: false,
-      text: `cannot close the worktree at ${target}: the session warp to the principal failed (${(err && err.message) || err}); the checkout and the registry were left untouched`,
-      details: { branch, path: target, force, warp: null },
+      refused: true,
+      text: `cannot close the worktree at ${target}: the active-session guard is unavailable (${(err && err.message) || err}); the checkout and the registry were left untouched`,
+      notices: [],
+      guard: { status: "unavailable" },
     };
   }
-  let herdrWorkspace = null;
-  const notices = [];
-  // Subprocess anchor: the pre-warp repo.root names the caller's
-  // checkout, which after a warp is the doomed target itself. Re-anchor
-  // on the principal the warp just moved to (best-effort; the common
-  // dir — and therefore the registry — is shared either way), so the
-  // workspace reconcile and the removal below never run with a cwd
-  // inside the checkout being removed.
-  let anchorRoot = repo.root;
-  if (warp !== null) {
-    try {
-      anchorRoot = (await git.repoIdentityAsync(warp.path, { runAsync: libRunner(git) })).root;
-    } catch {
-      anchorRoot = repo.root;
-    }
-    runRoot = anchorRoot;
-    // S24: the reconcile runs when the session warped OUT of the doomed
-    // checkout (closing your OWN checkout), which is exactly when the reader
-    // is still watching: its Herdr children are awaited on the async runner
-    // with the same argv, order and timeouts, so the host never freezes on
-    // them. The sync twin remains for non-interactive callers.
-    const reconciled = typeof closeHerdr.reconcileHerdrWorkspaceAsync === "function"
-      ? await closeHerdr.reconcileHerdrWorkspaceAsync({
-        runAsync: (argv, timeoutMs) => git.runArgvAsync(herdrBinary(), argv, { cwd: runRoot, timeoutMs }),
-        repoRoot: anchorRoot,
-        resolvedTarget,
-        principalPath: warp.path,
-        session: { file: warp.sessionFile, id: ourSessionId },
-        force,
-      })
-      : closeHerdr.reconcileHerdrWorkspace({
-        run: (argv, timeoutMs) => git.runArgv(herdrBinary(), argv, { cwd: runRoot, timeoutMs }),
-        repoRoot: anchorRoot,
-        resolvedTarget,
-        principalPath: warp.path,
-        session: { file: warp.sessionFile, id: ourSessionId },
-        force,
-      });
-    if (reconciled.status === "reconciled") {
-      herdrWorkspace = {
-        status: "reconciled",
-        closedWorkspace: reconciled.closedWorkspace,
-        openedWorkspace: reconciled.openedWorkspace,
-        session: reconciled.session,
-      };
-      // S35: the group reconcile closes every member of the checkout's
-      // group (linked first, root last); carry the full list when present.
-      if (Array.isArray(reconciled.closedWorkspaces)) {
-        herdrWorkspace.closedWorkspaces = reconciled.closedWorkspaces;
-      }
-    } else if (reconciled.status !== "absent") {
-      // 'skipped' and 'reconciled-partial': a short visible notice
-      // travels with the success, and the removal below still proceeds.
-      herdrWorkspace = {
-        status: reconciled.status,
-        notice: reconciled.notice,
-      };
-      if (reconciled.closedWorkspace !== undefined && reconciled.closedWorkspace !== null) {
-        herdrWorkspace.closedWorkspace = reconciled.closedWorkspace;
-      }
-      if (Array.isArray(reconciled.closedWorkspaces)) {
-        herdrWorkspace.closedWorkspaces = reconciled.closedWorkspaces;
-      }
-      // S35: a failed member leaves the group half-closed: name it so no
-      // partial success is mistaken for a clean reconcile.
-      if (typeof reconciled.failedWorkspace === "string" && reconciled.failedWorkspace.length > 0) {
-        herdrWorkspace.failedWorkspace = reconciled.failedWorkspace;
-      }
-      if (reconciled.openedWorkspace !== undefined) {
-        herdrWorkspace.openedWorkspace = reconciled.openedWorkspace;
-      }
-      if (reconciled.session !== undefined) herdrWorkspace.session = reconciled.session;
-      notices.push(reconciled.notice);
-    }
+  if (typeof guardLib.readGentlePresence !== "function" || typeof guardLib.evaluateCheckoutSessions !== "function") {
+    return {
+      refused: true,
+      text: `cannot close the worktree at ${target}: the active-session guard is incomplete; the checkout and the registry were left untouched`,
+      notices: [],
+      guard: { status: "unavailable" },
+    };
   }
-  return { ok: true, warp, herdrWorkspace, notices, repoRoot: anchorRoot };
+  try {
+    // Read-only, bounded and awaited so a slow filesystem never freezes the
+    // host event loop the human is typing into. The transport registry is what
+    // turns a presence hash into the RAW session id a refusal names; when it is
+    // absent the guard says so instead of guessing one.
+    const presence = await guardLib.readGentlePresence();
+    const transport = typeof guardLib.readTransportSessions === "function"
+      ? await guardLib.readTransportSessions()
+      : null;
+    const result = guardLib.evaluateCheckoutSessions({
+      targetPath: target,
+      presence,
+      transport,
+      currentSessionId: closeSessionString(ctx, "getSessionId"),
+      currentCwd: toolCwd(ctx),
+    });
+    const notices = Array.isArray(result.notices) ? result.notices : [];
+    if (result.verdict !== "clear") {
+      return { refused: true, text: result.text, notices: [], guard: result.evidence };
+    }
+    return { refused: false, text: null, notices, guard: result.evidence };
+  } catch (err) {
+    return {
+      refused: true,
+      text: `cannot close the worktree at ${target}: the active-session check failed (${(err && err.message) || err}); the checkout and the registry were left untouched`,
+      notices: [],
+      guard: { status: "failed" },
+    };
+  }
 }
 
 // gentle-shell owns the live session's permission mode, and its YOLO grant is
@@ -2694,18 +2564,23 @@ async function yoloActiveFor(ctx) {
   }
 }
 
-// Core of `worktree_close` (S7, D6): remove the checkout and its Herdr
-// workspace, keep the branch, drop the registry entry. Exported for unit
-// tests; the registered tool calls it with the live Pi context.
+// Core of `worktree_close` (S7, D6, S6-S9): remove the checkout, keep the
+// branch, drop the registry entry. Exported for unit tests; the registered tool
+// calls it with the live Pi context, and the warp panel's Ctrl+D calls it with
+// `opts.approved` after its own question.
 //
 // The S7 rule is that the BRANCH IS KEPT: this function never deletes a
-// branch, never passes `--trust-repository`, and passes `--force` only
-// when the caller asked for it. Removal is herdr-first (workspace id
-// resolved from `herdr worktree list`) with a `git worktree remove` fixed
-// argv fallback when herdr is unavailable; a dirty checkout without
-// `force` fails with the backend's own reason and nothing is mutated. The
-// registry entry is dropped only after `listWorktrees` confirms the path
-// is gone.
+// branch, never passes `--trust-repository`, and passes `--force` only when the
+// caller asked for it. Removal is `git worktree remove` and nothing else (S6):
+// no Herdr workspace is closed, created or retired, and Herdr is never asked to
+// remove a checkout. A dirty checkout without `force` fails with the backend's
+// own reason and nothing is mutated. The registry entry is dropped only after
+// `listWorktrees` confirms the path is gone.
+//
+// S7-S9: a live Pi session working in the target refuses the close — before the
+// approval question and again immediately before the removal — through the
+// shared `checkoutSessionGuard`. Nothing is auto-warped and nothing is closed on
+// the human's behalf.
 async function executeWorktreeClose(params, ctx, opts) {
   const git = libRequire("worktree-git.js");
   const registry = libRequire("worktree-registry.js");
@@ -2917,6 +2792,18 @@ async function executeWorktreeClose(params, ctx, opts) {
     }
   }
 
+  // S7/S8/S9: a live Pi session working in the target is a REFUSAL, and it is
+  // decided BEFORE the approval question: the human is never asked to confirm a
+  // removal the guard would refuse, and nothing (checkout, branch, registry) is
+  // touched. This runs BEFORE the question so a blocked delete costs one read
+  // instead of a dialog that cannot be honored.
+  const sessionCheck = await checkoutSessionGuard({ ctx, target: resolvedTarget });
+  if (sessionCheck.refused) {
+    return errorResult(sessionCheck.text, {
+      branch, path: target, force, removed: false, sessionCheck: sessionCheck.guard,
+    });
+  }
+
   // Approval when the host offers dialog UI; non-interactive modes
   // proceed without it. A refusal mutates nothing and keeps the entry.
   //
@@ -2982,65 +2869,54 @@ async function executeWorktreeClose(params, ctx, opts) {
     }
   }
 
-  // S33/S34: warp a live session out and reconcile the Herdr workspace
-  // BEFORE the checkout removal below. A refusal here changes nothing:
-  // the checkout, the branch and the registry entry are left untouched.
-  const preRemoval = await closePreRemovalSequence({
-    git, repo, target, branch, force, ctx, opts, resolvedTarget,
-  });
-  if (!preRemoval.ok) {
-    return errorResult(preRemoval.text, preRemoval.details);
-  }
-  // S33/S34: after a warp the caller's checkout is the doomed target
-  // itself, so the removal and its verification run anchored on the
-  // principal the warp moved to. Without a warp this is repo.root and
-  // the removal below is exactly as before.
-  const effectiveRoot = preRemoval.repoRoot || repo.root;
-
-  // Remove herdr-first: resolve the workspace id from `herdr worktree
-  // list`, then `herdr worktree remove`. Fixed argv only, values as
-  // separate elements (herdr rejects --flag=value). Never
-  // --trust-repository: trusting a repository is a human decision these
-  // tools never take. `--force` only when the caller asked for it.
-  //
-  // ORDER IS PART OF THE PROTECTION, not an implementation detail. This
-  // listing is a child process, so it is an await, and an await is the
-  // longest window a swap gets between an identity check and a remover: a
-  // reproduced race replaced the approved path with a symbolic link to another
-  // detached checkout exactly while this listing ran, after the check that
-  // used to sit above it. So the listing resolves FIRST, and the final check
-  // runs after it with NO await between that check and the spawn below.
-  let removedBy = null;
-  let removeError = null;
-  let workspace = null;
-  // S21: herdr is an interactive child here — awaited on the async runner with
-  // the same argv order and the same timeouts.
-  const listed = await git.runArgvAsync(herdrBinary(), git.herdrArgv("list", { cwd: effectiveRoot }), {
-    cwd: effectiveRoot,
-    timeoutMs: 60000,
-  });
-  if (listed.status === 0) {
-    workspace = herdrWorkspaceId(listed.stdout, resolvedTarget, effectiveRoot);
+  // The removal module is a required control, so a copy that cannot load fails
+  // closed instead of falling back to a hand-rolled child.
+  let closeLib;
+  try {
+    closeLib = libRequire("worktree-close-herdr.js");
+  } catch (err) {
+    return errorResult(
+      `cannot remove the worktree at ${target}: the removal module is unavailable (${(err && err.message) || err}); the checkout and the registry were left untouched`,
+      { branch, path: target, force, removed: false },
+    );
   }
 
-  // The last possible check before a backend is asked to delete anything: the
-  // pre-removal sequence above may have warped a session and reconciled a
-  // workspace, and the listing just above is itself an await. Both are exactly
-  // the windows a swap exploits, so this check is the LAST thing that runs
-  // before the remover is launched — no await stands between the two.
+  // S7/S8/S9: rechecked immediately before the removal, after every
+  // confirmation and after the awaits above. A session that appeared while the
+  // human answered — or whose heartbeat became recent — refuses here, with the
+  // checkout, the branch and the registry entry untouched.
+  const sessionRecheck = await checkoutSessionGuard({ ctx, target: resolvedTarget });
+  if (sessionRecheck.refused) {
+    return errorResult(sessionRecheck.text, {
+      branch, path: target, force, removed: false, sessionCheck: sessionRecheck.guard,
+    });
+  }
+
+  // S6: git is the ONLY remover. The Herdr workspace reconcile (closing every
+  // workspace of the checkout's group and opening one at the principal) and
+  // `herdr worktree remove` are gone: a close never closes, opens or retires a
+  // Herdr panel, and it never asks Herdr to remove the checkout. `git worktree
+  // remove` runs with a fixed argv, the absolute verified path, and `--force`
+  // only when the caller asked for it; the branch is never deleted and
+  // --trust-repository is never passed.
   //
-  // LIMITATION, stated rather than papered over: `git worktree remove` and
-  // `herdr worktree remove` take a path (or a workspace id) and resolve it in
-  // ANOTHER process, so the check and the removal cannot be one atomic act —
-  // there is no handle-based removal available here (no `openat`/`O_NOFOLLOW`
-  // "remove this exact directory") and the filesystem offers no
-  // compare-and-swap. A swap landing between this check and the remover's own
-  // `stat` is
-  // therefore not impossible. What is closed: every await-sized window, plus
-  // any replacement of the path (a link, or a different directory at the same
-  // path caught by the pinned inode), so an attacker must win a race measured
-  // in microseconds inside another process instead of one measured in an
-  // arbitrarily slow child.
+  // ORDER IS PART OF THE PROTECTION, not an implementation detail. The
+  // active-session recheck just above is an await, and an await is the longest
+  // window a swap gets between an identity check and a remover. So the recheck
+  // resolves FIRST and the final identity check runs after it, with NO await
+  // between that check and the spawn (lib/worktree-close-herdr.js spawns the
+  // git child synchronously, before it returns its promise).
+  //
+  // LIMITATION, stated rather than papered over: `git worktree remove` takes a
+  // path and resolves it in ANOTHER process, so the check and the removal
+  // cannot be one atomic act — there is no handle-based removal available here
+  // (no `openat`/`O_NOFOLLOW` "remove this exact directory") and the filesystem
+  // offers no compare-and-swap. A swap landing between this check and the
+  // remover's own `stat` is therefore not impossible. What is closed: every
+  // await-sized window, plus any replacement of the path (a link, or a
+  // different directory at the same path caught by the pinned inode), so an
+  // attacker must win a race measured in microseconds inside another process
+  // instead of one measured in an arbitrarily slow child.
   if (expectedReal !== null) {
     const refusal = identityRefusal();
     if (refusal !== null) {
@@ -3048,42 +2924,20 @@ async function executeWorktreeClose(params, ctx, opts) {
     }
   }
 
-  if (workspace) {
-    const removeParams = { workspace };
-    if (force) removeParams.force = true;
-    const removed = await git.runArgvAsync(herdrBinary(), git.herdrArgv("remove", removeParams), {
-      cwd: effectiveRoot,
-      timeoutMs: 120000,
-    });
-    if (removed.status === 0) {
-      removedBy = "herdr";
-    } else {
-      removeError = ((removed.stderr || removed.error || "") + "").trim()
-        || "herdr worktree remove failed";
-    }
-  } else {
-    // Herdr is unavailable (missing binary, failed list, unparseable
-    // output) or the checkout has no workspace id: `git worktree remove`
-    // with fixed argv. It never deletes the branch either. The absolute
-    // entry path travels explicitly so the removal names the verified
-    // checkout however the process cwd is set.
-    const argv = ["worktree", "remove"];
-    if (force) argv.push("--force");
-    argv.push(resolvedTarget);
-    const fallen = await git.runArgvAsync("git", argv, { cwd: effectiveRoot, timeoutMs: 120000 });
-    if (fallen.status === 0) {
-      removedBy = "git";
-    } else {
-      removeError = ((fallen.stderr || fallen.error || "") + "").trim()
-        || "git worktree remove failed";
-    }
-  }
+  const removal = await closeLib.removeCheckout({
+    runAsync: (bin, argv, options) => git.runArgvAsync(bin, argv, options),
+    repoRoot: repo.root,
+    resolvedTarget,
+    force,
+  });
+  const removedBy = removal.removed ? removal.removedBy : null;
+  const removeError = removal.removed ? null : removal.error;
   if (!removedBy) {
     // The remover exited non-zero — but a lying backend may still have
     // deleted a checkout other than the target on its way out, so the
     // vanished comparison runs BEFORE this early return, never after it.
     // Either way the registry entry is kept; only the message differs.
-    const vanishedOnFailure = await vanishedCheckouts(git, effectiveRoot, live, resolvedTarget);
+    const vanishedOnFailure = await vanishedCheckouts(git, repo.root, live, resolvedTarget);
     if (vanishedOnFailure.length > 0) {
       return errorResult(
         `worktree removal failed (${removeError || "failed to remove worktree"}) and removed an unexpected checkout at ${vanishedOnFailure[0]}: expected only ${target} to be removed; the checkout and the registry entry were left for inspection`,
@@ -3104,9 +2958,9 @@ async function executeWorktreeClose(params, ctx, opts) {
   // unverifiable-removal message. Covers both the herdr and git paths.
   let after;
   try {
-    after = await git.listWorktreesAsync(effectiveRoot, { runAsync });
+    after = await git.listWorktreesAsync(repo.root, { runAsync });
   } catch (err) {
-    const vanishedWithoutList = await vanishedCheckouts(git, effectiveRoot, live, resolvedTarget, null);
+    const vanishedWithoutList = await vanishedCheckouts(git, repo.root, live, resolvedTarget, null);
     if (vanishedWithoutList.length > 0) {
       return errorResult(
         `worktree removal removed an unexpected checkout at ${vanishedWithoutList[0]}: expected only ${target} to be removed; the checkout and the registry entry were left for inspection`,
@@ -3124,7 +2978,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   // successful, and the registry entry is left in place. Covers both the
   // herdr and the git removal paths; a legitimate single-checkout removal
   // (only the target gone) never trips it.
-  const vanished = await vanishedCheckouts(git, effectiveRoot, live, resolvedTarget, after);
+  const vanished = await vanishedCheckouts(git, repo.root, live, resolvedTarget, after);
   if (vanished.length > 0) {
     return errorResult(
       `worktree removal removed an unexpected checkout at ${vanished[0]}: expected only ${target} to be removed; the checkout and the registry entry were left for inspection`,
@@ -3142,7 +2996,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   }
   let dropped;
   try {
-    dropped = registry.removeWorktreeByPath(effectiveRoot, resolvedTarget);
+    dropped = registry.removeWorktreeByPath(repo.root, resolvedTarget);
   } catch (err) {
     dropped = { ok: false, error: (err && err.message) || String(err) };
   }
@@ -3152,21 +3006,25 @@ async function executeWorktreeClose(params, ctx, opts) {
       { branch, path: target, force, removed: true, branchKept: true },
     );
   }
-  // S33/S34: the pre-removal sequence appends its own visible lines —
-  // the warp that moved this session out, and any skipped Herdr
-  // workspace step — while the removed/branch-kept contract stays
-  // byte-identical on every path that never warped.
+  // The removed/branch-kept contract is byte-identical on every path that was
+  // not refused.
   const successLines = [closeSuccessText(branch, true)];
-  if (preRemoval.warp !== null) successLines.push("session warped to principal");
-  for (const notice of preRemoval.notices) successLines.push(notice);
   // S1: a worktree carries no issue and no ODD document, so the close output
   // names no association — no association line, no association warning and no
   // dropped-document list. Nothing is lost either way: the registry writes
   // every row the close does not address back byte for byte, so there is no
   // collapse left to report.
-  const successDetails = { path: target, branch, removed: true, branchKept: true, thread: owner };
-  if (preRemoval.warp !== null) successDetails.warp = preRemoval.warp;
-  if (preRemoval.herdrWorkspace !== null) successDetails.herdrWorkspace = preRemoval.herdrWorkspace;
+  const successDetails = {
+    path: target, branch, removed: true, branchKept: true, thread: owner,
+    sessionCheck: sessionRecheck.guard,
+  };
+  // S7/S8/S9: stale, unattributable and truncated presence evidence is
+  // disclosed instead of silently ignored. `warnings` is the channel the
+  // model-result formatter keeps verbatim, so each caveat reaches both the human
+  // and the agent — and none of them ever blocks the removal.
+  if (sessionRecheck.notices.length > 0) {
+    successDetails.warnings = [...sessionRecheck.notices];
+  }
   return textResult(
     successLines.join("\n"),
     successDetails,
@@ -3190,7 +3048,7 @@ const worktreeCloseTool = withWorktreeCardRenderer(defineTool({
   name: "worktree_close",
   label: "Worktree Close",
   exposure: "codemode",
-  description: "Remove a registered agent worktree checkout (and its Herdr workspace, when Herdr is running) while keeping the branch. Pass the worktree name, path, or branch (only one), plus force:true to close a dirty checkout.",
+  description: "Remove a registered agent worktree checkout while keeping the branch. Pass the worktree name, path, or branch (only one), plus force:true to close a dirty checkout. A live Pi session working in that checkout — this session or another — refuses the close: warp to another checkout first, or let that session finish. The checkout is removed with git; no Herdr workspace is closed, opened or removed.",
   parameters: Type.Object({
     name: opt(Type.String({ description: "Name of the registered worktree to close (the flattened branch slug, or principal)" })),
     path: opt(Type.String({ description: "Path of the registered worktree to close" })),
@@ -6099,6 +5957,19 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     }
   }
 
+  // S7/S8/S9: the SAME active-session guard `worktree_close` runs, and it runs
+  // BEFORE anything reads the pending changes or builds the deletion question.
+  // A keypress may never turn into a confirmation dialog for a checkout a live
+  // Pi session is working in: the human is told to finish/warp that session
+  // first, and the checkout is left exactly as it was. `approvedReal` is the
+  // identity the panel listed, so the guard is asked about the same checkout the
+  // human is looking at.
+  const sessionCheck = await checkoutSessionGuard({ ctx, target: approvedReal });
+  if (sessionCheck.refused) {
+    notify?.(sessionCheck.text, 'error');
+    return;
+  }
+
   // 4. Only a REGISTERED worktree can be closed: the shared close resolves its
   // target through the registry, so a live checkout nobody registered would be
   // asked about and then refused. That is a question a human cannot act on, so
@@ -6220,7 +6091,10 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
   // comes only from positive dirty evidence. `expectedReal` carries the
   // approval into the removal itself: the close re-reads the identity right
   // before it names a checkout to a backend, so the narrowest possible window
-  // remains between that read and the remover.
+  // remains between that read and the remover. It also RE-RUNS the
+  // active-session guard immediately before the removal, so a session that
+  // started working in the checkout while the question was open refuses there
+  // (S8: the check precedes the question, and it is repeated after it).
   let result;
   try {
     result = await executeWorktreeClose({ path: target.path, force: prompt.force === true }, ctx, { approved: true, expectedReal: approvedReal, expectedPin: approvedPin });
@@ -7113,6 +6987,537 @@ function registerOddCommand(pi) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// `/issues` (T3 S1,S3): a full-screen four-bucket overlay (My issues /
+// Assigned / Involved / All) over the CURRENT checkout's repository issues,
+// through this package's own migrated pieces (lib/gh-issues.js for `gh`,
+// lib/issues-view.js for the pure view).
+//
+// GATED INVOCATION: the command is registered eagerly at load so it is always
+// discoverable; the session-start `gh` check only decides whether it may open.
+// Without an authenticated `gh`, one notification per session names what is
+// missing and the command that fixes it, and the handler re-emits it instead
+// of opening. The scoped tabs read cursor search pages (author:@me,
+// assignee:@me, involves:@me -author:@me), `All` reads the repository's own
+// open issue connection, the detail asks for authoritative metadata, and the
+// `o` key opens `gh issue view <n> --web -R <pinned>` through a fixed argv
+// (never a shell, never an invented opener), with the TUI suspended for the
+// open. Assignment to a checkout is deliberately absent: this reader is
+// read-only about the worktree↔issue association (S1/S4).
+// ---------------------------------------------------------------------------
+
+let issuesTuiLoader = () => import("@earendil-works/pi-tui");
+
+function setIssuesTuiLoader(loader) {
+  issuesTuiLoader = loader;
+}
+
+// The three scoped buckets are disjoint at the source: `involved` excludes the
+// viewer's own issues (they already own a row in `mine`). Each query asks gh
+// for last-update ordering so no client re-sorts. `All` is the interactive
+// reader's fourth tab: every open issue of the repository, with nothing
+// inferred or deduplicated against the three scoped ones.
+const ISSUES_PAGE_QUERIES = [
+  { id: "mine", label: "My issues", query: "author:@me sort:updated-desc" },
+  { id: "assigned", label: "Assigned", query: "assignee:@me sort:updated-desc" },
+  { id: "involved", label: "Involved", query: "involves:@me -author:@me sort:updated-desc" },
+];
+
+const ISSUES_INTERACTIVE_BUCKETS = [
+  ...ISSUES_PAGE_QUERIES,
+  // `connection: true` marks the ONE bucket read from the repository's issue
+  // connection instead of the search API: GitHub refuses to page a search
+  // past 1000 matches, while `repository.issues` walks to its end with an
+  // exact total. `query` stays the bucket's search scope for a typed reader
+  // query; it is never forwarded to the connection, which takes no text.
+  { id: "all", label: "All", query: "sort:updated-desc", connection: true },
+];
+
+const ISSUES_FETCH_PAGE_SIZE = 30;
+
+// A failed gate notifies once per session (module lifetime == session). The
+// flag flips only when an alert is handed to notify, so a startup without UI
+// never consumes the session's single alert.
+let issuesGateNotified = false;
+// `null` = not probed yet, `true` = gh was usable this session, `false` = the
+// last probe failed. Registration is eager; this state gates ONLY the open.
+let issuesGateOpen = null;
+
+function issuesPageQuery(spec, rawQuery) {
+  const extra = typeof rawQuery === "string" ? rawQuery.trim() : "";
+  return extra === "" ? spec.query : `${spec.query} ${extra}`;
+}
+
+function issuesListArgs(query, state) {
+  return {
+    query,
+    state: state === "closed" ? "closed" : "open",
+    page: 1,
+    pageSize: ISSUES_FETCH_PAGE_SIZE,
+  };
+}
+
+function issuesScopeLabel(name) {
+  return typeof name === "string" && name.length > 0 ? name : "gh's default repository";
+}
+
+function issuesScopeDriftLine(currentName, pinnedName) {
+  return `the checkout's repository changed since this issue list loaded (now ${issuesScopeLabel(currentName)} instead of ${issuesScopeLabel(pinnedName)}); reopen /issues`;
+}
+
+// The TUI hands the terminal to another process: a browser open must give it up
+// first, exactly like the odd viewer's editor open, or the child's own output
+// and the overlay fight over the same stdin/renderer. `stop()` is the host's
+// own suspend; `start()` plus a forced repaint take the terminal back once the
+// child has been waited for.
+function withSuspendedTerminal(hostTui, run) {
+  let suspended = false;
+  try {
+    if (hostTui && typeof hostTui.stop === "function") {
+      hostTui.stop();
+      suspended = true;
+    }
+  } catch {
+    suspended = false;
+  }
+  const resume = () => {
+    if (!suspended) return;
+    suspended = false;
+    try {
+      if (hostTui && typeof hostTui.start === "function") hostTui.start();
+    } catch {
+      // A host that cannot restart still gets the repaint attempt below.
+    }
+    try {
+      if (hostTui && typeof hostTui.requestRender === "function") hostTui.requestRender(true);
+    } catch {
+      // A repaint failure never breaks the open.
+    }
+  };
+  return Promise.resolve()
+    .then(run)
+    .catch((err) => ({ ok: false, error: (err && err.message) || "open failed" }))
+    .finally(resume);
+}
+
+// The `o`-key browser opener: `gh issue view <n> --web` through the file's own
+// fixed-argv runner (never a shell, never xdg-open). `-R <owner/name>` is the
+// repository the LIST was loaded from, bound when the list loads and passed at
+// press time — an issue number on screen always opens the issue it was read
+// from, even if the checkout's remote moved while the reader is open.
+function issuesOpenInBrowser(hostTui, cwd, number, pinnedIdentity) {
+  try {
+    const gh = libRequire("gh-issues.js");
+    const git = libRequire("worktree-git.js");
+    if (!git || typeof git.runArgvAsync !== "function") {
+      return Promise.resolve({ ok: false, error: "cannot open the browser: no fixed-argv runner" });
+    }
+    if (typeof pinnedIdentity !== "string" || pinnedIdentity.length === 0) {
+      return Promise.resolve({ ok: false, error: "the issue list has not loaded a repository yet" });
+    }
+    const bin = gh && typeof gh.ghBinary === "function" ? gh.ghBinary({}) : "gh";
+    const argv = ["issue", "view", String(number), "--web", "-R", pinnedIdentity];
+    return withSuspendedTerminal(hostTui, async () => {
+      const res = await git.runArgvAsync(bin, argv, { cwd, timeoutMs: 30000 });
+      if (!res) return { ok: false, error: `cannot open issue #${number} in the browser` };
+      if (res.error) return { ok: false, error: res.error };
+      if (typeof res.status === "number" && res.status !== 0) {
+        const stderr = (res.stderr || "").trim().split("\n")[0];
+        return { ok: false, error: stderr || `cannot open issue #${number} in the browser (gh exited with status ${res.status})` };
+      }
+      return { ok: true };
+    });
+  } catch (err) {
+    return Promise.resolve({ ok: false, error: (err && err.message) || `cannot open issue #${number} in the browser` });
+  }
+}
+
+function issuesWrapFailure(promise, what) {
+  return Promise.resolve(promise).then((res) => {
+    if (res && typeof res === "object") return res;
+    return { ok: false, error: `${what}: unexpected result` };
+  }).catch((err) => ({ ok: false, error: (err && err.message) || `${what}: failed` }));
+}
+
+// The no-UI fallback: the three bucket reads happen together, in order, for
+// one state. Partial failure keeps the successful pages and reports the first
+// error; when every bucket fails the result is `{ok:false}` so the caller
+// never reports fake rows.
+async function issuesFetchPages(gh, cwd, state, scope) {
+  const outcomes = await Promise.all(ISSUES_PAGE_QUERIES.map(async (spec) => {
+    const empty = { id: spec.id, label: spec.label, issues: [], total: 0, truncated: false };
+    try {
+      const res = await gh.listIssues(issuesListArgs(spec.query, state), { cwd, scope });
+      if (res && res.ok === true) {
+        return {
+          ok: true,
+          error: null,
+          page: {
+            id: spec.id,
+            label: spec.label,
+            issues: res.issues,
+            total: res.total,
+            truncated: res.truncated === true,
+          },
+        };
+      }
+      return { ok: false, error: (res && res.error) || "gh issue list failed", page: empty };
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || "gh issue list failed", page: empty };
+    }
+  }));
+  const pages = outcomes.map((outcome) => outcome.page);
+  const firstError = outcomes.find((outcome) => outcome.ok !== true);
+  if (!outcomes.some((outcome) => outcome.ok === true)) {
+    return { ok: false, error: (firstError && firstError.error) || "gh issue list failed", pages };
+  }
+  return { ok: true, pages, loadError: firstError ? firstError.error : null };
+}
+
+async function executeIssues(rawArgs, ctx) {
+  const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
+  const raw = String(rawArgs ?? "").trim();
+  if (raw !== "") {
+    if (typeof notify === "function") notify(`Unknown option "${raw}". Use /issues.`, "error");
+    return;
+  }
+  const cwd = toolCwd(ctx);
+  // The reader belongs to the checkout the session runs in: inside a worktree
+  // that is the worktree, never the principal. Anything that cannot resolve to
+  // a Git root fails closed instead of guessing.
+  const checkoutRoot = await oddCheckoutRootAsync(cwd);
+  if (!checkoutRoot) {
+    if (typeof notify === "function") notify(notGitRepositoryLine(cwd), "info");
+    return;
+  }
+  let gh = null;
+  try {
+    gh = libRequire("gh-issues.js");
+  } catch (err) {
+    if (typeof notify === "function") notify(`issues: cannot load the gh client: ${(err && err.message) || err}`, "error");
+    return;
+  }
+  // The repository identity is PINNED when the list loads, as ONE
+  // HOST-QUALIFIED string (`<host>/<owner>/<repo>`, the form gh accepts for
+  // GH_REPO and `-R`). The host is part of the identity: the same owner/name on
+  // a fork's server and on an enterprise server are different repositories.
+  // Every later read, every action and the `o` opener bind exactly that string.
+  const ghRepoEnv = () => (typeof process.env.GH_REPO === "string" && process.env.GH_REPO.trim() !== ""
+    ? process.env.GH_REPO.trim()
+    : null);
+  const effectiveRepo = async (fresh) => {
+    const envRepo = ghRepoEnv();
+    if (envRepo !== null) {
+      const normalized = gh.normalizeScopeIdentity(envRepo, process.env);
+      if (!normalized || normalized.ok !== true) {
+        return { ok: false, error: (normalized && normalized.error) || "cannot normalize the GH_REPO identity" };
+      }
+      return { ok: true, identity: normalized.identity };
+    }
+    let scope = null;
+    try {
+      scope = await gh.checkoutRepoScope({ cwd: checkoutRoot, fresh: fresh === true });
+    } catch {
+      scope = null;
+    }
+    if (!scope || scope.ok !== true) {
+      return { ok: false, error: (scope && scope.error) || "cannot resolve this checkout's own repository" };
+    }
+    if (typeof scope.identity === "string" && scope.identity.length > 0) {
+      return { ok: true, identity: scope.identity };
+    }
+    // A checkout with one remote has nothing to disambiguate, so gh resolves
+    // it; the answer is qualified with the host gh itself would use (GH_HOST,
+    // else github.com), never left as a host-less name.
+    let reported = null;
+    try {
+      reported = await gh.reportedRepoName({ cwd: checkoutRoot, scope: null });
+    } catch {
+      reported = null;
+    }
+    if (!reported || reported.ok !== true
+      || typeof reported.nameWithOwner !== "string" || reported.nameWithOwner.length === 0) {
+      return { ok: false, error: (reported && reported.error) || "cannot resolve this checkout's repository" };
+    }
+    const normalized = gh.normalizeScopeIdentity(reported.nameWithOwner, process.env);
+    if (!normalized || normalized.ok !== true) {
+      return { ok: false, error: (normalized && normalized.error) || "cannot normalize the repository identity" };
+    }
+    return { ok: true, identity: normalized.identity };
+  };
+  let pinnedRepo;
+  let pinnedPromise = null;
+  const pinRepo = async () => {
+    if (pinnedRepo !== undefined) return pinnedRepo;
+    if (pinnedPromise === null) {
+      // A FRESH read at open: the identity the list displays is the one the
+      // checkout has now, never a scope cached moments before a move.
+      pinnedPromise = effectiveRepo(true)
+        .catch(() => ({ ok: false, error: "cannot resolve this checkout's own repository" }))
+        .then((pin) => {
+          pinnedRepo = pin;
+          return pin;
+        });
+    }
+    return pinnedPromise;
+  };
+  const pinnedReadArgs = async () => {
+    const pinned = await pinRepo();
+    if (!pinned || pinned.ok !== true) {
+      return { ok: false, error: (pinned && pinned.error) || "cannot resolve this checkout's own repository" };
+    }
+    return { ok: true, args: { cwd: checkoutRoot, scope: pinned.identity } };
+  };
+  // An action runs only while the checkout still resolves to the displayed
+  // repository — a resolution failure (including a corrupt configuration)
+  // refuses — and then BINDS the pinned name, so it can never send a displayed
+  // issue number to another repository.
+  const scopeDrift = async () => {
+    const pinned = await pinRepo();
+    if (!pinned || pinned.ok !== true) {
+      return { ok: false, error: (pinned && pinned.error) || "cannot resolve this checkout's own repository" };
+    }
+    const current = await effectiveRepo(true);
+    if (!current || current.ok !== true) {
+      return { ok: false, error: (current && current.error) || "cannot verify this checkout's own repository" };
+    }
+    if (current.identity !== pinned.identity) {
+      return { ok: false, error: issuesScopeDriftLine(current.identity, pinned.identity) };
+    }
+    return { ok: true, scope: pinned.identity };
+  };
+  // One page per request, straight through the real client. The bucket id
+  // selects the EXACT source query; an unknown bucket is an explicit failure
+  // and never reaches a subprocess. A typed query rides along as additional
+  // search text, so the read searches the COMPLETE bucket. A client error
+  // (including the GitHub 1000-match search cap) passes through unchanged.
+  const loadIssuePage = (request = {}) => {
+    const spec = ISSUES_INTERACTIVE_BUCKETS.find((bucket) => bucket.id === request.bucketId);
+    if (!spec) return { ok: false, error: `unknown issues bucket "${String(request.bucketId)}"` };
+    const asked = Number(request.limit);
+    const limit = Number.isFinite(asked) ? Math.min(1000, Math.max(1, Math.floor(asked))) : 1;
+    const cursor = request.cursor == null || request.cursor === "" ? null : String(request.cursor);
+    const typed = typeof request.query === "string" ? request.query.trim() : "";
+    return issuesWrapFailure((async () => {
+      const pinned = await pinnedReadArgs();
+      if (pinned.ok !== true) return pinned;
+      // The unfiltered `All` bucket reads the repository's issue CONNECTION:
+      // cursor-paged to its end with an exact total, instead of a search capped
+      // at 1000 matches. It takes NO search text, so only an EMPTY reader query
+      // takes this path; a typed query stays on the search API, whose cap is
+      // reported honestly rather than routed around.
+      if (spec.connection === true && typed === "") {
+        if (typeof gh.getIssueConnectionPage !== "function") {
+          return { ok: false, error: "cannot read issues: the gh client has no unfiltered issue connection reader" };
+        }
+        return await gh.getIssueConnectionPage({ after: cursor, first: limit }, pinned.args);
+      }
+      return await gh.getIssuePage(
+        { query: issuesPageQuery(spec, request.query), after: cursor, first: limit },
+        pinned.args,
+      );
+    })(), "cannot read issues");
+  };
+  const loadLabels = async () => {
+    const pinned = await pinnedReadArgs();
+    if (pinned.ok !== true) return pinned;
+    return await gh.listLabels(pinned.args);
+  };
+  // The assignee editor's candidates are the repository's assignable users,
+  // read lazily on the editor's first open and scoped to this checkout.
+  const loadAssignees = async () => {
+    const pinned = await pinnedReadArgs();
+    if (pinned.ok !== true) return pinned;
+    return await gh.listAssignableUsers(pinned.args);
+  };
+  const checkoutName = path.basename(checkoutRoot);
+  // Pin the identity before the overlay mounts, so the first screenful is not
+  // a git probe per gh call and every row is read from that one repository.
+  await pinRepo();
+  let helpers = null;
+  try {
+    helpers = await issuesTuiLoader();
+  } catch {
+    helpers = null;
+  }
+  if (!helpers || !ctx || !ctx.ui || typeof ctx.ui.custom !== "function") {
+    // No interactive host: read once so the one-line notice states a real
+    // total, then say the viewer needs an interactive session.
+    const pinned = await pinnedReadArgs();
+    const loaded = pinned.ok === true
+      ? await issuesFetchPages(gh, checkoutRoot, "open", pinned.args.scope)
+      : { ok: false, error: pinned.error, pages: [] };
+    const pages = Array.isArray(loaded.pages) ? loaded.pages : [];
+    if (typeof notify === "function") {
+      if (loaded.ok !== true) {
+        notify(`issues: ${loaded.error || "gh issue list failed"}`, "info");
+      } else {
+        const total = pages.reduce((sum, page) => sum + (Array.isArray(page.issues) ? page.issues.length : 0), 0);
+        notify(`issues: ${total} issue(s) across ${pages.length} pages (the viewer needs an interactive session)`, "info");
+      }
+    }
+    return;
+  }
+  // The overlay factory's own host object is what the browser opener suspends.
+  // Set just before the factory runs so no action can reach a stale host.
+  let hostTuiRef = null;
+  const actions = {
+    // Created names go through `gh label create` first, then the whole delta
+    // through `gh issue edit`. A failure at either step returns honestly and
+    // the view keeps the editor open with local state unchanged.
+    editLabels: (number, add, remove, created) => issuesWrapFailure((async () => {
+      const gate = await scopeDrift();
+      if (gate.ok !== true) return gate;
+      const args = { cwd: checkoutRoot, scope: gate.scope };
+      for (const name of Array.isArray(created) ? created : []) {
+        if (typeof name !== "string" || name === "") continue;
+        const made = await gh.createLabel({ name }, args);
+        if (!made || made.ok !== true) return { ok: false, error: (made && made.error) || `cannot create label ${name}` };
+      }
+      return await gh.editLabels(number, { add, remove }, args);
+    })(), "cannot edit labels"),
+    postComment: (number, text) => issuesWrapFailure((async () => {
+      const gate = await scopeDrift();
+      if (gate.ok !== true) return gate;
+      return await gh.commentIssue(number, text, { cwd: checkoutRoot, scope: gate.scope });
+    })(), "cannot comment"),
+    // Assignee toggles save only the add/remove delta through one fixed-argv
+    // `gh issue edit`; the repository role check inside the client is the final
+    // authority, so a refused save is reported, never assumed.
+    editAssignees: (number, { add, remove }) => issuesWrapFailure((async () => {
+      const gate = await scopeDrift();
+      if (gate.ok !== true) return gate;
+      return await gh.editAssignees(number, { add, remove }, { cwd: checkoutRoot, scope: gate.scope });
+    })(), "cannot edit assignees"),
+    setState: (number, state) => issuesWrapFailure((async () => {
+      const gate = await scopeDrift();
+      if (gate.ok !== true) return gate;
+      return await gh.setIssueState(number, state, { cwd: checkoutRoot, scope: gate.scope });
+    })(), "cannot change the issue state"),
+    openBrowser: (number) => {
+      if (pinnedRepo === undefined) return { ok: false, error: "the issue list has not loaded a repository yet" };
+      if (pinnedRepo.ok !== true) {
+        return { ok: false, error: pinnedRepo.error || "cannot resolve this checkout's own repository" };
+      }
+      return issuesOpenInBrowser(hostTuiRef, checkoutRoot, number, pinnedRepo.identity);
+    },
+  };
+  try {
+    await ctx.ui.custom(
+      (hostTui, theme, _keybindings, done) => {
+        hostTuiRef = hostTui;
+        return libRequire("issues-view.js").createIssuesView({
+          // Bucket metadata only: the rows arrive page by page through
+          // `loadIssuePage`, so no accumulated list is handed over. All four
+          // tabs are prefetched once at open, so no tab sits at a false zero.
+          pages: ISSUES_INTERACTIVE_BUCKETS.map((spec) => ({ id: spec.id, label: spec.label, issues: null })),
+          loadIssuePage,
+          loadLabels,
+          loadAssignees,
+          checkoutName,
+          prefetchBuckets: true,
+          // `includeMetadata` carries the authoritative repository role, the
+          // current assignees and the linked PR count into the view; without
+          // it the view sees no confirmed capability and offers no editors.
+          loadIssue: async (number) => {
+            const pinned = await pinnedReadArgs();
+            if (pinned.ok !== true) return pinned;
+            return await gh.getIssue(number, { ...pinned.args, includeMetadata: true });
+          },
+          // No association props: a checkout carries no issue list, so nothing
+          // is marked as assigned and nothing is saved.
+          actions,
+          helpers,
+          theme,
+          rowsAvailable: () => oddTerminalRows(hostTui),
+          requestRender: () => {
+            try {
+              if (hostTui && typeof hostTui.requestRender === "function") hostTui.requestRender();
+            } catch {
+              // A repaint failure never breaks navigation.
+            }
+          },
+          done,
+        });
+      },
+      // Full screen like the odd viewer: the point of this surface is reading
+      // long issues with their comments.
+      { overlay: true, overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%", margin: 0 } },
+    );
+  } catch {
+    // A host that rejects the overlay degrades to one muted line.
+    if (typeof notify === "function") notify("issues: the viewer could not open in this session", "info");
+  }
+}
+
+// A missing binary needs an install plus login; anything else already carries
+// gh's own `gh auth login` wording. The note says the command cannot OPEN,
+// never that it is unregistered, because registration is eager.
+function issuesGateMessage(error) {
+  const text = String(error || "gh check failed");
+  if (/ENOENT|not available|not found/i.test(text)) {
+    return "issues: the gh CLI is not available; install it (https://cli.github.com) and run `gh auth login` — /issues cannot open until then";
+  }
+  return `issues: ${text} — /issues cannot open until then`;
+}
+
+async function checkIssuesGate(_pi, ctx) {
+  try {
+    const gh = libRequire("gh-issues.js");
+    const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
+    const res = await gh.ghStatus({ cwd });
+    issuesGateOpen = !!(res && res.ok === true);
+    if (issuesGateOpen) return { ok: true };
+    const error = (res && res.error) || "gh check failed";
+    if (!issuesGateNotified && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
+      try {
+        ctx.ui.notify(issuesGateMessage(error), "info");
+        issuesGateNotified = true;
+      } catch {
+        // Notifying never breaks startup.
+      }
+    }
+    return { ok: false, error };
+  } catch (err) {
+    // The gate must never break startup.
+    return { ok: false, error: (err && err.message) || String(err) };
+  }
+}
+
+// The command stays discoverable even before the session gate resolves, so
+// running it probes `gh` on demand. A session that already answered `ok` never
+// re-probes; a failure notifies the same honest fix every time it is asked.
+async function probeIssuesGate(ctx) {
+  if (issuesGateOpen === true) return { ok: true };
+  let gate;
+  try {
+    const gh = libRequire("gh-issues.js");
+    const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
+    const res = await gh.ghStatus({ cwd });
+    gate = res && res.ok === true ? { ok: true } : { ok: false, error: (res && res.error) || "gh check failed" };
+  } catch (err) {
+    gate = { ok: false, error: (err && err.message) || String(err) };
+  }
+  issuesGateOpen = gate.ok === true;
+  return gate;
+}
+
+function registerIssuesCommand(pi) {
+  if (typeof pi?.registerCommand !== "function") return;
+  pi.registerCommand("issues", {
+    description: "Browse fresh GitHub issue pages and details; edit labels/assignees, comment or close when permitted",
+    handler: async (args, ctx) => {
+      const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
+      const gate = await probeIssuesGate(ctx);
+      if (gate.ok !== true) {
+        if (typeof notify === "function") notify(issuesGateMessage(gate.error), "error");
+        return;
+      }
+      await executeIssues(args, ctx);
+    },
+  });
+}
+
 export default function (pi) {
   // A TOOL context has no session control, so `worktree_warp` queues the
   // `/warp` COMMAND through this handle (`sendUserMessage` with
@@ -7121,6 +7526,7 @@ export default function (pi) {
   registerWarpMessageRenderer(pi);
   registerWarpCommand(pi);
   registerOddCommand(pi);
+  registerIssuesCommand(pi);
   pi.registerTool(worktreeCreateTool);
   pi.registerTool(worktreeListTool);
   pi.registerTool(worktreeCloseTool);
@@ -7130,6 +7536,11 @@ export default function (pi) {
   // session start and drop it on shutdown, so no render path ever reaches a
   // context the runtime has invalidated.
   pi.on("session_start", rememberWorktreeCardUi);
+  // The session-start `gh` check only gates whether `/issues` may open; the
+  // command itself is registered eagerly above.
+  pi.on("session_start", async (event, ctx) => {
+    await checkIssuesGate(pi, ctx);
+  });
   pi.on("session_shutdown", forgetWorktreeCardUi);
   // Nothing deferred survives its session: shutdown advances the startup epoch,
   // so work still in flight drops instead of writing into the session that
@@ -7169,4 +7580,4 @@ export default function (pi) {
   });
 }
 
-export { executeWorktreeCreate, executeWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, executeWorktreeWarpTool, emitOsc7, awaitPendingCreationSetups, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setWorktreeCardHelpers, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable };
+export { executeWorktreeCreate, executeWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, executeWorktreeWarpTool, emitOsc7, awaitPendingCreationSetups, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable };

@@ -1,0 +1,170 @@
+'use strict';
+// S7: the `## ODD worktrees` section and its append-only injection. The two
+// texts are the contract, so they are asserted verbatim; the gate is injected
+// so no test depends on whether the machine has the CLI.
+const { test, describe, after } = require('node:test');
+const assert = require('node:assert/strict');
+const os = require('node:os');
+
+const prompt = require('../lib/odd-worktrees-prompt.js');
+
+const WITH_CODEGRAPH = [
+  '## ODD worktrees',
+  '',
+  'Each ODD feature has its own worktree. Before starting implementation, check',
+  'whether that ODD already has an assigned worktree: if it does, resume it there;',
+  'if it does not, create one before starting.',
+  '',
+  '`worktree_create` places the checkout at `<repo-parent>/<repo-name>-worktrees/<name>`',
+  'and runs `codegraph init` there, so the new checkout has its own index from the',
+  'start. Edits and writes trigger a background `codegraph sync` for that checkout.',
+  'Every worktree keeps its own `.codegraph/`; never copy, symlink or reuse another',
+  "checkout's index.",
+  '',
+  'Keep all work for one ODD in its assigned worktree. Do not create a second one',
+  'to continue it.',
+].join('\n');
+
+const WITHOUT_CODEGRAPH = [
+  '## ODD worktrees',
+  '',
+  'Each ODD feature has its own worktree. Before starting implementation, check',
+  'whether that ODD already has an assigned worktree: if it does, resume it there;',
+  'if it does not, create one before starting.',
+  '',
+  '`worktree_create` places the checkout at `<repo-parent>/<repo-name>-worktrees/<name>`.',
+  '',
+  'Keep all work for one ODD in its assigned worktree. Do not create a second one',
+  'to continue it.',
+].join('\n');
+
+const savedEnv = { ...process.env };
+after(() => {
+  for (const key of Object.keys(process.env)) {
+    if (!(key in savedEnv)) delete process.env[key];
+  }
+  for (const [key, value] of Object.entries(savedEnv)) process.env[key] = value;
+});
+
+function clearEnv() {
+  delete process.env.ODD_WORKTREE_PROMPT;
+  delete process.env.GENTLE_PI_AGENTS_CHILD;
+}
+
+function run(event, deps = {}) {
+  return prompt.appendOddWorktreesSection(event, deps);
+}
+
+const present = () => true;
+const absent = () => false;
+const primaryEvent = (options) => ({ systemPromptOptions: options });
+
+describe('section text', () => {
+  test('the CodeGraph variant is exactly the specified text', () => {
+    const options = {};
+    assert.equal(run(primaryEvent(options), { env: {}, hasCodegraph: present }), undefined);
+    assert.equal(options.appendSystemPrompt, WITH_CODEGRAPH);
+  });
+
+  test('the variant without CodeGraph is exactly the specified text', () => {
+    const options = {};
+    run(primaryEvent(options), { env: {}, hasCodegraph: absent });
+    assert.equal(options.appendSystemPrompt, WITHOUT_CODEGRAPH);
+  });
+});
+
+describe('append-only injection', () => {
+  test('existing harness text is preserved verbatim and the block follows it', () => {
+    const harness = 'You are Pi.\n\nUse the tools.';
+    const options = { appendSystemPrompt: harness };
+    run(primaryEvent(options), { env: {}, hasCodegraph: absent });
+    assert.ok(options.appendSystemPrompt.startsWith(harness), 'existing text is the prefix');
+    assert.equal(options.appendSystemPrompt, `${harness}\n\n${WITHOUT_CODEGRAPH}`);
+  });
+
+  test('a trailing newline in the existing text keeps the separator minimal', () => {
+    const harness = 'You are Pi.\n';
+    const options = { appendSystemPrompt: harness };
+    run(primaryEvent(options), { env: {}, hasCodegraph: absent });
+    assert.equal(options.appendSystemPrompt, `${harness}\n${WITHOUT_CODEGRAPH}`);
+  });
+
+  test('never returns or assigns systemPrompt', () => {
+    const event = { systemPromptOptions: {}, systemPrompt: 'harness-owned' };
+    const returned = run(event, { env: {}, hasCodegraph: absent });
+    assert.equal(returned, undefined);
+    assert.equal(event.systemPrompt, 'harness-owned');
+    assert.ok(!('systemPrompt' in event.systemPromptOptions));
+  });
+
+  test('idempotent across two calls', () => {
+    const options = {};
+    run(primaryEvent(options), { env: {}, hasCodegraph: present });
+    const once = options.appendSystemPrompt;
+    run(primaryEvent(options), { env: {}, hasCodegraph: present });
+    assert.equal(options.appendSystemPrompt, once);
+    assert.equal(options.appendSystemPrompt, WITH_CODEGRAPH);
+  });
+
+  test('a variant switch mid-session never duplicates the heading', () => {
+    const options = {};
+    run(primaryEvent(options), { env: {}, hasCodegraph: absent });
+    run(primaryEvent(options), { env: {}, hasCodegraph: present });
+    const headings = options.appendSystemPrompt.split('## ODD worktrees').length - 1;
+    assert.equal(headings, 1, 'the section is injected once, whatever the variant');
+  });
+});
+
+describe('session gating', () => {
+  test('a named agent gets nothing', () => {
+    for (const event of [
+      { agentName: 'worker', systemPromptOptions: {} },
+      { agent: 'worker', systemPromptOptions: {} },
+      { agent: { name: 'worker' }, systemPromptOptions: {} },
+      { name: 'worker', systemPromptOptions: {} },
+      { subagent: { name: 'worker' }, systemPromptOptions: {} },
+    ]) {
+      run(event, { env: {}, hasCodegraph: present });
+      assert.equal(event.systemPromptOptions.appendSystemPrompt, undefined);
+    }
+  });
+
+  test('a GENTLE_PI_AGENTS_CHILD worker gets nothing', () => {
+    clearEnv();
+    process.env.GENTLE_PI_AGENTS_CHILD = '1';
+    const options = {};
+    run(primaryEvent(options), { env: process.env, hasCodegraph: present });
+    assert.equal(options.appendSystemPrompt, undefined);
+  });
+
+  test('ODD_WORKTREE_PROMPT=0 suppresses the block entirely', () => {
+    clearEnv();
+    process.env.ODD_WORKTREE_PROMPT = '0';
+    const options = {};
+    run(primaryEvent(options), { env: process.env, hasCodegraph: present });
+    assert.equal(options.appendSystemPrompt, undefined);
+  });
+
+  test('missing systemPromptOptions is a no-op that never throws', () => {
+    assert.doesNotThrow(() => run({}, { env: {}, hasCodegraph: present }));
+    assert.doesNotThrow(() => run(undefined, { env: {}, hasCodegraph: present }));
+    assert.doesNotThrow(() => run({ systemPromptOptions: null }, { env: {}, hasCodegraph: present }));
+  });
+});
+
+describe('extension wiring (T3)', () => {
+  test('before_agent_start appends the section to the prompt options', async () => {
+    clearEnv();
+    const { loadExtension } = require('./fixtures/load-extension.js');
+    const { hooks } = await loadExtension({});
+    const handlers = hooks.filter(([name]) => name === 'before_agent_start').map(([, handler]) => handler);
+    assert.equal(handlers.length, 1, 'exactly one before_agent_start handler');
+    const options = {};
+    await handlers[0]({ systemPromptOptions: options }, { cwd: os.tmpdir() });
+    assert.ok(
+      options.appendSystemPrompt === WITH_CODEGRAPH || options.appendSystemPrompt === WITHOUT_CODEGRAPH,
+      'the injected block is one of the two exact variants',
+    );
+    assert.doesNotThrow(() => handlers[0]({}, {}));
+  });
+});

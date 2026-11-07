@@ -7575,6 +7575,15 @@ export default function (pi) {
       // Index freshness is best effort and never touches the tool result.
     }
   });
+  // S7: the ODD worktree rules ride the prompt options, appended after the
+  // harness's own text. Sync mutation, so the host reads the final string.
+  pi.on("before_agent_start", (event) => {
+    try {
+      libRequire("odd-worktrees-prompt.js").appendOddWorktreesSection(event);
+    } catch {
+      // The prompt block is best effort.
+    }
+  });
   // Register every live checkout the registry does not own yet. Dispatched here
   // and awaited by the barrier below: the host runs session_start handlers one
   // at a time, so awaiting the scan inside this handler would put the session's

@@ -217,6 +217,23 @@ function bodyOf(view, width) {
   return strip(lines.join('\n'));
 }
 
+// The RIGHT (document) pane of every body row, one entry per row, so a test can
+// name WHICH row a token landed on instead of only that it was painted.
+function rightRows(view, width, rows = 24) {
+  const panes = readerPanes(width);
+  return view.render(width)
+    .slice(4, Math.max(4, rows - 2))
+    .map((line) => [...strip(line)].slice(5 + panes.left, 5 + panes.left + panes.right).join('').trimEnd());
+}
+
+// The body row the caret is painted on. Written as a helper because the defect
+// these tests pin is WHICH row carries it, not that it is painted at all.
+function caretRow(rows) {
+  const at = rows.findIndex((row) => row.includes('█'));
+  assert.notEqual(at, -1, `no caret painted in the pane: ${JSON.stringify(rows)}`);
+  return at;
+}
+
 // Only the LEFT pane of every body row, so a list assertion can never be
 // satisfied by the preview on the right: S3 puts titles left and the number
 // right, and the two are trimmed to different widths.
@@ -2882,6 +2899,58 @@ describe('issues view pending writes and comment caret (S10/S11)', () => {
     assert.ok(!/h█i/.test(body), 'the caret is never detached from the insertion point');
     view.handleInput('backspace');
     assert.match(bodyOf(view, 100), /ther█/, 'Backspace moves the caret back with the text');
+  });
+
+  test('the caret lands on the real line on the first frame after opening and after enter (S11)', async () => {
+    const { view } = makeView({
+      pages: pagesOf([[issue(1)], [], []]),
+      issues: [issue(1)],
+      loadIssue: (n) => ({ ok: true, issue: issue(n), comments: [] }),
+    });
+    await tick();
+    view.handleInput('c');
+    // The header owns the first body row, so the insertion point of an empty
+    // draft is the row directly under it — never the one below that.
+    let rows = rightRows(view, 100);
+    assert.match(rows[0], /Leave a comment/, 'the editor header owns the first body row');
+    assert.equal(caretRow(rows), 1, 'an empty draft puts the caret on the first line under the header');
+    assert.equal(rows[1], '█', 'and that line holds nothing but the caret');
+    assert.equal(rows[2], '', 'no blank line is left between the header and the caret');
+
+    for (const ch of 'hi') view.handleInput(ch);
+    rows = rightRows(view, 100);
+    assert.equal(caretRow(rows), 1, 'typing keeps the caret on the line typing continues on');
+    assert.match(rows[1], /hi█/);
+
+    // Enter opens the line under the typed text, so that IS the insertion row.
+    view.handleInput('enter');
+    rows = rightRows(view, 100);
+    assert.equal(rows[1], 'hi', 'enter commits the typed line above');
+    assert.equal(caretRow(rows), 2, 'enter moves the caret onto the new line, not one below it');
+    assert.equal(rows[2], '█', 'the new line holds nothing but the caret');
+    assert.equal(rows[3], '', 'the caret is not detached from the line it belongs to');
+
+    for (const ch of 'there') view.handleInput(ch);
+    rows = rightRows(view, 100);
+    assert.equal(caretRow(rows), 2, 'typing after enter continues on the row the caret is on');
+    assert.equal(rows[2], 'there█');
+  });
+
+  test('a full line still pushes the caret onto the next row (S11 preserved)', async () => {
+    const { view } = makeView({
+      pages: pagesOf([[issue(1)], [], []]),
+      issues: [issue(1)],
+      loadIssue: (n) => ({ ok: true, issue: issue(n), comments: [] }),
+    });
+    await tick();
+    view.handleInput('c');
+    const rightWidth = readerPanes(100).right;
+    assert.ok(rightWidth > 0, 'the pane has room to fill');
+    for (const ch of 'x'.repeat(rightWidth)) view.handleInput(ch);
+    const rows = rightRows(view, 100);
+    assert.equal(rows[1], 'x'.repeat(rightWidth), 'the typed line fills the pane exactly');
+    assert.equal(caretRow(rows), 2, 'a line with no room left wraps the caret onto the next row');
+    assert.equal(rows[2], '█');
   });
 });
 

@@ -2034,7 +2034,7 @@ describe('S16: repository permissions gate the label and assignee editors', () =
       });
       await tick();
       const body = bodyOf(view, 220);
-      assert.equal(body.includes('L labels'), shown, `labels hint for ${JSON.stringify(permissions)}`);
+      assert.equal(body.includes('l labels'), shown, `labels hint for ${JSON.stringify(permissions)}`);
       assert.equal(body.includes('a assign'), shown, `assignees hint for ${JSON.stringify(permissions)}`);
     }
   });
@@ -2162,7 +2162,7 @@ describe('S16: repository permissions gate the label and assignee editors', () =
       loadAssignees: () => { calls.push('loadAssignees'); return users(); },
     });
     await tick();
-    assert.match(bodyOf(view, 220), /L labels/, 'the permitted issue shows the hint');
+    assert.match(bodyOf(view, 220), /l labels/, 'the permitted issue shows the hint');
     view.handleInput('j');
     await tick();
     const body = bodyOf(view, 220);

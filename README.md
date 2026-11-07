@@ -97,6 +97,12 @@ the host already owns. Nothing is written to user config.
 - Removal is `git worktree remove <absolute path>`, with `--force` only when the
   caller asked for it. The branch is kept, and no Herdr panel is closed, opened
   or removed on any path.
+- The `/warp` selector never offers the checkout the session already stands in:
+  warping there would move the session to the route it is already on. The
+  exclusion is by checkout identity (the resolved real path), not by spelling,
+  so a symlinked or otherwise differently-spelled path to the current checkout
+  is excluded too, while a checkout whose name merely shares a prefix is still
+  offered.
 - `/issues` pins the repository identity (`<host>/<owner>/<repo>`) when the
   list loads. Every page, detail, label and assignee read binds it, and so do
   the actions and the `o` browser opener (`gh issue view <n> --web -R`). If the

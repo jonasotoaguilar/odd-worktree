@@ -6438,6 +6438,15 @@ async function runWarpSelectorLoop(ctx, git, registry, repo, fromCwd, notify) {
           const view = viewLib.createWarpSelectorView({
             checkouts: mountedCheckouts,
             current: { name: freshCurrent.name, path: freshCurrent.path },
+            // S4b: the exclusion is by checkout IDENTITY, so the panel and the
+            // extended list never offer the current checkout under a second
+            // spelling (a symlink, a `..` segment). The same realpath-with-
+            // absolute-fallback identity every other surface uses.
+            canonicalPath: (value) => {
+              const st = checkoutState(value, repo.root);
+              if (st.real !== null) return st.real;
+              return st.absolute !== null ? st.absolute : value;
+            },
             facts: checkoutFacts ? (checkoutPath) => checkoutFacts.facts(checkoutPath).then(warpFactsForView) : undefined,
             reload,
             helpers,
@@ -6472,8 +6481,9 @@ async function runWarpSelectorLoop(ctx, git, registry, repo, fromCwd, notify) {
     }
     if (out === null || out === undefined) return undefined;
     if (out && typeof out === "object" && out.warp) {
-      // The extended list also shows the current checkout: selecting it
-      // resolves to an already-there warp, which stays silent.
+      // Neither view offers the checkout the session already stands in, so a
+      // resolved warp is always a real move; the listing is still re-read here
+      // and an unknown path changes nothing.
       const chosen = freshOffered.find((entry) => entry.path === out.warp);
       if (!chosen) {
         notify?.(`warp: unknown checkout selection ${JSON.stringify(out.warp)}; nothing was moved.`, "error");

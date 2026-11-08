@@ -14,7 +14,7 @@
 // names that session. Nothing else may: no label, no prefix, no saved history.
 //
 // These cases are written against the PUBLIC surfaces only — the two exported
-// guard functions and the registered `worktree_close` tool — so they keep
+// guard functions and the registered `worktree_delete` tool — so they keep
 // working if internals move. Every fixture is a throwaway repository and agent
 // home under the system temp directory; no real worktree, presence store or
 // session is touched.
@@ -255,7 +255,7 @@ describe('S7 identity join through the registered tool', () => {
     const sessionHash = publishPresence(AGENT_HOME, { sessionId: 'raw-session-7', label: 'Worker', workspace: target, heartbeat: Date.now(), incarnationIndex: 4 });
     publishTransport(AGENT_HOME, { sessionId: 'raw-session-7' });
 
-    const closed = await tools.get('worktree_close').execute('t5-c2', { name: 'feat-t5-joined' }, undefined, undefined, ctx);
+    const closed = await tools.get('worktree_delete').execute('t5-c2', { name: 'feat-t5-joined' }, undefined, undefined, ctx);
     assert.equal(closed.isError, true);
     const text = resultText(closed);
     assert.ok(text.includes('id raw-session-7'), text);
@@ -277,7 +277,7 @@ describe('S7 identity join through the registered tool', () => {
     const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-t5-unjoined');
     const sessionHash = publishPresence(AGENT_HOME, { sessionId: 'raw-session-8', label: 'Worker', workspace: target, heartbeat: Date.now(), incarnationIndex: 5 });
 
-    const closed = await tools.get('worktree_close').execute('t5-c5', { name: 'feat-t5-unjoined' }, undefined, undefined, ctx);
+    const closed = await tools.get('worktree_delete').execute('t5-c5', { name: 'feat-t5-unjoined' }, undefined, undefined, ctx);
     assert.equal(closed.isError, true);
     const text = resultText(closed);
     assert.ok(text.includes(`presence ${sessionHash.slice(0, 12)}`), text);
@@ -295,7 +295,7 @@ describe('S7 identity join through the registered tool', () => {
     // never be attributed to this checkout, and it must never block.
     publishPresence(AGENT_HOME, { sessionId: 'legacy-peer', label: 'Legacy', heartbeat: Date.now(), incarnationIndex: 6, discovery: false });
 
-    const closed = await tools.get('worktree_close').execute('t5-c7', { name: 'feat-t5-notice' }, undefined, undefined, ctx);
+    const closed = await tools.get('worktree_delete').execute('t5-c7', { name: 'feat-t5-notice' }, undefined, undefined, ctx);
     assert.notEqual(closed.isError, true, resultText(closed));
     const text = resultText(closed);
     assert.match(text, /published no workspace/);

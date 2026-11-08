@@ -8,35 +8,14 @@ const os = require('node:os');
 
 const prompt = require('../lib/odd-worktrees-prompt.js');
 
-const WITH_CODEGRAPH = [
-  '## ODD worktrees',
-  '',
-  'Each ODD feature has its own worktree. Before starting implementation, check',
-  'whether that ODD already has an assigned worktree: if it does, resume it there;',
-  'if it does not, create one before starting.',
-  '',
-  '`worktree_create` places the checkout at `<repo-parent>/<repo-name>-worktrees/<name>`',
-  'and runs `codegraph init` there, so the new checkout has its own index from the',
-  'start. Edits and writes trigger a background `codegraph sync` for that checkout.',
-  'Every worktree keeps its own `.codegraph/`; never copy, symlink or reuse another',
-  "checkout's index.",
-  '',
-  'Keep all work for one ODD in its assigned worktree. Do not create a second one',
-  'to continue it.',
-].join('\n');
+const fs = require('node:fs');
+const path = require('node:path');
 
-const WITHOUT_CODEGRAPH = [
-  '## ODD worktrees',
-  '',
-  'Each ODD feature has its own worktree. Before starting implementation, check',
-  'whether that ODD already has an assigned worktree: if it does, resume it there;',
-  'if it does not, create one before starting.',
-  '',
-  '`worktree_create` places the checkout at `<repo-parent>/<repo-name>-worktrees/<name>`.',
-  '',
-  'Keep all work for one ODD in its assigned worktree. Do not create a second one',
-  'to continue it.',
-].join('\n');
+const PROMPT_DIR = path.resolve(__dirname, '..', 'lib', 'odd-prompt');
+const WITH_FILE = path.join(PROMPT_DIR, 'odd-worktrees.with-codegraph.md');
+const WITHOUT_FILE = path.join(PROMPT_DIR, 'odd-worktrees.without-codegraph.md');
+const WITH_CODEGRAPH = fs.readFileSync(WITH_FILE, 'utf8').trim();
+const WITHOUT_CODEGRAPH = fs.readFileSync(WITHOUT_FILE, 'utf8').trim();
 
 const savedEnv = { ...process.env };
 after(() => {
@@ -166,5 +145,33 @@ describe('extension wiring (T3)', () => {
       'the injected block is one of the two exact variants',
     );
     assert.doesNotThrow(() => handlers[0]({}, {}));
+  });
+});
+
+describe('the section is prose on disk', () => {
+  test('both variants live in their own Markdown file and are what gets injected', () => {
+    assert.ok(fs.existsSync(WITH_FILE), 'the CodeGraph variant file exists');
+    assert.ok(fs.existsSync(WITHOUT_FILE), 'the plain variant file exists');
+    assert.equal(prompt.WITH_CODEGRAPH, WITH_CODEGRAPH);
+    assert.equal(prompt.WITHOUT_CODEGRAPH, WITHOUT_CODEGRAPH);
+  });
+
+  test('each file opens with the section heading that makes injection idempotent', () => {
+    for (const text of [WITH_CODEGRAPH, WITHOUT_CODEGRAPH]) {
+      assert.ok(text.startsWith('## ODD worktrees'), text.split('\n')[0]);
+    }
+  });
+
+  test('only the CodeGraph variant mentions CodeGraph', () => {
+    assert.match(WITH_CODEGRAPH, /codegraph init/);
+    assert.match(WITH_CODEGRAPH, /codegraph sync/);
+    assert.doesNotMatch(WITHOUT_CODEGRAPH, /codegraph/i);
+  });
+
+  test('neither variant instructs the agent to warp', () => {
+    for (const text of [WITH_CODEGRAPH, WITHOUT_CODEGRAPH]) {
+      assert.doesNotMatch(text, /worktree_warp/);
+      assert.doesNotMatch(text, /move the session/i);
+    }
   });
 });

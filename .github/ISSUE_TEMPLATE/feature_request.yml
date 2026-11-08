@@ -33,7 +33,7 @@ body:
       options:
         - worktree_create
         - worktree_list
-        - worktree_close
+        - worktree_delete
         - worktree_warp
         - /warp panel (create, list, delete)
         - /odd-list viewer

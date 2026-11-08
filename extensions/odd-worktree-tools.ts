@@ -10,7 +10,7 @@
 //   /issues    read this checkout's GitHub issues, with label/assignee,
 //              comment and close actions when the repository permits them
 //
-// and four tools: worktree_create, worktree_list, worktree_close,
+// and four tools: worktree_create, worktree_list, worktree_delete,
 // worktree_warp. Create and close prompt for approval when the host offers
 // dialog UI; list never mutates anything; warp hands the move to /warp.
 //
@@ -1034,7 +1034,7 @@ async function executeWorktreeCreate(params, ctx, opts) {
 
   // No approval dialog: a create touches no existing data — the checkout and
   // its registry row are both new — and the panel's create path never asked
-  // either. The confirmation that matters lives in `worktree_close`.
+  // either. The confirmation that matters lives in `worktree_delete`.
 
   // (g) Create. S20 branch adoption is resolved BEFORE creating: when
   // `refs/heads/<branch>` already exists (and is not checked out at a
@@ -2021,7 +2021,7 @@ async function vanishedCheckouts(git, repoRoot, live, resolvedTarget, after) {
 }
 
 // S24 name resolution — the ONE place checkout names resolve to
-// checkouts. `worktree_close` (by `name`) and the `warp` command verb
+// checkouts. `worktree_delete` (by `name`) and the `warp` command verb
 // both call this, never separate logic. A name is the flattened branch
 // slug (`slugifyBranch`, already exported by lib/worktree-git.js), or
 // `principal` for the principal checkout.
@@ -2318,7 +2318,7 @@ function closeSessionString(ctx, method) {
   }
 }
 
-// S7/S8/S9: the active-session refusal, shared by `worktree_close` and the warp
+// S7/S8/S9: the active-session refusal, shared by `worktree_delete` and the warp
 // panel's Ctrl+D (lib/worktree-session-guard.js).
 //
 // The guard answers one question per checkout: is a live Pi session working
@@ -2442,7 +2442,7 @@ async function yoloActiveFor(ctx) {
   }
 }
 
-// Core of `worktree_close` (S7, D6, S6-S9): remove the checkout, keep the
+// Core of `worktree_delete` (S7, D6, S6-S9): remove the checkout, keep the
 // branch, drop the registry entry. Exported for unit tests; the registered tool
 // calls it with the live Pi context, and the warp panel's Ctrl+D calls it with
 // `opts.approved` after its own question.
@@ -2474,7 +2474,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   const hasName = typeof rawName === "string" && rawName.length > 0;
   if (!hasPath && !hasBranch && !hasName) {
     return errorResult(
-      "worktree_close requires a path or a branch or a name: pass the worktree path, branch, or name to close",
+      "worktree_delete requires a path or a branch or a name: pass the worktree path, branch, or name to close",
       { force },
     );
   }
@@ -2483,7 +2483,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   // agree-or-disagree behaviour below.)
   if (hasName && (hasPath || hasBranch)) {
     return errorResult(
-      "worktree_close accepts only one of path, branch, or name: pass only one",
+      "worktree_delete accepts only one of path, branch, or name: pass only one",
       { path: rawPath, branch: rawBranch, name: rawName, force },
     );
   }
@@ -2504,7 +2504,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   const byBranch = hasBranch && !hasName ? registry.findByBranch(repo.root, rawBranch) : null;
   if (hasPath && hasBranch && byPath && byBranch && byPath.branch !== byBranch.branch) {
     return errorResult(
-      `worktree_close path and branch disagree: path resolves to branch '${byPath.branch}' but branch '${rawBranch}' is registered elsewhere; pass only one`,
+      `worktree_delete path and branch disagree: path resolves to branch '${byPath.branch}' but branch '${rawBranch}' is registered elsewhere; pass only one`,
       { path: rawPath, branch: rawBranch, force },
     );
   }
@@ -2537,7 +2537,7 @@ async function executeWorktreeClose(params, ctx, opts) {
       }
     } else if (resolved.kind === "principal") {
       return errorResult(
-        `cannot close the principal checkout at ${resolved.path}: worktree_close only closes registered agent worktrees; the checkout and the registry were left untouched`,
+        `cannot close the principal checkout at ${resolved.path}: worktree_delete only closes registered agent worktrees; the checkout and the registry were left untouched`,
         { name: rawName, path: resolved.path, branch: resolved.branch, force },
       );
     } else {
@@ -2555,7 +2555,7 @@ async function executeWorktreeClose(params, ctx, opts) {
         const pid = pst.real !== null ? pst.real : pst.absolute;
         if (entryId !== null && pid !== null && entryId === pid) {
           return errorResult(
-            `cannot close the principal checkout at ${principalRef.path}: worktree_close only closes registered agent worktrees; the checkout and the registry were left untouched`,
+            `cannot close the principal checkout at ${principalRef.path}: worktree_delete only closes registered agent worktrees; the checkout and the registry were left untouched`,
             { name: rawName, path: principalRef.path, branch: principalRef.branch, force },
           );
         }
@@ -2633,7 +2633,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   // is invoked. Without that, a path replaced by a symbolic link while the
   // human answered would be handed to `git worktree remove`, which resolves the
   // spelling it is given and would name ANOTHER checkout. No tool reaches this:
-  // `worktree_close` calls this function without options.
+  // `worktree_delete` calls this function without options.
   const expectedReal = opts && typeof opts.expectedReal === "string" && opts.expectedReal.length > 0
     ? opts.expectedReal
     : null;
@@ -2700,7 +2700,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   // selector's keyboard delete, which never consults YOLO at all
   // (`warpDeleteCheckout`). It suppresses the second dialog only: every check
   // above and below, the live-session protections and the removal itself are
-  // unchanged, and no tool can reach this flag because `worktree_close` calls
+  // unchanged, and no tool can reach this flag because `worktree_delete` calls
   // this function without options.
   const alreadyApproved = !!(opts && opts.approved === true);
   if (ctx && ctx.hasUI && !alreadyApproved) {
@@ -2741,7 +2741,7 @@ async function executeWorktreeClose(params, ctx, opts) {
     }
     if (!approved) {
       return errorResult(
-        `worktree close cancelled: approval declined for branch '${branch}'`,
+        `worktree delete cancelled: approval declined for branch '${branch}'`,
         { cancelled: true, branch, path: target, force },
       );
     }
@@ -2923,15 +2923,15 @@ const worktreeListTool = withWorktreeCardRenderer(defineTool({
 }));
 
 const worktreeCloseTool = withWorktreeCardRenderer(defineTool({
-  name: "worktree_close",
-  label: "Worktree Close",
+  name: "worktree_delete",
+  label: "Worktree Delete",
   exposure: "codemode",
-  description: "Remove a registered agent worktree checkout while keeping the branch. Pass the worktree name, path, or branch (only one), plus force:true to close a dirty checkout. A live Pi session working in that checkout — this session or another — refuses the close: warp to another checkout first, or let that session finish. The checkout is removed with git; no Herdr workspace is closed, opened or removed.",
+  description: "Remove a registered agent worktree checkout while keeping the branch. Pass the worktree name, path, or branch (only one), plus force:true to delete a dirty checkout. A live Pi session working in that checkout — this session or another — refuses the deletion: warp to another checkout first, or let that session finish. The checkout is removed with git; no Herdr workspace is closed, opened or removed.",
   parameters: Type.Object({
-    name: opt(Type.String({ description: "Name of the registered worktree to close (the flattened branch slug, or principal)" })),
-    path: opt(Type.String({ description: "Path of the registered worktree to close" })),
-    branch: opt(Type.String({ description: "Branch of the registered worktree to close" })),
-    force: opt(Type.Boolean({ description: "Close even when the checkout is dirty" })),
+    name: opt(Type.String({ description: "Name of the registered worktree to delete (the flattened branch slug, or principal)" })),
+    path: opt(Type.String({ description: "Path of the registered worktree to delete" })),
+    branch: opt(Type.String({ description: "Branch of the registered worktree to delete" })),
+    force: opt(Type.Boolean({ description: "Delete even when the checkout is dirty" })),
   }),
   async execute(toolCallId, params, signal, onUpdate, ctx) {
     return executeWorktreeClose(params, ctx);
@@ -3471,6 +3471,16 @@ async function executeWorktreeWarpTool(params, ctx, opts) {
   const warpSessions = libRequire("worktree-warp-sessions.js");
   const raw = params && typeof params.name === "string" ? params.name.trim() : "";
   const fromCwd = toolCwd(ctx);
+  // S5: one pending warp per session. While one waits, a second request is
+  // REFUSED here — before anything is resolved, copied or queued — and the
+  // pending request is never disturbed: it is the move someone already asked
+  // for, and the refusal says where it stands.
+  const pendingGate = warpPendingGate(ctx, fromCwd, null);
+  if (pendingGate.pending) {
+    return errorResult(`worktree warp: ${warpPendingRefusalText(pendingGate.pending, raw)}`, {
+      tool: "worktree_warp", name: raw, pending: true,
+    });
+  }
   // S21: the warp is interactive too, so its preflight reads are awaited.
   const runAsync = libRunner(git);
   let repo;
@@ -3665,46 +3675,72 @@ async function executeWorktreeWarpTool(params, ctx, opts) {
   // `fromName`/`name`/`path`/`branch`), so the card falls back to that line
   // instead of painting a move that has not happened. The one visible "moved"
   // card comes from the switched-to session once the move is real.
-  // S4: this session's own background work is a refusal, not a queue. The
-  // command that performs the move waits for idle — and a session with running
-  // agent tasks IS idle — so queueing here would move the session out from
-  // under work that is still running. Nothing is queued when this refuses.
-  const toolBusy = await warpSessionActivity(ctx);
-  if (toolBusy && toolBusy.busy === true) {
-    return errorResult(`worktree warp: ${warpBusyText(toolBusy)}`, {
-      tool: "worktree_warp", name: displayName, path: targetCwd, branch: displayBranch,
-      kind: resolved.kind, busy: true,
-    });
-  }
-  const handoffDispatched = dispatchWarpHandoff(prepareWarpHandoff({
+  // S5/S9: this session's own workloads no longer refuse the handoff — the
+  // request is QUEUED exactly as it is when idle, and the command's pending warp
+  // performs the move once no agent task and no background job is running. What
+  // this tool reports is always the QUEUE, never a move: the idle wording is
+  // byte-identical to before, a busy session gets the waiting line naming both
+  // workloads, and the `queue:` line appears only when the job state could not
+  // be read at all.
+  const toolActivity = await warpSessionActivity(ctx);
+  const toolBusy = !!(toolActivity && toolActivity.busy === true);
+  const preparedToolHandoff = prepareWarpHandoff({
     name: displayName,
     target: targetCwd,
     from: fromCwd,
     branch: displayBranch,
     changes: toolChanges,
-  }));
+  });
+  if (!preparedToolHandoff.ok) {
+    return errorResult(
+      `worktree warp: ${preparedToolHandoff.error}`,
+      { tool: "worktree_warp", name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: false, cancelled: false },
+    );
+  }
+  // S6: the request becomes this session's ONE pending warp at QUEUE time, not
+  // when the command finally runs, so a second `worktree_warp` in the same turn
+  // meets the gate above instead of queueing another handoff. The record is
+  // created only after every validation above passed, so a request refused for
+  // another reason queues nothing, and every terminal outcome on the command
+  // front (moved, refused, cancelled, expired, shutdown) clears this same record.
+  const toolQueue = warpQueuePending({ ctx, fromCwd, name: displayName, prepared: preparedToolHandoff });
+  if (!toolQueue.ok && toolQueue.pending) {
+    return errorResult(`worktree warp: ${warpPendingRefusalText(toolQueue.pending, raw)}`, {
+      tool: "worktree_warp", name: raw, pending: true,
+    });
+  }
+  const handoffDispatched = dispatchWarpHandoff(preparedToolHandoff);
   if (!handoffDispatched.ok) {
+    // Nothing was handed off, so nothing may stay pending.
+    if (toolQueue.ok && toolQueue.pending) warpSettlePending(toolQueue.pending.key);
     return errorResult(
       `worktree warp: ${handoffDispatched.error}`,
       { tool: "worktree_warp", name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: false, cancelled: false },
     );
   }
+  if (toolQueue.ok && toolQueue.pending) warpMarkDispatched(toolQueue.pending.key);
   const changesNote = toolChanges.mode === "all"
     ? "\nchanges: all (copied when the move lands)"
     : toolChanges.mode === "paths"
       ? `\nchanges: ${toolChanges.paths.length} file${toolChanges.paths.length === 1 ? "" : "s"} (copied when the move lands)`
       : "";
-  const pendingText =
-    `worktree warp: handoff queued — the session moves when this turn ends\n` +
-    `to: ${warpClean(displayName, "worktree")}\n` +
-    `path: ${warpClean(targetCwd, "(unknown checkout)")}\n` +
-    `branch: ${warpClean(displayBranch, "(detached)")}${changesNote}`;
+  const jobsNote = toolBusy ? warpJobsUnknownText(toolActivity) : "";
+  const pendingText = [
+    toolBusy
+      ? `worktree warp: ${warpQueuedText(toolActivity)}`
+      : "worktree warp: handoff queued — the session moves when this turn ends",
+    `to: ${warpClean(displayName, "worktree")}`,
+    `path: ${warpClean(targetCwd, "(unknown checkout)")}`,
+    `branch: ${warpClean(displayBranch, "(detached)")}${changesNote}`,
+    ...(jobsNote.length > 0 ? [`queue: ${jobsNote}`] : []),
+  ].join("\n");
   return textResult(
     pendingText,
     {
       tool: "worktree_warp", handoff: true, pending: true,
       pendingName: displayName, pendingPath: targetCwd, pendingBranch: displayBranch,
       from: fromCwd, target: targetCwd, kind: resolved.kind,
+      ...(toolBusy ? { busy: true, queued: true } : {}),
     },
     false,
   );
@@ -4092,12 +4128,33 @@ async function sessionManagerClassFor(ctx) {
   return null;
 }
 
-// S4: THIS session's own agent-task counters, read from the presence store the
-// close guard already consumes (lib/worktree-warp-busy.js). Best effort: an
-// absent module or store answers null and blocks nothing. Background jobs are
-// NOT covered — gentle-shell keeps them in memory and publishes no durable
-// evidence — so nothing here claims to see one.
-async function warpSessionActivity(ctx) {
+// S4/S9: THIS session's own workloads — its agent-task counters, read from the
+// presence store the close guard already consumes, and its background jobs, read
+// through the host's `job_list` tool (lib/worktree-warp-busy.js). Both are one
+// answer: `busy` is true while an agent task runs or queues OR a job runs.
+//
+// The host seam is the one `session-worktree-register.js` already uses:
+// `ctx.tools` names `job_list` and `ctx.executeTool` calls it. Only those two
+// members are kept for a queued warp's lifetime, so a 30-minute record pins one
+// host method (and a projected tool list) instead of the whole command context.
+// A host without the tool answers `unknown` and blocks nothing.
+function warpJobHost(ctx) {
+  try {
+    if (!ctx || typeof ctx.executeTool !== "function") return null;
+    const tools = Array.isArray(ctx.tools) ? ctx.tools : null;
+    if (tools === null) return null;
+    const executeTool = ctx.executeTool;
+    return {
+      tools: tools.map((tool) => ({ name: tool && typeof tool.name === "string" ? tool.name : "" })),
+      executeTool: (name, args) => executeTool.call(ctx, name, args),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function warpSessionActivityById(sessionId, host) {
+  if (typeof sessionId !== "string" || sessionId.length === 0) return null;
   let lib = null;
   try {
     lib = libRequire("worktree-warp-busy.js");
@@ -4105,25 +4162,182 @@ async function warpSessionActivity(ctx) {
     return null;
   }
   if (!lib || typeof lib.sessionActivity !== "function") return null;
-  const sessionId = closeSessionString(ctx, "getSessionId");
   try {
-    return await lib.sessionActivity({ sessionId });
+    return await lib.sessionActivity({ sessionId, host: host || null });
   } catch {
     return null;
   }
 }
 
-// The one refusal sentence, from the same module that produced the counters. A
-// missing module falls back to a shorter sentence that still names agent tasks
-// only.
-function warpBusyText(activity) {
+function warpSessionActivity(ctx) {
+  return warpSessionActivityById(closeSessionString(ctx, "getSessionId"), warpJobHost(ctx));
+}
+
+// S5: the queue texts come from the module that produced the counters, so the
+// tool result, the command notice and the expiry notice cannot drift apart. A
+// missing module falls back to the same sentences.
+function warpQueuedText(activity) {
   try {
     const lib = libRequire("worktree-warp-busy.js");
-    if (lib && typeof lib.busyText === "function") return lib.busyText(activity);
+    if (lib && typeof lib.queuedText === "function") return lib.queuedText(activity);
   } catch {
     // fall through to the fixed sentence
   }
-  return "this session still has running agent tasks: the warp waits for them to finish (as of the last published heartbeat); background jobs are not visible here, so confirm they finished too";
+  return "handoff queued — waiting for this session's agent tasks and background jobs before the move";
+}
+
+// The one line a queued answer adds when, and only when, the job state was
+// unreadable. An empty string means both workloads were seen.
+function warpJobsUnknownText(activity) {
+  try {
+    const lib = libRequire("worktree-warp-busy.js");
+    if (lib && typeof lib.jobsUnknownText === "function") return lib.jobsUnknownText(activity);
+  } catch {
+    // fall through to the fixed sentence
+  }
+  return "";
+}
+
+function warpPendingRefusalText(pending, requestedName) {
+  try {
+    const lib = libRequire("worktree-warp-busy.js");
+    if (lib && typeof lib.pendingWarpRefusalText === "function") return lib.pendingWarpRefusalText(pending, requestedName);
+  } catch {
+    // fall through to the fixed sentence
+  }
+  const name = pending && typeof pending.name === "string" && pending.name.length > 0 ? pending.name : "that checkout";
+  return `a warp to ${name} is already pending for this session — it runs when the pending agent tasks finish; wait for it or let it expire`;
+}
+
+// S5: the ONE pending-warp gate. Both fronts ask it, keyed by the session id
+// (falling back to the checkout the session stands in) so the tool and the
+// command can never disagree about whether a warp is queued. `retry` is true
+// only for the pending request's OWN re-dispatched handoff, which must not be
+// refused as a second warp.
+function warpPendingGate(ctx, fromCwd, handoff) {
+  const empty = { key: null, pending: null, retry: false };
+  let lib = null;
+  try {
+    lib = libRequire("worktree-warp-busy.js");
+  } catch {
+    return empty;
+  }
+  if (!lib || typeof lib.pendingKeyFor !== "function" || typeof lib.pendingWarpFor !== "function") return empty;
+  let key = null;
+  try {
+    key = lib.pendingKeyFor({ sessionId: closeSessionString(ctx, "getSessionId"), root: fromCwd });
+  } catch {
+    return empty;
+  }
+  if (key === null) return empty;
+  const pending = lib.pendingWarpFor(key);
+  if (!pending) return { key, pending: null, retry: false };
+  let retry = false;
+  try {
+    retry = handoff !== null
+      && handoff !== undefined
+      && typeof lib.sameWarpHandoff === "function"
+      && lib.sameWarpHandoff(pending.handoff, handoff) === true;
+  } catch {
+    retry = false;
+  }
+  return { key, pending, retry };
+}
+
+// Hold the validated handoff as this session's one pending warp and start its
+// poller, which re-dispatches the SAME token through `ctx`-free closures (a
+// 30-minute queue must not pin a command context). Never throws; `ok:false`
+// with `pending` means another request got there first, and `ok:false` alone
+// means this process cannot hold a queue at all.
+function warpQueuePending({ ctx, fromCwd, name, prepared }) {
+  let lib = null;
+  try {
+    lib = libRequire("worktree-warp-busy.js");
+  } catch {
+    return { ok: false };
+  }
+  if (!lib || typeof lib.queuePendingWarp !== "function" || typeof lib.pendingKeyFor !== "function") return { ok: false };
+  const sessionId = closeSessionString(ctx, "getSessionId");
+  const host = warpJobHost(ctx);
+  let key = null;
+  try {
+    key = lib.pendingKeyFor({ sessionId, root: fromCwd });
+  } catch {
+    return { ok: false };
+  }
+  if (key === null) return { ok: false };
+  // Only the bound notifier is captured: the queue outlives this invocation, and
+  // a 30-minute record must not pin the whole command context (nor anything it
+  // reaches through) just to report an expiry.
+  const ui = ctx && ctx.ui && typeof ctx.ui.notify === "function" ? ctx.ui : null;
+  try {
+    return lib.queuePendingWarp({
+      key,
+      name,
+      token: prepared.token,
+      handoff: prepared.request,
+      env: process.env,
+      host,
+      read: () => warpSessionActivityById(sessionId, host),
+      dispatch: (queuedHandoff) => {
+        const reprepared = prepareWarpHandoff(queuedHandoff);
+        if (!reprepared.ok) return { ok: false, error: reprepared.error };
+        return dispatchWarpHandoff(reprepared);
+      },
+      notify: ui
+        ? (text, level) => { try { ui.notify(text, level); } catch { /* a dead UI never fails the queue */ } }
+        : null,
+    });
+  } catch {
+    return { ok: false };
+  }
+}
+
+function warpSettlePending(key) {
+  if (typeof key !== "string" || key.length === 0) return;
+  try {
+    const lib = libRequire("worktree-warp-busy.js");
+    if (lib && typeof lib.settlePendingWarp === "function") lib.settlePendingWarp(key);
+  } catch {
+    // Nothing to clear without the module that holds the queue.
+  }
+}
+
+function warpResumePending(key) {
+  if (typeof key !== "string" || key.length === 0) return;
+  try {
+    const lib = libRequire("worktree-warp-busy.js");
+    if (lib && typeof lib.resumePendingWarp === "function") lib.resumePendingWarp(key);
+  } catch {
+    // The dispatched retry settles or expires on its own.
+  }
+}
+
+// The tool front already handed its request to the command: the record it just
+// created only has to refuse a second warp and wait for that dispatch to settle
+// (or expire), never to send a second copy of the same handoff.
+function warpMarkDispatched(key) {
+  if (typeof key !== "string" || key.length === 0) return;
+  try {
+    const lib = libRequire("worktree-warp-busy.js");
+    if (lib && typeof lib.markPendingWarpDispatched === "function") lib.markPendingWarpDispatched(key);
+  } catch {
+    // Without the module the queue does not exist, so there is nothing to mark.
+  }
+}
+
+// Nothing deferred survives its session: a queued warp dies with the session
+// that asked for it, so no timer outlives the context it would move.
+function forgetPendingWarp(ctx) {
+  try {
+    const lib = libRequire("worktree-warp-busy.js");
+    if (!lib || typeof lib.pendingKeyFor !== "function" || typeof lib.settlePendingWarp !== "function") return;
+    const root = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : null;
+    const key = lib.pendingKeyFor({ sessionId: closeSessionString(ctx, "getSessionId"), root });
+    if (key !== null) lib.settlePendingWarp(key);
+  } catch {
+    // A shutdown never fails on bookkeeping.
+  }
 }
 
 // The COMMAND front's bounded wait: a warp lands after this turn settles, so it
@@ -4142,7 +4356,7 @@ async function warpWaitForIdleSession(ctx) {
   try {
     // The budget travels through the environment so a session can bound its own
     // wait (ODD_WORKTREE_WARP_BUSY_WAIT_MS); the default keeps a warp short.
-    return await lib.waitForSessionActivity({ sessionId, env: process.env });
+    return await lib.waitForSessionActivity({ sessionId, env: process.env, host: warpJobHost(ctx) });
   } catch {
     return null;
   }
@@ -4460,7 +4674,62 @@ async function warpMaybeCopyDirty({ ctx, git, fromCheckout, targetCwd, options }
   }
   return { ok: true, copied };
 }
+// S5: the change selection a QUEUED human warp carries. A queued handoff cannot
+// prompt (the command's handoff path never asks), so the same YES COPY / NO COPY
+// question the idle warp asks is answered NOW and travels in the token; the copy
+// itself still runs at move time inside the command. Cancelling queues nothing.
+// Never throws.
+async function warpQueuedChangesSelection({ ctx, git, fromCheckout, skipPrompt, options }) {
+  const none = { ok: true, changes: { mode: 'none', paths: [] } };
+  if (skipPrompt === true) return none;
+  let changesLib = null;
+  try {
+    changesLib = libRequire('worktree-changes.js');
+  } catch {
+    return none;
+  }
+  let summary;
+  try {
+    summary = await changesLib.summarizeChanges(fromCheckout, { git });
+  } catch {
+    return none;
+  }
+  if (!summary || summary.ok !== true || summary.files === 0) return none;
+  const summaryLine = `${summary.files} file${summary.files === 1 ? '' : 's'}, +${summary.added}/-${summary.deleted}`;
+  const choice = await askWarpDirtyChoice(ctx, summaryLine, options);
+  if (choice === null) return { cancelled: true };
+  return choice === 'yes'
+    ? { ok: true, changes: { mode: 'all', paths: [] } }
+    : none;
+}
+
+// S5: the ONE warp gate every front shares (the tool's queued handoff, a typed
+// `/warp <name>`, the selector pick and a create's follow-up warp). While a
+// pending warp exists, a SECOND request is refused here — it queues nothing,
+// switches nothing and never touches the pending request. The pending retry is
+// recognised by its own handoff, so the re-dispatched `/warp @<token>` runs, and
+// every terminal outcome (moved, refused, cancelled) clears the record so a
+// later warp is accepted again. A retry that finds the counters busy again
+// resumes the queue instead of settling it.
 async function executeWorktreeWarp(rawName, ctx, opts) {
+  const options = opts || {};
+  const gate = warpPendingGate(ctx, toolCwd(ctx), normalizeWarpHandoff(options.handoff));
+  if (gate.pending && gate.retry !== true) {
+    return warpFail(`worktree warp: ${warpPendingRefusalText(gate.pending, rawName)}`, {
+      name: typeof rawName === "string" ? rawName.trim() : "",
+      alreadyThere: false, cancelled: false, pending: true,
+    });
+  }
+  const out = await performWorktreeWarp(rawName, ctx, options, gate.retry === true);
+  if (out && out.stillQueued === true) {
+    if (gate.pending && gate.key !== null) warpResumePending(gate.key);
+    return out;
+  }
+  if (gate.key !== null) warpSettlePending(gate.key);
+  return out;
+}
+
+async function performWorktreeWarp(rawName, ctx, opts, retry) {
   const options = opts || {};
   const git = libRequire("worktree-git.js");
   const registry = libRequire("worktree-registry.js");
@@ -4490,17 +4759,14 @@ async function executeWorktreeWarp(rawName, ctx, opts) {
     );
   }
   await ctx.waitForIdle();
-  // S4: a session with running agent tasks is IDLE for the host, so the wait
-  // above does not wait for that work. This front gives the published counters
-  // a bounded chance to drain and then refuses instead of moving the session
-  // out from under a task that is still running. A store that is absent or
-  // unreadable blocks nothing.
+  // S4/S5: a session with running agent tasks is IDLE for the host, so the wait
+  // above does not wait for that work. This front gives the published counters a
+  // bounded chance to drain (ODD_WORKTREE_WARP_BUSY_WAIT_MS) and QUEUES the
+  // request when they have not: nothing switches under work that is still
+  // running, and the queued handoff is performed once the counters drain. A
+  // store that is absent or unreadable blocks nothing.
   const busyWait = await warpWaitForIdleSession(ctx);
-  if (busyWait && busyWait.activity && busyWait.activity.busy === true) {
-    return warpFail(`worktree warp: ${warpBusyText(busyWait.activity)}`, {
-      name, alreadyThere: false, cancelled: false, busy: true,
-    });
-  }
+  const sessionLoad = busyWait && busyWait.activity ? busyWait.activity : null;
   const fromCwd = typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
   // S21: the same awaited preflight reads as the tool, so a slow repository
   // never freezes the session that is being moved.
@@ -4618,6 +4884,92 @@ async function executeWorktreeWarp(rawName, ctx, opts) {
   // through `failAfterCopy` (below) and why a retry must prove the copied state
   // byte for byte before it skips anything.
   const dirtyFrom = warpDeepestContaining(sessionId, warpLiveIdentities(live, repo.root)) || fromCwd;
+  // S5: the QUEUED warp. This session still reports running or queued agent
+  // tasks, so nothing switches: the request is validated and kept as this
+  // session's one pending warp, and lib/worktree-warp-busy.js re-dispatches the
+  // SAME handoff once the counters drain. What this returns says queued, never
+  // moved, and says plainly that only this session's agent-task counters drain
+  // the queue.
+  if (sessionLoad && sessionLoad.busy === true) {
+    const queuedSelection = handoff
+      ? { ok: true, changes: handoff.changes }
+      : await warpQueuedChangesSelection({
+        ctx, git, fromCheckout: dirtyFrom, skipPrompt: skipDirtyPrompt, options: opts,
+      });
+    if (queuedSelection.cancelled === true) {
+      return warpFail(
+        `worktree warp: ${name} cancelled (the session stays in ${fromCwd})`,
+        { name, alreadyThere: false, cancelled: true },
+      );
+    }
+    const queuedHandoff = prepareWarpHandoff({
+      name: displayName,
+      target: targetCwd,
+      from: fromCwd,
+      branch: displayBranch,
+      changes: queuedSelection.changes,
+    });
+    if (!queuedHandoff.ok) {
+      return warpFail(`worktree warp: ${queuedHandoff.error}`, { name, alreadyThere: false, cancelled: false });
+    }
+    const queued = warpQueuePending({ ctx, fromCwd, name: displayName, prepared: queuedHandoff });
+    // Both workloads are named in the queue text; the extra line appears only
+    // when the job state could not be read at all.
+    const queuedJobsNote = warpJobsUnknownText(sessionLoad);
+    const queuedLines = [
+      `worktree warp: ${warpQueuedText(sessionLoad)}`,
+      ...(queuedJobsNote.length > 0 ? [`queue: ${queuedJobsNote}`] : []),
+    ];
+    if (!queued.ok && queued.pending) {
+      // This IS the pending retry and the workloads filled up again: keep the
+      // queue (the wrapper resumes its poller) instead of refusing our own move.
+      if (retry === true) {
+        return {
+          text: queuedLines.join("\n"),
+          details: {
+            name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind,
+            alreadyThere: false, cancelled: false, busy: true, queued: true, pending: true,
+          },
+          stillQueued: true,
+        };
+      }
+      return warpFail(`worktree warp: ${warpPendingRefusalText(queued.pending, name)}`, {
+        name, alreadyThere: false, cancelled: false, pending: true,
+      });
+    }
+    if (!queued.ok) {
+      return warpFail(
+        "worktree warp: this session still has running agent tasks or background jobs and this host cannot hold a queued warp; nothing moved — warp again when they finish",
+        { name, alreadyThere: false, cancelled: false, busy: true },
+      );
+    }
+    // A human front is told ONCE that the request is queued (a handoff already
+    // reported itself in the tool result); the queue's own notice covers expiry
+    // later. The retry says nothing, so one queued warp makes one notice.
+    if (!handoff && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
+      try {
+        ctx.ui.notify(queuedLines.join("; "), "info");
+      } catch {
+        // A dead UI never fails the queue.
+      }
+    }
+    const queuedChangesNote = queuedSelection.changes && queuedSelection.changes.mode === "all"
+      ? "\nchanges: all (copied when the move lands)"
+      : queuedSelection.changes && queuedSelection.changes.mode === "paths"
+        ? `\nchanges: ${queuedSelection.changes.paths.length} file${queuedSelection.changes.paths.length === 1 ? "" : "s"} (copied when the move lands)`
+        : "";
+    return {
+      text: `worktree warp: ${warpQueuedText(sessionLoad)}\n`
+        + `to: ${warpClean(displayName, "worktree")}${queuedChangesNote}`
+        + (queuedJobsNote.length > 0 ? `\nqueue: ${queuedJobsNote}` : ""),
+      details: {
+        name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind,
+        alreadyThere: false, cancelled: false, busy: true, queued: true, pending: true,
+        expiresAt: queued.pending ? queued.pending.expiresAt : null,
+      },
+      stillQueued: true,
+    };
+  }
   // A handoff copy that has landed in the destination is REAL state. It is never
   // rolled back automatically — deleting or reverting files nobody authorized us
   // to touch is exactly the destructive guess this path refuses — so every
@@ -6036,7 +6388,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     }
   }
 
-  // S7/S8/S9: the SAME active-session guard `worktree_close` runs, and it runs
+  // S7/S8/S9: the SAME active-session guard `worktree_delete` runs, and it runs
   // BEFORE anything reads the pending changes or builds the deletion question.
   // A keypress may never turn into a confirmation dialog for a checkout a live
   // Pi session is working in: the human is told to finish/warp that session
@@ -6095,7 +6447,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
   // realpath comparison cannot see. An unreadable pair is a REFUSAL: without it
   // the removal cannot say which directory it is about to destroy.
   if (typeof before.identity.dev !== "number" || typeof before.identity.ino !== "number") {
-    notify?.(`warp: refusing to delete ${target.path}: the identity of its directory could not be read, so a path replaced by another directory could not be told apart; nothing was removed — retry, or close it with the worktree_close tool.`, "error");
+    notify?.(`warp: refusing to delete ${target.path}: the identity of its directory could not be read, so a path replaced by another directory could not be told apart; nothing was removed — retry, or close it with the worktree_delete tool.`, "error");
     return;
   }
   const approvedPin = { real: approvedReal, dev: before.identity.dev, ino: before.identity.ino };
@@ -6111,7 +6463,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     const reason = changes && typeof changes.reason === "string" && changes.reason.length > 0
       ? changes.reason
       : "the change summary failed";
-    notify?.(`warp: refusing to delete ${target.path}: its uncommitted changes could not be read (${reason}), so nothing can say what would be lost; nothing was removed — retry, or close it with the worktree_close tool.`, "error");
+    notify?.(`warp: refusing to delete ${target.path}: its uncommitted changes could not be read (${reason}), so nothing can say what would be lost; nothing was removed — retry, or close it with the worktree_delete tool.`, "error");
     return;
   }
   const content = evidence.content && typeof evidence.content === "object" ? evidence.content : null;
@@ -6119,7 +6471,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     const reason = content && typeof content.reason === "string" && content.reason.length > 0
       ? content.reason
       : "the pending content could not be fingerprinted";
-    notify?.(`warp: refusing to delete ${target.path}: what is pending in it could not be fingerprinted (${reason}), so an identical +/- count could hide different work; nothing was removed — retry, or close it with the worktree_close tool.`, "error");
+    notify?.(`warp: refusing to delete ${target.path}: what is pending in it could not be fingerprinted (${reason}), so an identical +/- count could hide different work; nothing was removed — retry, or close it with the worktree_delete tool.`, "error");
     return;
   }
   const ignored = evidence.ignored && typeof evidence.ignored === "object" ? evidence.ignored : null;
@@ -6127,7 +6479,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     const reason = ignored && typeof ignored.reason === "string" && ignored.reason.length > 0
       ? ignored.reason
       : "the ignored-file listing failed";
-    notify?.(`warp: refusing to delete ${target.path}: the files git ignores there could not be listed (${reason}), so the removal could destroy work nobody was shown; nothing was removed — retry, or close it with the worktree_close tool.`, "error");
+    notify?.(`warp: refusing to delete ${target.path}: the files git ignores there could not be listed (${reason}), so the removal could destroy work nobody was shown; nothing was removed — retry, or close it with the worktree_delete tool.`, "error");
     return;
   }
 
@@ -6629,6 +6981,20 @@ function registerWarpCommand(pi) {
     handler: async (args, ctx) => {
       const notify = ctx?.ui?.notify;
       const raw = String(args ?? "").trim();
+      // S5: one pending warp per session, refused on EVERY front here — the
+      // selector is not even opened for a request that cannot run — except for
+      // the pending request's own re-dispatched handoff, which is the move this
+      // queue exists to perform.
+      const earlyHandoff = raw.startsWith(WARP_HANDOFF_PREFIX) ? decodeWarpHandoff(raw) : null;
+      const earlyGate = warpPendingGate(
+        ctx,
+        toolCwd(ctx),
+        earlyHandoff && earlyHandoff.ok === true ? earlyHandoff.request : null,
+      );
+      if (earlyGate.pending && earlyGate.retry !== true) {
+        notify?.(`worktree warp: ${warpPendingRefusalText(earlyGate.pending, raw)}`, "error");
+        return;
+      }
       // An agent handoff (queued by the `worktree_warp` tool) travels as ONE
       // `@<token>` argument. It is decoded and re-validated here; a rejected
       // token changes nothing and names no part of what it carried. Everything
@@ -7691,6 +8057,11 @@ export default function (pi) {
     await checkIssuesGate(pi, ctx);
   });
   pi.on("session_shutdown", forgetWorktreeCardUi);
+  // A queued warp is session state: shutdown clears its record and its timer so
+  // nothing outlives the session that asked for the move.
+  pi.on("session_shutdown", (event, ctx) => {
+    forgetPendingWarp(ctx);
+  });
   // Nothing deferred survives its session: shutdown advances the startup epoch,
   // so work still in flight drops instead of writing into the session that
   // replaced it.

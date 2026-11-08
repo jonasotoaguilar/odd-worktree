@@ -7,7 +7,7 @@ Pi extension, four agent tools, three panels, no configuration surface.
 
 `pi-odd-worktree` is a Pi extension package. It gives a Pi session:
 
-- four agent tools — `worktree_list`, `worktree_create`, `worktree_close`,
+- four agent tools — `worktree_list`, `worktree_create`, `worktree_delete`,
   `worktree_warp`;
 - three panels — `/warp` (move the session between checkouts), `/odd-list`
   (read this checkout's `odd/tasks/*.md`), `/issues` (read and, when permitted,
@@ -22,7 +22,7 @@ It works in Pi alone. Herdr is optional and never required.
 | `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the three commands (plus the three `/codegraph-*` ones when the CLI is present), the four tools, the `worktree-warp` message renderer, and the `session_start` / `session_shutdown` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
 | `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the flattened target path `<repo-parent>/<repo-name>-worktrees/<slug>` (`feat/login` → `feat-login`), and the async argv runner. |
 | `lib/worktree-registry.js` | The per-repository registry at `<git-common-dir>/pi-worktrees.json`. |
-| `lib/worktree-*.js` (rest) | Checkout behaviour: creation hooks (`worktree-hooks.js`), symlink policy (`worktree-symlinks.js`), pending-change transfer (`worktree-changes.js`), the active-session guard (`worktree-session-guard.js`), git-only removal (`worktree-close-herdr.js`), warp/fork bookkeeping (`worktree-warp-sessions.js`), result text (`worktree-model-result.js`) and the tool card (`worktree-card.js`), checkout facts (`checkout-facts.js`). |
+| `lib/worktree-*.js` (rest) | Checkout behaviour: creation hooks (`worktree-hooks.js`), symlink policy (`worktree-symlinks.js`), pending-change transfer (`worktree-changes.js`), the active-session guard (`worktree-session-guard.js`), git-only removal (`worktree-close-herdr.js`), the warp queue (`worktree-warp-busy.js`: this session's agent-task counters, its `job_list` jobs, and the one pending handoff), warp/fork bookkeeping (`worktree-warp-sessions.js`), result text (`worktree-model-result.js`) and the tool card (`worktree-card.js`), checkout facts (`checkout-facts.js`). |
 | `lib/warp-*.js` | The panel: selector and extended list (`warp-selector-view.js`), create wizard (`warp-create-panel.js`, `warp-create-picker.js`), delete confirmation (`warp-delete-confirm.js`). |
 | `lib/odd-*.js` | `odd-docs.js` (document discovery and ordering), `odd-view.js` (two-pane reader), `odd-markdown.js` (the shared markdown renderer). |
 | `lib/gh-issues.js` | The `gh` client: checkout repository scope, identity pinning, issue pages, details, labels, assignees, comments, close, and the `viewerPermission` → capability mapping. |
@@ -60,12 +60,12 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    asserts both the loaded surface and the source text.
 3. **The shipped surface is exactly three commands and four tools, plus three
    CodeGraph commands that only exist when the CLI does.** `/warp`,
-   `/odd-list`, `/issues`; `worktree_create`, `worktree_list`, `worktree_close`,
+   `/odd-list`, `/issues`; `worktree_create`, `worktree_list`, `worktree_delete`,
    `worktree_warp`. `/codegraph-hook`, `/codegraph-init` and `/codegraph-sync`
    are registered only when the session gate says `codegraph` is present, so a
    session without the CLI must not see them. Each keeps its declared name and
    label.
-4. **Deletion refuses on a live session.** `worktree_close` and the panel's
+4. **Deletion refuses on a live session.** `worktree_delete` and the panel's
    `ctrl+d` go through the *same* guard (`lib/worktree-session-guard.js`), before
    the pending-change question and again immediately before removal. This
    session's own checkout is refused with "warp first"; another session's is
@@ -109,6 +109,23 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     returns a replacement `systemPrompt` (the bridge drops it) and no existing
     text is removed. It is idempotent by content, primary sessions only, and
     `ODD_WORKTREE_PROMPT=0` suppresses it.
+13. **A warp waits for this session's own agent tasks AND background jobs, and it
+    is queued, never thrown away.** While `lib/worktree-warp-busy.js` reports a
+    running or queued agent task, or an active job, `worktree_warp` still
+    validates and QUEUES the handoff (its text says queued and waiting, never
+    moved), and `/warp` keeps the validated handoff PENDING and re-dispatches the
+    same `/warp @<token>` from a bounded, unref'd poller once both workloads are
+    idle. The request is recorded as pending at QUEUE time on the tool front too,
+    so a second warp in the same turn is refused on the tool and on the panel
+    alike, and the pending one is never replaced. Expiry
+    (`ODD_WORKTREE_WARP_PENDING_MS`, 30 min default) notifies that nothing moved,
+    and every terminal outcome (moved, refused, cancelled, expired, shutdown)
+    clears the record. Agent tasks come from the presence counters; jobs come
+    from the host's `job_list` tool through the same `ctx.tools` +
+    `ctx.executeTool` seam `worktree_create` uses. Only a status field that says
+    `running` or `queued` is active — `exited 0`, `failed 1` and `stopped` are
+    finished — and a missing tool, a failed call or an unknown answer is
+    UNKNOWN, which blocks nothing and is never reported as "no jobs".
 
 ## Commits and pull requests
 

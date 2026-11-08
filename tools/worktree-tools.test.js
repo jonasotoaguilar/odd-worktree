@@ -279,7 +279,7 @@ describe('worktree_create', () => {
   });
 });
 
-describe('worktree_close', () => {
+describe('worktree_delete', () => {
   test('removes the checkout and keeps the branch', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
@@ -293,7 +293,7 @@ describe('worktree_close', () => {
     assert.notEqual(created.isError, true, resultText(created));
     const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-close-me');
 
-    const closed = await tools.get('worktree_close').execute('call-8', { name: 'feat-close-me' }, undefined, undefined, ctx);
+    const closed = await tools.get('worktree_delete').execute('call-8', { name: 'feat-close-me' }, undefined, undefined, ctx);
     assert.notEqual(closed.isError, true, resultText(closed));
     assert.equal(
       resultText(closed),
@@ -313,7 +313,7 @@ describe('worktree_close', () => {
   test('an unknown name is refused and leaves the repository untouched', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    const result = await tools.get('worktree_close').execute('call-10', { name: 'nope' }, undefined, undefined, ctx);
+    const result = await tools.get('worktree_delete').execute('call-10', { name: 'nope' }, undefined, undefined, ctx);
     assert.equal(result.isError, true);
     assert.equal(resultText(result), 'no registered worktree for "nope": no worktrees are registered');
     assert.equal(listWorktreePaths(repo).length, 1);
@@ -330,7 +330,7 @@ describe('worktree_close', () => {
     const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-busy');
     const sessionHash = publishSession({ sessionId: 'worker-9', label: 'Worker', workspace: target });
 
-    const closed = await tools.get('worktree_close').execute('call-s2', { name: 'feat-busy' }, undefined, undefined, ctx);
+    const closed = await tools.get('worktree_delete').execute('call-s2', { name: 'feat-busy' }, undefined, undefined, ctx);
     assert.equal(closed.isError, true, 'a live session blocks the close');
     const text = resultText(closed);
     assert.match(text, /working in that checkout/);
@@ -355,7 +355,7 @@ describe('worktree_close', () => {
     // The session now STANDS in the checkout: no presence record is needed for
     // the deterministic cwd check to catch it.
     const { ctx } = makeCtx(target);
-    const closed = await tools.get('worktree_close').execute('call-s5', { name: 'feat-mine' }, undefined, undefined, ctx);
+    const closed = await tools.get('worktree_delete').execute('call-s5', { name: 'feat-mine' }, undefined, undefined, ctx);
     assert.equal(closed.isError, true);
     const text = resultText(closed);
     assert.match(text, /this session is working in that checkout/);
@@ -373,7 +373,7 @@ describe('worktree_close', () => {
     const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-blocked-ui');
     publishSession({ sessionId: 'ui-worker', label: 'UI Worker', workspace: target, incarnationIndex: 2 });
     const { ctx, confirmations } = makeUiCtx(repo);
-    const closed = await tools.get('worktree_close').execute('call-s7', { name: 'feat/blocked-ui' }, undefined, undefined, ctx);
+    const closed = await tools.get('worktree_delete').execute('call-s7', { name: 'feat/blocked-ui' }, undefined, undefined, ctx);
     assert.equal(closed.isError, true);
     assert.equal(confirmations.length, 0, 'the session check runs before the approval question');
     assert.ok(fs.existsSync(target));
@@ -385,7 +385,7 @@ describe('worktree_close', () => {
     await tools.get('worktree_create').execute('call-s8', { branch: 'feat/free', changes: 'none' }, undefined, undefined, ctx);
     const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-free');
     publishSession({ sessionId: 'other-worker', label: 'Other', workspace: repo, incarnationIndex: 3 });
-    const closed = await tools.get('worktree_close').execute('call-s9', { name: 'feat-free' }, undefined, undefined, ctx);
+    const closed = await tools.get('worktree_delete').execute('call-s9', { name: 'feat-free' }, undefined, undefined, ctx);
     assert.notEqual(closed.isError, true, resultText(closed));
     assert.equal(fs.existsSync(target), false);
   });
@@ -398,7 +398,7 @@ describe('worktree_close', () => {
     const sessionHash = publishSession({ sessionId: 'raw-worker-9', label: 'Raw', workspace: target, incarnationIndex: 7 });
     publishTransport({ sessionId: 'raw-worker-9' });
 
-    const closed = await tools.get('worktree_close').execute('call-s13', { name: 'feat-joined' }, undefined, undefined, ctx);
+    const closed = await tools.get('worktree_delete').execute('call-s13', { name: 'feat-joined' }, undefined, undefined, ctx);
     assert.equal(closed.isError, true);
     const text = resultText(closed);
     assert.ok(text.includes('id raw-worker-9'), text);
@@ -415,7 +415,7 @@ describe('worktree_close', () => {
     const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-unjoined');
     const sessionHash = publishSession({ sessionId: 'unjoined-worker', label: 'Unjoined', workspace: target, incarnationIndex: 8 });
 
-    const closed = await tools.get('worktree_close').execute('call-s15', { name: 'feat-unjoined' }, undefined, undefined, ctx);
+    const closed = await tools.get('worktree_delete').execute('call-s15', { name: 'feat-unjoined' }, undefined, undefined, ctx);
     assert.equal(closed.isError, true);
     const text = resultText(closed);
     assert.ok(text.includes(sessionHash.slice(0, 12)), text);
@@ -431,7 +431,7 @@ describe('worktree_close', () => {
     const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-advisory');
     publishSession({ sessionId: 'legacy-peer', label: 'Legacy', workspace: null, heartbeat: Date.now(), incarnationIndex: 9, discovery: false });
 
-    const closed = await tools.get('worktree_close').execute('call-s17', { name: 'feat-advisory' }, undefined, undefined, ctx);
+    const closed = await tools.get('worktree_delete').execute('call-s17', { name: 'feat-advisory' }, undefined, undefined, ctx);
     assert.notEqual(closed.isError, true, resultText(closed));
     assert.match(resultText(closed), /published no workspace/);
     assert.match(resultText(closed), /best effort/);
@@ -447,7 +447,7 @@ describe('worktree_close', () => {
       sessionId: 'crashed-worker', label: 'Crashed', workspace: target,
       heartbeat: Date.now() - 10 * 60 * 1000, incarnationIndex: 4,
     });
-    const closed = await tools.get('worktree_close').execute('call-s11', { name: 'feat-stale' }, undefined, undefined, ctx);
+    const closed = await tools.get('worktree_delete').execute('call-s11', { name: 'feat-stale' }, undefined, undefined, ctx);
     assert.notEqual(closed.isError, true, resultText(closed));
     const text = resultText(closed);
     assert.match(text, /stale Gentle Shell presence record ignored/);

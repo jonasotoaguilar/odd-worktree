@@ -471,7 +471,7 @@ describe('A2: ignored files are disclosed, never silently deleted', () => {
 });
 
 // S7/S8: the warp panel's Ctrl+D runs the SAME active-session guard as the
-// `worktree_close` tool, and it runs it BEFORE the pending-change question.
+// `worktree_delete` tool, and it runs it BEFORE the pending-change question.
 // These cases drive the real `/warp` command with a host double: `ui.custom`
 // answers the marker the selector's `ctrl+d` emits, `ui.confirm` records the
 // one dialog, and every temp worktree is created through the registered tool.

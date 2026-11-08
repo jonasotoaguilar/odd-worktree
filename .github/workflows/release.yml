@@ -196,8 +196,10 @@ jobs:
           name=$(node -p "require('./package.json').name")
           version=$(node -p "require('./package.json').version")
           # npm answers the publish before the version is readable from the
-          # registry, so poll a bounded number of times before failing.
-          attempts=12
+          # registry, and that propagation measured 2m7s for v1.0.0 and 2m38s for
+          # v1.1.0 — a 2-minute window missed it by 27 seconds. Poll for up to
+          # six minutes before failing.
+          attempts=24
           for attempt in $(seq 1 "$attempts"); do
             published=$(npm view "${name}@${version}" version 2>/dev/null || true)
             if [[ "$published" == "$version" ]]; then
@@ -205,7 +207,7 @@ jobs:
               exit 0
             fi
             echo "attempt ${attempt}/${attempts}: registry reports '${published:-missing}'"
-            sleep 10
+            sleep 15
           done
           echo "::error::registry never reported ${name}@${version}"
           exit 1

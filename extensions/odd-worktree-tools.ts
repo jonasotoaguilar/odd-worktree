@@ -3665,6 +3665,17 @@ async function executeWorktreeWarpTool(params, ctx, opts) {
   // `fromName`/`name`/`path`/`branch`), so the card falls back to that line
   // instead of painting a move that has not happened. The one visible "moved"
   // card comes from the switched-to session once the move is real.
+  // S4: this session's own background work is a refusal, not a queue. The
+  // command that performs the move waits for idle — and a session with running
+  // agent tasks IS idle — so queueing here would move the session out from
+  // under work that is still running. Nothing is queued when this refuses.
+  const toolBusy = await warpSessionActivity(ctx);
+  if (toolBusy && toolBusy.busy === true) {
+    return errorResult(`worktree warp: ${warpBusyText(toolBusy)}`, {
+      tool: "worktree_warp", name: displayName, path: targetCwd, branch: displayBranch,
+      kind: resolved.kind, busy: true,
+    });
+  }
   const handoffDispatched = dispatchWarpHandoff(prepareWarpHandoff({
     name: displayName,
     target: targetCwd,
@@ -4081,6 +4092,62 @@ async function sessionManagerClassFor(ctx) {
   return null;
 }
 
+// S4: THIS session's own agent-task counters, read from the presence store the
+// close guard already consumes (lib/worktree-warp-busy.js). Best effort: an
+// absent module or store answers null and blocks nothing. Background jobs are
+// NOT covered — gentle-shell keeps them in memory and publishes no durable
+// evidence — so nothing here claims to see one.
+async function warpSessionActivity(ctx) {
+  let lib = null;
+  try {
+    lib = libRequire("worktree-warp-busy.js");
+  } catch {
+    return null;
+  }
+  if (!lib || typeof lib.sessionActivity !== "function") return null;
+  const sessionId = closeSessionString(ctx, "getSessionId");
+  try {
+    return await lib.sessionActivity({ sessionId });
+  } catch {
+    return null;
+  }
+}
+
+// The one refusal sentence, from the same module that produced the counters. A
+// missing module falls back to a shorter sentence that still names agent tasks
+// only.
+function warpBusyText(activity) {
+  try {
+    const lib = libRequire("worktree-warp-busy.js");
+    if (lib && typeof lib.busyText === "function") return lib.busyText(activity);
+  } catch {
+    // fall through to the fixed sentence
+  }
+  return "this session still has running agent tasks: the warp waits for them to finish (as of the last published heartbeat); background jobs are not visible here, so confirm they finished too";
+}
+
+// The COMMAND front's bounded wait: a warp lands after this turn settles, so it
+// gives the published counters a chance to drain before it refuses. Null when
+// the module or the session identity is unavailable (best effort, blocks
+// nothing).
+async function warpWaitForIdleSession(ctx) {
+  let lib = null;
+  try {
+    lib = libRequire("worktree-warp-busy.js");
+  } catch {
+    return null;
+  }
+  if (!lib || typeof lib.waitForSessionActivity !== "function") return null;
+  const sessionId = closeSessionString(ctx, "getSessionId");
+  try {
+    // The budget travels through the environment so a session can bound its own
+    // wait (ODD_WORKTREE_WARP_BUSY_WAIT_MS); the default keeps a warp short.
+    return await lib.waitForSessionActivity({ sessionId, env: process.env });
+  } catch {
+    return null;
+  }
+}
+
 function warpFail(text, details) {
   return { text, details: details || {}, isError: true };
 }
@@ -4423,6 +4490,17 @@ async function executeWorktreeWarp(rawName, ctx, opts) {
     );
   }
   await ctx.waitForIdle();
+  // S4: a session with running agent tasks is IDLE for the host, so the wait
+  // above does not wait for that work. This front gives the published counters
+  // a bounded chance to drain and then refuses instead of moving the session
+  // out from under a task that is still running. A store that is absent or
+  // unreadable blocks nothing.
+  const busyWait = await warpWaitForIdleSession(ctx);
+  if (busyWait && busyWait.activity && busyWait.activity.busy === true) {
+    return warpFail(`worktree warp: ${warpBusyText(busyWait.activity)}`, {
+      name, alreadyThere: false, cancelled: false, busy: true,
+    });
+  }
   const fromCwd = typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
   // S21: the same awaited preflight reads as the tool, so a slow repository
   // never freezes the session that is being moved.

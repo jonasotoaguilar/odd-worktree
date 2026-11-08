@@ -153,6 +153,24 @@ Removal is `git worktree remove <absolute path>`, with `--force` only when the
 caller asked for it. The branch is kept, and **no Herdr workspace is closed,
 opened or removed** on any path.
 
+### A warp waits for this session's own agent tasks
+
+A warp never lands while this session still has running or queued agent tasks.
+The `worktree_warp` tool refuses **before** it queues anything, and `/warp`
+gives the published counters a bounded chance to drain (`ODD_WORKTREE_WARP_BUSY_WAIT_MS`,
+60 s by default) before it refuses: the session stays where it is and the notice
+says how many tasks are running. The counters are read from Gentle Shell's
+presence header for this session, through the same bounded reader the deletion
+guard uses.
+
+That check is **best effort, and it does not see background jobs**:
+
+- Agents publish their task counters in the presence header; a heartbeat older
+  than 15 s is not evidence, and an absent or unreadable store blocks nothing.
+- `bash_background` and `monitor` jobs live in Gentle Shell's in-memory job
+  registry, which publishes nothing durable and is not exposed by the Pi host,
+  so no warp can observe them. Confirm a job finished before warping.
+
 ### `/issues` pins the repository
 
 The repository identity (`<host>/<owner>/<repo>`) is pinned when the list loads,

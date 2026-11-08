@@ -34,7 +34,6 @@ interchangeably by `worktree_close`, and by `/warp`.
 | --- | --- |
 | Pi (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`) | Peer dependencies at `*`, supplied by the host. The package installs no runtime dependencies. |
 | Node.js >= 18 and `git` | `engines` declares 18 as the floor, and every repository operation is a git child process. |
-| `herdr` — optional | Not required: only `worktree_create` tries a Herdr workspace association, and it falls back to plain `git`. |
 | `gh`, authenticated (`gh auth login`) | `/issues` only. Without it the command stays registered, says once per session what is missing, and never opens. |
 | `codegraph` — optional | Keeps each checkout's index fresh: `codegraph init` when a checkout is created, and a background `codegraph sync` after edits and writes. Absent, both stay off for the whole session. |
 | Gentle Shell — recommended | Supplies the presence and transport records the deletion guard reads to see sessions other than this one. |
@@ -154,6 +153,24 @@ Removal is `git worktree remove <absolute path>`, with `--force` only when the
 caller asked for it. The branch is kept, and **no Herdr workspace is closed,
 opened or removed** on any path.
 
+### A warp waits for this session's own agent tasks
+
+A warp never lands while this session still has running or queued agent tasks.
+The `worktree_warp` tool refuses **before** it queues anything, and `/warp`
+gives the published counters a bounded chance to drain (`ODD_WORKTREE_WARP_BUSY_WAIT_MS`,
+60 s by default) before it refuses: the session stays where it is and the notice
+says how many tasks are running. The counters are read from Gentle Shell's
+presence header for this session, through the same bounded reader the deletion
+guard uses.
+
+That check is **best effort, and it does not see background jobs**:
+
+- Agents publish their task counters in the presence header; a heartbeat older
+  than 15 s is not evidence, and an absent or unreadable store blocks nothing.
+- `bash_background` and `monitor` jobs live in Gentle Shell's in-memory job
+  registry, which publishes nothing durable and is not exposed by the Pi host,
+  so no warp can observe them. Confirm a job finished before warping.
+
 ### `/issues` pins the repository
 
 The repository identity (`<host>/<owner>/<repo>`) is pinned when the list loads,
@@ -238,7 +255,7 @@ This package is the worktree / ODD / issues surface only: no customize panel, no
 plugin-tools toggles, no Herdr plugin management, and no worktree↔issue
 association. There is nothing to configure, and `/warp`, `/odd-list` and
 `/issues` are always on (the three `/codegraph-*` commands follow the CLI).
-Paths, branches and arguments reach `git`, `herdr` and `gh` as fixed argv arrays,
+Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 
 ## Tests

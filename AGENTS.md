@@ -20,7 +20,7 @@ It works in Pi alone. Herdr is optional and never required.
 | Path | Responsibility |
 | --- | --- |
 | `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the three commands (plus the three `/codegraph-*` ones when the CLI is present), the four tools, the `worktree-warp` message renderer, and the `session_start` / `session_shutdown` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
-| `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the flattened target path `<repo-parent>/<repo-name>-worktrees/<slug>` (`feat/login` → `feat-login`), the async argv runner, and the single authority for resolving the `herdr` binary. |
+| `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the flattened target path `<repo-parent>/<repo-name>-worktrees/<slug>` (`feat/login` → `feat-login`), and the async argv runner. |
 | `lib/worktree-registry.js` | The per-repository registry at `<git-common-dir>/pi-worktrees.json`. |
 | `lib/worktree-*.js` (rest) | Checkout behaviour: creation hooks (`worktree-hooks.js`), symlink policy (`worktree-symlinks.js`), pending-change transfer (`worktree-changes.js`), the active-session guard (`worktree-session-guard.js`), git-only removal (`worktree-close-herdr.js`), warp/fork bookkeeping (`worktree-warp-sessions.js`), result text (`worktree-model-result.js`) and the tool card (`worktree-card.js`), checkout facts (`checkout-facts.js`). |
 | `lib/warp-*.js` | The panel: selector and extended list (`warp-selector-view.js`), create wizard (`warp-create-panel.js`, `warp-create-picker.js`), delete confirmation (`warp-delete-confirm.js`). |
@@ -76,9 +76,8 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
 5. **Deletion never touches Herdr.** Removal is `git worktree remove <absolute
    path>` (with `--force` only when the caller asked), the branch is kept, and no
    Herdr workspace is closed, opened or removed on any path — including the
-   panel's create, which is git plus the registry row only. The `worktree_create`
-   *tool* may attempt a Herdr workspace association first and falls back to git,
-   but the checkout succeeding never depends on it.
+   panel's create and the `worktree_create` tool, which use git and the registry
+   without invoking Herdr.
 6. **`/issues` keeps repository identity pinning.** The identity
    (`<host>/<owner>/<repo>`) is pinned when the list loads and bound to every
    read, every mutation and the `o` browser opener. A checkout whose remote moved
@@ -90,7 +89,7 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    a literal `true` capability means no hint, no editor, no mutation.
 8. **The package ships only `extensions`, `lib`, `tools`, `README.md`.** Adding a
    shipped path means changing `files[]` and the package-surface test together.
-9. **Fixed argv, never a shell string.** Every child (`git`, `herdr`, `gh`,
+9. **Fixed argv, never a shell string.** Every child (`git`, `gh`,
    package managers, `codegraph`) gets a binary plus an argument array with a
    bounded timeout. Interactive paths await the async runner; nothing blocks the
    host event loop with `spawnSync`.

@@ -14,8 +14,7 @@
 // worktree_warp. Create and close prompt for approval when the host offers
 // dialog UI; list never mutates anything; warp hands the move to /warp.
 //
-// Herdr is optional, never required: every Herdr call is attempted first and
-// falls back to plain git, so the package works in Pi alone.
+// Worktree creation and removal use git; no Herdr workspace is opened.
 //
 // The file is plain JavaScript with a .ts extension (// @ts-nocheck, no type
 // annotations), so the test copy-to-.mjs loading pattern keeps working under
@@ -67,54 +66,6 @@ let warpTuiLoader = () => import("@earendil-works/pi-tui");
 
 function setWarpTuiLoader(loader) {
   warpTuiLoader = loader;
-}
-
-// The herdr binary honors the documented HERDR_BIN_PATH override (tests),
-// else `herdr` on PATH.
-//
-// lib/worktree-git.js `resolveHerdrBinary` is the SINGLE authority and its
-// answer is propagated verbatim, including its refusal: under the test harness
-// (GENTLE_WORKTREE_LIB_DIR, set only by the test loaders) a value that may be
-// the live binary is refused unless the CURRENT test opted in with
-// GENTLE_WORKTREE_ALLOW_LIVE_HERDR=1. A `catch {}` around that call used to
-// swallow the refusal and then re-apply an inherited HERDR_BIN_PATH here, which
-// handed a test process exactly the live binary the authority had just refused
-// (a real Herdr workspace, created from a test). No fallback in this file may
-// re-decide the binary: the only remaining branch is for a lib that is missing
-// entirely, and it fails closed under the harness.
-function herdrBinary() {
-  let git = null;
-  try {
-    git = libRequire("worktree-git.js");
-  } catch {
-    git = null;
-  }
-  if (git && typeof git.resolveHerdrBinary === "function") {
-    return git.resolveHerdrBinary(process.env);
-  }
-  const harness = process.env.GENTLE_WORKTREE_LIB_DIR;
-  if (typeof harness === "string" && harness.length > 0) {
-    throw new Error(
-      "refusing to run live herdr from a test harness: herdr binary cannot be resolved "
-      + "(lib/worktree-git.js is unavailable, so no binary is injected)",
-    );
-  }
-  const bin = process.env.HERDR_BIN_PATH;
-  if (typeof bin === "string" && bin.length > 0) return bin;
-  return "herdr";
-}
-
-// The texts the authority (and the missing-lib branch above) use to refuse.
-// Matching on text keeps the boundary between lib and extension small: a
-// refusal is a resolved STATE, not an error class shared across it.
-const HERDR_REFUSAL_PATTERN = /refusing to run live herdr|herdr binary is not injected/;
-
-function isHerdrRefusal(err) {
-  return !!(
-    err
-    && typeof err.message === "string"
-    && HERDR_REFUSAL_PATTERN.test(err.message)
-  );
 }
 
 function toolCwd(ctx) {
@@ -543,12 +494,6 @@ function withWorktreeCardRenderer(tool) {
   // Model text and visual cards are independent presentation layers. Keep
   // backend helpers unchanged so runtime callers retain their raw contract.
   //
-  // The same seam turns a herdr resolution REFUSAL into an error result: the
-  // guard's refusal (a test harness handing over a possible live binary, or a
-  // harness with no binary injected) says the resolution failed, not that the
-  // tool crashed. Letting it escape would be an uncaught throw out of a tool
-  // handler, so every refusal is answered with its own text and `isError`, and
-  // every other exception is re-thrown untouched.
   const execute = tool.execute;
   let format = null;
   try {
@@ -559,13 +504,7 @@ function withWorktreeCardRenderer(tool) {
   }
   if (typeof execute === "function") {
     tool.execute = async function (...args) {
-      let result;
-      try {
-        result = await execute.apply(this, args);
-      } catch (err) {
-        if (!isHerdrRefusal(err)) throw err;
-        result = errorResult(`${tool.name}: ${err.message}`, { tool: tool.name, herdrRefused: true });
-      }
+      const result = await execute.apply(this, args);
       if (!format) return result;
       try {
         return format(tool.name, result);
@@ -703,7 +642,7 @@ async function awaitPendingCreationSetups() {
   }
 }
 
-// Core of `worktree_create`: validation (S2, S3) then herdr-first creation
+// Core of `worktree_create`: validation (S2, S3) then git creation
 // with a git fallback. Exported for unit tests; the registered tool calls
 // it with the live Pi context. It only ever CREATES: the branch plus the
 // `changes` selection (S3/S4), and no issue or ODD association is verified,
@@ -711,15 +650,6 @@ async function awaitPendingCreationSetups() {
 async function executeWorktreeCreate(params, ctx, opts) {
   const git = libRequire("worktree-git.js");
   const registry = libRequire("worktree-registry.js");
-  // S53 git-only route (create-from-warp): the wizard creates a plain
-  // git checkout plus the registry row and nothing else — never a Herdr
-  // workspace (`herdr worktree create/open` is what materialized the
-  // stray Herdr worktree the user never asked for). The route reuses
-  // every validation and the registry machinery below; only the
-  // backends change. Subprocesses run through the async runner here so
-  // a hanging child aborts on its bound instead of freezing the
-  // interactive session on the main thread.
-  const gitOnly = !!(opts && opts.gitOnly === true);
   // `backgroundHooks` is the INTERACTIVE create's speed contract: the checkout
   // plus its registry row are all the warp needs, so the slow half of the hooks
   // (install, codegraph) is handed to a tracked background task instead of
@@ -1112,24 +1042,12 @@ async function executeWorktreeCreate(params, ctx, opts) {
   // EXISTING branch with `git worktree add <target> <branch>` — no `-b`,
   // no base, the ref never created, rewritten or deleted — and the result
   // reports `branchCreated: false` plus a warning naming the adopted
-  // branch. Herdr's `worktree create` cannot adopt an existing branch, so
-  // the adopt case goes through git and then associates the Herdr
-  // workspace BEST-EFFORT via `herdr worktree open --path <path>
-  // --cwd <root>`; the checkout succeeding never depends on herdr.
-  // When the ref does not exist, creation keeps the herdr-first path
-  // with a `git worktree add -b` fallback and reports `branchCreated:
-  // true`. Fixed argv only, values as separate elements (herdr rejects
-  // --flag=value). Never --focus, never --trust-repository: trusting a
-  // repository is a human decision these tools never take. The base is
-  // LOCAL MAIN (S2), resolved in (d1) before anything was written: a session
-  // working inside a linked worktree can never seed the new branch with its
-  // own unmerged commits, and a repository without a local `main` was already
-  // refused there instead of falling back to the invoking HEAD.
+  // branch. New branches start at local main; existing branches are adopted
+  // unchanged. Both tool and panel creation use git only.
   const base = baseInfo !== null ? baseInfo.commit : null;
   let createdBy = null;
   let createError = null;
   let branchCreated = null;
-  let herdrAssociated = null;
   const adoptWarnings = [];
   if (branchExists) {
     // Adopt: check out the existing branch at the fresh path. No `-b`
@@ -1142,45 +1060,9 @@ async function executeWorktreeCreate(params, ctx, opts) {
       adoptWarnings.push(
         `adopted existing branch '${branch}' at ${target}: the worktree checks out that branch as-is, the branch ref was left untouched`,
       );
-      // Best-effort Herdr workspace association: reported, never fatal.
-      // Skipped on the git-only route: that checkout is git plus the
-      // registry row by design, so no association is expected.
-      if (!gitOnly) {
-      try {
-        const opened = await runGit(herdrBinary(), git.herdrArgv("open", { cwd: repo.root, path: target }), {
-          cwd: repo.root,
-          timeoutMs: 60000,
-        });
-        herdrAssociated = opened.status === 0;
-      } catch (err) {
-        herdrAssociated = false;
-      }
-      if (herdrAssociated !== true) {
-        adoptWarnings.push(
-          `herdr workspace association failed for ${target} ('herdr worktree open' did not succeed): the checkout itself is fine, associate it by hand when needed`,
-        );
-      }
-      }
     } else {
       createError = ((adopted.stderr || adopted.error || "unknown error") + "").trim();
     }
-  } else {
-  // The git-only route skips the herdr-first attempt outright: no
-  // `herdr worktree create` runs, so no Herdr workspace is ever
-  // materialized from the wizard. The tool path keeps herdr-first
-  // with the git fallback below, byte-identical.
-  let herdrRes = null;
-  if (!gitOnly) {
-  const createParams = { cwd: repo.root, branch, path: target };
-  if (base) createParams.base = base;
-  herdrRes = await runGit(herdrBinary(), git.herdrArgv("create", createParams), {
-    cwd: repo.root,
-    timeoutMs: 120000,
-  });
-  }
-  if (herdrRes !== null && herdrRes.status === 0) {
-    createdBy = "herdr";
-    branchCreated = true;
   } else {
     const fallbackArgv = ["worktree", "add", "-b", branch, target];
     if (base) fallbackArgv.push(base);
@@ -1212,10 +1094,9 @@ async function executeWorktreeCreate(params, ctx, opts) {
       }
     }
   }
-  }
   if (!createdBy) {
     return errorResult(
-      `failed to create worktree for branch '${branch}': ${createError || "herdr and git both failed"}`,
+      `failed to create worktree for branch '${branch}': ${createError || "git failed"}`,
       { branch, path: target, pruned: prunedStale },
     );
   }
@@ -1519,11 +1400,8 @@ async function executeWorktreeCreate(params, ctx, opts) {
   // S6: the ONE CodeGraph fact of this create, read from the hooks that just
   // ran (never re-run, never inferred).
   const codegraph = codegraphStatus(hooks);
-  // S20 adoption reporting: whether the branch was created or adopted,
-  // and (adopt case only) whether the best-effort Herdr workspace
-  // association happened. The checkout succeeding never depends on herdr.
+  // Report whether the branch was created or adopted.
   const adoptionDetails = { branchCreated };
-  if (herdrAssociated !== null) adoptionDetails.herdrAssociated = herdrAssociated;
   // (l) T41/S50 changes registration: register the checkout just
   // created on the CURRENT session through gentle-shell's
   // `session_worktree_register` host tool, but ONLY when that tool is
@@ -5975,8 +5853,8 @@ async function warpCreateAndEnter(ctx, git, notify) {
     return { closed: true, created: false, cancelled: true };
   }
   createParams.changes = pending.copy ? 'all' : 'none';
-  // S53: the git-only route — a plain git checkout plus the registry row,
-  // never a Herdr workspace — reusing the same creation path (validations,
+  // S53: the panel's create — a plain git checkout plus the registry row —
+  // reusing the same creation path (validations,
   // refusals, registration), which never prompts. The layout is
   // principal-anchored (S56): the new checkout lands beside the PRINCIPAL
   // checkout even when the panel runs inside a linked worktree, while the
@@ -5989,7 +5867,6 @@ async function warpCreateAndEnter(ctx, git, notify) {
   // can move, or the human would switch into a checkout that is missing the
   // work they just asked to carry.
   const created = await executeWorktreeCreate(createParams, ctx, {
-    gitOnly: true,
     principalLayout: true,
     backgroundHooks: true,
     ...(typeof notify === 'function' ? { notify } : {}),

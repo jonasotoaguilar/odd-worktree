@@ -202,6 +202,30 @@ describe('worktree_list', () => {
 });
 
 describe('worktree_create', () => {
+  for (const existing of [false, true]) {
+    test(`never invokes Herdr for ${existing ? 'an existing' : 'a new'} branch`, async () => {
+      const repo = makeRepo();
+      const branch = existing ? 'feat/existing' : 'feat/new';
+      if (existing) git(repo, ['branch', branch]);
+      const gitLib = require('../lib/worktree-git.js');
+      const original = gitLib.runArgvAsync;
+      const binaries = [];
+      gitLib.runArgvAsync = async (bin, ...args) => {
+        binaries.push(bin);
+        return original(bin, ...args);
+      };
+      try {
+        const { ctx } = makeCtx(repo);
+        const result = await tools.get('worktree_create').execute('no-herdr', { branch, changes: 'none' }, undefined, undefined, ctx);
+        assert.notEqual(result.isError, true, resultText(result));
+        assert.equal(result.details.branchCreated, !existing);
+        assert.ok(binaries.includes('git'));
+        assert.ok(!binaries.includes(NO_HERDR), `unexpected Herdr execution: ${binaries}`);
+      } finally {
+        gitLib.runArgvAsync = original;
+      }
+    });
+  }
   test('creates the checkout and its registry row without Herdr', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);

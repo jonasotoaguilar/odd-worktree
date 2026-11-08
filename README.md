@@ -14,7 +14,7 @@ alone; Herdr is optional.
 | `worktree_list` | tool | Lists the principal checkout, then this session's own checkout, then the rest, cross-checked against live git checkouts. Rows whose path is gone are excluded and pruned from the registry. |
 | `worktree_create` | tool | Creates a branch and its checkout from the **local** `main`, registers it, runs the creation hooks, and copies the pending changes you name. |
 | `worktree_warp` | tool | Queues the session move to another checkout as a `/warp` handoff; the command performs the move when the turn ends. |
-| `worktree_close` | tool | Removes a registered checkout with `git worktree remove`, keeping the branch, and refuses while a live Pi session is working in it. |
+| `worktree_delete` | tool | Removes a registered checkout with `git worktree remove`, keeping the branch, and refuses while a live Pi session is working in it. |
 | `/warp` | panel | Moves this session to another checkout: no argument opens the selector (list, create, delete, extended list); `/warp <name>` jumps straight there. A session with no conversation yet changes checkout **silently** — no fork, no `Warp · moved` card, nothing to carry — and warping back from it is the same empty case. |
 | `/odd-list` | panel | Two-pane reader of this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
 | `/issues` | panel | Full-screen reader of this checkout's repository issues — My issues / Assigned / Involved / All — with preview, comments, labels, assignees and close, gated on your repository role. |
@@ -26,7 +26,7 @@ A checkout's **name** is the slug of its branch, and its path is
 `<repo-parent>/<repo-name>-worktrees/<slug>`: the slug lowercases the branch and
 turns every non-alphanumeric run into `-` (`feat/login` → `feat-login`). The
 principal checkout is `principal`. Names, paths and branches are accepted
-interchangeably by `worktree_close`, and by `/warp`.
+interchangeably by `worktree_delete`, and by `/warp`.
 
 ## Quick Start
 
@@ -73,8 +73,8 @@ as commands, and the four `worktree_*` tools are offered to the agent.
    selector never offers the checkout you are already in; the exclusion is by
    resolved real path, so a differently-spelled path to the same checkout is
    excluded too.
-4. **Close** — `worktree_close` with exactly one of `name`, `path` or `branch`,
-   plus `force: true` for a dirty checkout. Closing asks for approval when the
+4. **Delete** — `worktree_delete` with exactly one of `name`, `path` or `branch`,
+   plus `force: true` for a dirty checkout. Deleting asks for approval when the
    host offers dialog UI; creating never does, because it touches no existing
    data.
 
@@ -127,7 +127,7 @@ attempted.
 ### The deletion guard, and its honest limit
 
 Deleting a checkout is refused while a live Pi session is working in it, and
-the **same** check runs for `worktree_close` and for the panel's `ctrl+d`, both
+the **same** check runs for `worktree_delete` and for the panel's `ctrl+d`, both
 before the pending-change question and again immediately before the removal.
 This session's own checkout is refused with "warp first"; another session's is
 refused naming its real session id, resolved by joining the published presence
@@ -153,23 +153,54 @@ Removal is `git worktree remove <absolute path>`, with `--force` only when the
 caller asked for it. The branch is kept, and **no Herdr workspace is closed,
 opened or removed** on any path.
 
-### A warp waits for this session's own agent tasks
+### A warp waits for this session's own agent tasks and background jobs
 
-A warp never lands while this session still has running or queued agent tasks.
-The `worktree_warp` tool refuses **before** it queues anything, and `/warp`
-gives the published counters a bounded chance to drain (`ODD_WORKTREE_WARP_BUSY_WAIT_MS`,
-60 s by default) before it refuses: the session stays where it is and the notice
-says how many tasks are running. The counters are read from Gentle Shell's
-presence header for this session, through the same bounded reader the deletion
-guard uses.
+A warp never lands while this session still has running or queued agent tasks or
+a running background job — and it is never thrown away: the request is
+**queued**.
 
-That check is **best effort, and it does not see background jobs**:
+- The `worktree_warp` tool validates and queues the handoff exactly as it does
+  when the session is idle, and its first line names both workloads: `worktree
+  warp: handoff queued — waiting for 2 running agent task(s) and 1 running
+  background job before the move`. It never claims a move. A second
+  `worktree_warp` call in the same turn is refused, because the request is
+  pending from the moment it is queued.
+- `/warp` — a typed name, the selector, a create's follow-up warp and the agent
+  handoff all share one path — gives both sources a bounded chance to drain
+  (`ODD_WORKTREE_WARP_BUSY_WAIT_MS`, 60 s by default) and then keeps the request
+  **pending** instead of switching: the session stays where it is, and a bounded
+  background poller re-dispatches the SAME validated handoff once this session
+  reports no running or queued agent task and no running job. Nothing switches
+  mid-work.
+- **One pending warp per session.** A second warp is refused while one is
+  pending — on the tool and on the panel alike, with `a warp to <name> is
+  already pending for this session — it runs when the pending agent tasks
+  finish; wait for it or let it expire` — and the pending request is never
+  replaced.
+- The pending warp expires after `ODD_WORKTREE_WARP_PENDING_MS` (30 minutes by
+  default, clamped to a day) and notifies that it expired with nothing moved. It
+  re-reads both sources every `ODD_WORKTREE_WARP_PENDING_POLL_MS` (2 s by
+  default) and its timer never keeps the session alive. A warp that runs, is
+  refused or expires clears the queue, so the next request is accepted again.
+- The re-dispatched handoff re-checks that the destination checkout and the
+  session are still where the request left them: drift refuses the move instead
+  of guessing.
 
-- Agents publish their task counters in the presence header; a heartbeat older
-  than 15 s is not evidence, and an absent or unreadable store blocks nothing.
-- `bash_background` and `monitor` jobs live in Gentle Shell's in-memory job
-  registry, which publishes nothing durable and is not exposed by the Pi host,
-  so no warp can observe them. Confirm a job finished before warping.
+Both sources are read **best effort**, and neither is ever guessed:
+
+- **Agent tasks** come from Gentle Shell's presence header for this session,
+  through the same bounded reader the deletion guard uses. A heartbeat older than
+  15 s is not evidence, and an absent or unreadable store blocks nothing.
+- **Background jobs** come from the host's `job_list` tool — the same `ctx.tools`
+  + `ctx.executeTool` seam `worktree_create` uses to register a checkout. Each
+  row is `id · status · label · elapsed · output`; only a status field that says
+  `running` or `queued` (a monitor reports `monitor running`) keeps the warp
+  waiting, while `exited 0`, `failed 1` and `stopped` are finished. "Not
+  exited" is never read as activity.
+- A host that does not offer `job_list`, a call that fails, and an answer this
+  parser does not know all count as **unknown**, never as "no jobs": the warp
+  still runs, and a `queue:` line says the job state is unknown instead of
+  pretending it was read.
 
 ### `/issues` pins the repository
 

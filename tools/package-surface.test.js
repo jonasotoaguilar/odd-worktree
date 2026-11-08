@@ -86,7 +86,7 @@ describe('registration', () => {
     const { hasCodegraph } = require('../lib/codegraph-session.js');
     const expected = hasCodegraph(process.env) ? [...base, ...codegraph].sort() : base;
     assert.deepEqual(registered, expected, 'the command list is the base three plus the codegraph triple exactly when the CLI is present');
-    assert.deepEqual([...tools.keys()].sort(), ['worktree_close', 'worktree_create', 'worktree_list', 'worktree_warp']);
+    assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_delete', 'worktree_list', 'worktree_warp']);
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
 
@@ -98,13 +98,13 @@ describe('registration', () => {
     };
     assert.deepEqual(summary('worktree_create'), { name: 'worktree_create', label: 'Worktree Create' });
     assert.deepEqual(summary('worktree_list'), { name: 'worktree_list', label: 'Worktree List' });
-    assert.deepEqual(summary('worktree_close'), { name: 'worktree_close', label: 'Worktree Close' });
+    assert.deepEqual(summary('worktree_delete'), { name: 'worktree_delete', label: 'Worktree Delete' });
     assert.deepEqual(summary('worktree_warp'), { name: 'worktree_warp', label: 'Worktree Warp' });
   });
 
-  test('the close help text names the active-session refusal and no Herdr workspace', async () => {
+  test('the delete help text names the active-session refusal and no Herdr workspace', async () => {
     const { tools } = await loadExtension({});
-    const description = tools.get('worktree_close').description;
+    const description = tools.get('worktree_delete').description;
     assert.match(description, /live Pi session working in that checkout/);
     assert.match(description, /warp to another checkout first/i);
     assert.match(description, /git/);
@@ -139,7 +139,10 @@ describe('removed surface', () => {
       assert.equal(commands.has(gone), false, `no /${gone} command`);
     }
     assert.equal(commands.has('issues'), true, '/issues is the migrated command');
+    // Modules only: `lib/` also holds the prompt prose (`lib/odd-prompt/*.md`),
+    // which no module reads through `require`.
     for (const file of fs.readdirSync(path.join(ROOT, 'lib'))) {
+      if (!fs.statSync(path.join(LIB_DIR, file)).isFile()) continue;
       const text = fs.readFileSync(path.join(LIB_DIR, file), 'utf8');
       assert.equal(/require\(['"]\.\/gh-issues\.js['"]\)/.test(text), false, `lib/${file} does not pull the issues reader`);
     }

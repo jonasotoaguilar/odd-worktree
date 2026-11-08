@@ -1,6 +1,6 @@
 'use strict';
 // S7/S8/S9: lib/worktree-session-guard.js — the ONE active-session guard the
-// `worktree_close` tool and the warp panel's Ctrl+D both run.
+// `worktree_delete` tool and the warp panel's Ctrl+D both run.
 //
 // Gentle Shell publishes its session presence store under
 // `<agent home>/gentle-agents/presence`: a bounded `<sessionHash>.<incarnation>

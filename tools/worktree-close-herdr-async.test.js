@@ -1,5 +1,5 @@
 'use strict';
-// S6: `worktree_close` removes a checkout with `git worktree remove` and NOTHING
+// S6: `worktree_delete` removes a checkout with `git worktree remove` and NOTHING
 // else. The Herdr workspace reconcile it used to run — closing every workspace
 // of the checkout's group and opening a fresh one at the principal — is gone:
 // this package never closes or opens a Herdr panel, and it never asks Herdr to
@@ -192,7 +192,7 @@ describe('S6: a real close spawns no Herdr process', () => {
     // From here on any Herdr spawn would leave a line in the log.
     process.env.HERDR_BIN_PATH = HERDR_SHIM;
     try {
-      const closed = await tools.get('worktree_close').execute('c2', { name: 'feat-quiet' }, undefined, undefined, ctx);
+      const closed = await tools.get('worktree_delete').execute('c2', { name: 'feat-quiet' }, undefined, undefined, ctx);
       assert.notEqual(closed.isError, true, resultText(closed));
     } finally {
       process.env.HERDR_BIN_PATH = NO_HERDR;

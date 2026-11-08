@@ -19,7 +19,7 @@
 // A job whose status field is not running/queued is finished, a `job_list` that
 // is missing, fails or answers in an unknown shape is UNKNOWN (never "no jobs"),
 // and unknown blocks nothing.
-const { test, describe, before, after } = require('node:test');
+const { test, describe, before, after, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -62,6 +62,11 @@ function pendingKey() {
 function settlePending() {
   busyLib.settlePendingWarp(pendingKey());
 }
+
+// The queue is ONE record per session, held in this process and shared by every
+// test in this file: each test clears its own, and this backstop keeps an
+// unrelated assertion failure from leaking a record into the tests after it.
+afterEach(() => { settlePending(); });
 
 function git(cwd, args) {
   const out = spawnSync('git', args, { cwd, encoding: 'utf8' });

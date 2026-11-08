@@ -11,7 +11,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { loadExtension } = require('./fixtures/load-extension.js');
+const { pathToFileURL } = require('node:url');
+const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
 
 const scratch = [];
 function track(dir) {
@@ -168,14 +169,44 @@ function makeUiCtx(repoRoot, thread = 'thread-1') {
 }
 
 let tools;
+let extensionMod;
+let extensionHooks;
 before(async () => {
   process.env.HERDR_BIN_PATH = NO_HERDR;
   process.env.GENTLE_WORKTREE_THREAD = 'thread-1';
   process.env.PATH = `${HOOK_BIN}${path.delimiter}${savedEnv.PATH || ''}`;
   delete process.env.GENTLE_PI_AGENT_HOME;
   process.env.PI_CODING_AGENT_DIR = AGENT_HOME;
-  ({ tools } = await loadExtension({}));
+  ({ tools, mod: extensionMod, hooks: extensionHooks } = await loadExtensionWithModule({}));
 });
+
+// The create is instant on BOTH fronts, and its deferred setup is tracked by the
+// module instance that registered the tool. `awaitPendingCreationSetups` is that
+// instance's own exported seam (the same one a shutdown path uses), so this file
+// loads the extension itself — same stubs, same lib override, same fake host as
+// the shared fixture — and keeps the module namespace beside the registrations.
+async function loadExtensionWithModule(pi) {
+  process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-ext-'));
+  try {
+    const copy = path.join(dir, 'odd-worktree-tools.mjs');
+    fs.writeFileSync(copy, stubbedSource());
+    const mod = await import(pathToFileURL(copy).href);
+    const commands = new Map();
+    const tools = new Map();
+    const hooks = [];
+    mod.default({
+      registerCommand: (name, handler) => { commands.set(name, handler); },
+      registerTool: (tool) => { tools.set(tool.name, tool); },
+      registerMessageRenderer: () => {},
+      on: (event, handler) => { hooks.push([event, handler]); },
+      ...pi,
+    });
+    return { mod, commands, tools, hooks };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 describe('worktree_list', () => {
   test('a fresh repository lists its principal checkout only', async () => {
@@ -454,5 +485,138 @@ describe('worktree_delete', () => {
     assert.match(text, /best effort/);
     assert.equal(fs.existsSync(target), false);
     assert.ok(branches(repo).includes('feat/stale'), 'the branch is kept');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The create is INSTANT on both fronts: the checkout and its registry row are
+// the answer, and the slow half of the setup (dependency install, `codegraph
+// init`) finishes behind it in a tracked task. Nothing is skipped, and the tool
+// front never notifies a UI its call did not ask for.
+// ---------------------------------------------------------------------------
+describe('an instant create finishes its setup in the background', { concurrency: false }, () => {
+  // A `codegraph` that is visibly SLOW: it records that it started, waits, then
+  // records that it finished. A create that awaited the setup could never return
+  // between the two lines.
+  function slowCodegraph(markerPath) {
+    const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-slowbin-')));
+    fs.writeFileSync(
+      path.join(dir, 'codegraph'),
+      `#!/bin/sh\nprintf 'started\\n' >> '${markerPath}'\nsleep 0.5\nprintf 'finished\\n' >> '${markerPath}'\n`,
+      { mode: 0o755 },
+    );
+    return dir;
+  }
+
+  function markerFile() {
+    return path.join(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-marker-'))), 'codegraph.log');
+  }
+
+  function readMarker(marker) {
+    return fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8') : '';
+  }
+
+  function binWith(name, script) {
+    const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-bin-')));
+    fs.writeFileSync(path.join(dir, name), script, { mode: 0o755 });
+    return dir;
+  }
+
+  test('the result returns first, the codegraph step still runs to the end, and a later create reports it', async () => {
+    const repo = makeRepo();
+    const marker = markerFile();
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${slowCodegraph(marker)}${path.delimiter}${savedPath}`;
+    try {
+      const { ctx, notifications } = makeCtx(repo);
+      const created = await tools.get('worktree_create').execute('instant-1', { branch: 'feat/instant', changes: 'none' }, undefined, undefined, ctx);
+      assert.notEqual(created.isError, true, resultText(created));
+      const text = resultText(created);
+      assert.match(text, /^created: feat-instant · feat\/instant$/m);
+      assert.match(text, /^setup: running in the background \(install, codegraph\)$/m, text);
+      assert.match(text, /^codegraph: pending /m, 'the create states the step is not done yet');
+      assert.equal(created.details.setupPending, true);
+      assert.equal(/finished/.test(readMarker(marker)), false, 'the create returned only after its setup had finished');
+      assert.ok(fs.existsSync(path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-instant')), 'the checkout is usable at return time');
+
+      // Nothing is skipped: the deferred task still reaches the end of the
+      // codegraph step, observed through the module's own
+      // `awaitPendingCreationSetups` seam.
+      await extensionMod.awaitPendingCreationSetups();
+      assert.equal(readMarker(marker).includes('finished'), true, 'the background codegraph step never ran to the end');
+
+      // The settled lifecycle is readable through the tool surface: asking again
+      // for the same checkout reports the state and the steps that really ran.
+      const replay = await tools.get('worktree_create').execute('instant-2', { branch: 'feat/instant', changes: 'none' }, undefined, undefined, ctx);
+      assert.notEqual(replay.isError, true, resultText(replay));
+      assert.match(resultText(replay), /^registered: unchanged$/m);
+      assert.match(resultText(replay), /^setup: finished$/m, resultText(replay));
+      assert.ok(
+        replay.details.setup.steps.some((step) => step.name === 'codegraph-init' && step.status === 'done'),
+        `the codegraph step is reported as done: ${JSON.stringify(replay.details.setup.steps)}`,
+      );
+      assert.deepEqual(notifications, [], 'the tool front never notifies a UI its call did not ask for');
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  test('only a caller that asks for the notice gets it, and a session that ends gets none', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const notes = [];
+    const notify = (message, level) => { notes.push([level, message]); };
+    const created = await extensionMod.executeWorktreeCreate(
+      { branch: 'feat/notified', changes: 'none' },
+      ctx,
+      { backgroundHooks: true, notify },
+    );
+    assert.notEqual(created.isError, true, resultText(created));
+    await extensionMod.awaitPendingCreationSetups();
+    assert.deepEqual(notes, [['info', 'warp: setup finished for feat/notified: codegraph initialized']]);
+
+    // A setup that settles after its session ended records and reports nothing:
+    // the session it belonged to is gone, so there is no UI to write into.
+    const marker = markerFile();
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${slowCodegraph(marker)}${path.delimiter}${savedPath}`;
+    try {
+      const late = await extensionMod.executeWorktreeCreate(
+        { branch: 'feat/late', changes: 'none' },
+        ctx,
+        { backgroundHooks: true, notify },
+      );
+      assert.notEqual(late.isError, true, resultText(late));
+      notes.length = 0;
+      // The shutdown hooks of the SAME instance that owns the deferred task: it
+      // is the session that created the checkout that ends here.
+      for (const [, handler] of extensionHooks.filter(([name]) => name === 'session_shutdown')) await handler({}, ctx);
+      await extensionMod.awaitPendingCreationSetups();
+      assert.deepEqual(notes, [], 'a setup that settles after shutdown reports nothing');
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  test('a problem in the deferred setup is a warning, never an error', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const notes = [];
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${binWith('codegraph', '#!/bin/sh\nexit 1\n')}${path.delimiter}${savedPath}`;
+    try {
+      const created = await extensionMod.executeWorktreeCreate(
+        { branch: 'feat/broken', changes: 'none' },
+        ctx,
+        { backgroundHooks: true, notify: (message, level) => { notes.push([level, message]); } },
+      );
+      assert.notEqual(created.isError, true, resultText(created));
+      await extensionMod.awaitPendingCreationSetups();
+      assert.deepEqual(notes.map(([level]) => level), ['warning'], JSON.stringify(notes));
+      assert.match(notes[0][1], /^warp: setup for feat\/broken finished with problems: codegraph-init: codegraph init failed/);
+      assert.match(notes[0][1], / — the checkout at .+ is usable$/);
+    } finally {
+      process.env.PATH = savedPath;
+    }
   });
 });

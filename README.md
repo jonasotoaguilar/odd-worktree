@@ -66,7 +66,13 @@ as commands, and the four `worktree_*` tools are offered to the agent.
    `worktree_create` needs a `branch` and a mandatory `changes` selection:
    `"all"`, `"none"`, or a list of checkout-relative paths. It never guesses,
    and a repository with no local `main` is refused before anything is written.
-   An existing branch is adopted as-is instead of being recreated.
+   An existing branch is adopted as-is instead of being recreated. **A create is
+   instant**: the checkout and its registry row are the answer, and the slow half
+   of the setup — dependency install, `codegraph init` — continues in a tracked
+   background task on both fronts. The panel notifies you when it finishes; the
+   tool says `setup: running in the background (install, codegraph)` and a later
+   `worktree_create` for the same checkout reports how it ended. Nothing is
+   skipped, and a deferred setup never turns a successful create into an error.
 2. **List** — `worktree_list`, or open `/warp`. Pass `all: true` to the tool (or
    `v` in the panel) to also see live checkouts the registry does not know.
 3. **Move** — `/warp <name>`, the selector's `enter`, or `worktree_warp`. The
@@ -220,9 +226,11 @@ start, unless you set `CODEGRAPH_FORCE=1`, which answers "present" without
 probing.
 
 - **On creation**, `worktree_create` runs `codegraph init` inside the new
-  checkout, so it starts with its own index. A session where the gate answered
-  false reports that step as `skipped` and names the gate as the reason; it never
-  silently pretends to have indexed anything.
+  checkout, so it starts with its own index. It runs in the background half of
+  the create's setup (see *Create* above), so the checkout is usable before the
+  index is written. A session where the gate answered false reports that step as
+  `skipped` and names the gate as the reason; it never silently pretends to have
+  indexed anything.
 - **On edits**, a successful `edit` or `write` schedules `codegraph sync` for the
   git toplevel of the file touched, so a worktree syncs that worktree. The sync is
   detached: the tool result never waits for it, and a failure never reaches you.

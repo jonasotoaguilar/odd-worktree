@@ -234,6 +234,67 @@ describe('/codegraph-hook (S9)', () => {
 // --- /codegraph-init and /codegraph-sync --------------------------------
 
 const OK = { status: 0, stdout: 'indexed\n', stderr: '', error: null };
+// Real captures (glyphs included, ANSI stripped). The lines the summarizer reads
+// are the plain-text ones; the box glyphs are decoration and never matched.
+const CAPTURES = {
+  initFresh: (dir) => ({ status: 0, error: null, stderr: '', stdout: [
+    '┌  Initializing CodeGraph', '│', `◇  Initialized in ${dir}`, '│',
+    'Scanning files...', 'Parsing code...', 'Resolving refs...', '│',
+    '◇  Indexed 1 files', '│', '◇  3 nodes, 3 edges in 141ms', '│', '└  Done', '',
+  ].join('\n') }),
+  initAgain: (dir) => ({ status: 0, error: null, stderr: '', stdout: [
+    '┌  Initializing CodeGraph', '│', `▲  Already initialized in ${dir}`, '│',
+    '●  Use "codegraph index" to re-index or "codegraph sync" to update', '│', '└  ', '',
+  ].join('\n') }),
+  syncUpToDate: { status: 0, error: null, stderr: '', stdout: [
+    '┌  Syncing CodeGraph', '│', 'Scanning files...', '│', '●  Already up to date', '│', '└  Done', '',
+  ].join('\n') },
+  syncChanged: { status: 0, error: null, stderr: '', stdout: [
+    '┌  Syncing CodeGraph', '│', 'Scanning files...', '◆  Synced 1 changed files', '│',
+    '●  Modified: 1 — 4 nodes in 31ms', '│', '└  Done', '',
+  ].join('\n') },
+  syncNoIndex: (dir) => ({ status: 1, error: null, stdout: '', stderr: `✗  CodeGraph not initialized in ${dir}\n` }),
+};
+
+describe('init and sync report what happened, not just the exit code (S9)', () => {
+  const runOf = (capture) => ({ run: async () => (typeof capture === 'function' ? capture() : capture) });
+
+  test('a fresh init names the checkout, the files and the graph it built', async () => {
+    const cwd = tempDir('cg-report-init-');
+    const out = await commands.codegraphInit('', { cwd }, runOf(CAPTURES.initFresh(cwd)));
+    assert.deepEqual(out, { ok: true, level: 'info', text: `codegraph init: initialized ${cwd} — 1 file, 3 nodes, 3 edges` });
+  });
+
+  test('an init over an existing index says so and points at sync', async () => {
+    const cwd = tempDir('cg-report-init2-');
+    const out = await commands.codegraphInit('', { cwd }, runOf(CAPTURES.initAgain(cwd)));
+    assert.deepEqual(out, { ok: true, level: 'info', text: `codegraph init: already initialized at ${cwd} — nothing to do, use /codegraph-sync to update` });
+  });
+
+  test('a sync with nothing to do says exactly that', async () => {
+    const cwd = tempDir('cg-report-sync0-');
+    const out = await commands.codegraphSync('', { cwd }, runOf(CAPTURES.syncUpToDate));
+    assert.deepEqual(out, { ok: true, level: 'info', text: 'codegraph sync: already up to date — nothing to sync' });
+  });
+
+  test('a sync that changed files names the count and the nodes', async () => {
+    const cwd = tempDir('cg-report-sync1-');
+    const out = await commands.codegraphSync('', { cwd }, runOf(CAPTURES.syncChanged));
+    assert.deepEqual(out, { ok: true, level: 'info', text: 'codegraph sync: synced 1 changed file — 4 nodes' });
+  });
+
+  test('a sync with no index is a failure that names the fix', async () => {
+    const cwd = tempDir('cg-report-sync2-');
+    const out = await commands.codegraphSync('', { cwd }, runOf(CAPTURES.syncNoIndex(cwd)));
+    assert.deepEqual(out, { ok: false, level: 'error', text: 'codegraph sync: no index in this checkout — run /codegraph-init first' });
+  });
+
+  test('successful output the summarizer does not recognise still reports success', async () => {
+    const cwd = tempDir('cg-report-unknown-');
+    const out = await commands.codegraphSync('', { cwd }, runOf({ status: 0, stdout: 'something new\n', stderr: '', error: null }));
+    assert.deepEqual(out, { ok: true, level: 'info', text: 'codegraph sync: done' });
+  });
+});
 
 describe('/codegraph-init and /codegraph-sync (S9)', () => {
   test('init runs `codegraph init .` in the session directory', async () => {
@@ -243,7 +304,7 @@ describe('/codegraph-init and /codegraph-sync (S9)', () => {
       run: async (bin, args, runCwd) => { calls.push([bin, args, runCwd]); return OK; },
     });
     assert.deepEqual(calls, [['codegraph', ['init', '.'], cwd]]);
-    assert.deepEqual(out, { ok: true, level: 'info', text: 'codegraph init: exit 0' });
+    assert.deepEqual(out, { ok: true, level: 'info', text: 'codegraph init: done' });
   });
 
   test('sync runs `codegraph sync .` in the session directory', async () => {
@@ -253,7 +314,7 @@ describe('/codegraph-init and /codegraph-sync (S9)', () => {
       run: async (bin, args, runCwd) => { calls.push([bin, args, runCwd]); return OK; },
     });
     assert.deepEqual(calls, [['codegraph', ['sync', '.'], cwd]]);
-    assert.deepEqual(out, { ok: true, level: 'info', text: 'codegraph sync: exit 0' });
+    assert.deepEqual(out, { ok: true, level: 'info', text: 'codegraph sync: done' });
   });
 
   test('the run happens in the process directory when the session has none', async () => {

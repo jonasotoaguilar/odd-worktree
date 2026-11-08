@@ -19,8 +19,8 @@ alone; Herdr is optional.
 | `/odd-list` | panel | Two-pane reader of this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
 | `/issues` | panel | Full-screen reader of this checkout's repository issues — My issues / Assigned / Involved / All — with preview, comments, labels, assignees and close, gated on your repository role. |
 | `/codegraph-hook` | command | **Only when the CodeGraph CLI is installed.** Turns the edit/write sync on or off for the session. |
-| `/codegraph-init` | command | **Only when the CLI is installed.** Runs `codegraph init` at the session's current directory. |
-| `/codegraph-sync` | command | **Only when the CLI is installed.** Runs `codegraph sync` at the session's current directory. |
+| `/codegraph-init` | command | **Only when the CLI is installed.** Runs `codegraph init` at the session's current directory and says what happened: `initialized <path> — 1 file, 3 nodes, 3 edges`, or `already initialized at <path> — nothing to do`. |
+| `/codegraph-sync` | command | **Only when the CLI is installed.** Runs `codegraph sync` at the session's current directory and says what happened: `already up to date — nothing to sync`, `synced 3 changed files — 12 nodes`, or `no index in this checkout — run /codegraph-init first`. |
 
 A checkout's **name** is the slug of its branch, and its path is
 `<repo-parent>/<repo-name>-worktrees/<slug>`: the slug lowercases the branch and

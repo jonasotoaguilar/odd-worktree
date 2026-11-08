@@ -297,7 +297,14 @@ describe('scheduler (S1/S2/S6/S8)', () => {
       onSpawn: (child) => { child.kill = (signal) => { killed.push(signal); }; },
     });
     assert.equal(session.scheduleSync(path.join(root, 'a.js'), deps).scheduled, true);
-    await session.whenIdle();
+    // The watchdog timer is unref'd on purpose (a settled sync must never keep
+    // the host alive), so this test holds the loop itself instead of relying on
+    // the runner: without a live handle the loop can drain before 25ms on some
+    // Node versions, which would cancel the pending whenIdle().
+    await Promise.race([
+      session.whenIdle(),
+      new Promise((resolve) => setTimeout(resolve, 500)),
+    ]);
     assert.deepEqual(killed, ['SIGTERM'], 'the stuck child is terminated');
     // The lock came back and the root is not wedged: the next edit syncs.
     const next = makeDeps(root, { onSpawn: closeSoon });

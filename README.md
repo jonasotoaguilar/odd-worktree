@@ -15,7 +15,7 @@ alone; Herdr is optional.
 | `worktree_create` | tool | Creates a branch and its checkout from the **local** `main`, registers it, runs the creation hooks, and copies the pending changes you name. |
 | `worktree_warp` | tool | Queues the session move to another checkout as a `/warp` handoff; the command performs the move when the turn ends. |
 | `worktree_close` | tool | Removes a registered checkout with `git worktree remove`, keeping the branch, and refuses while a live Pi session is working in it. |
-| `/warp` | panel | Moves this session to another checkout: no argument opens the selector (list, create, delete, extended list); `/warp <name>` jumps straight there. |
+| `/warp` | panel | Moves this session to another checkout: no argument opens the selector (list, create, delete, extended list); `/warp <name>` jumps straight there. A session with no conversation yet changes checkout **silently** — no fork, no `Warp · moved` card, nothing to carry — and warping back from it is the same empty case. |
 | `/odd-list` | panel | Two-pane reader of this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
 | `/issues` | panel | Full-screen reader of this checkout's repository issues — My issues / Assigned / Involved / All — with preview, comments, labels, assignees and close, gated on your repository role. |
 | `/codegraph-hook` | command | **Only when the CodeGraph CLI is installed.** Turns the edit/write sync on or off for the session. |

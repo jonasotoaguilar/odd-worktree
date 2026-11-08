@@ -4244,6 +4244,16 @@ function warpNoticeText(targetCwd, branch) {
   return `Worktree warp: now in ${to} (branch '${cleanBranch}').`;
 }
 
+// S1 (warp-empty-session): what an EMPTY session's warp reports. It names
+// WHERE the session now is and never a move: nothing was carried, so the
+// `moved:`/`to:` compact — and the card that accompanies it — would claim a
+// transition that did not happen.
+function warpEmptyText(name, targetCwd) {
+  const toName = warpClean(name, 'worktree');
+  const to = warpClean(targetCwd, '(unknown checkout)');
+  return `worktree warp: ${toName} (empty session, nothing to carry; now at ${to})`;
+}
+
 // Deepest live checkout containing a cwd, by resolved identity — the one
 // rule the listing, the selector title and the already-there check share.
 // `extraIds` lets the already-there check keep its target-cwd candidate
@@ -4813,6 +4823,18 @@ async function executeWorktreeWarp(rawName, ctx, opts) {
     }
     if (handoff) await warpConfirm(r, warpHandoffNotice, true);
   };
+  // S1/S3 (warp-empty-session): the switched-to session of an EMPTY warp is
+  // told nothing — no card, and no handoff continuation either, because the
+  // session carries no task yet (the already-there no-op answers a handoff
+  // with text only, for the same reason). The status line stays: it says
+  // WHERE the session is, not what it carried.
+  const warpSilentWithSession = async (r) => {
+    try {
+      r.ui.setStatus("worktree", `${displayName} (${targetCwd})`);
+    } catch {
+      // Status is cosmetic; the silence is the point.
+    }
+  };
   // S43 records. The POINT of a session is its ACTIVE branch (the live
   // leaf's parentId path, never all append-only entries) filtered to
   // entries that are NOT our own bookkeeping — the custom marker, the
@@ -4853,6 +4875,16 @@ async function executeWorktreeWarp(rawName, ctx, opts) {
   // actual destination state, never a stale manager or cached fingerprint.
   const currentLeaf = typeof smEarly.getLeafId === "function" ? safeEarly(() => smEarly.getLeafId()) : undefined;
   const currentPoint = warpSessions.sessionPoint(
+    currentEntriesList, typeof currentLeaf === "string" ? currentLeaf : undefined,
+  );
+  // S1/S5 (warp-empty-session): an EMPTY session is one whose active branch
+  // carries no conversation — no `message` entry with role user or assistant
+  // outside the warp bookkeeping, so a rename, the session-worktree
+  // registration or a transition marker never counts as content. It has
+  // nothing to carry, so its warp changes PATH instead of moving work: never
+  // a fork (the host refuses a conversation-less source), never a card, never
+  // a "moved:" claim.
+  const sessionEmpty = !warpSessions.hasConversation(
     currentEntriesList, typeof currentLeaf === "string" ? currentLeaf : undefined,
   );
   const warpFileOpen = options && typeof options.warpSessionFileOpen === "function"
@@ -5023,7 +5055,13 @@ async function executeWorktreeWarp(rawName, ctx, opts) {
           // cached fingerprint. An unreadable destination never resumes.
           // Never throws: any comparison failure reads as "fork".
           const freshDestPoint = warpFreshPoint(recorded.sessionFile);
-          if (freshDestPoint !== null && warpSessions.samePoint(currentPoint, freshDestPoint)) {
+          // An empty source has no point to compare (its own point is empty
+          // by definition), so it RESUMES the destination session whenever
+          // that file is readable — the conversation it already holds (S4)
+          // or its own emptiness — instead of allocating a copy of nothing. A
+          // session with conversation keeps the same-point gate.
+          if (freshDestPoint !== null
+            && (sessionEmpty || warpSessions.samePoint(currentPoint, freshDestPoint))) {
             recordedSession = recorded;
             recordedFreshPoint = freshDestPoint;
           }
@@ -5039,7 +5077,9 @@ async function executeWorktreeWarp(rawName, ctx, opts) {
   if (recordedSessionFile !== null) {
     let resumed;
     try {
-      resumed = await ctx.switchSession(recordedSessionFile, { withSession: warpResumeWithSession });
+      resumed = await ctx.switchSession(recordedSessionFile, {
+        withSession: sessionEmpty ? warpSilentWithSession : warpResumeWithSession,
+      });
     } catch (err) {
       return failAfterCopy(
         `worktree warp: the session switch to ${targetCwd} failed: ${(err && err.message) || err}; the recorded warp session was kept`,
@@ -5066,8 +5106,12 @@ async function executeWorktreeWarp(rawName, ctx, opts) {
     );
     emitOsc7(options.oscStream || process.stdout, targetCwd);
     return {
-      text: moveText,
-      details: { name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: false, cancelled: false, ...handoffCopyDetails() },
+      text: sessionEmpty ? warpEmptyText(name, targetCwd) : moveText,
+      details: {
+        name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind,
+        alreadyThere: false, cancelled: false,
+        ...(sessionEmpty ? { emptySession: true } : {}), ...handoffCopyDetails(),
+      },
     };
   }
   const sm = ctx.sessionManager || {};
@@ -5082,7 +5126,11 @@ async function executeWorktreeWarp(rawName, ctx, opts) {
   const leaf = typeof sm.getLeafId === "function" ? safe(() => sm.getLeafId()) : null;
   const sessionDir = typeof sm.getSessionDir === "function" ? safe(() => sm.getSessionDir()) : undefined;
   let carried = [];
-  if (!warpSourceUsable(file, warpFileOpen)) {
+  // S1: an empty session is allowed through without a persisted file or
+  // in-memory entries — the refusal below exists because a session with
+  // nothing to carry had nothing to warp FOR, and the empty path now changes
+  // its path instead of carrying anything.
+  if (!sessionEmpty && !warpSourceUsable(file, warpFileOpen)) {
     const entries = typeof sm.getEntries === "function" ? safe(() => sm.getEntries()) : undefined;
     carried = Array.isArray(entries) ? entries : [];
     if (carried.length === 0) {
@@ -5093,6 +5141,82 @@ async function executeWorktreeWarp(rawName, ctx, opts) {
     }
   }
   const SM = options.sessionManagerClass || await sessionManagerClassFor(ctx);
+  // S3 (warp-empty-session): an empty session changes PATH. There is nothing
+  // to carry, so nothing is forked (`forkFrom` refuses a conversation-less
+  // source anyway) and the in-place move the host would need does not exist —
+  // `switchSession(file)` is the only mount, and a session's cwd comes from
+  // its own header. So the equivalent is used: a FRESH session allocated at
+  // the target cwd through the same create/switch machinery the non-persisted
+  // path uses, with only its header written (`wx`, never clobbering) so the
+  // mount and the record both have a real file. The switch is silent: no
+  // card, no transition entry, no rename — bookkeeping this flow did not earn.
+  if (sessionEmpty) {
+    if (!SM || typeof SM.create !== "function") {
+      return failAfterCopy(
+        "worktree warp is unavailable here: the host SessionManager has no create",
+        { name, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: false, cancelled: false },
+      );
+    }
+    let emptyFile = null;
+    try {
+      const allocated = SM.create(targetCwd, sessionDir);
+      const allocatedFile = allocated && typeof allocated.getSessionFile === "function" ? allocated.getSessionFile() : undefined;
+      if (typeof allocatedFile !== "string" || allocatedFile.length === 0) {
+        throw new Error("the host allocated no session file for the target");
+      }
+      const header = typeof allocated.getHeader === "function" ? allocated.getHeader() : null;
+      if (!header) throw new Error("the allocated session has no header");
+      // The file is the header alone: there is no entry to carry, and a file
+      // naming the target cwd is what makes the mount and the fresh point
+      // real. `wx` never clobbers an existing file.
+      fs.writeFileSync(allocatedFile, `${JSON.stringify(header)}\n`, { flag: "wx" });
+      emptyFile = allocatedFile;
+    } catch (err) {
+      return failAfterCopy(
+        `worktree warp: could not change this session's path to ${targetCwd}: ${(err && err.message) || err}`,
+        { name, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: false, cancelled: false },
+      );
+    }
+    let changed;
+    try {
+      changed = await ctx.switchSession(emptyFile, { withSession: warpSilentWithSession });
+    } catch (err) {
+      return failAfterCopy(
+        `worktree warp: the session switch to ${targetCwd} failed: ${(err && err.message) || err}; the new session file was kept at ${emptyFile}`,
+        { name, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: false, cancelled: false },
+      );
+    }
+    if (changed && changed.cancelled === true) {
+      try {
+        fs.unlinkSync(emptyFile);
+      } catch {
+        // Best effort: the report below is what matters.
+      }
+      return failAfterCopy(
+        `worktree warp: ${name} cancelled (the session stays in ${fromCwd}; the new session file was removed)`,
+        { name, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: false, cancelled: true },
+      );
+    }
+    // Recording is unchanged: both sides are recorded at their own points, so
+    // a later warp finds this destination session again (S2: warping back
+    // from an empty session is the same empty case).
+    try {
+      recordBothSides(
+        targetCwd, emptyFile, warpFreshPoint(emptyFile),
+        sourceIdentity, currentFile, currentPoint,
+      );
+    } catch {
+      // Best effort: the warp already switched.
+    }
+    emitOsc7(options.oscStream || process.stdout, targetCwd);
+    return {
+      text: warpEmptyText(name, targetCwd),
+      details: {
+        name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind,
+        alreadyThere: false, cancelled: false, emptySession: true, ...handoffCopyDetails(),
+      },
+    };
+  }
   if (!SM || typeof SM.forkFrom !== "function") {
     return failAfterCopy(
       "worktree warp is unavailable here: the host SessionManager has no forkFrom",

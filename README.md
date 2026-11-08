@@ -18,6 +18,9 @@ alone; Herdr is optional.
 | `/warp` | panel | Moves this session to another checkout: no argument opens the selector (list, create, delete, extended list); `/warp <name>` jumps straight there. |
 | `/odd-list` | panel | Two-pane reader of this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
 | `/issues` | panel | Full-screen reader of this checkout's repository issues — My issues / Assigned / Involved / All — with preview, comments, labels, assignees and close, gated on your repository role. |
+| `/codegraph-hook` | command | **Only when the CodeGraph CLI is installed.** Turns the edit/write sync on or off for the session. |
+| `/codegraph-init` | command | **Only when the CLI is installed.** Runs `codegraph init` at the session's current directory. |
+| `/codegraph-sync` | command | **Only when the CLI is installed.** Runs `codegraph sync` at the session's current directory. |
 
 A checkout's **name** is the slug of its branch, and its path is
 `<repo-parent>/<repo-name>-worktrees/<slug>`: the slug lowercases the branch and
@@ -33,6 +36,7 @@ interchangeably by `worktree_close`, and by `/warp`.
 | Node.js >= 18 and `git` | `engines` declares 18 as the floor, and every repository operation is a git child process. |
 | `herdr` — optional | Not required: only `worktree_create` tries a Herdr workspace association, and it falls back to plain `git`. |
 | `gh`, authenticated (`gh auth login`) | `/issues` only. Without it the command stays registered, says once per session what is missing, and never opens. |
+| `codegraph` — optional | Keeps each checkout's index fresh: `codegraph init` when a checkout is created, and a background `codegraph sync` after edits and writes. Absent, both stay off for the whole session. |
 | Gentle Shell — recommended | Supplies the presence and transport records the deletion guard reads to see sessions other than this one. |
 
 ```bash
@@ -160,18 +164,80 @@ the checkout's remote moves while the reader is open, mutations refuse with
 …); reopen /issues`, and the reads keep the displayed repository. An issue
 number on screen can never be sent to another repository.
 
+### CodeGraph stays fresh, when the CLI is installed
+
+The probe for `codegraph` on `PATH` runs **once per session** and is cached for
+everything below. Install the CLI mid-session and nothing changes until the next
+start, unless you set `CODEGRAPH_FORCE=1`, which answers "present" without
+probing.
+
+- **On creation**, `worktree_create` runs `codegraph init` inside the new
+  checkout, so it starts with its own index. A session where the gate answered
+  false reports that step as `skipped` and names the gate as the reason; it never
+  silently pretends to have indexed anything.
+- **On edits**, a successful `edit` or `write` schedules `codegraph sync` for the
+  git toplevel of the file touched, so a worktree syncs that worktree. The sync is
+  detached: the tool result never waits for it, and a failure never reaches you.
+- **Debounced and coalesced.** Rapid edits collapse into one sync after ~2s, and
+  an edit that lands while a sync runs starts exactly one more when it ends —
+  never a queue.
+- **One sync at a time across sessions**, guarded by
+  `<root>/.codegraph/pi-sync.lock` holding `{pid, startedAt}`. A lock held by a
+  live process means skip (the other session's sync already covers that tree),
+  with one bounded retry so the edit that raced it still lands. A dead pid or an
+  expired lock is taken over.
+- **Skipped when it would be wasted**: no `.codegraph/` in that checkout, or a
+  live CodeGraph daemon (`<root>/.codegraph/daemon.pid`, either the JSON record
+  1.6 writes or the older bare pid), whose own watcher is already syncing that
+  tree.
+- **Bounded**: a sync that never finishes is terminated after two minutes so a
+  checkout can never be wedged for the rest of the session.
+
+Three commands exist **only when the CLI is present**, and they do not appear at
+all otherwise:
+
+| Command | What it does |
+| --- | --- |
+| `/codegraph-hook` | Turns the edit/write sync on or off for the whole process. No argument toggles; `on`, `off` and `status` say it explicitly. It starts enabled. |
+| `/codegraph-init` | Runs `codegraph init` at the session's current directory. |
+| `/codegraph-sync` | Runs `codegraph sync` at the session's current directory. |
+
+The toggle lasts for the session — this package writes nothing to user
+configuration — so `CODEGRAPH_HOOK=0` is how you start a session with it off.
+
+### The `## ODD worktrees` block in the system prompt
+
+The primary session's system prompt gains a short section telling the agent where
+worktrees live, to resume an ODD in its assigned one, and — when `codegraph` is
+present — that creation indexes the checkout and edits sync it.
+
+It is **appended**, never substituted: the block rides
+`systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other
+extension) put there is preserved verbatim and our text lands after it. Two
+variants exist, with and without the CodeGraph sentences, chosen by the same
+session gate. Child and named-agent sessions get nothing, because their own
+instructions are already the bounded task they received. `ODD_WORKTREE_PROMPT=0`
+suppresses the block.
+
+One limit, stated plainly: a string has no "must be last" flag, so the block's
+position follows extension load order. It can sit before a later extension's
+short hint; it can never land inside or in place of another extension's text.
+
 ### Where state lives
 
 The worktree registry is per repository at `<git-common-dir>/pi-worktrees.json`,
 so every worktree of the same clone sees the same rows. Session names derived
 from an ODD write, and the warp's fork/resume bookkeeping, travel in the Pi
-session files the host already owns. Nothing is written to user configuration.
+session files the host already owns. The only other file this package writes is
+the short-lived `<root>/.codegraph/pi-sync.lock`. Nothing is written to user
+configuration.
 
 ### Deliberately absent
 
 This package is the worktree / ODD / issues surface only: no customize panel, no
 plugin-tools toggles, no Herdr plugin management, and no worktree↔issue
-association. There is nothing to configure, and the three commands are always on.
+association. There is nothing to configure, and `/warp`, `/odd-list` and
+`/issues` are always on (the three `/codegraph-*` commands follow the CLI).
 Paths, branches and arguments reach `git`, `herdr` and `gh` as fixed argv arrays,
 never as a shell string.
 

@@ -7528,6 +7528,65 @@ function registerIssuesCommand(pi) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// `/codegraph-hook`, `/codegraph-init`, `/codegraph-sync` (T5 S9): the sync
+// hook's switch and the two on-demand CLI runs. The bodies live in
+// lib/codegraph-commands.js so they are testable without a host; this file only
+// registers them and hands their one-line result to the session UI.
+//
+// GATED REGISTRATION: the three commands do not exist at all in a session whose
+// gate says the `codegraph` CLI is absent, so they never appear in that
+// session's command list. The gate caches its answer per process (S3), so
+// asking at registration time costs one PATH probe for the whole session.
+function codegraphCommandsAvailable() {
+  try {
+    return libRequire("codegraph-session.js").hasCodegraph(process.env) === true;
+  } catch {
+    return false;
+  }
+}
+
+function registerCodegraphCommands(pi) {
+  if (typeof pi?.registerCommand !== "function") return;
+  if (!codegraphCommandsAvailable()) return;
+  const render = (ctx, result) => {
+    const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
+    if (typeof notify === "function") notify(result.text, result.level);
+    return result;
+  };
+  // A command never throws into the host: the lib returns a failure line
+  // instead of rejecting, and anything unforeseen is swallowed here.
+  const run = async (ctx, work) => {
+    try {
+      render(ctx, await work());
+    } catch {
+      // Nothing to report that the lib did not already describe.
+    }
+  };
+  pi.registerCommand("codegraph-hook", {
+    description: "Turn the automatic edit/write CodeGraph sync on or off: on, off, status (no argument toggles)",
+    handler: async (args, ctx) => {
+      await run(ctx, () => libRequire("codegraph-commands.js").codegraphHook(args));
+    },
+  });
+  pi.registerCommand("codegraph-init", {
+    description: "Initialize a CodeGraph index in this session's checkout: codegraph init .",
+    handler: async (args, ctx) => {
+      await run(ctx, () => libRequire("codegraph-commands.js").codegraphInit(args, ctx, {
+        run: libRunner(libRequire("worktree-git.js")),
+      }));
+    },
+  });
+  pi.registerCommand("codegraph-sync", {
+    description: "Sync this session's checkout CodeGraph index: codegraph sync .",
+    handler: async (args, ctx) => {
+      await run(ctx, () => libRequire("codegraph-commands.js").codegraphSync(args, ctx, {
+        run: libRunner(libRequire("worktree-git.js")),
+      }));
+    },
+  });
+}
+
 export default function (pi) {
   // A TOOL context has no session control, so `worktree_warp` queues the
   // `/warp` COMMAND through this handle (`sendUserMessage` with
@@ -7537,6 +7596,7 @@ export default function (pi) {
   registerWarpCommand(pi);
   registerOddCommand(pi);
   registerIssuesCommand(pi);
+  registerCodegraphCommands(pi);
   pi.registerTool(worktreeCreateTool);
   pi.registerTool(worktreeListTool);
   pi.registerTool(worktreeCloseTool);
@@ -7560,6 +7620,30 @@ export default function (pi) {
   });
   pi.on("tool_call", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi));
   pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
+  // S1/S3: a successful edit or write asks for ONE background `codegraph sync`
+  // of that file's checkout. The call is fire-and-forget — never awaited, its
+  // decision never reaches the tool result, and a failure here is swallowed
+  // instead of surfacing as a broken edit.
+  pi.on("tool_result", (event) => {
+    try {
+      if (!event || (event.toolName !== "edit" && event.toolName !== "write")) return;
+      if (event.isError) return;
+      const filePath = event.input && event.input.path;
+      if (typeof filePath !== "string" || filePath.length === 0) return;
+      libRequire("codegraph-session.js").scheduleSync(filePath);
+    } catch {
+      // Index freshness is best effort and never touches the tool result.
+    }
+  });
+  // S7: the ODD worktree rules ride the prompt options, appended after the
+  // harness's own text. Sync mutation, so the host reads the final string.
+  pi.on("before_agent_start", (event) => {
+    try {
+      libRequire("odd-worktrees-prompt.js").appendOddWorktreesSection(event);
+    } catch {
+      // The prompt block is best effort.
+    }
+  });
   // Register every live checkout the registry does not own yet. Dispatched here
   // and awaited by the barrier below: the host runs session_start handlers one
   // at a time, so awaiting the scan inside this handler would put the session's

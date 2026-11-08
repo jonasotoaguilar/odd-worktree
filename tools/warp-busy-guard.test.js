@@ -273,3 +273,216 @@ describe('warp fronts while this session is busy', () => {
     assert.deepEqual(busyRefusals, [], `no busy refusal without evidence: ${JSON.stringify(notifications)}`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// S4 boundaries: what the guard must NOT block, every entry path, and the
+// surfaces that must keep working while this session reports running work.
+// ---------------------------------------------------------------------------
+describe('S4 boundaries: negative cases, every front, unaffected surfaces', () => {
+  const busyLib = require('../lib/worktree-warp-busy.js');
+  const INCARNATION = '11111111-2222-4333-8444-555555555555';
+
+  function writeOtherSession(counts) {
+    fs.mkdirSync(PRESENCE, { recursive: true, mode: 0o700 });
+    fs.chmodSync(PRESENCE, 0o700);
+    const other = crypto.createHash('sha256').update('thread-2').digest('hex');
+    fs.writeFileSync(path.join(PRESENCE, `${other}.${INCARNATION}.header.json`), JSON.stringify({
+      schema: 1, sessionHash: other, incarnation: INCARNATION, label: 'Other session',
+      heartbeat: Date.now(), generation: 1,
+      counts: { running: 0, queued: 0, waiting: 0, finished: 0, ...counts },
+      digest: 'f'.repeat(64), unavailable: null,
+    }), { mode: 0o600 });
+  }
+
+  test('the tool queues its handoff when the presence store is absent', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('busy-7', { branch: 'feat/nostore', changes: 'none' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    clearPresence();
+    host.sent.length = 0;
+    const queued = await tools.get('worktree_warp').execute('busy-8', { name: 'feat-nostore' }, undefined, undefined, ctx);
+    assert.notEqual(queued.isError, true, resultText(queued));
+    assert.match(resultText(queued), /^worktree warp: handoff queued/);
+    assert.equal(host.sent.length, 1, 'an absent store blocks nothing');
+  });
+
+  test('a stale heartbeat and an unreadable record never block the tool', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('busy-9', { branch: 'feat/stale', changes: 'none' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+
+    publishSession({ running: 3, heartbeat: Date.now() - 600000 });
+    host.sent.length = 0;
+    const stale = await tools.get('worktree_warp').execute('busy-10', { name: 'feat-stale' }, undefined, undefined, ctx);
+    assert.notEqual(stale.isError, true, `a stale heartbeat is not evidence: ${resultText(stale)}`);
+    assert.equal(host.sent.length, 1);
+
+    publishSession({ running: 3 });
+    fs.chmodSync(PRESENCE, 0o755);
+    try {
+      host.sent.length = 0;
+      const unreadable = await tools.get('worktree_warp').execute('busy-11', { name: 'feat-stale' }, undefined, undefined, ctx);
+      assert.notEqual(unreadable.isError, true, `an unsafe store is no evidence: ${resultText(unreadable)}`);
+      assert.equal(host.sent.length, 1);
+    } finally {
+      fs.chmodSync(PRESENCE, 0o700);
+    }
+  });
+
+  test('queued counters block; waiting and finished counters do not', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('busy-12', { branch: 'feat/queued', changes: 'none' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+
+    publishSession({ running: 0, queued: 2, waiting: 1, finished: 4 });
+    host.sent.length = 0;
+    const refused = await tools.get('worktree_warp').execute('busy-13', { name: 'feat-queued' }, undefined, undefined, ctx);
+    assert.equal(refused.isError, true, 'queued work must refuse');
+    assert.equal(host.sent.length, 0, 'a refusal queues nothing');
+    assert.match(resultText(refused), /2 queued agent task\(s\)/);
+
+    publishSession({ running: 0, queued: 0, waiting: 4, finished: 9 });
+    host.sent.length = 0;
+    const idle = await tools.get('worktree_warp').execute('busy-14', { name: 'feat-queued' }, undefined, undefined, ctx);
+    assert.notEqual(idle.isError, true, `waiting/finished work is not busy: ${resultText(idle)}`);
+    assert.equal(host.sent.length, 1);
+  });
+
+  test('a busy refusal leaves the worktree listing and the registry byte-identical', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('busy-15', { branch: 'feat/intact', changes: 'none' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+
+    const registryPath = path.resolve(repo, git(repo, ['rev-parse', '--git-common-dir']), 'pi-worktrees.json');
+    const listBefore = git(repo, ['worktree', 'list', '--porcelain']);
+    const registryBefore = crypto.createHash('sha256').update(fs.readFileSync(registryPath)).digest('hex');
+
+    publishSession({ running: 1 });
+    host.sent.length = 0;
+    const refused = await tools.get('worktree_warp').execute('busy-16', { name: 'feat-intact' }, undefined, undefined, ctx);
+    assert.equal(refused.isError, true);
+    assert.equal(host.sent.length, 0);
+
+    assert.equal(git(repo, ['worktree', 'list', '--porcelain']), listBefore, 'the listing changed');
+    assert.equal(
+      crypto.createHash('sha256').update(fs.readFileSync(registryPath)).digest('hex'),
+      registryBefore,
+      'the registry changed',
+    );
+  });
+
+  test('a queued handoff token is refused by /warp when this session turns busy', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('busy-17', { branch: 'feat/token', changes: 'none' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+
+    clearPresence();
+    host.sent.length = 0;
+    const queued = await tools.get('worktree_warp').execute('busy-18', { name: 'feat-token' }, undefined, undefined, ctx);
+    assert.notEqual(queued.isError, true, resultText(queued));
+    assert.equal(host.sent.length, 1);
+    const token = host.sent[0][0].replace(/^\/warp /, '');
+
+    publishSession({ running: 2 });
+    notifications.length = 0;
+    const switches = [];
+    ctx.switchSession = async (file) => { switches.push(file); return { cancelled: false }; };
+    await commands.get('warp').handler(token, ctx);
+    assert.equal(switches.length, 0, 'a handoff must not move the session under a running task');
+    assert.equal(notifications.length, 1, JSON.stringify(notifications));
+    assert.match(notifications[0][1], /still has 2 running agent task\(s\)/);
+  });
+
+  test('the selector pick refuses and never switches while this session is busy', async () => {
+    const repo = makeRepo();
+    const { ctx: createCtx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('busy-19', { branch: 'feat/pick', changes: 'none' }, undefined, undefined, createCtx);
+    assert.notEqual(created.isError, true, resultText(created));
+
+    const switches = [];
+    const picks = [];
+    const ctx = {
+      cwd: repo,
+      hasUI: true,
+      mode: 'tui',
+      sessionManager: { getSessionId: () => SESSION_ID },
+      ui: {
+        notify: (text, level) => { notifications.push([level, text]); },
+        confirm: async () => true,
+        select: async (_title, options) => {
+          const want = picks.shift();
+          return want ? options.find((option) => String(option).startsWith(`${want} `)) : undefined;
+        },
+      },
+      waitForIdle: async () => {},
+      switchSession: async (file) => { switches.push(file); return { cancelled: false }; },
+    };
+
+    publishSession({ running: 2 });
+    notifications.length = 0;
+    picks.push('feat-pick');
+    await commands.get('warp').handler('', ctx);
+    assert.equal(switches.length, 0, 'the selector must not move the session under a running task');
+    assert.equal(notifications.filter(([, text]) => /still has .* agent task/.test(String(text))).length, 1);
+  });
+
+  test('another session’s running tasks never block this session', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('busy-20', { branch: 'feat/other', changes: 'none' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+
+    clearPresence();
+    writeOtherSession({ running: 5, queued: 3 });
+    host.sent.length = 0;
+    const queued = await tools.get('worktree_warp').execute('busy-21', { name: 'feat-other' }, undefined, undefined, ctx);
+    assert.notEqual(queued.isError, true, `a peer's work is not this session's: ${resultText(queued)}`);
+    assert.equal(host.sent.length, 1);
+
+    notifications.length = 0;
+    await commands.get('warp').handler('feat-other', ctx);
+    assert.deepEqual(notifications.filter(([, text]) => /still has .* agent task/.test(String(text))), []);
+  });
+
+  test('list, create and close still work while this session reports running work', async () => {
+    const repo = makeRepo();
+    // The close approval question is part of its own flow: it is answered here
+    // so this test measures only whether the busy counters leak into it.
+    const ctx = {
+      cwd: repo,
+      hasUI: true,
+      mode: 'tui',
+      sessionManager: { getSessionId: () => SESSION_ID },
+      ui: {
+        notify: (text, level) => { notifications.push([level, text]); },
+        confirm: async () => true,
+      },
+      waitForIdle: async () => {},
+      switchSession: async () => ({ cancelled: false }),
+    };
+    publishSession({ running: 2, queued: 1 });
+
+    const listed = await tools.get('worktree_list').execute('busy-22', {}, undefined, undefined, ctx);
+    assert.notEqual(listed.isError, true, resultText(listed));
+    const created = await tools.get('worktree_create').execute('busy-23', { branch: 'feat/surface', changes: 'none' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    const closed = await tools.get('worktree_close').execute('busy-24', { name: 'feat-surface', force: true }, undefined, undefined, ctx);
+    assert.notEqual(closed.isError, true, resultText(closed));
+  });
+
+  test('the wait budget is parsed, defaulted and clamped', () => {
+    assert.equal(busyLib.DEFAULT_WAIT_MS, 60000);
+    assert.equal(busyLib.MAX_WAIT_MS, 600000);
+    assert.equal(busyLib.waitBudgetMs({}), 60000);
+    assert.equal(busyLib.waitBudgetMs({ ODD_WORKTREE_WARP_BUSY_WAIT_MS: '' }), 60000);
+    assert.equal(busyLib.waitBudgetMs({ ODD_WORKTREE_WARP_BUSY_WAIT_MS: '5000' }), 5000);
+    assert.equal(busyLib.waitBudgetMs({ ODD_WORKTREE_WARP_BUSY_WAIT_MS: '-1' }), 60000);
+    assert.equal(busyLib.waitBudgetMs({ ODD_WORKTREE_WARP_BUSY_WAIT_MS: 'abc' }), 60000);
+    assert.equal(busyLib.waitBudgetMs({ ODD_WORKTREE_WARP_BUSY_WAIT_MS: '999999999' }), 600000);
+  });
+});

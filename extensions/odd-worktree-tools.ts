@@ -549,23 +549,48 @@ async function resolveCreateBase(runGit, repo) {
   return null;
 }
 
-// The INTERACTIVE create (the warp panel) returns to the selector as soon as
-// the checkout path exists: the SLOW half of the creation hooks — dependency
-// install, `codegraph init` — is what made a confirmed create feel like a hang,
-// because a package manager can run for minutes. `backgroundHooks` hands that
-// half to this managed background task instead of awaiting it, so the path the
-// warp needs is usable immediately and the setup finishes behind it.
+// A create is INSTANT on BOTH fronts — the `worktree_create` tool and the
+// `/warp` panel: the checkout plus its registry row are all a warp needs, so the
+// SLOW half of the creation hooks — dependency install, `codegraph init` — is
+// handed to this managed background task instead of being awaited. A package
+// manager can run for minutes, and awaiting it is exactly what made a confirmed
+// create feel like a hang.
 //
 // Nothing is skipped and nothing is orphaned:
 //   - the hooks library still runs both phases (through the `setup()` callable
 //     it returns), so the checkout is set up exactly as before;
 //   - every task is tracked here until it settles, and
-//     `awaitPendingCreationSetups` is the seam a test (or a shutdown path) uses
-//     to wait for the last one;
-//   - each task settles into exactly ONE report, so a failure reaches the human
-//     instead of vanishing into a detached promise, and the task itself never
-//     rejects (nothing is left unobserved).
+//     `awaitPendingCreationSetups` is the seam a test (or a caller) uses to wait
+//     for the last one;
+//   - the settled outcome is recorded per checkout, so a later `worktree_create`
+//     for that same checkout reports what the background work actually did;
+//   - each task settles into at most ONE report, and the task itself never
+//     rejects (nothing is left unobserved);
+//   - a task that settles after `session_shutdown` records and reports nothing:
+//     it belongs to a session whose UI the runtime already invalidated.
 const creationSetups = new Set();
+
+// Session epoch for deferred setups. Shutdown advances it, so late work drops
+// instead of writing into the session that replaced it.
+let creationEpoch = 0;
+
+// The deferred setup's lifecycle record, one entry per checkout path: `running`
+// while the background task owns it, then `done` or `failed` with the steps that
+// really ran. Session state only — never written to disk, cleared on shutdown.
+const creationSetupStates = new Map();
+
+function beginCreationTask() {
+  return creationEpoch;
+}
+
+function creationTaskLive(epoch) {
+  return epoch === creationEpoch;
+}
+
+function forgetCreationSetups() {
+  creationEpoch += 1;
+  creationSetupStates.clear();
+}
 
 // Fold a child's stderr into one escape-free line, the same shape every
 // summary row uses, so a multi-line failure cannot break the notification.
@@ -576,8 +601,50 @@ function setupReportLine(text) {
     .trim();
 }
 
-// The one report a settled setup produces: what ran on success, and the reasons
-// on failure — plus the fact that the checkout stays usable either way.
+// The create result's row for that lifecycle. It states the SETUP's state, never
+// the index on disk (`codegraphIndexState` reads that), so the two rows of one
+// result can never contradict each other.
+function setupStateRow(state) {
+  if (!state || typeof state !== 'object') return null;
+  if (state.status === 'running') return 'setup: running in the background (install, codegraph)';
+  if (state.status === 'failed') {
+    const reason = setupReportLine(state.reason || '');
+    return `setup: finished with problems: ${reason.length > 0 ? reason : 'the setup reported a failure'} — the checkout is usable`;
+  }
+  if (state.status === 'done') return 'setup: finished';
+  return null;
+}
+
+// One settled step, in the words the create's rows use.
+function setupStepLabel(step) {
+  const name = String((step && step.name) || 'setup');
+  if (name === 'codegraph-init') return 'codegraph initialized';
+  return setupReportLine(name.replace(/^install:/, 'install '));
+}
+
+// The ONE reading of a settled setup, shared by the record a later tool result
+// reports and by the notice a caller asked for: the steps that ran, and the
+// reason it went wrong when it did.
+function settledCreationSetup(outcome) {
+  const steps = outcome && Array.isArray(outcome.steps) ? outcome.steps : [];
+  const failed = steps.filter((step) => step && step.status === 'failed');
+  const done = steps.filter((step) => step && step.status === 'done');
+  const warnings = outcome && Array.isArray(outcome.warnings) ? outcome.warnings : [];
+  const wentWrong = failed.length > 0 || !!(outcome && outcome.ok === false) || warnings.length > 0;
+  if (!wentWrong) return { steps, done, problem: null };
+  const reasons = warnings.length > 0 ? warnings : failed.map((step) => `${step.name} failed`);
+  const named = reasons.map(setupReportLine).filter((line) => line.length > 0).join('; ');
+  return { steps, done, problem: named.length > 0 ? named : 'the setup reported a failure' };
+}
+
+// WHERE THE COMPLETION NOTICE GOES. It belongs to the caller that asked for one:
+// only an explicitly supplied `notify` receives it. The `/warp` panel supplies
+// the UI notification a human is watching. The `worktree_create` tool supplies
+// NOTHING — an agent's tool result is its report, so a create never fires a
+// `ui.notify` the call did not ask for, and never reports the deferred setup as
+// an error: a problem is a warning, and the checkout stays usable either way.
+// The agent learns the outcome later from the tool surface: a create for the same
+// checkout reports the recorded state (`setupStateRow`) and its steps.
 //
 // A run in which NO step completed reports NOTHING. Every step can be skipped
 // (no lockfile detected, `codegraph` not on PATH), and a "setup finished" toast
@@ -585,34 +652,22 @@ function setupReportLine(text) {
 // create used to show on every such checkout. Failures are never suppressed by
 // that rule: a failed step, a failed outcome or any warning is reported first
 // and returns, so silence can only ever mean "nothing ran, nothing failed".
-function reportCreationSetup({ branch, target, outcome, notify }) {
+function reportCreationSetup({ branch, target, settled, notify }) {
   if (typeof notify !== 'function') return;
-  const steps = outcome && Array.isArray(outcome.steps) ? outcome.steps : [];
-  const failed = steps.filter((step) => step && step.status === 'failed');
-  const done = steps.filter((step) => step && step.status === 'done');
-  const uninformedFailure = !!(outcome && outcome.ok === false);
-  const label = (step) => {
-    const name = String(step.name || 'setup');
-    if (name === 'codegraph-init') return 'codegraph initialized';
-    return setupReportLine(name.replace(/^install:/, 'install '));
-  };
-  const warnings = outcome && Array.isArray(outcome.warnings) ? outcome.warnings : [];
-  if (failed.length > 0 || uninformedFailure || warnings.length > 0) {
-    const reasons = warnings.length > 0 ? warnings : failed.map((step) => `${step.name} failed`);
-    const reasonText = reasons.map(setupReportLine).filter((line) => line.length > 0).join('; ');
+  if (settled.problem !== null) {
     notify(
-      `warp: setup for ${branch} finished with problems: ${reasonText.length > 0 ? reasonText : 'the setup reported a failure'} — the checkout at ${target} is usable`,
-      'error',
+      `warp: setup for ${branch} finished with problems: ${settled.problem} — the checkout at ${target} is usable`,
+      'warning',
     );
     return;
   }
-  if (done.length === 0) return;
-  notify(`warp: setup finished for ${branch}: ${done.map(label).join(', ')}`, 'info');
+  if (settled.done.length === 0) return;
+  notify(`warp: setup finished for ${branch}: ${settled.done.map(setupStepLabel).join(', ')}`, 'info');
 }
 
 // Start (and track) the deferred setup. The returned task never rejects: a
-// throwing phase is reported as a failed setup, never as an unhandled rejection.
-function startCreationSetup({ run, branch, target, notify }) {
+// throwing phase is recorded as a failed setup, never as an unhandled rejection.
+function startCreationSetup({ run, branch, target, key, notify, epoch }) {
   const task = (async () => {
     let outcome;
     try {
@@ -621,8 +676,14 @@ function startCreationSetup({ run, branch, target, notify }) {
       const message = `creation setup failed: ${(err && err.message) || err}`;
       outcome = { ok: false, steps: [{ name: 'setup', status: 'failed', detail: message }], warnings: [message] };
     }
+    // A setup whose session ended writes nothing at all: no record, no report.
+    if (!creationTaskLive(epoch)) return;
+    const settled = settledCreationSetup(outcome);
+    creationSetupStates.set(key, settled.problem === null
+      ? { status: 'done', branch, steps: settled.steps }
+      : { status: 'failed', branch, steps: settled.steps, reason: settled.problem });
     try {
-      reportCreationSetup({ branch, target, outcome, notify });
+      reportCreationSetup({ branch, target, settled, notify });
     } catch {
       // Reporting is the last step of a settled task: a hostile notify never
       // leaves the task unobserved or the tracking set dirty.
@@ -634,8 +695,9 @@ function startCreationSetup({ run, branch, target, notify }) {
   return task;
 }
 
-// Resolves once every tracked setup has settled. Exported for tests and for a
-// shutdown path that must not leave a child running behind it.
+// Resolves once every tracked setup has settled. The task stays tracked after its
+// session dropped it, so this seam (exported for tests and for a caller that
+// must not leave a child running behind it) still sees the real completion.
 async function awaitPendingCreationSetups() {
   while (creationSetups.size > 0) {
     await Promise.all(Array.from(creationSetups));
@@ -650,11 +712,12 @@ async function awaitPendingCreationSetups() {
 async function executeWorktreeCreate(params, ctx, opts) {
   const git = libRequire("worktree-git.js");
   const registry = libRequire("worktree-registry.js");
-  // `backgroundHooks` is the INTERACTIVE create's speed contract: the checkout
-  // plus its registry row are all the warp needs, so the slow half of the hooks
-  // (install, codegraph) is handed to a tracked background task instead of
-  // being awaited. The AGENT tool never sets it — its result is the agent's only
-  // report, so the hooks must have settled before that result is returned.
+  // `backgroundHooks` is the create's speed contract on BOTH fronts: the checkout
+  // plus its registry row are all anyone needs, so the slow half of the hooks
+  // (dependency install, `codegraph init`) is handed to a tracked background task
+  // instead of being awaited. The tool passes it exactly like the panel, so a
+  // create answers as soon as the checkout exists and its result says
+  // `setup: running in the background` instead of implying a finished install.
   const backgroundHooks = !!(opts && opts.backgroundHooks === true);
   // S21: BOTH routes are interactive (the tool handler and the create
   // panel), so both wait for their children on the async runner. The
@@ -835,11 +898,23 @@ async function executeWorktreeCreate(params, ctx, opts) {
     // no hook — and it says so instead of claiming a create or an update. The
     // registry row already exists (`registered: unchanged`), and the CodeGraph
     // row reports the index the checkout really has, read without initializing
-    // anything.
+    // anything. The one thing a repeat call can add is the deferred setup this
+    // checkout already carries: its state rides along as its own row, with the
+    // steps that really ran in `details.setup`.
     const codegraph = codegraphIndexState(owned.path);
+    const setup = creationSetupStates.get(path.resolve(owned.path)) || null;
+    const lines = [createSuccessText(owned.branch, owned.path, true), 'registered: unchanged', codegraphLine(codegraph), setupStateRow(setup)]
+      .filter((line) => typeof line === 'string' && line.length > 0);
     return textResult(
-      `${createSuccessText(owned.branch, owned.path, true)}\nregistered: unchanged\n${codegraphLine(codegraph)}`,
-      { path: owned.path, branch: owned.branch, alreadyExists: true, registered: 'unchanged', codegraph },
+      lines.join('\n'),
+      {
+        path: owned.path,
+        branch: owned.branch,
+        alreadyExists: true,
+        registered: 'unchanged',
+        codegraph,
+        ...(setup !== null ? { setup } : {}),
+      },
       false,
     );
   }
@@ -1362,17 +1437,21 @@ async function executeWorktreeCreate(params, ctx, opts) {
   // overlap and turn a good copy into a reported failure, so the copy is the
   // last awaited step and the setup runs behind it. The create returns as soon
   // as the copy settles (or fails, and says so): the setup's own outcome is
-  // reported by `reportCreationSetup`, never swallowed and never awaited here.
+  // recorded for a later create and reported to a caller that asked for a
+  // notice, never awaited here.
   let setupPending = false;
   if (deferredSetup !== null) {
     setupPending = true;
+    creationSetupStates.set(resolvedTarget, { status: 'running', branch });
     startCreationSetup({
       run: deferredSetup,
       branch,
       target,
-      notify: (opts && typeof opts.notify === 'function')
-        ? opts.notify
-        : (ctx && ctx.ui && typeof ctx.ui.notify === 'function' ? (message, level) => ctx.ui.notify(message, level) : null),
+      key: resolvedTarget,
+      epoch: beginCreationTask(),
+      // Only a caller that supplied a notice gets one: the panel's UI. The tool
+      // front supplies none, so no create notifies behind the agent's back.
+      notify: opts && typeof opts.notify === 'function' ? opts.notify : null,
     });
   }
 
@@ -1422,7 +1501,7 @@ async function executeWorktreeCreate(params, ctx, opts) {
   // S7: the registry-write fact sits right after the identity rows, before the
   // hook fact: it is the tool's own bookkeeping and must never be inferred.
   const successText = [createSuccessText(branch, target, false), `registered: ${registeredOutcome}`, codegraphLine(codegraph)].filter((line) => typeof line === "string" && line.length > 0);
-  if (setupPending) successText.push("setup: running in the background (install, codegraph)");
+  if (setupPending) successText.push(setupStateRow({ status: 'running' }));
   if (changesRegistered) successText.push("changes: already registered for this session");
   // S3/S4: what the copy actually did, in the same `N files, +A/-B` shape the
   // rest of the worktree surface uses. A clean selection adds no row.
@@ -1517,7 +1596,12 @@ const worktreeCreateTool = withWorktreeCardRenderer(defineTool({
     changes: changesParameterSchema(CHANGES_DESCRIPTION),
   }),
   async execute(toolCallId, params, signal, onUpdate, ctx) {
-    return executeWorktreeCreate(params, ctx);
+    // Instant create: the checkout and its registry row settle, the slow setup
+    // (install, codegraph) keeps running in a tracked background task. No notify
+    // callback is passed, so this front never fires a `ui.notify` the agent's
+    // call did not ask for; the result reports the setup state and a later
+    // create for the same checkout reports how the background work ended.
+    return executeWorktreeCreate(params, ctx, { backgroundHooks: true });
   },
 }));
 
@@ -8064,9 +8148,11 @@ export default function (pi) {
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,
   // so work still in flight drops instead of writing into the session that
-  // replaced it.
+  // replaced it, and it drops the deferred creation setups with it — a late
+  // settle records and reports nothing.
   pi.on("session_shutdown", () => {
     startupEpoch += 1;
+    forgetCreationSetups();
   });
   pi.on("tool_call", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi));
   pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));

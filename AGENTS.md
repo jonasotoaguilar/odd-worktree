@@ -126,6 +126,19 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     `running` or `queued` is active — `exited 0`, `failed 1` and `stopped` are
     finished — and a missing tool, a failed call or an unknown answer is
     UNKNOWN, which blocks nothing and is never reported as "no jobs".
+14. **A create is instant on both fronts, and its setup still finishes.**
+    `worktree_create` and the panel's create both run
+    `lib/worktree-hooks.js` with `deferSetup: true`: the checkout, its registry
+    row and the pending-change copy settle, and the slow half (dependency
+    install, `codegraph init`) continues in one tracked task per create. Never
+    await it in the create path — that is the hang the split removed. Nothing is
+    skipped: the task runs every deferred phase, is tracked until it settles
+    (exported as `awaitPendingCreationSetups`), and drops its record and its
+    report when its session has already shut down. The completion notice belongs
+    to the caller that supplied a `notify` (the panel); the tool front supplies
+    none, so a create never fires a `ui.notify` its call did not ask for and
+    never reports the deferred setup as an error — a problem is a warning, and a
+    later create for the same checkout reports the recorded state and steps.
 
 ## Commits and pull requests
 

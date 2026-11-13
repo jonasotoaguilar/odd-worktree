@@ -354,7 +354,7 @@ test('S7: a second create for the same ODD is refused by the ODD path, whatever 
 
 	assert.deepEqual(error, {
 		code: 'path-exists',
-		message: 'worktree path already exists: /dev/projects/repo-worktrees/login-ui\nRemove it or pass a different name.',
+		message: 'worktree path already exists: /dev/projects/repo-worktrees/login-ui\nRemove it or pass a different odd.',
 	});
 	assert.ok(!stub.calls.some((call) => call.args[1] === 'add'), 'nothing was created');
 });
@@ -364,7 +364,7 @@ test('S4: an occupied destination is refused without asking Git to create it', a
 	const error = await expectedError(REQUEST, REPOSITORY, seamsFor(stub.git, [DESTINATION]).seams);
 	assert.deepEqual(error, {
 		code: 'path-exists',
-		message: `worktree path already exists: ${DESTINATION}\nRemove it or pass a different name.`,
+		message: `worktree path already exists: ${DESTINATION}\nRemove it or pass a different odd.`,
 	});
 	assert.ok(!stub.calls.some((call) => call.args[1] === 'add'), 'nothing was created');
 });
@@ -818,7 +818,7 @@ test('S4: a real occupied destination is refused and creates no branch', async (
 	if (decision.ok === true) assert.fail('expected the occupied destination to be reported');
 	assert.deepEqual(decision.error, {
 		code: 'path-exists',
-		message: `worktree path already exists: ${realpathSync(destination)}\nRemove it or pass a different name.`,
+		message: `worktree path already exists: ${realpathSync(destination)}\nRemove it or pass a different odd.`,
 	});
 	assert.equal(repository.git(repository.root, ['branch', '--list', 'feat/worktree-tools']).trim(), '', 'no branch was created');
 });

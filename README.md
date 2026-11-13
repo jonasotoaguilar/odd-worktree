@@ -74,7 +74,7 @@ as commands, and the two `worktree_*` tools are offered to the agent.
      refused with `could not resolve a base branch: tried main, origin/HEAD,
      init.defaultBranch` before anything is written.
    - Three refusals protect what already exists, each before a single write:
-     `worktree path already exists: …` (remove it or pass a different name),
+     `worktree path already exists: …` (remove it or pass a different odd),
      `branch … is already checked out in …` (use another branch, or work in that
      worktree), and `branch main is the base branch; pick the branch this worktree
      should work on`.

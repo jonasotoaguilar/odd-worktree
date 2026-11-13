@@ -1,8 +1,8 @@
 // @ts-nocheck
 // odd-worktree-tools.ts — the standalone odd-worktree Pi extension.
 //
-// One package, one surface: the agent worktree tools (create, list, close,
-// warp) and the two read/inspect panels they belong to.
+// One package, one surface: the two agent worktree tools (create, list) and
+// the three read/inspect panels.
 //
 // Registers three commands:
 //   /warp      move this session to another checkout of the project
@@ -10,9 +10,10 @@
 //   /issues    read this checkout's GitHub issues, with label/assignee,
 //              comment and close actions when the repository permits them
 //
-// and four tools: worktree_create, worktree_list, worktree_delete,
-// worktree_warp. Create and close prompt for approval when the host offers
-// dialog UI; list never mutates anything; warp hands the move to /warp.
+// and two tools: worktree_create and worktree_list. Create prompts for approval
+// when the host offers dialog UI; list never mutates anything; `/warp` is the
+// only way to move the session and the panel's ctrl+d is the only way to remove
+// a checkout, so no agent surface can do either (S3, S4).
 //
 // Worktree creation and removal use git; no other workspace manager takes part.
 //
@@ -170,19 +171,8 @@ function isLiveGitRecord(entry, repoRoot) {
 // Marks a TypeBox property optional. Production `Type` is the full TypeBox
 // export, but older test doubles stub only the constructors the tools
 // needed; falling back to the bare schema keeps the module loadable there
-// while production still gets true optionals.
-// Older test doubles stub only the constructors the tools needed;
-// Type.Union is the production shape for string-or-array options, so
-// the one option that needs it degrades to a bare string schema when
-// the host Type has no Union (tests) instead of failing the load.
-function unionSchema(schemas, opts) {
-  try {
-    if (Type && typeof Type.Union === 'function') return Type.Union(schemas, opts);
-  } catch {
-    // Fall through to the stub-compatible shape below.
-  }
-  return Type.String();
-}
+// while production still gets true optionals. (The string-or-array `Union`
+// helper went with the `worktree_warp` tool's `changes` option, T6/S3.)
 function opt(schema) {
   if (Type && typeof Type.Optional === "function") return Type.Optional(schema);
   return schema;
@@ -286,30 +276,25 @@ function closeSuccessText(branch, branchKept) {
   return `removed: ${slugPart(branch)} · ${name}\n${branchKept === false ? 'branch deleted' : 'branch kept'}`;
 }
 
-// Worktree tool card wiring: each registered
-// tool draws the compact/expandable native card from lib/worktree-card.js
-// through its own renderShell/renderCall/renderResult, so execute,
-// schemas, content and details stay exactly as they are. Width helpers
-// resolve lazily here — never a top-level package import (S6/S10: every
-// test loader stubs only the two package import lines) — preferring the
-// real pi-tui measurement (emoji/wide-char aware) and degrading to the
-// lib's local fallback when the host has no such module. keyHint rides
-// along only when the coding-agent module resolves; otherwise the lib's
-// static ctrl+o hint stands in. Renderers are cached per helpers
-// identity because Pi re-renders every visible card each frame.
+// Warp message card wiring: the warp is a COMMAND, so its one visible
+// confirmation is the `worktree-warp` custom message renderer built on
+// lib/worktree-card.js. Width helpers resolve lazily here — never a
+// top-level package import (S6/S10: every test loader stubs only the two
+// package import lines) — preferring the real pi-tui measurement
+// (emoji/wide-char aware) and degrading to the lib's local fallback when
+// the host has no such module. keyHint rides along only when the
+// coding-agent module resolves; otherwise the lib's static ctrl+o hint
+// stands in.
 let worktreeCardHelpersOverride;
-let worktreeCardCache = null;
 // The runtime resolution below runs once per process: rebuilding the
-// helpers object on every render would defeat the per-identity card
-// cache above (a fresh identity busts it each time). The injectable seam
-// still wins whenever set, and resetting it returns to this stable
-// resolution — never to a fresh rebuild.
+// helpers object on every render would defeat the per-identity deps
+// memo below. The injectable seam still wins whenever set, and resetting
+// it returns to this stable resolution — never to a fresh rebuild.
 let worktreeCardAutoHelpers;
 let worktreeCardAutoResolved = false;
 
 function setWorktreeCardHelpers(helpers) {
   worktreeCardHelpersOverride = helpers;
-  worktreeCardCache = null;
 }
 
 function loadRuntimeCardHelpers() {
@@ -400,59 +385,6 @@ function worktreeCardDeps() {
     worktreeCardDepsCache = { base, seamed, deps };
   }
   return worktreeCardDepsCache.deps;
-}
-
-function worktreeCardFor(toolName) {
-  const helpers = worktreeCardDeps();
-  if (!worktreeCardCache || worktreeCardCache.helpers !== helpers) {
-    worktreeCardCache = { helpers, cards: new Map() };
-  }
-  let card = worktreeCardCache.cards.get(toolName);
-  if (!card) {
-    card = libRequire("worktree-card.js").createWorktreeCardRenderer(toolName, helpers);
-    worktreeCardCache.cards.set(toolName, card);
-  }
-  return card;
-}
-
-// Spreads nothing and keeps the defineTool identity: the card hooks are
-// assigned onto the definition, so a failure anywhere above returns the
-// tool untouched and execution never depends on rendering. The hooks
-// resolve the cached card per invocation (one Map hit) so an injected
-// helpers seam set after load still reaches every render.
-function withWorktreeCardRenderer(tool) {
-  try {
-    const card = worktreeCardFor(tool.name);
-    tool.renderShell = card.renderShell;
-    tool.renderCall = (...args) => worktreeCardFor(tool.name).renderCall(...args);
-    tool.renderResult = (...args) => worktreeCardFor(tool.name).renderResult(...args);
-  } catch {
-    // Rendering stays generic; the tool itself is unaffected.
-  }
-  // Model text and visual cards are independent presentation layers. Keep
-  // backend helpers unchanged so runtime callers retain their raw contract.
-  //
-  const execute = tool.execute;
-  let format = null;
-  try {
-    const candidate = libRequire("worktree-model-result.js").formatWorktreeModelResult;
-    if (typeof candidate === "function") format = candidate;
-  } catch {
-    // An unavailable formatter leaves execution and diagnostics untouched.
-  }
-  if (typeof execute === "function") {
-    tool.execute = async function (...args) {
-      const result = await execute.apply(this, args);
-      if (!format) return result;
-      try {
-        return format(tool.name, result);
-      } catch {
-        // A presentation failure must not hide a completed tool's result.
-        return result;
-      }
-    };
-  }
-  return tool;
 }
 
 // The one sentence every `changes` refusal uses for the accepted forms, so the
@@ -712,8 +644,8 @@ async function runPortedWorktreeCreate(input, ctx) {
   });
   if (execution.ok === false) return errorResult(execution.error.message, { path: decision.plan.path });
 
-  // The registry row is what the panel, the live-session guard and `worktree_warp`
-  // resolve a name against, so the checkout is registered before the slow work
+  // The registry row is what the panel, the live-session guard and the `warp`
+  // command resolve a name against, so the checkout is registered before the slow work
   // starts. A row that cannot be written is reported with the checkout that exists,
   // never hidden and never rolled back.
   const stored = registry.upsertWorktree(repo.root, {
@@ -1032,8 +964,8 @@ async function vanishedCheckouts(git, repoRoot, live, resolvedTarget, after) {
 }
 
 // S24 name resolution — the ONE place checkout names resolve to
-// checkouts. `worktree_delete` (by `name`) and the `warp` command verb
-// both call this, never separate logic. A name is the flattened branch
+// checkouts. The `/warp` command and the removal path both call this, never
+// separate logic. A name is the flattened branch
 // slug (`slugifyBranch`, already exported by lib/worktree-git.js), or
 // `principal` for the principal checkout.
 //
@@ -1329,13 +1261,13 @@ function closeSessionString(ctx, method) {
   }
 }
 
-// S7/S8/S9: the active-session refusal, shared by `worktree_delete` and the warp
-// panel's Ctrl+D (lib/worktree-session-guard.js).
+// S7/S8/S9: the active-session refusal, shared by the removal path the warp
+// panel's Ctrl+D drives (lib/worktree-session-guard.js).
 //
 // The guard answers one question per checkout: is a live Pi session working
 // there? It reads Gentle Shell's published presence records (heartbeat +
 // workspace) and, deterministically, the checkout THIS session stands on. Both
-// callers run it, so the tool and the panel can never disagree.
+// callers run it, so the panel's refusal and the close can never disagree.
 //
 // Two outcomes refuse with nothing mutated:
 //   - this session is in the checkout: the human is told to warp first
@@ -1453,10 +1385,10 @@ async function yoloActiveFor(ctx) {
   }
 }
 
-// Core of `worktree_delete` (S7, D6, S6-S9): remove the checkout, keep the
-// branch, drop the registry entry. Exported for unit tests; the registered tool
-// calls it with the live Pi context, and the warp panel's Ctrl+D calls it with
-// `opts.approved` after its own question.
+// Core of a removal (S7, D6, S6-S9): remove the checkout, keep the branch, drop
+// the registry entry. Exported for unit tests and called by the warp panel's
+// Ctrl+D with `opts.approved` after its own question — it is the panel's only
+// removal path, because no agent tool deletes a checkout (S4).
 //
 // The S7 rule is that the BRANCH IS KEPT: this function never deletes a
 // branch, never passes `--trust-repository`, and passes `--force` only when the
@@ -1484,7 +1416,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   const hasName = typeof rawName === "string" && rawName.length > 0;
   if (!hasPath && !hasBranch && !hasName) {
     return errorResult(
-      "worktree_delete requires a path or a branch or a name: pass the worktree path, branch, or name to close",
+      "closing a worktree requires a path or a branch or a name: pass the worktree path, branch, or name to close",
       { force },
     );
   }
@@ -1493,7 +1425,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   // agree-or-disagree behaviour below.)
   if (hasName && (hasPath || hasBranch)) {
     return errorResult(
-      "worktree_delete accepts only one of path, branch, or name: pass only one",
+      "closing a worktree accepts only one of path, branch, or name: pass only one",
       { path: rawPath, branch: rawBranch, name: rawName, force },
     );
   }
@@ -1514,7 +1446,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   const byBranch = hasBranch && !hasName ? registry.findByBranch(repo.root, rawBranch) : null;
   if (hasPath && hasBranch && byPath && byBranch && byPath.branch !== byBranch.branch) {
     return errorResult(
-      `worktree_delete path and branch disagree: path resolves to branch '${byPath.branch}' but branch '${rawBranch}' is registered elsewhere; pass only one`,
+      `closing a worktree: path and branch disagree: path resolves to branch '${byPath.branch}' but branch '${rawBranch}' is registered elsewhere; pass only one`,
       { path: rawPath, branch: rawBranch, force },
     );
   }
@@ -1547,7 +1479,7 @@ async function executeWorktreeClose(params, ctx, opts) {
       }
     } else if (resolved.kind === "principal") {
       return errorResult(
-        `cannot close the principal checkout at ${resolved.path}: worktree_delete only closes registered agent worktrees; the checkout and the registry were left untouched`,
+        `cannot close the principal checkout at ${resolved.path}: the removal path only closes registered agent worktrees; the checkout and the registry were left untouched`,
         { name: rawName, path: resolved.path, branch: resolved.branch, force },
       );
     } else {
@@ -1565,7 +1497,7 @@ async function executeWorktreeClose(params, ctx, opts) {
         const pid = pst.real !== null ? pst.real : pst.absolute;
         if (entryId !== null && pid !== null && entryId === pid) {
           return errorResult(
-            `cannot close the principal checkout at ${principalRef.path}: worktree_delete only closes registered agent worktrees; the checkout and the registry were left untouched`,
+            `cannot close the principal checkout at ${principalRef.path}: the removal path only closes registered agent worktrees; the checkout and the registry were left untouched`,
             { name: rawName, path: principalRef.path, branch: principalRef.branch, force },
           );
         }
@@ -1642,8 +1574,8 @@ async function executeWorktreeClose(params, ctx, opts) {
   // before any pre-removal side effect, and again immediately before a remover
   // is invoked. Without that, a path replaced by a symbolic link while the
   // human answered would be handed to `git worktree remove`, which resolves the
-  // spelling it is given and would name ANOTHER checkout. No tool reaches this:
-  // `worktree_delete` calls this function without options.
+  // spelling it is given and would name ANOTHER checkout. Only the panel's
+  // ctrl+d reaches this function and it always passes its approved identity.
   const expectedReal = opts && typeof opts.expectedReal === "string" && opts.expectedReal.length > 0
     ? opts.expectedReal
     : null;
@@ -1710,8 +1642,8 @@ async function executeWorktreeClose(params, ctx, opts) {
   // selector's keyboard delete, which never consults YOLO at all
   // (`warpDeleteCheckout`). It suppresses the second dialog only: every check
   // above and below, the live-session protections and the removal itself are
-  // unchanged, and no tool can reach this flag because `worktree_delete` calls
-  // this function without options.
+  // unchanged, and no caller reaches it without an approval: the panel's
+  // ctrl+d is the only removal path.
   const alreadyApproved = !!(opts && opts.approved === true);
   if (ctx && ctx.hasUI && !alreadyApproved) {
     const canAsk = ctx.ui && typeof ctx.ui.confirm === "function";
@@ -1932,22 +1864,6 @@ const worktreeListTool = defineTool({
   },
 });
 
-const worktreeCloseTool = withWorktreeCardRenderer(defineTool({
-  name: "worktree_delete",
-  label: "Worktree Delete",
-  exposure: "codemode",
-  description: "Remove a registered agent worktree checkout while keeping the branch. Pass the worktree name, path, or branch (only one), plus force:true to delete a dirty checkout. A live Pi session working in that checkout — this session or another — refuses the deletion: warp to another checkout first, or let that session finish. The checkout is removed with git worktree remove; the branch is kept.",
-  parameters: Type.Object({
-    name: opt(Type.String({ description: "Name of the registered worktree to delete (the flattened branch slug, or principal)" })),
-    path: opt(Type.String({ description: "Path of the registered worktree to delete" })),
-    branch: opt(Type.String({ description: "Branch of the registered worktree to delete" })),
-    force: opt(Type.Boolean({ description: "Delete even when the checkout is dirty" })),
-  }),
-  async execute(toolCallId, params, signal, onUpdate, ctx) {
-    return executeWorktreeClose(params, ctx);
-  },
-}));
-
 function warpForkSourceUsable(file) {
   try {
     if (typeof file !== "string" || file.length === 0) return false;
@@ -2026,41 +1942,6 @@ function warpCreatePreflight(ctx) {
   return { ok: true };
 }
 
-// S61 tool-side handling of the `changes` option: it VALIDATES the selection and
-// nothing more. The copy itself belongs to the command (see
-// `warpHandoffCopyChanges`), because the tool only QUEUES the move — a copy made
-// here would land in a checkout the command can still refuse, and the retry the
-// refusal asks for would then fail on its own stranded copy.
-// Resolves to {isError:false, selection} or {isError:true, result} with nothing
-// queued. Never throws.
-function warpToolChangesSelection(params) {
-  let raw;
-  try {
-    raw = params ? params.changes : undefined;
-  } catch {
-    raw = undefined;
-  }
-  let changesLib = null;
-  try {
-    changesLib = libRequire('worktree-changes.js');
-  } catch (err) {
-    return { isError: false, selection: { mode: 'none', paths: [] } };
-  }
-  let normalized;
-  try {
-    normalized = changesLib.normalizeChangesSelection(raw);
-  } catch (err) {
-    return {
-      isError: true,
-      result: errorResult(`worktree warp: ${(err && err.message) || err}`, { tool: 'worktree_warp' }),
-    };
-  }
-  if (!normalized.ok) {
-    return { isError: true, result: errorResult(`worktree warp: ${normalized.error}`, { tool: 'worktree_warp' }) };
-  }
-  return { isError: false, selection: { mode: normalized.mode, paths: normalized.paths.slice() } };
-}
-
 // The handoff's change selection, applied at MOVE time by the command: after
 // every refusal check above and before the switch. A handoff refused before this
 // point mutates NOTHING, and the copy that does run never mutates the source or
@@ -2091,42 +1972,6 @@ async function warpHandoffCopyChanges({ git, fromCheckout, targetCwd, changes })
     return { error: (copied && copied.error) || 'cannot copy changes' };
   }
   return { ok: true, copied };
-}
-
-// The tool's selection preflight: a selection naming a file that is NOT pending
-// must refuse BEFORE the handoff is queued, because the command can only refuse
-// it — a queued request the command always rejects is the same false success the
-// token cap had. Read-only: the shared summary and matcher decide, nothing is
-// written. Destination state is deliberately NOT checked here: an overlap may be
-// this handoff's own earlier copy, which the command proves byte for byte and
-// skips at move time. Never throws.
-async function warpHandoffSelectionCheck({ git, fromCheckout, changes }) {
-  if (!changes || changes.mode === 'none') return { ok: true };
-  let changesLib = null;
-  try {
-    changesLib = libRequire('worktree-changes.js');
-  } catch (err) {
-    return { ok: true };
-  }
-  let summary;
-  try {
-    summary = await changesLib.summarizeChanges(fromCheckout, { git });
-  } catch (err) {
-    return { ok: false, error: `cannot read the pending changes: ${(err && err.message) || err} (nothing was queued)` };
-  }
-  if (!summary || summary.ok !== true) {
-    return { ok: false, error: `${(summary && summary.error) || 'cannot read the pending changes'} (nothing was queued)` };
-  }
-  let matched;
-  try {
-    matched = changesLib.matchSelection(summary, changes.mode, changes.paths);
-  } catch (err) {
-    return { ok: false, error: `cannot match the changes selection: ${(err && err.message) || err} (nothing was queued)` };
-  }
-  if (!matched || matched.ok !== true) {
-    return { ok: false, error: `${(matched && matched.error) || 'cannot match the changes selection'}; nothing was queued` };
-  }
-  return { ok: true };
 }
 
 // One side of the proof: what this process can actually observe at a path.
@@ -2237,13 +2082,13 @@ function warpCopyFilesSummary(files) {
   return { count, line: `${count} file${count === 1 ? '' : 's'}${detail}` };
 }
 // ---------------------------------------------------------------------------
-// The warp handoff (`worktree_warp` -> `/warp`).
+// The warp handoff (`/warp @<token>`).
 //
 // The host keeps session control on the extension COMMAND context: a tool's
 // context carries no `switchSession`, and awaiting `waitForIdle` from inside a
 // tool is a self-deadlock (the tool runs inside the turn it would wait for).
-// Tools therefore cannot move the session themselves. The one supported route
-// is the host's own documented one for this case (see the installed
+// No agent tool warps any more (S3), but the QUEUE still re-dispatches its own
+// validated handoff through the host's documented route (see the installed
 // `examples/extensions/reload-runtime.ts`): queue the extension COMMAND that
 // owns the privileged action with `pi.sendUserMessage(text, {
 // expandPromptTemplates: true })`. That dispatches the command immediately —
@@ -2266,7 +2111,8 @@ const WARP_HANDOFF_MAX_TOKEN = 2048;
 const WARP_HANDOFF_MAX_NAME = 200;
 
 // The host API captured at load: `sendUserMessage` is the only supported way
-// for a tool to reach a command context. Null until the extension loads.
+// to re-dispatch the queued `/warp` command from the queue's own timer. Null
+// until the extension loads.
 let warpHandoffPi = null;
 
 // The ONE token contract, shared by the encode and the decode side: a non-empty
@@ -2465,309 +2311,6 @@ function normalizeWarpHandoff(value) {
     return null;
   }
 }
-
-async function executeWorktreeWarpTool(params, ctx, opts) {
-  const options = opts || {};  // A tool never switches the session: it queues the handoff to the command
-  // that can (see `dispatchWarpHandoff`). A host with no route refuses before
-  // any read, so nothing is resolved, copied or claimed.
-  if (!warpHandoffPi || typeof warpHandoffPi.sendUserMessage !== "function") {
-    return errorResult(
-      "worktree warp is unavailable here: the host cannot dispatch the warp command",
-      { tool: "worktree_warp" },
-    );
-  }
-  const git = libRequire("worktree-git.js");
-  const registry = libRequire("worktree-registry.js");
-  const warpSessions = libRequire("worktree-warp-sessions.js");
-  const raw = params && typeof params.name === "string" ? params.name.trim() : "";
-  const fromCwd = toolCwd(ctx);
-  // S5: one pending warp per session. While one waits, a second request is
-  // REFUSED here — before anything is resolved, copied or queued — and the
-  // pending request is never disturbed: it is the move someone already asked
-  // for, and the refusal says where it stands.
-  const pendingGate = warpPendingGate(ctx, fromCwd, null);
-  if (pendingGate.pending) {
-    return errorResult(`worktree warp: ${warpPendingRefusalText(pendingGate.pending, raw)}`, {
-      tool: "worktree_warp", name: raw, pending: true,
-    });
-  }
-  // S21: the warp is interactive too, so its preflight reads are awaited.
-  const runAsync = libRunner(git);
-  let repo;
-  try {
-    repo = await git.repoIdentityAsync(fromCwd, { runAsync });
-  } catch (err) {
-    return errorResult(notGitRepositoryLine(fromCwd), { tool: "worktree_warp" });
-  }
-  const read = registry.readRegistry(repo.root);
-  if (!read.ok) {
-    return errorResult(`worktree warp: cannot read worktree registry: ${read.error}`, { tool: "worktree_warp" });
-  }
-  let live;
-  try {
-    live = await git.listWorktreesAsync(repo.root, { runAsync });
-  } catch (err) {
-    return errorResult(`worktree warp: cannot list worktrees: ${(err && err.message) || err}`, { tool: "worktree_warp" });
-  }
-  noteWarpDiscovery(repo.root, live);
-  const principal = principalForName(git, repo.root, repo, live);
-  // The refusal listing: every live selectable checkout as `<name> — <path>`,
-  // so the agent can pick without a human.
-  const availableCheckouts = () => {
-    try {
-      const offered = warpOfferedCheckouts(git, read, principal, live, repo.root);
-      const listed = offered.map((entry) => `${entry.name} — ${entry.path}`);
-      return listed.length > 0 ? listed.join(", ") : "(none)";
-    } catch {
-      return "(none)";
-    }
-  };
-  if (raw === "") {
-    return errorResult(
-      `worktree_warp needs a name: pass the worktree name or path; available checkouts: ${availableCheckouts()}`,
-      { tool: "worktree_warp" },
-    );
-  }
-  // Name first, then path — one candidate; unknown, foreign or ambiguous
-  // fails closed with the listing, exactly like the command's resolver plus
-  // the shared path leg.
-  let resolved = resolveCheckoutByName(raw, git, read, principal, live, repo.root, { allowUnregistered: true });
-  if (!resolved.ok) {
-    const pathEntry = resolveClosePathEntry(raw, git, read, live, repo.root);
-    if (pathEntry) {
-      const entrySlug = slugOf(git, pathEntry.branch);
-      resolved = {
-        ok: true, kind: "agent", name: entrySlug !== null ? entrySlug : raw,
-        path: pathEntry.path, branch: pathEntry.branch, entry: pathEntry,
-      };
-    } else {
-      // A live checkout of this repository reached by path — including one
-      // the registry does not own (the warp's lone-unregistered rule) — is
-      // not foreign; anything else keeps the name refusal with the listing.
-      let byPath = null;
-      try {
-        const st = checkoutState(raw, repo.root);
-        const id = st.real !== null ? st.real : st.absolute;
-        if (st.absolute !== null && st.exists && st.isDirectory && id !== null && liveIdentities(live, repo.root).has(id)) {
-          let isPrincipal = false;
-          try {
-            if (principal && typeof principal.path === "string" && principal.path.length > 0) {
-              const pst = checkoutState(principal.path, repo.root);
-              const pid = pst.real !== null ? pst.real : pst.absolute;
-              isPrincipal = pid !== null && pid === id;
-            }
-          } catch {
-            isPrincipal = false;
-          }
-          if (isPrincipal) {
-            byPath = { ok: true, kind: "principal", name: "principal", path: principal.path, branch: principal.branch, entry: null };
-          } else {
-            let liveBranch = null;
-            for (const entry of live) {
-              if (!entry || typeof entry.path !== "string" || entry.path.length === 0) continue;
-              const est = checkoutState(entry.path, repo.root);
-              const eid = est.real !== null ? est.real : est.absolute;
-              if (eid !== null && eid === id && typeof entry.branch === "string" && entry.branch.length > 0) { liveBranch = entry.branch; break; }
-            }
-            const rows = read && Array.isArray(read.worktrees) ? read.worktrees : [];
-            const claimants = rows.filter((row) => {
-              try {
-                if (!row || typeof row.path !== "string" || !path.isAbsolute(row.path)) return false;
-                const rst = checkoutState(row.path, repo.root);
-                const rid = rst.real !== null ? rst.real : rst.absolute;
-                return rid !== null && rid === id;
-              } catch {
-                return false;
-              }
-            });
-            if (claimants.length <= 1) {
-              const branch = liveBranch || (claimants.length === 1 ? claimants[0].branch : null);
-              if (typeof branch === "string" && branch.length > 0) {
-                const slug = slugOf(git, branch);
-                byPath = {
-                  ok: true, kind: claimants.length === 1 ? "agent" : "unregistered",
-                  name: slug !== null ? slug : raw, path: id, branch,
-                  entry: claimants.length === 1 ? claimants[0] : null,
-                };
-              }
-            }
-          }
-        }
-      } catch {
-        byPath = null;
-      }
-      if (byPath) {
-        resolved = byPath;
-      } else {
-        return errorResult(
-          `worktree warp: ${resolved.error}; available checkouts: ${availableCheckouts()}`,
-          { tool: "worktree_warp", name: raw, candidates: resolved.candidates },
-        );
-      }
-    }
-  }
-  // S39 fail-closed: the target must exist as a directory AND still be a
-  // checkout of this repository in git's listing — no fork, no notice, no
-  // record write when it is missing or foreign.
-  const targetState = checkoutState(resolved.path, repo.root);
-  const targetCwd = targetState.real !== null ? targetState.real
-    : targetState.absolute !== null ? targetState.absolute
-    : path.resolve(resolved.path);
-  if (!targetState.exists || !targetState.isDirectory || !liveIdentities(live, repo.root).has(targetCwd)) {
-    return errorResult(
-      `worktree warp: no live checkout for "${raw}" at ${targetCwd}: the path is missing or is not a checkout of this repository; available checkouts: ${availableCheckouts()}`,
-      { tool: "worktree_warp", name: raw },
-    );
-  }
-  // S39 current branch: the registry row keeps the branch recorded at
-  // creation time, so the warp shows the checkout's CURRENT branch from git.
-  const liveBranch = (registryClaimCounts(read.worktrees, repo.root).get(targetCwd) || 0) <= 1
-    ? warpLiveBranchFor(targetCwd, live, repo.root)
-    : null;
-  let displayName = resolved.name;
-  let displayBranch = resolved.branch;
-  if (typeof liveBranch === "string" && liveBranch.length > 0) {
-    displayBranch = liveBranch;
-    if (resolved.kind !== "principal") {
-      const liveSlug = slugOf(git, liveBranch);
-      if (liveSlug !== null) displayName = liveSlug;
-    }
-  }
-  // Already there: the deepest live checkout containing the session, the
-  // rule the listing already uses. No fork, no switch, no message.
-  const sessionId = warpSessionIdentity(fromCwd, repo.root);
-  const sessionCheckout = warpDeepestContaining(sessionId, [targetCwd, ...warpLiveIdentities(live, repo.root)]);
-  if (sessionCheckout !== null && sessionCheckout === targetCwd) {
-    return textResult(
-      `worktree warp: ${raw} (already there)`,
-      { tool: "worktree_warp", name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: true, cancelled: false },
-      false,
-    );
-  }
-  // S61: the tool's `changes` option (named changes, never copy):
-  // omitted/empty [] or "" copies nothing, "all" copies every pending
-  // change, a list of files copies only those. The selection is VALIDATED here
-  // and carried in the handoff token; the copy itself runs inside the command,
-  // at move time, after its refusal checks (see `warpHandoffCopyChanges`) — a
-  // copy made here would land in a checkout the command can still refuse, and
-  // the retry would then fail on its own stranded copy. No human selector in
-  // the tool: the selection copies working-tree changes only (the source is
-  // retained, the destination index preserved) through the same
-  // lib/worktree-changes.js transfer the command uses.
-  const toolChangesGate = warpToolChangesSelection(params);
-  if (toolChangesGate && toolChangesGate.isError) return toolChangesGate.result;
-  const toolChanges = toolChangesGate && toolChangesGate.selection
-    ? toolChangesGate.selection
-    : { mode: "none", paths: [] };
-  // A selection that names no pending file is refused HERE: the command could
-  // only refuse it later, and queueing a request that is already known to fail
-  // is the same false "handoff queued" the token cap produced.
-  const toolSelectionCheck = await warpHandoffSelectionCheck({
-    git, fromCheckout: sessionCheckout || fromCwd, changes: toolChanges,
-  });
-  if (toolSelectionCheck && toolSelectionCheck.ok !== true) {
-    return errorResult(`worktree warp: ${toolSelectionCheck.error}`, { tool: "worktree_warp" });
-  }
-  // The host keeps session control on the COMMAND context, so this tool never
-  // moves the session itself: it resolves and validates the request and then
-  // HANDS THE MOVE to the one verb that can perform it
-  // (`/warp`, see `dispatchWarpHandoff`). The switch therefore
-  // happens only AFTER this turn settles — the command handler waits for idle
-  // first — so no message, tool result or pending change is torn mid-turn.
-  //
-  // The handoff is PREPARED before it is queued: the token is encoded, bounded
-  // and round-tripped through the command's own decoder, so "handoff queued" is
-  // only ever claimed for a request the command will accept. A refusal here
-  // queues nothing and touches no checkout.
-  //
-  // What this tool may claim: the handoff is QUEUED, never completed. The
-  // first line says so, and the details carry no completed-move row (no
-  // `fromName`/`name`/`path`/`branch`), so the card falls back to that line
-  // instead of painting a move that has not happened. The one visible "moved"
-  // card comes from the switched-to session once the move is real.
-  // S5/S9: this session's own workloads no longer refuse the handoff — the
-  // request is QUEUED exactly as it is when idle, and the command's pending warp
-  // performs the move once no agent task and no background job is running. What
-  // this tool reports is always the QUEUE, never a move: the idle wording is
-  // byte-identical to before, a busy session gets the waiting line naming both
-  // workloads, and the `queue:` line appears only when the job state could not
-  // be read at all.
-  const toolActivity = await warpSessionActivity(ctx);
-  const toolBusy = !!(toolActivity && toolActivity.busy === true);
-  const preparedToolHandoff = prepareWarpHandoff({
-    name: displayName,
-    target: targetCwd,
-    from: fromCwd,
-    branch: displayBranch,
-    changes: toolChanges,
-  });
-  if (!preparedToolHandoff.ok) {
-    return errorResult(
-      `worktree warp: ${preparedToolHandoff.error}`,
-      { tool: "worktree_warp", name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: false, cancelled: false },
-    );
-  }
-  // S6: the request becomes this session's ONE pending warp at QUEUE time, not
-  // when the command finally runs, so a second `worktree_warp` in the same turn
-  // meets the gate above instead of queueing another handoff. The record is
-  // created only after every validation above passed, so a request refused for
-  // another reason queues nothing, and every terminal outcome on the command
-  // front (moved, refused, cancelled, expired, shutdown) clears this same record.
-  const toolQueue = warpQueuePending({ ctx, fromCwd, name: displayName, prepared: preparedToolHandoff });
-  if (!toolQueue.ok && toolQueue.pending) {
-    return errorResult(`worktree warp: ${warpPendingRefusalText(toolQueue.pending, raw)}`, {
-      tool: "worktree_warp", name: raw, pending: true,
-    });
-  }
-  const handoffDispatched = dispatchWarpHandoff(preparedToolHandoff);
-  if (!handoffDispatched.ok) {
-    // Nothing was handed off, so nothing may stay pending.
-    if (toolQueue.ok && toolQueue.pending) warpSettlePending(toolQueue.pending.key);
-    return errorResult(
-      `worktree warp: ${handoffDispatched.error}`,
-      { tool: "worktree_warp", name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: false, cancelled: false },
-    );
-  }
-  if (toolQueue.ok && toolQueue.pending) warpMarkDispatched(toolQueue.pending.key);
-  const changesNote = toolChanges.mode === "all"
-    ? "\nchanges: all (copied when the move lands)"
-    : toolChanges.mode === "paths"
-      ? `\nchanges: ${toolChanges.paths.length} file${toolChanges.paths.length === 1 ? "" : "s"} (copied when the move lands)`
-      : "";
-  const jobsNote = toolBusy ? warpJobsUnknownText(toolActivity) : "";
-  const pendingText = [
-    toolBusy
-      ? `worktree warp: ${warpQueuedText(toolActivity)}`
-      : "worktree warp: handoff queued — the session moves when this turn ends",
-    `to: ${warpClean(displayName, "worktree")}`,
-    `path: ${warpClean(targetCwd, "(unknown checkout)")}`,
-    `branch: ${warpClean(displayBranch, "(detached)")}${changesNote}`,
-    ...(jobsNote.length > 0 ? [`queue: ${jobsNote}`] : []),
-  ].join("\n");
-  return textResult(
-    pendingText,
-    {
-      tool: "worktree_warp", handoff: true, pending: true,
-      pendingName: displayName, pendingPath: targetCwd, pendingBranch: displayBranch,
-      from: fromCwd, target: targetCwd, kind: resolved.kind,
-      ...(toolBusy ? { busy: true, queued: true } : {}),
-    },
-    false,
-  );
-}
-
-const worktreeWarpTool = withWorktreeCardRenderer(defineTool({
-  name: "worktree_warp",
-  label: "Worktree Warp",
-  description: "Move this session to another checkout of the project and continue the task there: pass the worktree name or path (no selector). Resumes the checkout's session when it holds the same content, otherwise forks one, then continues working in the new checkout.",
-  parameters: Type.Object({
-    name: Type.String({ description: "Name of the checkout to move to (the flattened branch slug, or principal), or its path" }),
-    changes: opt(unionSchema([Type.String(), Type.Array(Type.String())], { description: "Pending changes to copy into the destination checkout: omit or pass \"\" or [] for no copy, \"all\" for everything, or a list of files for selected changes only" })),
-  }),
-  async execute(toolCallId, params, signal, onUpdate, ctx) {
-    return executeWorktreeWarpTool(params, ctx);
-  },
-}));
 
 // ---------------------------------------------------------------------------
 // Session auto-naming from ODD writes (S1 as narrowed by D7).
@@ -3077,10 +2620,10 @@ function handleWorktreeOddEvent(event, ctx, pi, allowPhaseTrigger) {
 //
 // The platform keeps session control (`waitForIdle`/`switchSession`) on
 // the extension COMMAND context, and that is exactly why the warp is a
-// command verb. The agent's `worktree_warp` tool cannot call either, so it
-// queues THIS command through `pi.sendUserMessage(..., {
+// command verb. Nothing else can call either, so the queue re-dispatches THIS
+// command through `pi.sendUserMessage(..., {
 // expandPromptTemplates: true })` (S14, `dispatchWarpHandoff`): one
-// implementation of the move, reached by two front doors. The name is
+// implementation of the move, queued by the same verb that performs it. The name is
 // the flattened branch slug S24 prints (or `principal`), resolved through
 // the SAME `resolveCheckoutByName` the close-by-name path uses — one
 // place, never two.
@@ -3178,13 +2721,9 @@ async function warpSessionActivityById(sessionId, host) {
   }
 }
 
-function warpSessionActivity(ctx) {
-  return warpSessionActivityById(closeSessionString(ctx, "getSessionId"), warpJobHost(ctx));
-}
-
 // S5: the queue texts come from the module that produced the counters, so the
-// tool result, the command notice and the expiry notice cannot drift apart. A
-// missing module falls back to the same sentences.
+// command notice and the expiry notice cannot drift apart. A missing module
+// falls back to the same sentences.
 function warpQueuedText(activity) {
   try {
     const lib = libRequire("worktree-warp-busy.js");
@@ -3319,19 +2858,6 @@ function warpResumePending(key) {
     if (lib && typeof lib.resumePendingWarp === "function") lib.resumePendingWarp(key);
   } catch {
     // The dispatched retry settles or expires on its own.
-  }
-}
-
-// The tool front already handed its request to the command: the record it just
-// created only has to refuse a second warp and wait for that dispatch to settle
-// (or expire), never to send a second copy of the same handoff.
-function warpMarkDispatched(key) {
-  if (typeof key !== "string" || key.length === 0) return;
-  try {
-    const lib = libRequire("worktree-warp-busy.js");
-    if (lib && typeof lib.markPendingWarpDispatched === "function") lib.markPendingWarpDispatched(key);
-  } catch {
-    // Without the module the queue does not exist, so there is nothing to mark.
   }
 }
 
@@ -3742,7 +3268,7 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
   const options = opts || {};
   const git = libRequire("worktree-git.js");
   const registry = libRequire("worktree-registry.js");
-  // A handoff (queued by the `worktree_warp` tool) names the checkout it
+  // A handoff (queued by this session's own pending warp) names the checkout it
   // resolved, so this invocation never re-picks a destination: it re-checks
   // that the very same live checkout is still the one the name resolves to
   // and refuses otherwise. An ordinary invocation (a human typing
@@ -3882,7 +3408,7 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
   // same rule the already-there check uses); outside every checkout the
   // session cwd itself is summarized.
   //
-  // A HANDOFF never asks: its caller (`worktree_warp`) already validated the
+  // A HANDOFF never asks: the queue already validated the
   // requested selection and an interactive picker fired from a queued command
   // would block the move on a prompt nobody asked for. It carries the selection
   // in its token instead, and the copy happens HERE — after every refusal check
@@ -5397,7 +4923,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     }
   }
 
-  // S7/S8/S9: the SAME active-session guard `worktree_delete` runs, and it runs
+  // S7/S8/S9: the SAME active-session guard the close runs, and it runs
   // BEFORE anything reads the pending changes or builds the deletion question.
   // A keypress may never turn into a confirmation dialog for a checkout a live
   // Pi session is working in: the human is told to finish/warp that session
@@ -5456,7 +4982,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
   // realpath comparison cannot see. An unreadable pair is a REFUSAL: without it
   // the removal cannot say which directory it is about to destroy.
   if (typeof before.identity.dev !== "number" || typeof before.identity.ino !== "number") {
-    notify?.(`warp: refusing to delete ${target.path}: the identity of its directory could not be read, so a path replaced by another directory could not be told apart; nothing was removed — retry, or close it with the worktree_delete tool.`, "error");
+    notify?.(`warp: refusing to delete ${target.path}: the identity of its directory could not be read, so a path replaced by another directory could not be told apart; nothing was removed — retry.`, "error");
     return;
   }
   const approvedPin = { real: approvedReal, dev: before.identity.dev, ino: before.identity.ino };
@@ -5472,7 +4998,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     const reason = changes && typeof changes.reason === "string" && changes.reason.length > 0
       ? changes.reason
       : "the change summary failed";
-    notify?.(`warp: refusing to delete ${target.path}: its uncommitted changes could not be read (${reason}), so nothing can say what would be lost; nothing was removed — retry, or close it with the worktree_delete tool.`, "error");
+    notify?.(`warp: refusing to delete ${target.path}: its uncommitted changes could not be read (${reason}), so nothing can say what would be lost; nothing was removed — retry.`, "error");
     return;
   }
   const content = evidence.content && typeof evidence.content === "object" ? evidence.content : null;
@@ -5480,7 +5006,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     const reason = content && typeof content.reason === "string" && content.reason.length > 0
       ? content.reason
       : "the pending content could not be fingerprinted";
-    notify?.(`warp: refusing to delete ${target.path}: what is pending in it could not be fingerprinted (${reason}), so an identical +/- count could hide different work; nothing was removed — retry, or close it with the worktree_delete tool.`, "error");
+    notify?.(`warp: refusing to delete ${target.path}: what is pending in it could not be fingerprinted (${reason}), so an identical +/- count could hide different work; nothing was removed — retry.`, "error");
     return;
   }
   const ignored = evidence.ignored && typeof evidence.ignored === "object" ? evidence.ignored : null;
@@ -5488,7 +5014,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     const reason = ignored && typeof ignored.reason === "string" && ignored.reason.length > 0
       ? ignored.reason
       : "the ignored-file listing failed";
-    notify?.(`warp: refusing to delete ${target.path}: the files git ignores there could not be listed (${reason}), so the removal could destroy work nobody was shown; nothing was removed — retry, or close it with the worktree_delete tool.`, "error");
+    notify?.(`warp: refusing to delete ${target.path}: the files git ignores there could not be listed (${reason}), so the removal could destroy work nobody was shown; nothing was removed — retry.`, "error");
     return;
   }
 
@@ -5548,6 +5074,20 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     return;
   }
   notify?.(`worktree deleted: ${target.name} · ${target.path}; the branch '${target.branch}' is kept.`, "info");
+  const caveats = result && result.details && Array.isArray(result.details.warnings)
+    ? result.details.warnings
+    : [];
+  for (const caveat of caveats) {
+    if (typeof caveat !== "string" || caveat.length === 0) continue;
+    notify?.(caveat, "warning");
+  }
+  // S7/S8/S9 as they reach the HUMAN: the shared close publishes the
+  // active-session guard's caveats in `details.warnings` — a stale presence
+  // record, a session it could not attribute, a truncated scan — and this panel
+  // is the only surface that removes a checkout now, so here is where that
+  // evidence is disclosed (AGENTS.md invariant 4: disclosed, never silently
+  // dropped). The guard's own strings are passed through verbatim; one notice
+  // per caveat, and none of them changes the fact that the removal happened.
 }
 
 // The EXACT checkout a deletion names, read on both sides of the question.
@@ -6004,7 +5544,7 @@ function registerWarpCommand(pi) {
         notify?.(`worktree warp: ${warpPendingRefusalText(earlyGate.pending, raw)}`, "error");
         return;
       }
-      // An agent handoff (queued by the `worktree_warp` tool) travels as ONE
+      // A handoff (this session's own queued warp) travels as ONE
       // `@<token>` argument. It is decoded and re-validated here; a rejected
       // token changes nothing and names no part of what it carried. Everything
       // after this point is the ordinary warpath: the same resolver, the same
@@ -6983,9 +6523,8 @@ function registerIssuesCommand(pi) {
 }
 
 export default function (pi) {
-  // A TOOL context has no session control, so `worktree_warp` queues the
-  // `/warp` COMMAND through this handle (`sendUserMessage` with
-  // prompt-template expansion) — the host-supported way in from a tool.
+  // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
+  // moves the session, so the command is where a handoff waits and lands.
   warpHandoffPi = pi;
   registerWarpMessageRenderer(pi);
   registerWarpCommand(pi);
@@ -6993,8 +6532,6 @@ export default function (pi) {
   registerIssuesCommand(pi);
   pi.registerTool(worktreeCreateTool);
   pi.registerTool(worktreeListTool);
-  pi.registerTool(worktreeCloseTool);
-  pi.registerTool(worktreeWarpTool);
   if (typeof pi?.on !== "function") return;
   // The card click seam's session lifecycle: remember the live UI on every
   // session start and drop it on shutdown, so no render path ever reaches a
@@ -7058,4 +6595,4 @@ export default function (pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, executeWorktreeWarpTool, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable };

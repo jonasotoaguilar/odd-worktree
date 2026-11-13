@@ -1,9 +1,10 @@
 'use strict';
 // S4 commands: `/warp` and `/odd-list` are driven here through the registered
 // handlers. `/issues` has its own suite (tools/issues-command.test.js), where
-// the `gh` runner is injected. The warp case also proves the agent route end to
-// end: `worktree_warp` queues the move as `/warp @<token>` and that exact
-// argument is the handoff the command decodes.
+// the `gh` runner is injected. The warp case also proves the handoff route end
+// to end: `/warp @<token>` is decoded as the queued move it carries instead of
+// being read as a checkout name. (T6/S3: `worktree_warp` is not registered, so
+// the token is built the way the queue builds it.)
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -31,7 +32,6 @@ after(() => {
 });
 
 const HOOK_BIN = path.resolve(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-cmd-hookbin-'))));
-fs.writeFileSync(path.join(HOOK_BIN, 'codegraph'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
 const NO_HERDR = path.join(os.tmpdir(), 'odd-worktree-no-such-herdr-binary');
 
 function git(cwd, args) {
@@ -168,7 +168,7 @@ describe('/warp', () => {
     ]);
   });
 
-  test('the agent tool queues the move as the /warp handoff the command reads', async () => {
+  test('the /warp @<token> handoff is decoded as a move, not read as a name', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
     const created = await tools.get('worktree_create').execute(
@@ -179,21 +179,17 @@ describe('/warp', () => {
       ctx,
     );
     assert.notEqual(created.isError, true, resultText(created));
+    const target = created.details.path;
 
-    host.sent.length = 0;
-    const queued = await tools.get('worktree_warp').execute(
-      'call-2',
-      { name: 'feat-warp-me' },
-      undefined,
-      undefined,
-      ctx,
-    );
-    assert.notEqual(queued.isError, true, resultText(queued));
-    assert.match(resultText(queued), /^worktree warp: handoff queued/);
-    assert.equal(host.sent.length, 1);
-    const [message, options] = host.sent[0];
-    assert.deepEqual(options, { expandPromptTemplates: true });
-    assert.ok(message.startsWith('/warp @'), `the queued command is /warp (${message})`);
+    // The token the queue re-dispatches: one base64url argument carrying the
+    // move it validated (lib/../extensions `prepareWarpHandoff`).
+    const message = `/warp @${Buffer.from(JSON.stringify({
+      v: 1,
+      name: 'feat-warp-me',
+      target,
+      from: fs.realpathSync(repo),
+      branch: 'feat/warp-me',
+    }), 'utf8').toString('base64url')}`;
 
     // The command accepts exactly that argument: the handoff is decoded (the
     // session-control refusal is the NEXT gate, so nothing about the token is

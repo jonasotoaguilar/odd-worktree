@@ -1,7 +1,9 @@
 'use strict';
-// S6/T9b: `worktree_delete` removes a checkout with `git worktree remove` and
-// NOTHING else. The module is `lib/worktree-remove.js`, so the suite is named
-// after the removal it covers.
+// S6/T9b: a removal uses `git worktree remove` and NOTHING else. The module is
+// `lib/worktree-remove.js`, so the suite is named after the removal it covers;
+// the cases below drive the extension's own close (the seam the warp panel's
+// ctrl+d calls — the `worktree_delete` tool that used to wrap it is unregistered,
+// T6/S4).
 //
 // What is pinned here, with teeth:
 //   - the removal argv is git's, fixed, absolute, with `--force` only when the
@@ -21,7 +23,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { loadExtension } = require('./fixtures/load-extension.js');
+const { pathToFileURL } = require('node:url');
+const { LIB_DIR, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
 
 const lib = require('../lib/worktree-remove.js');
 
@@ -106,6 +109,7 @@ describe('a real close removes with git alone', () => {
   const AGENT_HOME = track(fs.mkdtempSync(path.join(os.tmpdir(), 'wt-remove-agent-home-')));
 
   let tools;
+  let mod;
   before(async () => {
     delete process.env.GENTLE_PI_AGENT_HOME;
     process.env.PI_CODING_AGENT_DIR = AGENT_HOME;
@@ -115,7 +119,23 @@ describe('a real close removes with git alone', () => {
     process.env.LC_ALL = 'C';
     process.env.LANG = 'C';
     ({ tools } = await loadExtension({}));
+    mod = await loadStubbedModule();
   });
+
+  // The removal the panel's ctrl+d drives is an exported seam of the extension
+  // module, not a registered tool (T6/S4), so this file keeps that namespace
+  // beside the registrations: same stubs, same lib override, same copy.
+  async function loadStubbedModule() {
+    process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-remove-mod-'));
+    try {
+      const copy = path.join(dir, 'odd-worktree-tools.mjs');
+      fs.writeFileSync(copy, stubbedSource());
+      return await import(pathToFileURL(copy).href);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
 
   after(() => {
     for (const key of Object.keys(process.env)) {
@@ -203,7 +223,7 @@ describe('a real close removes with git alone', () => {
     const recorder = recordChildren();
     let closed;
     try {
-      closed = await tools.get('worktree_delete').execute('remove-1', { name: 'feat-doomed' }, undefined, undefined, makeCtx(repo));
+      closed = await mod.executeWorktreeClose({ name: 'feat-doomed' }, makeCtx(repo));
     } finally {
       recorder.restore();
     }
@@ -245,7 +265,7 @@ describe('a real close removes with git alone', () => {
       return original(bin, argv, options);
     };
     try {
-      const closing = tools.get('worktree_delete').execute('remove-2', { name: 'feat-slow' }, undefined, undefined, makeCtx(repo));
+      const closing = mod.executeWorktreeClose({ name: 'feat-slow' }, makeCtx(repo));
       // Yield once so the close reaches the remover before the assertion below.
       await new Promise((resolve) => setTimeout(resolve, 5));
       assert.ok(fs.existsSync(target), 'the await means the checkout survives until git answers');
@@ -269,7 +289,7 @@ describe('a real close removes with git alone', () => {
     const recorder = recordChildren();
     let refused;
     try {
-      refused = await tools.get('worktree_delete').execute('remove-3', { name: 'feat-dirty' }, undefined, undefined, makeCtx(repo));
+      refused = await mod.executeWorktreeClose({ name: 'feat-dirty' }, makeCtx(repo));
     } finally {
       recorder.restore();
     }

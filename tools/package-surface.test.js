@@ -1,7 +1,10 @@
 'use strict';
 // S2/S4 surface: the standalone package always registers /warp, /odd-list and
-// /issues plus the four agent worktree tools, loads in plain Pi with git as its
-// only external dependency, and ships none of the removed functionality
+// /issues plus the TWO agent worktree tools (S3/S4: `worktree_delete` and
+// `worktree_warp` are not registered, so `/warp` is the only front that moves
+// the session and the panel's ctrl+d the only one that removes a checkout),
+// loads in plain Pi with git as its only external dependency, and ships none of
+// the removed functionality
 // (customize panel, plugin-tools toggles, worktree mode file, perf tracing,
 // CodeGraph commands or a CodeGraph gate).
 // The issues reader, preview formatter and view are the migrated T2 units and
@@ -67,12 +70,12 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd-list, /issues and the four worktree tools', async () => {
+  test('registers /warp, /odd-list, /issues and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
     assert.deepEqual(registered, ['issues', 'odd-list', 'warp'], 'the command list is exactly the three panels');
-    assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_delete', 'worktree_list', 'worktree_warp']);
+    assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
 
@@ -84,17 +87,20 @@ describe('registration', () => {
     };
     assert.deepEqual(summary('worktree_create'), { name: 'worktree_create', label: 'Worktree Create' });
     assert.deepEqual(summary('worktree_list'), { name: 'worktree_list', label: 'Worktree List' });
-    assert.deepEqual(summary('worktree_delete'), { name: 'worktree_delete', label: 'Worktree Delete' });
-    assert.deepEqual(summary('worktree_warp'), { name: 'worktree_warp', label: 'Worktree Warp' });
   });
 
-  test('the delete help text names the active-session refusal and no Herdr workspace', async () => {
+  // S3/S4: neither removal nor warp is an agent surface any more, so nothing the
+  // model can call names them. The guard they both used still refuses a live
+  // session (tools/worktree-tools.test.js), and the panel still discloses its
+  // caveats (tools/warp-delete-confirm.test.js) — those are the surviving checks.
+  test('no tool deletes a checkout or moves the session', async () => {
     const { tools } = await loadExtension({});
-    const description = tools.get('worktree_delete').description;
-    assert.match(description, /live Pi session working in that checkout/);
-    assert.match(description, /warp to another checkout first/i);
-    assert.match(description, /git/);
-    assert.equal(/herdr/i.test(description), false, 'no Herdr workspace removal is promised');
+    assert.equal(tools.has('worktree_delete'), false, 'no delete tool is registered');
+    assert.equal(tools.has('worktree_warp'), false, 'no warp tool is registered');
+    const source = stubbedSource();
+    assert.equal(/registerTool\(worktreeCloseTool\)/.test(source), false, 'the close tool stays unregistered');
+    assert.equal(/registerTool\(worktreeWarpTool\)/.test(source), false, 'the warp tool stays unregistered');
+    assert.equal(/herdr/i.test(source), false, 'no Herdr workspace removal is promised anywhere');
   });
 });
 

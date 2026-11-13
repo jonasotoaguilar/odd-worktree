@@ -88,9 +88,10 @@ as commands, and the two `worktree_*` tools are offered to the agent.
      the base.
    - The answer and the list both print the ODD; a list row for a record written
      before the field existed prints `odd: -`.
-   - `copy_changes: true` carries this clone's uncommitted work — staged,
-     unstaged and untracked non-ignored files — into the new checkout, and leaves
-     it in the main checkout too.
+   - `copy_changes: true` carries the uncommitted work of the checkout the call
+     was made from — the one the session stands in, not necessarily the main
+     checkout — into the new checkout: staged, unstaged and untracked
+     non-ignored files. The source checkout keeps those changes.
    - **A create is instant.** The checkout, its registry row, its record, the
      session registration and the preparation hooks (submodules, local inputs,
      `copy_changes`, build-cache and asset links) settle before the answer. The
@@ -310,8 +311,11 @@ Nothing is written to user configuration, and there is no second worktree file.
 ### The `## ODD worktrees` block in the system prompt
 
 The primary session's system prompt gains a short section telling the agent where
-worktrees live, to resume an ODD in its assigned one, and that deleting a
-checkout and moving the session are the human's actions, taken from `/warp`.
+a worktree lives and that the directory is the ODD it serves, that an ODD with an
+existing assignment is resumed instead of duplicated, to carry pending work that
+belongs to it with `copy_changes`, and that after the merge the branch is kept and
+the checkout removed unless a live session stands in it. Moving the session stays
+the human's.
 
 It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other

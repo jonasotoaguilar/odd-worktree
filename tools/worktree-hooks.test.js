@@ -131,6 +131,9 @@ function hooksFixture(t, options = {}) {
 			};
 			const input = {
 				mainRoot: main,
+				// The checkout whose uncommitted delta a copy reads is the one the caller
+				// stands in, so the fixture names it explicitly and defaults to main.
+				changesRoot: runOptions.changesRoot ?? main,
 				path: runOptions.path ?? worktree,
 				odd: 'worktree-tools',
 				copyChanges: runOptions.copyChanges === true,
@@ -508,7 +511,7 @@ test('S18: true copies the staged, unstaged and untracked changes and counts fil
 		status: 'applied',
 		copyChanges: { copied: 3, failed: [] },
 	});
-	assert.equal(worktreeCopyChangesLine(run.results), 'copy_changes: 3 changes copied (main keeps its uncommitted changes)');
+	assert.equal(worktreeCopyChangesLine(run.results), 'copy_changes: 3 changes copied');
 	assert.equal(run.summary, 'hooks: 1 applied, 11 skipped', 'the step is part of the one hooks summary');
 	assert.ok(
 		run.gitCalls.some((call) => call.cwd === fixture.main && call.args.join(' ') === 'diff --name-only --no-renames -z HEAD'),
@@ -524,6 +527,40 @@ test('S18: true copies the staged, unstaged and untracked changes and counts fil
 	);
 });
 
+test('S18: the delta is read from the asking checkout, never from main', async (t) => {
+	const fixture = hooksFixture(t, { tracked: { 'shared.txt': 'base\n' }, files: { 'main-only.txt': 'main\n' } });
+	fixture.git(fixture.main, ['worktree', 'add', '-b', 'feat/destination', join(fixture.fixture, 'repo-worktrees', 'destination')]);
+	const destination = realpathSync(join(fixture.fixture, 'repo-worktrees', 'destination'));
+	writeFileSync(join(fixture.worktree, 'asking-only.txt'), 'asking\n');
+	writeFileSync(join(fixture.worktree, 'shared.txt'), 'asking edit\n');
+
+	const run = await fixture.run({
+		copyChanges: true,
+		changesRoot: fixture.worktree,
+		path: destination,
+		hooks: [copyChangesHook],
+	});
+
+	assert.equal(readFileSync(join(destination, 'asking-only.txt'), 'utf8'), 'asking\n', "the asking checkout's untracked file travels");
+	assert.equal(readFileSync(join(destination, 'shared.txt'), 'utf8'), 'asking edit\n', "the asking checkout's edit travels");
+	assert.equal(existsSync(join(destination, 'main-only.txt')), false, "main's uncommitted file stays behind");
+	assert.deepEqual(run.results, [{ name: 'copy_changes', status: 'applied', copyChanges: { copied: 2, failed: [] } }]);
+	assert.equal(readFileSync(join(fixture.worktree, 'asking-only.txt'), 'utf8'), 'asking\n', 'the asking checkout keeps its own change');
+	assert.equal(readFileSync(join(fixture.main, 'main-only.txt'), 'utf8'), 'main\n', 'main keeps its own change');
+	assert.ok(
+		run.gitCalls.some((call) => call.cwd === fixture.worktree && call.args.join(' ') === 'diff --name-only --no-renames -z HEAD'),
+		'the changed paths are read in the asking checkout',
+	);
+	assert.ok(
+		run.gitCalls.some((call) => call.cwd === fixture.worktree && call.args[0] === 'diff' && call.args.includes('--binary')),
+		'the patch is read in the asking checkout',
+	);
+	assert.ok(
+		run.gitCalls.some((call) => call.cwd === destination && call.args[0] === 'apply'),
+		'the patch still lands in the new worktree',
+	);
+});
+
 test("S18: a staged rename copies its deletion and its addition", async (t) => {
 	const fixture = hooksFixture(t, { tracked: { 'old.txt': 'content\n' } });
 	fixture.git(fixture.main, ['mv', 'old.txt', 'new.txt']);
@@ -532,7 +569,7 @@ test("S18: a staged rename copies its deletion and its addition", async (t) => {
 	assert.equal(existsSync(join(fixture.worktree, 'old.txt')), false, "the rename's deletion reaches the worktree");
 	assert.equal(readFileSync(join(fixture.worktree, 'new.txt'), 'utf8'), 'content\n', "the rename's addition reaches the worktree");
 	assert.deepEqual(run.results, [{ name: 'copy_changes', status: 'applied', copyChanges: { copied: 2, failed: [] } }]);
-	assert.equal(worktreeCopyChangesLine(run.results), 'copy_changes: 2 changes copied (main keeps its uncommitted changes)');
+	assert.equal(worktreeCopyChangesLine(run.results), 'copy_changes: 2 changes copied');
 });
 
 test('S18: an omitted or false copy_changes copies nothing and prints nothing', async (t) => {
@@ -582,7 +619,7 @@ test('S18: a conflicting change reports its paths and leaves the worktree clean'
 	]);
 	assert.equal(
 		worktreeCopyChangesLine(run.results),
-		'copy_changes: 1 changes copied (main keeps its uncommitted changes); failed: conflict.txt',
+		'copy_changes: 1 changes copied; failed: conflict.txt',
 	);
 	assert.equal(run.summary, 'hooks: 1 failed: copy_changes (could not copy: conflict.txt)');
 	assert.equal(readFileSync(join(fixture.worktree, 'conflict.txt'), 'utf8'), 'branch\n', "the conflicted path keeps the branch's content");

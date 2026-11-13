@@ -373,6 +373,51 @@ describe('worktree_create', () => {
     assert.equal(resultText(result), 'branch main is the base branch; pick the branch this worktree should work on');
     assert.deepEqual({ paths: listWorktreePaths(repo), branches: branches(repo) }, before);
   });
+
+  test('copy_changes carries the principal checkout\u2019s uncommitted changes when the call is made there', async () => {
+    const repo = makeRepo();
+    fs.writeFileSync(path.join(repo, 'pending.txt'), 'pending\n');
+    const { ctx } = makeCtx(repo);
+    const result = await tools.get('worktree_create').execute(
+      'call-copy-principal',
+      { branch: 'feat/copy-principal', odd: 'copy-principal', copy_changes: true },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.notEqual(result.isError, true, resultText(result));
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'copy-principal');
+    assert.equal(fs.readFileSync(path.join(target, 'pending.txt'), 'utf8'), 'pending\n', 'the principal\u2019s uncommitted file travelled');
+    assert.match(resultText(result), /^copy_changes: 1 changes copied$/m);
+    assert.equal(fs.readFileSync(path.join(repo, 'pending.txt'), 'utf8'), 'pending\n', 'the source checkout keeps its change');
+  });
+
+  test('copy_changes carries the calling checkout\u2019s changes and never the principal\u2019s', async () => {
+    const repo = makeRepo();
+    const calling = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'calling');
+    fs.mkdirSync(path.dirname(calling), { recursive: true });
+    git(repo, ['worktree', 'add', '-b', 'feat/calling', calling]);
+    fs.writeFileSync(path.join(repo, 'principal-only.txt'), 'principal\n');
+    fs.writeFileSync(path.join(calling, 'calling-only.txt'), 'calling\n');
+    const { ctx } = makeCtx(calling);
+    const result = await tools.get('worktree_create').execute(
+      'call-copy-calling',
+      { branch: 'feat/copy-calling', odd: 'copy-calling', copy_changes: true },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.notEqual(result.isError, true, resultText(result));
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'copy-calling');
+    assert.equal(fs.readFileSync(path.join(target, 'calling-only.txt'), 'utf8'), 'calling\n', 'the calling checkout\u2019s uncommitted file travelled');
+    assert.equal(
+      fs.existsSync(path.join(target, 'principal-only.txt')),
+      false,
+      'the principal\u2019s uncommitted file stays where it belongs',
+    );
+    assert.equal(fs.readFileSync(path.join(calling, 'calling-only.txt'), 'utf8'), 'calling\n', 'the calling checkout keeps its change');
+    assert.equal(fs.readFileSync(path.join(repo, 'principal-only.txt'), 'utf8'), 'principal\n', 'the principal keeps its change');
+  });
 });
 
 describe('the shared close the panel deletion drives', () => {

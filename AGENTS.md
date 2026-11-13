@@ -1,37 +1,54 @@
 # pi-odd-worktree — Agent Guide
 
 Read this before changing anything. It is the contract for this repository: one
-Pi extension, four agent tools, three panels, no configuration surface.
+Pi extension, two agent tools, three panels, no configuration surface.
 
 ## Purpose
 
 `pi-odd-worktree` is a Pi extension package. It gives a Pi session:
 
-- four agent tools — `worktree_list`, `worktree_create`, `worktree_delete`,
-  `worktree_warp`;
-- three panels — `/warp` (move the session between checkouts), `/odd-list`
-  (read this checkout's `odd/tasks/*.md`), `/issues` (read and, when permitted,
-  edit this checkout's GitHub issues).
+- two agent tools — `worktree_create` (create a checkout beside the clone and
+  start its setup) and `worktree_list` (read-only listing);
+- three panels — `/warp` (move the session between checkouts, and remove one),
+  `/odd-list` (read this checkout's `odd/tasks/*.md`), `/issues` (read and, when
+  permitted, edit this checkout's GitHub issues).
 
-It works in Pi alone. Herdr is optional and never required.
+Deleting a checkout and moving the session are human actions only: they happen
+through `/warp` (its `ctrl+d`, its selector, a typed name, a queued handoff), and
+no agent tool does either. It works in Pi alone, with `git` as the only external
+requirement; Gentle Shell is recommended only because the deletion guard reads
+its presence records.
 
 ## Layout
 
 | Path | Responsibility |
 | --- | --- |
-| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the three commands (plus the three `/codegraph-*` ones when the CLI is present), the four tools, the `worktree-warp` message renderer, and the `session_start` / `session_shutdown` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
-| `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the flattened target path `<repo-parent>/<repo-name>-worktrees/<slug>` (`feat/login` → `feat-login`), and the async argv runner. |
-| `lib/worktree-registry.js` | The per-repository registry at `<git-common-dir>/pi-worktrees.json`. |
-| `lib/worktree-*.js` (rest) | Checkout behaviour: creation hooks (`worktree-hooks.js`), symlink policy (`worktree-symlinks.js`), pending-change transfer (`worktree-changes.js`), the active-session guard (`worktree-session-guard.js`), git-only removal (`worktree-close-herdr.js`), the warp queue (`worktree-warp-busy.js`: this session's agent-task counters, its `job_list` jobs, and the one pending handoff), warp/fork bookkeeping (`worktree-warp-sessions.js`), result text (`worktree-model-result.js`) and the tool card (`worktree-card.js`), checkout facts (`checkout-facts.js`). |
+| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the three commands, the two tools, the `worktree-warp` message renderer, and the `session_start` / `session_shutdown` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
+| `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the canonical target path `<repo-parent>/<repo-name>-worktrees/<slug>` and its helpers, and the async argv runner. |
+| `lib/worktree-registry.js` | The `worktrees` side of the clone document: one row per checkout (branch, path, owning thread), read by the panel and the live-session guard. |
+| `lib/worktree-metadata.js` | The `records` side of that same document: per-worktree `odd`, creator, base ref, hook outcomes and setup state; reconciliation against `git worktree list`; the closed state vocabulary; and the strict whitelist that reads the file. |
+| `lib/worktree-create.js` | `worktree_create`'s core: request validation, base resolution, the destination name, the refusals sentence for sentence, plan execution and the fixed output lines. |
+| `lib/worktree-list.js` | `worktree_list`'s rendering: rows, order, detail lines and footers, from one structured row list. It writes nothing. |
+| `lib/worktree-hooks.js` | The preparation chain of a create: submodules, local inputs, `copy_changes`, build-cache and asset links, the setup slot, and the clone-local `gentle-ai/worktree-hooks.json` that extends the lists. |
+| `lib/worktree-setup.js` | The setup chain: the closed command table one lockfile selects, the plan, the state machine and its vocabulary. |
+| `lib/worktree-setup-runner.js` | The tracked background task of a create: spawns the planned command, sends its output to its own log under the system temp directory, persists the state and reports one notice. |
+| `lib/worktree-remove.js` | Git-only removal: `git worktree remove <absolute path>`, branch kept. |
+| `lib/worktree-symlinks.js` | Symlink policy for a checkout. |
+| `lib/worktree-changes.js` | Pending-change snapshot and transfer (the panel's `changes` selection, and a typed warp's copy). |
+| `lib/worktree-session-guard.js` | The active-session guard the panel's `ctrl+d` runs, with the caveats it discloses. |
+| `lib/worktree-warp-busy.js` | This session's busy evidence for a warp: agent-task counters, its `job_list` jobs, and the one pending handoff. |
+| `lib/worktree-warp-sessions.js` | Warp/fork bookkeeping in the session files the host owns. |
+| `lib/checkout-facts.js` | The facts one checkout row shows in the selector. |
+| `lib/worktree-card.js` | The `worktree-warp` message renderer (the moved/queued card). |
+| `lib/shell-card.js`, `lib/worktree-cards.js` | The card substrate (rounded frame, palette, tone, elapsed) and the two tools' call/result card factory built on it. |
 | `lib/warp-*.js` | The panel: selector and extended list (`warp-selector-view.js`), create wizard (`warp-create-panel.js`, `warp-create-picker.js`), delete confirmation (`warp-delete-confirm.js`). |
 | `lib/odd-*.js` | `odd-docs.js` (document discovery and ordering), `odd-view.js` (two-pane reader), `odd-markdown.js` (the shared markdown renderer). |
+| `lib/odd-prompt/odd-worktrees.md` | The `## ODD worktrees` prompt prose: one text, no variants. |
+| `lib/odd-worktrees-prompt.js` | The append-only injection helper that reads that file. |
 | `lib/gh-issues.js` | The `gh` client: checkout repository scope, identity pinning, issue pages, details, labels, assignees, comments, close, and the `viewerPermission` → capability mapping. |
 | `lib/issues-view.js`, `lib/issue-preview.js` | The pure `/issues` view and its preview formatter. |
 | `lib/tui-paint.js`, `lib/view-layout.js`, `lib/preview-scroll-keys.js`, `lib/clipboard.js`, `lib/open-external.js` | Shared presentation helpers: the one palette, window/layout maths, the one preview scroll decision, clipboard, external opener. |
 | `lib/session-auto-name.js`, `lib/session-worktree-register.js` | Session bookkeeping: naming a session after an ODD write, and the host's session-worktree registry entry. |
-| `lib/codegraph-session.js` | The CodeGraph gate (one probe per process, `CODEGRAPH_FORCE=1`), the per-directory git-toplevel cache, and the background `sync` scheduler: debounce, one `{running, pending}` pair, cross-process `O_EXCL` lock, `.codegraph/` and live-daemon skips, run watchdog, hook on/off switch. |
-| `lib/codegraph-commands.js` | The three `/codegraph-*` command bodies, returning render-ready lines; registered only when the gate is true. |
-| `lib/odd-worktrees-prompt.js` | The two `## ODD worktrees` system-prompt variants and the append-only injection helper. |
 | `tools/*.test.js`, `tools/fixtures/` | The Node test suites and their fixtures (`load-extension.js`, `gh-*.json`). |
 
 `package.json` ships `extensions`, `lib`, `tools` and `README.md`, and declares
@@ -56,28 +73,27 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    file. A second entry point changes what the host loads.
 2. **No customize / plugin-tools / Herdr-panel surface.** No customize command,
    no plugin-tools toggles, no Herdr plugin management, no `worktree-mode` file,
-   no perf tracing, and no `herdr-gentle:` command name. `tools/package-surface.test.js`
-   asserts both the loaded surface and the source text.
-3. **The shipped surface is exactly three commands and four tools, plus three
-   CodeGraph commands that only exist when the CLI does.** `/warp`,
-   `/odd-list`, `/issues`; `worktree_create`, `worktree_list`, `worktree_delete`,
-   `worktree_warp`. `/codegraph-hook`, `/codegraph-init` and `/codegraph-sync`
-   are registered only when the session gate says `codegraph` is present, so a
-   session without the CLI must not see them. Each keeps its declared name and
-   label.
-4. **Deletion refuses on a live session.** `worktree_delete` and the panel's
-   `ctrl+d` go through the *same* guard (`lib/worktree-session-guard.js`), before
-   the pending-change question and again immediately before removal. This
+   no perf tracing, and no `herdr-gentle:` command name — and no CodeGraph probe,
+   command or sync either. `tools/package-surface.test.js` asserts both the loaded
+   surface and the source text.
+3. **The shipped surface is exactly three commands and two tools.** `/warp`,
+   `/odd-list`, `/issues`; `worktree_create`, `worktree_list`. No agent surface
+   moves the session or removes a checkout: `/warp` moves the session (its
+   `ctrl+d`, the selector, a typed name, a queued handoff) and its `ctrl+d`
+   removes a checkout. Each keeps its declared name and label.
+4. **Deletion refuses on a live session.** The only front that removes a checkout
+   is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
+   before the pending-change question and again immediately before removal. This
    session's own checkout is refused with "warp first"; another session's is
    refused naming its real session id, or the presence hash plus an explicit
    "could not be resolved". Nothing is auto-warped. The check is best effort:
-   stale, unattributable and truncated evidence is disclosed, never silently
-   dropped and never left blocking forever.
-5. **Deletion never touches Herdr.** Removal is `git worktree remove <absolute
-   path>` (with `--force` only when the caller asked), the branch is kept, and no
-   Herdr workspace is closed, opened or removed on any path — including the
-   panel's create and the `worktree_create` tool, which use git and the registry
-   without invoking Herdr.
+   stale, unattributable and truncated evidence is disclosed — the panel notifies
+   each caveat the guard could not resolve, one notice per caveat — never
+   silently dropped and never left blocking forever.
+5. **Deletion is git only.** Removal is `git worktree remove <absolute path>`
+   (with `--force` only when the caller asked) and the branch is kept. No other
+   application is closed, opened or removed on any path — including the panel's
+   create and `worktree_create`, which use git and the registry alone.
 6. **`/issues` keeps repository identity pinning.** The identity
    (`<host>/<owner>/<repo>`) is pinned when the list loads and bound to every
    read, every mutation and the `o` browser opener. A checkout whose remote moved
@@ -89,35 +105,56 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    a literal `true` capability means no hint, no editor, no mutation.
 8. **The package ships only `extensions`, `lib`, `tools`, `README.md`.** Adding a
    shipped path means changing `files[]` and the package-surface test together.
-9. **Fixed argv, never a shell string.** Every child (`git`, `gh`,
-   package managers, `codegraph`) gets a binary plus an argument array with a
-   bounded timeout. Interactive paths await the async runner; nothing blocks the
-   host event loop with `spawnSync`.
-10. **The CodeGraph gate is one probe per process.** `lib/codegraph-session.js`
-    answers PATH presence once and caches it; nothing re-probes mid-session.
-    `CODEGRAPH_FORCE=1` answers "present" without probing. Both the edit-time
-    sync and the creation-time `codegraph init` read that one answer, so a
-    session where the CLI is absent does no CodeGraph work at all.
-11. **Edit-time work never blocks a tool result.** `scheduleSync` is
-    fire-and-forget: the `tool_result` handler never awaits it, never lets it
-    throw and never changes the result. Pile-up is bounded by the debounce (one
-    timer per root), the single `{running, pending}` pair (one more run, never a
-    queue), the cross-process `O_EXCL` lock, and the run watchdog that settles a
-    hung sync. Keep all three.
-12. **The prompt block is append-only.** The `## ODD worktrees` section reaches
+9. **Fixed argv, never a shell string.** Every child (`git`, `gh`, package
+   managers) gets a binary plus an argument array with a bounded timeout.
+   Interactive paths await the async runner; nothing blocks the host event loop
+   with `spawnSync`.
+10. **The clone keeps one document with two owners.**
+    `<git-common-dir>/pi-worktrees.json` carries `worktrees` — the registry
+    `lib/worktree-registry.js` owns — and `records` — the metadata
+    `lib/worktree-metadata.js` owns (odd, creator, base ref, hook outcomes,
+    setup state). Each side preserves the key it does not own, byte for byte, on
+    read and on write, and neither gains authority over the other's. A second
+    file is never the answer. Two consequences are limits, not open work:
+    `version` is written by both sides, so a format bump changes both in the same
+    change, and the metadata side keeps a strict whitelist (`kind`, `version`,
+    `worktrees`, `records`), so a third key must be whitelisted there in the
+    change that introduces it. Nothing deletes a record behind a reader's back;
+    `gone` is how the list reports one.
+11. **The listing is read-only.** `worktree_list` writes nothing, prunes nothing
+    and never touches the document: a dead checkout is reported as `gone` or
+    `missing` with its reason and date. The state vocabulary is closed — `ready`,
+    `running`, `failed`, `skipped`, `pending`, `interrupted`, `active · manual`,
+    `missing`, `gone`, `foreign` — and every surface derives its wording from
+    `lib/worktree-metadata.js` instead of repeating literals. The main checkout
+    prints first and unnumbered, then numbered rows, and the footers count the
+    rows they hide, which the tool's `all: true` then lists.
+12. **A create never waits for its setup.** `worktree_create` and the panel's
+    create both plan the chain in `lib/worktree-setup.js` and start it through
+    `lib/worktree-setup-runner.js` as one tracked task per checkout: the task
+    spawns the planned command with its own log under the system temp directory
+    and persists the state through `recordWorktreeSetup` when the child ends.
+    The preparation hooks (`lib/worktree-hooks.js`) run before the answer and the
+    setup continues behind it; never await the setup in the create path, because
+    that is the hang the split removed. Nothing is skipped, and a child that
+    never finishes is terminated at its bound. A record a crash left `running`
+    stays the honest state. The completion notice belongs to the caller that
+    supplied a `notify` (the panel); the tool front supplies none, so a create
+    never fires a `ui.notify` its call did not ask for, and a setup problem is
+    never reported as a failed create.
+13. **The prompt block is append-only.** The `## ODD worktrees` section reaches
     the model only through `systemPromptOptions.appendSystemPrompt`; no handler
     returns a replacement `systemPrompt` (the bridge drops it) and no existing
-    text is removed. It is idempotent by content, primary sessions only, and
+    text is removed. It is one text (`lib/odd-prompt/odd-worktrees.md`) with no
+    variant selection, idempotent by content, primary sessions only, and
     `ODD_WORKTREE_PROMPT=0` suppresses it.
-13. **A warp waits for this session's own agent tasks AND background jobs, and it
+14. **A warp waits for this session's own agent tasks AND background jobs, and it
     is queued, never thrown away.** While `lib/worktree-warp-busy.js` reports a
-    running or queued agent task, or an active job, `worktree_warp` still
-    validates and QUEUES the handoff (its text says queued and waiting, never
-    moved), and `/warp` keeps the validated handoff PENDING and re-dispatches the
-    same `/warp @<token>` from a bounded, unref'd poller once both workloads are
-    idle. The request is recorded as pending at QUEUE time on the tool front too,
-    so a second warp in the same turn is refused on the tool and on the panel
-    alike, and the pending one is never replaced. Expiry
+    running or queued agent task, or an active job, `/warp` keeps the validated
+    handoff PENDING instead of switching, and re-dispatches the same
+    `/warp @<token>` from a bounded, unref'd poller once both workloads are idle.
+    The request is recorded as pending at QUEUE time, so a second warp in the
+    same turn is refused and the pending one is never replaced. Expiry
     (`ODD_WORKTREE_WARP_PENDING_MS`, 30 min default) notifies that nothing moved,
     and every terminal outcome (moved, refused, cancelled, expired, shutdown)
     clears the record. Agent tasks come from the presence counters; jobs come
@@ -126,19 +163,6 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     `running` or `queued` is active — `exited 0`, `failed 1` and `stopped` are
     finished — and a missing tool, a failed call or an unknown answer is
     UNKNOWN, which blocks nothing and is never reported as "no jobs".
-14. **A create is instant on both fronts, and its setup still finishes.**
-    `worktree_create` and the panel's create both run
-    `lib/worktree-hooks.js` with `deferSetup: true`: the checkout, its registry
-    row and the pending-change copy settle, and the slow half (dependency
-    install, `codegraph init`) continues in one tracked task per create. Never
-    await it in the create path — that is the hang the split removed. Nothing is
-    skipped: the task runs every deferred phase, is tracked until it settles
-    (exported as `awaitPendingCreationSetups`), and drops its record and its
-    report when its session has already shut down. The completion notice belongs
-    to the caller that supplied a `notify` (the panel); the tool front supplies
-    none, so a create never fires a `ui.notify` its call did not ask for and
-    never reports the deferred setup as an error — a problem is a warning, and a
-    later create for the same checkout reports the recorded state and steps.
 
 ## Commits and pull requests
 
@@ -189,14 +213,13 @@ lists every shipped surface.
   rendered lines, the files on disk. Do not read module-internal state.
 - **Inject the runners.** Every child process sits behind a seam
   (`runAsync`, an injected `runner`, `hasBinary`, the TUI loader). Tests pass
-  fakes; they never spawn real `gh`, `herdr`, `codegraph`, a package manager, or
-  anything that reaches the network. `tools/fixtures/load-extension.js` copies
-  `extensions/odd-worktree-tools.ts` to a scratch `.mjs` with the two Pi imports
-  stubbed, loads it against a fake host, and points it at this package's `lib/`
-  through `GENTLE_WORKTREE_LIB_DIR`.
+  fakes; they never spawn real `gh`, a package manager, or anything that reaches
+  the network. `tools/fixtures/load-extension.js`
+  copies `extensions/odd-worktree-tools.ts` to a scratch `.mjs` with the two Pi
+  imports stubbed, loads it against a fake host, and points it at this package's
+  `lib/` through `GENTLE_WORKTREE_LIB_DIR`.
 - **No network, no live tools.** GitHub responses come from
-  `tools/fixtures/gh-*.json` through the injected runner. A test that needs a
-  Herdr binary gets a provably nonexistent path.
+  `tools/fixtures/gh-*.json` through the injected runner.
 - **Temporary state lives outside the worktree.** Use
   `fs.mkdtempSync(path.join(os.tmpdir(), …))`, remove it in teardown/`after()`,
   and never point `TMPDIR` or a cache directory into the repository. A test that

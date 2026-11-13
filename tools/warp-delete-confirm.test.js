@@ -537,7 +537,7 @@ describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () =
     const repo = makeRepo(`ctrl-d-${tag}`);
     git(repo, ['branch', 'main', 'HEAD']);
     const created = await tools.get('worktree_create').execute(
-      `create-${tag}`, { branch: `feat/${tag}`, changes: 'none' }, undefined, undefined,
+      `create-${tag}`, { branch: `feat/${tag}` }, undefined, undefined,
       {
         cwd: repo,
         hasUI: false,
@@ -547,7 +547,8 @@ describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () =
       },
     );
     assert.notEqual(created.isError, true, JSON.stringify(created));
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, `feat-${tag}`);
+    // The path the create really wrote, not a remembered flattened spelling.
+    const target = created.details.path;
     const notifications = [];
     const confirmations = [];
     let mounts = 0;

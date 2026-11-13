@@ -9,8 +9,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
-const { loadExtension } = require('./fixtures/load-extension.js');
+const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
 
 const scratch = [];
 function track(dir) {
@@ -71,17 +72,76 @@ function resultText(result) {
 let host;
 let commands;
 let tools;
+let mod;
 before(async () => {
   process.env.HERDR_BIN_PATH = NO_HERDR;
   process.env.GENTLE_WORKTREE_THREAD = 'thread-1';
   process.env.PATH = `${HOOK_BIN}${path.delimiter}${savedEnv.PATH || ''}`;
   const sent = [];
-  const loaded = await loadExtension({ sendUserMessage: (text, options) => { sent.push([text, options]); } });
+  const loaded = await loadExtensionWithModule({ sendUserMessage: (text, options) => { sent.push([text, options]); } });
   host = loaded.host;
   commands = loaded.commands;
   tools = loaded.tools;
+  mod = loaded.mod;
   host.sent = sent;
 });
+
+// The `/warp` create front lives on the same module instance as the registered
+// command, so this suite keeps the module namespace beside the registrations —
+// the same stubs, lib override and fake host as the shared fixture.
+// `setWarpDirtyAsker` and `executeWorktreeCreate` are that instance's own
+// exported seams: how the panel's pending-changes answer and its specific-path
+// selection are driven through the panel front (never through the tool).
+async function loadExtensionWithModule(pi) {
+  process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-cmd-ext-'));
+  try {
+    const copy = path.join(dir, 'odd-worktree-tools.mjs');
+    fs.writeFileSync(copy, stubbedSource());
+    const loadedMod = await import(pathToFileURL(copy).href);
+    const registered = new Map();
+    const registeredTools = new Map();
+    const hooks = [];
+    const fakeHost = {
+      registerCommand: (name, handler) => { registered.set(name, handler); },
+      registerTool: (tool) => { registeredTools.set(tool.name, tool); },
+      registerMessageRenderer: () => {},
+      on: (event, handler) => { hooks.push([event, handler]); },
+      ...pi,
+    };
+    loadedMod.default(fakeHost);
+    return { mod: loadedMod, commands: registered, tools: registeredTools, hooks, host: fakeHost };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// The destination the ported pipeline really writes, read from the pipeline's
+// own rule (<repo-parent>/<repo-name>-worktrees/<name>) instead of remembering
+// a flattened spelling.
+function portedDestination(repo, branch) {
+  const create = require('../lib/worktree-create.js');
+  return create.worktreeDestinationPath(fs.realpathSync(repo), create.defaultWorktreeName(branch));
+}
+
+function readSharedDocument(repo) {
+  return JSON.parse(fs.readFileSync(path.join(fs.realpathSync(repo), '.git', 'pi-worktrees.json'), 'utf8'));
+}
+
+// The selector's create action, then the create panel's answer, then the
+// closing selector: only those three mounts are scripted.
+function warpCreateUi(panelAnswer) {
+  const ui = {
+    mounts: 0,
+    custom: async () => {
+      ui.mounts += 1;
+      if (ui.mounts === 1) return { create: true };
+      if (ui.mounts === 2) return panelAnswer;
+      return undefined;
+    },
+  };
+  return ui;
+}
 
 describe('/warp', () => {
   test('refuses more than one name and says which form to use', async () => {
@@ -113,7 +173,7 @@ describe('/warp', () => {
     const ctx = makeCtx(repo);
     const created = await tools.get('worktree_create').execute(
       'call-1',
-      { branch: 'feat/warp-me', changes: 'none' },
+      { branch: 'feat/warp-me' },
       undefined,
       undefined,
       ctx,
@@ -146,6 +206,92 @@ describe('/warp', () => {
   });
 });
 
+describe('the /warp panel create front', () => {
+  // Both branch states: a branch the create makes, and an existing branch it
+  // adopts. The assertion asks the pipeline where it writes instead of
+  // remembering the old flattened spelling.
+  for (const existing of [false, true]) {
+    const name = existing ? 'adopted' : 'fresh';
+    const branch = `feat/${name}`;
+    test(`${existing ? 'adopts an existing' : 'creates a new'} branch and reports the create without a stray notice`, async () => {
+      const repo = makeRepo();
+      if (existing) git(repo, ['branch', branch]);
+      const target = portedDestination(repo, branch);
+      const ui = warpCreateUi({ ok: true, type: 'feat', name });
+      notifications.length = 0;
+      await commands.get('warp').handler('', makeCtx(repo, { custom: ui.custom }));
+      assert.ok(fs.existsSync(target), `the /warp create made no checkout (notifications: ${JSON.stringify(notifications)})`);
+      assert.equal(git(target, ['rev-parse', '--abbrev-ref', 'HEAD']), branch, 'the new checkout holds the created/adopted branch');
+      // The create flow closed back into the selector, so the front reported a
+      // create; the click asked for none of these notices.
+      assert.ok(ui.mounts >= 3, `the selector was not handed back after the create (${ui.mounts} mounts)`);
+      assert.deepEqual(notifications, [], 'a clean create fires no notification it did not ask for');
+      // One shared document carries both owners' keys and this create's row.
+      const document = readSharedDocument(repo);
+      assert.deepEqual(Object.keys(document).sort(), ['kind', 'records', 'version', 'worktrees']);
+      assert.deepEqual(document.worktrees.map((row) => row.branch), [branch]);
+      assert.ok(document.records[fs.realpathSync(target)], 'the metadata record is keyed by the checkout path');
+    });
+  }
+
+  test('a refused panel create is the ported sentence, verbatim, and writes nothing', async () => {
+    const repo = makeRepo();
+    const out = await mod.executeWorktreeCreate({ branch: 'bad..name' }, makeCtx(repo));
+    assert.equal(out.isError, true);
+    assert.equal(
+      resultText(out),
+      'invalid name: "bad..name"\nname must be a single path segment (letters, digits, dash, underscore, dot)',
+    );
+    assert.equal(fs.existsSync(portedDestination(repo, 'bad..name')), false);
+    assert.equal(fs.existsSync(path.join(fs.realpathSync(repo), '.git', 'pi-worktrees.json')), false, 'no document is written');
+  });
+
+  test('"copy everything" becomes the ported boolean and prints only the ported line', async () => {
+    const repo = makeRepo();
+    fs.writeFileSync(path.join(repo, 'pending.txt'), 'pending\n');
+    const target = portedDestination(repo, 'feat/all-copy');
+    const out = await mod.executeWorktreeCreate({ branch: 'feat/all-copy', changes: 'all' }, makeCtx(repo));
+    assert.notEqual(out.isError, true, resultText(out));
+    const text = resultText(out);
+    assert.match(text, /^copy_changes: 1 changes copied \(main keeps its uncommitted changes\)$/m);
+    assert.doesNotMatch(text, /^copied:/m, 'the panel line belongs to the path mode only');
+    assert.equal(fs.readFileSync(path.join(target, 'pending.txt'), 'utf8'), 'pending\n', 'the ported hook copied it once');
+  });
+
+  test('a specific path selection copies only those paths and prints its own line', async () => {
+    const repo = makeRepo();
+    fs.writeFileSync(path.join(repo, 'selected.txt'), 'selected\n');
+    fs.writeFileSync(path.join(repo, 'skipped.txt'), 'skipped\n');
+    const target = portedDestination(repo, 'feat/selected');
+    const out = await mod.executeWorktreeCreate(
+      { branch: 'feat/selected', changes: ['selected.txt'] },
+      makeCtx(repo),
+    );
+    assert.notEqual(out.isError, true, resultText(out));
+    const text = resultText(out);
+    assert.match(text, /^copied: 1 file, \+1\/-0$/m);
+    assert.doesNotMatch(text, /^copy_changes:/m, 'the boolean mode\u2019s line is not printed by the path mode');
+    assert.equal(fs.readFileSync(path.join(target, 'selected.txt'), 'utf8'), 'selected\n');
+    assert.equal(fs.existsSync(path.join(target, 'skipped.txt')), false, 'only the selected path travelled');
+    // The record stores the hooks that ran; the panel's transfer is not a ported
+    // hook, so no copy_changes row is invented for it.
+    const document = readSharedDocument(repo);
+    assert.deepEqual(Object.keys(document).sort(), ['kind', 'records', 'version', 'worktrees']);
+    const record = document.records[fs.realpathSync(target)];
+    assert.equal(record.branchAtCreation, 'feat/selected');
+    assert.equal(record.createdBy, 'thread-1');
+    assert.ok(!(record.hooks || []).some((hook) => hook.name === 'copy_changes'));
+  });
+
+  test('an unknown selected path refuses before anything is created', async () => {
+    const repo = makeRepo();
+    const out = await mod.executeWorktreeCreate({ branch: 'feat/unknown', changes: ['missing.txt'] }, makeCtx(repo));
+    assert.equal(out.isError, true);
+    assert.match(resultText(out), /unknown changed file: "missing.txt" \(nothing was copied\) \(nothing was created\)$/);
+    assert.equal(fs.existsSync(portedDestination(repo, 'feat/unknown')), false);
+  });
+});
+
 describe('/odd-list', () => {
   test('an empty checkout says there is nothing to read', async () => {
     const repo = makeRepo();
@@ -162,7 +308,7 @@ describe('/odd-list', () => {
     notifications.length = 0;
     await commands.get('odd-list').handler(
       '',
-      makeCtx(repo, { select: async (title, options) => { offered = options; return options[0]; } }),
+      makeCtx(repo, { select: async (_title, options) => { offered = options; return options[0]; } }),
     );
     assert.deepEqual(offered, ['feature']);
     assert.deepEqual(notifications, [['info', path.join(repo, 'odd', 'tasks', 'feature.md')]]);

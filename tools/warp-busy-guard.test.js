@@ -517,7 +517,7 @@ describe('the worktree_warp tool queues while this session has agent tasks or jo
   test('a busy session gets the queued wording and one handoff, and nothing claims jobs are invisible', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-1', { branch: 'feat/busy', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-1', { branch: 'feat/busy' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     publishSession({ running: 1 });
@@ -547,7 +547,7 @@ describe('the worktree_warp tool queues while this session has agent tasks or jo
   test('an idle session keeps the byte-identical queued wording', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-3', { branch: 'feat/free', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-3', { branch: 'feat/free' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     publishSession({ running: 0 });
@@ -566,7 +566,7 @@ describe('the worktree_warp tool queues while this session has agent tasks or jo
   test('queued counters queue the warp; waiting and finished counters do not', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-5', { branch: 'feat/queued', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-5', { branch: 'feat/queued' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     publishSession({ running: 0, queued: 2, waiting: 1, finished: 4 });
@@ -591,7 +591,7 @@ describe('the worktree_warp tool queues while this session has agent tasks or jo
   test('a running job queues the warp, and a same-turn second call is refused', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-j1', { branch: 'feat/jobs', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-j1', { branch: 'feat/jobs' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     const jobs = addJobs(ctx, [{ id: 'job-1', status: 'running', label: 'Probe de job' }]);
@@ -618,7 +618,7 @@ describe('the worktree_warp tool queues while this session has agent tasks or jo
   test('a running agent task and a running job are both named', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-j4', { branch: 'feat/both', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-j4', { branch: 'feat/both' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     publishSession({ running: 2 });
@@ -641,7 +641,7 @@ describe('the worktree_warp tool queues while this session has agent tasks or jo
   test('an unavailable, failing or unparsable job list blocks nothing and is disclosed only then', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-j6', { branch: 'feat/unknown', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-j6', { branch: 'feat/unknown' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
     publishSession({ running: 1 });
 
@@ -679,7 +679,7 @@ describe('the worktree_warp tool queues while this session has agent tasks or jo
   test('a queued (busy) tool warp mutates no checkout and no registry row', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-8', { branch: 'feat/intact', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-8', { branch: 'feat/intact' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     const registryPath = path.resolve(repo, git(repo, ['rev-parse', '--git-common-dir']), 'pi-worktrees.json');
@@ -715,7 +715,7 @@ describe('the /warp front queues the move and performs it after the counters dra
     ctx.sessionManager = Object.assign(new SM(null, null, null), { getSessionId: () => SESSION_ID });
     ctx.sessionManager.constructor = SM;
     ctx.switchSession = async (file) => { switches.push(file); return { cancelled: false }; };
-    const created = await tools.get('worktree_create').execute('busy-10', { branch: 'feat/cmd', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-10', { branch: 'feat/cmd' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     publishSession({ running: 2 });
@@ -746,7 +746,7 @@ describe('the /warp front queues the move and performs it after the counters dra
     ctx.sessionManager = Object.assign(new SM(null, null, null), { getSessionId: () => SESSION_ID });
     ctx.sessionManager.constructor = SM;
     ctx.switchSession = async (file) => { switches.push(file); return { cancelled: false }; };
-    const created = await tools.get('worktree_create').execute('busy-11', { branch: 'feat/drain', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-11', { branch: 'feat/drain' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     publishSession({ running: 1, queued: 1 });
@@ -781,9 +781,9 @@ describe('the /warp front queues the move and performs it after the counters dra
   test('a second warp is refused while one is pending, on both fronts', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const first = await tools.get('worktree_create').execute('busy-13', { branch: 'feat/one', changes: 'none' }, undefined, undefined, ctx);
+    const first = await tools.get('worktree_create').execute('busy-13', { branch: 'feat/one' }, undefined, undefined, ctx);
     assert.notEqual(first.isError, true, resultText(first));
-    const second = await tools.get('worktree_create').execute('busy-14', { branch: 'feat/two', changes: 'none' }, undefined, undefined, ctx);
+    const second = await tools.get('worktree_create').execute('busy-14', { branch: 'feat/two' }, undefined, undefined, ctx);
     assert.notEqual(second.isError, true, resultText(second));
 
     publishSession({ running: 2 });
@@ -822,7 +822,7 @@ describe('the /warp front queues the move and performs it after the counters dra
   test('an expired pending warp notices that nothing moved and clears for a later warp', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-16', { branch: 'feat/expire', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-16', { branch: 'feat/expire' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     publishSession({ running: 1 });
@@ -860,7 +860,7 @@ describe('the /warp front queues the move and performs it after the counters dra
     ctx.sessionManager.constructor = SM;
     ctx.switchSession = async (file) => { switches.push(file); return { cancelled: false }; };
     const jobs = addJobs(ctx, [{ id: 'job-1', status: 'running', label: 'Probe de job' }]);
-    const created = await tools.get('worktree_create').execute('busy-j20', { branch: 'feat/jobwait', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-j20', { branch: 'feat/jobwait' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
     // No agent task at all: the JOB is the only thing standing in the way.
     clearPresence();
@@ -895,7 +895,7 @@ describe('the /warp front queues the move and performs it after the counters dra
   test('a refused queued warp clears the record, so a later warp is accepted', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-r1', { branch: 'feat/refused', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-r1', { branch: 'feat/refused' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     // The tool queues the request while a job runs, so it is pending.
@@ -929,9 +929,9 @@ describe('the /warp front queues the move and performs it after the counters dra
   test('a handoff token for another checkout is refused while one is pending', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const first = await tools.get('worktree_create').execute('busy-18', { branch: 'feat/held', changes: 'none' }, undefined, undefined, ctx);
+    const first = await tools.get('worktree_create').execute('busy-18', { branch: 'feat/held' }, undefined, undefined, ctx);
     assert.notEqual(first.isError, true, resultText(first));
-    const second = await tools.get('worktree_create').execute('busy-19', { branch: 'feat/other', changes: 'none' }, undefined, undefined, ctx);
+    const second = await tools.get('worktree_create').execute('busy-19', { branch: 'feat/other' }, undefined, undefined, ctx);
     assert.notEqual(second.isError, true, resultText(second));
 
     // Queue a handoff for feat-other first (idle front), then make the session
@@ -985,7 +985,7 @@ describe('boundaries: negative cases, every front, unaffected surfaces', () => {
   test('the tool queues normally when the presence store is absent', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-21', { branch: 'feat/nostore', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-21', { branch: 'feat/nostore' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
     clearPresence();
     host.sent.length = 0;
@@ -999,7 +999,7 @@ describe('boundaries: negative cases, every front, unaffected surfaces', () => {
   test('a stale heartbeat and an unreadable record are no evidence of work', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-23', { branch: 'feat/stale', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-23', { branch: 'feat/stale' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     publishSession({ running: 3, heartbeat: Date.now() - 600000 });
@@ -1028,7 +1028,7 @@ describe('boundaries: negative cases, every front, unaffected surfaces', () => {
   test('another session’s running tasks never block this session', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-26', { branch: 'feat/other', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-26', { branch: 'feat/other' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     clearPresence();
@@ -1051,7 +1051,7 @@ describe('boundaries: negative cases, every front, unaffected surfaces', () => {
   test('the selector pick is queued, never switched, while this session is busy', async () => {
     const repo = makeRepo();
     const createCtx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-28', { branch: 'feat/pick', changes: 'none' }, undefined, undefined, createCtx);
+    const created = await tools.get('worktree_create').execute('busy-28', { branch: 'feat/pick' }, undefined, undefined, createCtx);
     assert.notEqual(created.isError, true, resultText(created));
 
     const switches = [];
@@ -1086,7 +1086,7 @@ describe('boundaries: negative cases, every front, unaffected surfaces', () => {
   test('session shutdown clears the pending warp', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('busy-sd1', { branch: 'feat/shutdown', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-sd1', { branch: 'feat/shutdown' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
     publishSession({ running: 1 });
@@ -1119,7 +1119,7 @@ describe('boundaries: negative cases, every front, unaffected surfaces', () => {
 
     const listed = await tools.get('worktree_list').execute('busy-29', {}, undefined, undefined, ctx);
     assert.notEqual(listed.isError, true, resultText(listed));
-    const created = await tools.get('worktree_create').execute('busy-30', { branch: 'feat/surface', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('busy-30', { branch: 'feat/surface' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
     const closed = await tools.get('worktree_delete').execute('busy-31', { name: 'feat-surface', force: true }, undefined, undefined, ctx);
     assert.notEqual(closed.isError, true, resultText(closed));

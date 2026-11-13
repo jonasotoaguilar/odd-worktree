@@ -249,9 +249,9 @@ describe('S7 identity join through the registered tool', () => {
   test('the tool refusal shows the raw id and leaves the checkout, branch and registry intact', async () => {
     const repo = makeRepo('joined');
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('t5-c1', { branch: 'feat/t5-joined', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('t5-c1', { branch: 'feat/t5-joined' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-t5-joined');
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 't5-joined');
     const sessionHash = publishPresence(AGENT_HOME, { sessionId: 'raw-session-7', label: 'Worker', workspace: target, heartbeat: Date.now(), incarnationIndex: 4 });
     publishTransport(AGENT_HOME, { sessionId: 'raw-session-7' });
 
@@ -267,14 +267,14 @@ describe('S7 identity join through the registered tool', () => {
     assert.ok(git(repo, ['worktree', 'list', '--porcelain']).includes(target), 'git still lists it');
     assert.ok(git(repo, ['branch', '--format=%(refname:short)']).split('\n').includes('feat/t5-joined'), 'the branch survives');
     const listed = await tools.get('worktree_list').execute('t5-c3', {}, undefined, undefined, ctx);
-    assert.equal(resultText(listed).split('\n').length, 3, 'the registry row survives');
+    assert.equal(resultText(listed).split('\n').length, 4, 'the registry row survives');
   });
 
   test('the tool refusal discloses an unresolved id instead of inventing one', async () => {
     const repo = makeRepo('unjoined');
     const ctx = makeCtx(repo);
-    await tools.get('worktree_create').execute('t5-c4', { branch: 'feat/t5-unjoined', changes: 'none' }, undefined, undefined, ctx);
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-t5-unjoined');
+    await tools.get('worktree_create').execute('t5-c4', { branch: 'feat/t5-unjoined' }, undefined, undefined, ctx);
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 't5-unjoined');
     const sessionHash = publishPresence(AGENT_HOME, { sessionId: 'raw-session-8', label: 'Worker', workspace: target, heartbeat: Date.now(), incarnationIndex: 5 });
 
     const closed = await tools.get('worktree_delete').execute('t5-c5', { name: 'feat-t5-unjoined' }, undefined, undefined, ctx);
@@ -289,8 +289,8 @@ describe('S7 identity join through the registered tool', () => {
   test('the clear path shows the best-effort notices and still removes the checkout', async () => {
     const repo = makeRepo('notices');
     const ctx = makeCtx(repo);
-    await tools.get('worktree_create').execute('t5-c6', { branch: 'feat/t5-notice', changes: 'none' }, undefined, undefined, ctx);
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-t5-notice');
+    await tools.get('worktree_create').execute('t5-c6', { branch: 'feat/t5-notice' }, undefined, undefined, ctx);
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 't5-notice');
     // A live peer whose discovery sidecar never published a workspace: it can
     // never be attributed to this checkout, and it must never block.
     publishPresence(AGENT_HOME, { sessionId: 'legacy-peer', label: 'Legacy', heartbeat: Date.now(), incarnationIndex: 6, discovery: false });

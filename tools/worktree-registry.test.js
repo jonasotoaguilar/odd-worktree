@@ -22,6 +22,15 @@
 //   - an unreadable (malformed) registry is still replaced with a best-effort
 //     backup rather than merged.
 //
+// The same promise holds one level up. `<git-common-dir>/pi-worktrees.json`
+// is ONE document with MORE THAN ONE owner: this module owns `worktrees`, and
+// the clone-metadata reader (`lib/worktree-metadata.js`) owns `kind` and
+// `records`. This module never interprets those keys, so no write may reshape,
+// reorder or drop one — and a file that never carried one must never gain it.
+// The metadata reader accepts a `worktrees`-only document as a valid EMPTY
+// store, so a dropped `kind`/`records` would lose every record with no error
+// anywhere: the silent loss these tests exist to prevent.
+//
 // Every test builds its own isolated fixture repository under os.tmpdir().
 
 const { test, describe, after } = require('node:test');
@@ -86,10 +95,10 @@ function legacyRow(root) {
   };
 }
 
-function writeRegistryFile(root, rows) {
+function writeRegistryFile(root, rows, extra = {}) {
   const file = registryLib.registryPath(root);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify({ version: registryLib.REGISTRY_VERSION, worktrees: rows }, null, 2)}\n`);
+  fs.writeFileSync(file, `${JSON.stringify({ version: registryLib.REGISTRY_VERSION, worktrees: rows, ...extra }, null, 2)}\n`);
   return file;
 }
 
@@ -240,5 +249,277 @@ describe('S1: the registry file carries no report and no marker', { concurrency:
     assert.equal(Object.keys(reread).includes('oddDropped'), false, 'the stamp is never an observable field');
     assert.equal(JSON.stringify(reread).includes('oddDropped'), false, 'and never serializes');
     assert.equal(reread.odd, LEGACY_ODD[0], 'the in-memory view keeps the single-document rule');
+  });
+});
+
+// -------------------------------------------------- the shared document
+//
+// The same promise holds one level up. `<git-common-dir>/pi-worktrees.json` is
+// ONE document with MORE THAN ONE owner: this module owns `worktrees`, and the
+// clone-metadata reader (`lib/worktree-metadata.js`) owns `kind` and `records`.
+// This module never interprets those keys, so no write may reshape, reorder or
+// drop them — and a file that never carried them must never gain them. The
+// metadata reader accepts a `worktrees`-only document as a valid EMPTY store,
+// so a dropped `kind`/`records` would lose every record without an error
+// anywhere: the failure these tests exist to prevent.
+const metadataLib = require('../lib/worktree-metadata.js');
+
+// The sibling's records, shaped exactly as the metadata side stores them.
+const SHARED_RECORDS = {
+  '/tmp/fixture-original': {
+    odd: 'odd/tasks/worktree-tools-v2.md',
+    createdAt: '2024-02-03T04:05:06.000Z',
+    createdBy: 'session-original',
+    adminId: 'fixture-original',
+    branchAtCreation: 'main',
+    baseRef: 'origin/main',
+    hooks: [{ name: 'copy-inputs', status: 'applied', detail: '3 files' }],
+    setup: {
+      status: 'ready',
+      steps: [{
+        command: 'npm ci',
+        status: 'ready',
+        logPath: '/tmp/fixture-original-setup.log',
+        exitCode: 0,
+        endedAt: '2024-02-03T04:06:06.000Z',
+      }],
+      jobId: 'job-original',
+      command: 'npm ci',
+      exitCode: 0,
+      endedAt: '2024-02-03T04:06:06.000Z',
+    },
+    lastSeen: { at: '2024-02-05T04:05:06.000Z', branch: 'main', status: 'active' },
+  },
+  '/tmp/fixture-feature': {
+    odd: 'odd/tasks/worktree-tools-v2.md',
+    createdAt: '2024-02-04T05:06:07.000Z',
+    createdBy: 'session-feature',
+    adminId: 'fixture-feature',
+    branchAtCreation: 'feat/feature',
+    baseRef: 'main',
+    hooks: [{ name: 'copy-inputs', status: 'skipped' }],
+    setup: {
+      status: 'pending',
+      steps: [],
+      detail: 'no background job registry in this session',
+    },
+    lastSeen: { at: '2024-02-06T05:06:07.000Z', branch: 'feat/feature', status: 'foreign' },
+  },
+};
+
+// A shared file in the exact bytes the metadata side writes for it: `kind`
+// first, `worktrees` in one stable position, `records` key-sorted last.
+function writeSharedRegistryFile(root, rows, records = SHARED_RECORDS) {
+  const file = registryLib.registryPath(root);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const bytes = metadataLib.serializeWorktreeMetadataFile({
+    kind: metadataLib.WORKTREE_METADATA_KIND,
+    version: registryLib.REGISTRY_VERSION,
+    worktrees: rows,
+    records,
+  });
+  fs.writeFileSync(file, bytes);
+  return { file, bytes };
+}
+
+function sharedFixture(tag) {
+  const root = makeRepo(tag);
+  const rows = [row('feat/one', root), row('feat/two', root)];
+  const { file, bytes } = writeSharedRegistryFile(root, rows);
+  return { root, rows, file, bytes };
+}
+
+// Every top-level key this module does not own, checked the way the rows are:
+// the document's key order, and each sibling value's own bytes.
+function assertSiblingKeysKept(file, beforeRaw, { sameKeyOrder = true } = {}) {
+  const before = JSON.parse(beforeRaw);
+  const written = fs.readFileSync(file, 'utf8');
+  const after = JSON.parse(written);
+  if (sameKeyOrder) {
+    assert.deepEqual(Object.keys(after), Object.keys(before),
+      `the shared document keeps its key order:\n${written}`);
+  }
+  for (const key of Object.keys(before)) {
+    if (key === 'worktrees') continue;
+    assert.equal(JSON.stringify(after[key]), JSON.stringify(before[key]),
+      `\`${key}\` is carried through byte for byte:\n${written}`);
+  }
+}
+
+// The stronger form available for a real shared document: the registry's own
+// output is still exactly what the metadata side would serialize, so an
+// untouched file the registry had to rewrite keeps its canonical bytes.
+function assertCanonicalSharedDocument(file) {
+  const written = fs.readFileSync(file, 'utf8');
+  assert.equal(metadataLib.serializeWorktreeMetadataFile(JSON.parse(written)), written,
+    `the registry emitted the metadata side's own canonical bytes:\n${written}`);
+}
+
+// Anything a write left beside the registry: a temp file would mean the atomic
+// path leaked, a `.corrupt-` backup would mean a two-owner document was read as
+// damage.
+function registrySiblings(file) {
+  return fs.readdirSync(path.dirname(file)).filter((name) => name.startsWith(`${path.basename(file)}.`));
+}
+
+// Every whole-file write this module exposes, each addressing a row while both
+// sibling keys sit in the same document.
+const SHARED_WRITES = [
+  ['upsertWorktree (add)', ({ root }) => registryLib.upsertWorktree(root, row('feat/added', root))],
+  ['appendWorktree (add)', ({ root }) => registryLib.appendWorktree(root, row('feat/appended', root))],
+  ['updateWorktree', ({ root }) => registryLib.updateWorktree(root, 'feat/one', { issues: [7] })],
+  ['addOddDoc', ({ root }) => registryLib.addOddDoc(root, 'feat/one', 'odd/tasks/chosen.md')],
+  ['removeWorktree', ({ root }) => registryLib.removeWorktree(root, 'feat/two')],
+  ['removeWorktreeByPath', ({ root, rows }) => registryLib.removeWorktreeByPath(root, rows[1].path)],
+  ['removeWorktreeExact', ({ root, rows }) => registryLib.removeWorktreeExact(root, rows[1].branch, rows[1].path)],
+  ['pruneWorktrees', ({ root, rows }) => registryLib.pruneWorktrees(root, [rows[1].path])],
+  ['registerMissingWorktrees', ({ root }) => {
+    const live = checkoutPath(root, 'shared-live');
+    fs.mkdirSync(live, { recursive: true });
+    roots.push(live);
+    return registryLib.registerMissingWorktrees(root, [{ branch: 'feat/shared-live', path: live }], null);
+  }],
+];
+
+describe('S4b: the registry carries the shared-document keys it does not own', { concurrency: false }, () => {
+  test('a two-owner document reads as the same registry, never as damage', () => {
+    const { root, rows, file, bytes } = sharedFixture('shared-read');
+    const read = registryLib.readRegistry(root);
+    assert.equal(read.ok, true, `a sibling key is not a corruption: ${JSON.stringify(read)}`);
+    assert.equal(read.error, null);
+    assert.equal(read.version, registryLib.REGISTRY_VERSION, 'and not an unknown version');
+    assert.deepEqual(read.worktrees.map((entry) => entry.branch), rows.map((entry) => entry.branch),
+      'the rows read exactly as they do without the sibling keys');
+    assert.equal(fs.readFileSync(file, 'utf8'), bytes, 'a read never rewrites the file');
+    assert.deepEqual(registrySiblings(file), [], 'and a good document is never backed up as corrupt');
+  });
+
+  for (const [name, run] of SHARED_WRITES) {
+    test(`${name} carries \`kind\` and \`records\` through byte for byte`, () => {
+      const fixture = sharedFixture(`shared-${name.split(' ')[0]}`);
+      const before = fs.readFileSync(fixture.file, 'utf8');
+      const result = run(fixture);
+      assert.equal(result.ok, true, `expected the write to succeed: ${JSON.stringify(result)}`);
+      assertSiblingKeysKept(fixture.file, before);
+      assertCanonicalSharedDocument(fixture.file);
+      assert.deepEqual(registrySiblings(fixture.file), [],
+        'the write left neither a temp file nor a corruption backup behind');
+      assert.notDeepEqual(JSON.parse(fs.readFileSync(fixture.file, 'utf8')).worktrees, JSON.parse(before).worktrees,
+        'the worktrees edit that was asked for did land');
+      assert.equal(registryLib.readRegistry(fixture.root).ok, true, 'the two-owner document is readable again');
+    });
+  }
+
+  test('`kind` and `records` survive an add, then a remove, then a prune', () => {
+    const fixture = sharedFixture('shared-sequence');
+    const steps = [
+      ['add', () => registryLib.upsertWorktree(fixture.root, row('feat/added', fixture.root))],
+      ['remove', () => registryLib.removeWorktree(fixture.root, 'feat/two')],
+      ['prune', () => registryLib.pruneWorktrees(fixture.root, [checkoutPath(fixture.root, 'feat-one')])],
+    ];
+    for (const [step, run] of steps) {
+      const before = fs.readFileSync(fixture.file, 'utf8');
+      const result = run();
+      assert.equal(result.ok, true, `${step}: ${JSON.stringify(result)}`);
+      assertSiblingKeysKept(fixture.file, before);
+      assertCanonicalSharedDocument(fixture.file);
+    }
+    assert.deepEqual(JSON.parse(fs.readFileSync(fixture.file, 'utf8')).worktrees.map((entry) => entry.branch),
+      ['feat/added'], 'the three edits left only the row the add created');
+  });
+
+  test('a metadata-written file survives a registry write and is still read by the metadata side', () => {
+    const root = makeRepo('shared-metadata-e2e');
+    const file = registryLib.registryPath(root);
+    assert.equal(registryLib.upsertWorktree(root, row('feat/one', root)).ok, true);
+    // The metadata side writes its own keys into the same clone file.
+    const recordPath = checkoutPath(root, 'shared-records');
+    const record = { ...SHARED_RECORDS['/tmp/fixture-original'] };
+    metadataLib.saveWorktreeMetadataRecords(file, { [recordPath]: record });
+    const metadataBytes = fs.readFileSync(file, 'utf8');
+    assert.deepEqual(Object.keys(JSON.parse(metadataBytes)), ['kind', 'version', 'worktrees', 'records'],
+      `the metadata side wrote the shared document:\n${metadataBytes}`);
+
+    // A registry write the other owner knows nothing about.
+    const written = registryLib.upsertWorktree(root, row('feat/two', root));
+    assert.equal(written.ok, true, JSON.stringify(written));
+    assertSiblingKeysKept(file, metadataBytes);
+    assertCanonicalSharedDocument(file);
+
+    const reread = metadataLib.readWorktreeMetadataStore(file);
+    assert.equal(reread.status, 'valid', `the metadata side still reads the file: ${JSON.stringify(reread)}`);
+    assert.deepEqual(Object.keys(reread.file.records), [recordPath], 'its records are all still there, none invented');
+    assert.deepEqual(reread.file.records[recordPath], record, 'and unchanged');
+    assert.deepEqual(reread.file.worktrees.map((entry) => entry.branch), ['feat/one', 'feat/two'],
+      'while its view of the registry array is the current one');
+  });
+
+  test('a write over a file that never carried the sibling keys never invents them', () => {
+    const root = makeRepo('shared-absent');
+    const file = writeRegistryFile(root, [row('feat/one', root)]);
+    assert.equal(registryLib.upsertWorktree(root, row('feat/two', root)).ok, true);
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(Object.keys(doc), ['version', 'worktrees'],
+      `no empty records map and no kind are invented: ${JSON.stringify(doc)}`);
+
+    // The same holds for a clone whose registry does not exist yet.
+    const fresh = makeRepo('shared-absent-fresh');
+    assert.equal(registryLib.upsertWorktree(fresh, row('feat/one', fresh)).ok, true);
+    const freshDoc = JSON.parse(fs.readFileSync(registryLib.registryPath(fresh), 'utf8'));
+    assert.deepEqual(Object.keys(freshDoc), ['version', 'worktrees'],
+      `a first write stays exactly as shaped today: ${JSON.stringify(freshDoc)}`);
+  });
+
+  test('`records` without `worktrees` still reads as the malformed registry it reads today', () => {
+    const root = makeRepo('shared-no-worktrees');
+    const file = registryLib.registryPath(root);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const bytes = metadataLib.serializeWorktreeMetadataFile({
+      kind: metadataLib.WORKTREE_METADATA_KIND,
+      version: registryLib.REGISTRY_VERSION,
+      records: SHARED_RECORDS,
+    });
+    fs.writeFileSync(file, bytes);
+    const read = registryLib.readRegistry(root);
+    assert.equal(read.ok, false, 'the file is not a registry until `worktrees` exists');
+    assert.equal(read.version, null);
+    assert.deepEqual(read.worktrees, []);
+    assert.equal(read.error, 'malformed registry (expected {worktrees: []})', 'the message is unchanged');
+    assert.equal(fs.readFileSync(file, 'utf8'), bytes, 'a read never rewrites the file');
+  });
+
+  test('the write that replaces such a document keeps the sibling keys and still backs up the bytes', () => {
+    const root = makeRepo('shared-no-worktrees-write');
+    const file = registryLib.registryPath(root);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const damaged = metadataLib.serializeWorktreeMetadataFile({
+      kind: metadataLib.WORKTREE_METADATA_KIND,
+      version: registryLib.REGISTRY_VERSION,
+      records: SHARED_RECORDS,
+    });
+    fs.writeFileSync(file, damaged);
+    const written = registryLib.upsertWorktree(root, row('feat/new', root));
+    assert.equal(written.ok, true, JSON.stringify(written));
+    assert.equal(typeof written.backup, 'string', 'the damaged bytes are preserved beside the registry');
+    assert.equal(fs.readFileSync(written.backup, 'utf8'), damaged, 'the backup holds the previous bytes');
+    assertSiblingKeysKept(file, damaged, { sameKeyOrder: false });
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(Object.keys(doc), ['kind', 'version', 'worktrees', 'records'],
+      'the completed document takes the stable order this file has always had');
+    assert.deepEqual(doc.worktrees.map((entry) => entry.branch), ['feat/new'],
+      'the worktrees side is replaced, never merged');
+  });
+
+  test('an unmodelled top-level key is tolerated on read and carried through on write', () => {
+    const root = makeRepo('shared-unknown-key');
+    const file = writeRegistryFile(root, [row('feat/one', root)], { kind: 'future.sibling', later: { kept: true } });
+    const bytes = fs.readFileSync(file, 'utf8');
+    const read = registryLib.readRegistry(root);
+    assert.equal(read.ok, true, 'a key this version does not model is tolerated, never a corruption');
+    assert.equal(registryLib.upsertWorktree(root, row('feat/two', root)).ok, true);
+    assertSiblingKeysKept(file, bytes);
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(Object.keys(doc), ['version', 'worktrees', 'kind', 'later'],
+      'the key keeps its place and its bytes; worktrees keeps the position it held');
   });
 });

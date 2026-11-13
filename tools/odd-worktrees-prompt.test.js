@@ -141,6 +141,20 @@ describe('the section is prose on disk', () => {
     assert.doesNotMatch(SECTION, /codegraph/i);
   });
 
+  test('the section states the checkout naming rule once, as the ODD', () => {
+    const prose = SECTION.replace(/\s+/g, ' ');
+    assert.equal(
+      SECTION.match(/<repo-parent>\/<repo-name>-worktrees\//g).length,
+      1,
+      'the destination is stated once',
+    );
+    assert.match(prose, /directory IS the ODD/);
+    assert.match(prose, /`branch` only names the git branch/);
+    assert.doesNotMatch(prose, /defaults to the branch/i);
+    assert.doesNotMatch(prose, /first segment/i);
+    assert.doesNotMatch(prose, /<name>/);
+  });
+
   test('the section never instructs the agent to warp', () => {
     assert.doesNotMatch(SECTION, /worktree_warp/);
     assert.doesNotMatch(SECTION, /move the session/i);

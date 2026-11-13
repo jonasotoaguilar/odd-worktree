@@ -775,6 +775,116 @@ async function runPortedWorktreeCreate(input, ctx) {
   return textResult(view.text, view.details, false);
 }
 
+// ---- S5: the two tools' own cards ----
+//
+// Both tool definitions render their call and result through
+// lib/worktree-cards.js, the renderer that draws on the substrate of
+// lib/shell-card.js (S5). The host seam is `renderCall` / `renderResult` on a
+// ToolDefinition registered through `defineTool` + `pi.registerTool`
+// (@earendil-works/pi-coding-agent `dist/core/extensions/types.d.ts`).
+//
+// The text measurement those cards need (`visibleWidth`, `truncateToWidth`,
+// `wrapTextWithAnsi`) belongs to @earendil-works/pi-tui and is resolved INSIDE
+// the hook, never imported at load: this package ships no node_modules, and the
+// test loader stubs only the two package import lines. When the host has no such
+// module the same hooks answer PLAIN TEXT — the tool's own call name and its own
+// result text — so a missing TUI package only costs the frame, never the answer,
+// and nothing can throw while the extension loads.
+let worktreeToolCardMetricsOverride;
+let worktreeToolCardMetricsAuto;
+let worktreeToolCardMetricsResolved = false;
+let worktreeToolCardsCache;
+
+/** The measurement seam tests inject; `undefined` restores the runtime lookup. */
+function setWorktreeToolCardMetrics(metrics) {
+  worktreeToolCardMetricsOverride = metrics;
+}
+
+function loadRuntimeToolCardMetrics() {
+  try {
+    const tui = require("@earendil-works/pi-tui");
+    if (!tui) return null;
+    const { visibleWidth, truncateToWidth, wrapTextWithAnsi } = tui;
+    if (
+      typeof visibleWidth !== "function"
+      || typeof truncateToWidth !== "function"
+      || typeof wrapTextWithAnsi !== "function"
+    ) return null;
+    return {
+      visibleWidth: (text) => visibleWidth(text),
+      truncateToWidth: (text, width, ellipsis) => truncateToWidth(text, width, ellipsis),
+      wrapTextWithAnsi: (text, width) => wrapTextWithAnsi(text, width),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolveWorktreeToolCardMetrics() {
+  if (worktreeToolCardMetricsOverride !== undefined) return worktreeToolCardMetricsOverride || null;
+  if (!worktreeToolCardMetricsResolved) {
+    worktreeToolCardMetricsResolved = true;
+    worktreeToolCardMetricsAuto = loadRuntimeToolCardMetrics();
+  }
+  return worktreeToolCardMetricsAuto || null;
+}
+
+// One factory per metrics identity, so a render never rebuilds the cards and an
+// injected seam still takes effect on the next render.
+function worktreeCardRenderer(toolName, metrics) {
+  if (worktreeToolCardsCache === undefined || worktreeToolCardsCache.metrics !== metrics) {
+    const cards = libRequire("worktree-cards.js").createWorktreeCards({ metrics });
+    worktreeToolCardsCache = { metrics, cards };
+  }
+  return worktreeToolCardsCache.cards.renderer(toolName);
+}
+
+function plainTextComponent(text) {
+  const lines = String(text).split("\n");
+  return {
+    render() { return lines; },
+    invalidate() {},
+  };
+}
+
+// The heading the plain fallback shows: the tool's own name plus the one
+// argument that changes what it does, in the same words the card's detail uses.
+function worktreeCallPlainText(toolName, args) {
+  const value = args !== null && typeof args === "object" ? args : {};
+  const detail = toolName === "worktree_create"
+    ? (typeof value.branch === "string" && value.branch.length > 0 ? ` ${value.branch}` : "")
+    : (value.all === true ? " all" : "");
+  return `${toolName.replace("_", " ")}${detail}`;
+}
+
+/** The two render hooks one tool definition carries, bound to that tool's card. */
+function worktreeToolRenderers(toolName) {
+  return {
+    renderCall(args, theme, context) {
+      const metrics = resolveWorktreeToolCardMetrics();
+      if (metrics !== null) {
+        try {
+          return worktreeCardRenderer(toolName, metrics).renderCall(args, theme, context);
+        } catch {
+          // The card is presentation; the call is never lost to it.
+        }
+      }
+      return plainTextComponent(worktreeCallPlainText(toolName, args));
+    },
+    renderResult(result, options, theme, context) {
+      const metrics = resolveWorktreeToolCardMetrics();
+      if (metrics !== null) {
+        try {
+          return worktreeCardRenderer(toolName, metrics).renderResult(result, options, theme, context);
+        } catch {
+          // The card is presentation; the tool's own answer is never lost to it.
+        }
+      }
+      return plainTextComponent(toolResultText(result));
+    },
+  };
+}
+
 /** S1: the `worktree_create` tool's own front — the ported request and nothing else. */
 async function executePortedWorktreeCreate(params, ctx) {
   return runPortedWorktreeCreate({
@@ -798,6 +908,7 @@ const worktreeCreateTool = defineTool({
     name: opt(Type.String({ description: "Directory name under <repo-name>-worktrees. Omitted derives it from the branch: feat/worktree-tools becomes worktree-tools." })),
     copy_changes: opt(Type.Boolean({ description: "Omitted or false copies nothing. true carries this clone's uncommitted changes, staged and unstaged plus untracked non-ignored files, into the new worktree and leaves them in the main worktree too." })),
   }),
+  ...worktreeToolRenderers("worktree_create"),
   async execute(toolCallId, params, signal, onUpdate, ctx) {
     return executePortedWorktreeCreate(params || {}, ctx);
   },
@@ -811,11 +922,36 @@ const worktreeCreateTool = defineTool({
 // registry rows and Git's own worktree set stay exactly as the call found them, so a
 // dead record is reported as `gone`/`missing` instead of being pruned behind the
 // caller's back.
+
+// S12: `interrupted` is reachable only when the reconciliation can ask whether a
+// record's job is still alive. This process's own setup runner owns that answer
+// (`lib/worktree-setup-runner.js` keeps its running tasks keyed by checkout
+// path), so the join is each record's `setup.jobId`: a job is live exactly while
+// the runner still runs a task for the checkout that record belongs to. A record
+// a dead session left `running` therefore derives `interrupted` instead of
+// printing a stale `running` forever; the stored record is never rewritten here.
+function setupJobLiveness(records, runner) {
+  const live = new Set();
+  for (const [worktreePath, record] of Object.entries(records)) {
+    const jobId = record && record.setup ? record.setup.jobId : undefined;
+    if (typeof jobId !== "string" || jobId.length === 0) continue;
+    let running = false;
+    try {
+      running = runner.isWorktreeSetupRunning(worktreePath) === true;
+    } catch {
+      running = false;
+    }
+    if (running) live.add(jobId);
+  }
+  return (jobId) => live.has(jobId);
+}
+
 async function executePortedWorktreeList(params, ctx) {
   const git = libRequire("worktree-git.js");
   const metadata = libRequire("worktree-metadata.js");
   const registry = libRequire("worktree-registry.js");
   const list = libRequire("worktree-list.js");
+  const runner = libRequire("worktree-setup-runner.js");
   const cwd = toolCwd(ctx);
   const runAsync = libRunner(git);
   const portedGit = portedGitSeam(runAsync);
@@ -835,11 +971,13 @@ async function executePortedWorktreeList(params, ctx) {
   // A store this version cannot read loses the filter it feeds, so the list shows
   // what Git knows and says why, instead of an empty view that looks authoritative.
   const lost = store.status === "unreadable" || store.status === "unsupported";
+  const records = store.status === "valid" ? store.file.records : {};
   const view = list.worktreeListView({
     reconciliation: metadata.reconcileWorktrees({
       entries,
-      records: store.status === "valid" ? store.file.records : {},
+      records,
       commonDir: repo.commonDir,
+      setupJobLiveness: setupJobLiveness(records, runner),
     }),
     project: path.basename(main.path),
     main: { path: main.path, branch: main.branch || "-", shortSha: (main.head || "").slice(0, 7) },
@@ -1859,6 +1997,7 @@ const worktreeListTool = defineTool({
   parameters: Type.Object({
     all: opt(Type.Boolean({ description: "Omitted lists only the registered worktrees. true also shows the worktrees Git knows outside the list and the records whose worktree no longer exists." })),
   }),
+  ...worktreeToolRenderers("worktree_list"),
   async execute(toolCallId, params, signal, onUpdate, ctx) {
     return executePortedWorktreeList(params, ctx);
   },
@@ -6595,4 +6734,4 @@ export default function (pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable };

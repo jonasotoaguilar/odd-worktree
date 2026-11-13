@@ -3,8 +3,11 @@
 // from the two fields the form asks for.
 //
 // A human picking a change type wants to see WHICH type they picked before
-// typing anything: `preview branch: feat/` and the checkout directory it will
-// occupy (`…/odd-worktree-worktrees/feat-`), completed as the name is typed.
+// typing anything: `preview branch: feat/` and the directory the checkout will
+// occupy (`…/odd-worktree-worktrees`), completed as the name is typed. The
+// directory name is the CREATE's own (`defaultWorktreeName` drops the branch's
+// leading type segment: `feat/login` lands in `…-worktrees/login`), so the
+// preview and the create can never show two different paths.
 // The preview is DISPLAY ONLY while the name is empty — an untouched form is
 // still not submittable — so the refusal keeps its own words while the two
 // preview rows stay neutral. Picking another type moves both rows on the same
@@ -24,6 +27,7 @@ const { execFileSync } = require('node:child_process');
 
 const panel = require('../lib/warp-create-panel.js');
 const realGit = require('../lib/worktree-git.js');
+const createLib = require('../lib/worktree-create.js');
 
 const scratch = [];
 after(() => {
@@ -109,17 +113,19 @@ describe('the preview shows the selected type before any name is typed', { concu
   test('an untouched form previews the type branch prefix and its checkout directory', () => {
     const { view } = openPanel();
     assert.equal(previewText(view, 'branch'), 'feat/', 'the branch preview names the picked type');
-    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'feat-'), 'the path preview names the directory that type starts');
+    assert.equal(previewText(view, 'path'), WORKTREE_ROOT, 'the path preview names the directory a name will complete into');
     const text = allText(renderedLines(view));
     assert.ok(!text.includes('preview branch: -'), 'the branch preview is never blank once the type is known');
     assert.ok(!text.includes('preview path: -'), 'the path preview is never blank once the type is known');
   });
 
-  test('every change type previews its own prefix', () => {
+  test('every change type previews its own branch prefix', () => {
     for (const type of panel.CHANGE_TYPES) {
       const { view } = openPanel({ initialType: type.id });
       assert.equal(previewText(view, 'branch'), `${type.id}/`, `${type.id} previews its branch prefix`);
-      assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, `${type.id}-`), `${type.id} previews its checkout directory`);
+      // The create names the directory after the branch's LAST segment, not the
+      // type, so every type lands in the same root while the name is empty.
+      assert.equal(previewText(view, 'path'), WORKTREE_ROOT, `${type.id} previews the directory it lands in`);
     }
   });
 
@@ -128,10 +134,10 @@ describe('the preview shows the selected type before any name is typed', { concu
     focusName(view);
     typeText(view, 'my');
     assert.equal(previewText(view, 'branch'), 'feat/my', 'the branch preview follows the first typed characters');
-    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'feat-my'), 'the path preview follows them too');
+    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'my'), 'the path preview follows them too');
     typeText(view, '-name');
     assert.equal(previewText(view, 'branch'), 'feat/my-name');
-    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'feat-my-name'));
+    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'my-name'));
   });
 
   test('switching the type moves both previews on the same keystroke, typed name included', () => {
@@ -139,7 +145,7 @@ describe('the preview shows the selected type before any name is typed', { concu
     assert.equal(previewText(view, 'branch'), 'feat/');
     view.handleInput('\x1b[B'); // down: Bug fix
     assert.equal(previewText(view, 'branch'), 'fix/', 'both rows follow the picked type immediately');
-    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'fix-'));
+    assert.equal(previewText(view, 'path'), WORKTREE_ROOT);
 
     focusName(view);
     typeText(view, 'my-name');
@@ -147,10 +153,10 @@ describe('the preview shows the selected type before any name is typed', { concu
     assert.equal(view.state.focus, 'type');
     view.handleInput('\x1b[A'); // up: back to feat
     assert.equal(previewText(view, 'branch'), 'feat/my-name', 'the typed name survives the type change');
-    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'feat-my-name'));
+    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'my-name'));
     view.handleInput('\x1b[B'); // down: fix again
     assert.equal(previewText(view, 'branch'), 'fix/my-name');
-    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'fix-my-name'));
+    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'my-name'), 'the directory is named after the change, not the type');
     assert.deepEqual(finished, [], 'changing the type never submits the form');
   });
 
@@ -178,8 +184,30 @@ describe('the preview shows the selected type before any name is typed', { concu
   test('a complete form previews and creates the same branch and path', () => {
     const { view, finished } = openPanel({ initialName: 'new-change' });
     assert.equal(previewText(view, 'branch'), 'feat/new-change');
-    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'feat-new-change'));
+    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'new-change'));
     createNow(view);
     assert.deepEqual(finished, [{ ok: true, type: 'feat', name: 'new-change' }], 'the completed form creates with the type id and the typed name');
+  });
+
+  // The create and the preview must ask ONE function what a branch is called on
+  // disk. `feat/login` is the case the legacy slug got wrong (`feat-login`): the
+  // ported create drops the branch's leading segment and makes `login`.
+  test('the preview equals the path the create makes for feat/login and for an explicit name', () => {
+    const { view } = openPanel({ initialName: 'login' });
+    assert.equal(previewText(view, 'branch'), 'feat/login');
+    const previewPath = previewText(view, 'path');
+
+    assert.equal(createLib.defaultWorktreeName('feat/login'), 'login');
+    assert.equal(previewPath, createLib.worktreeDestinationPath(REPO, createLib.defaultWorktreeName('feat/login')));
+    assert.equal(previewPath, path.join(WORKTREE_ROOT, 'login'));
+    assert.notEqual(previewPath, path.join(WORKTREE_ROOT, 'feat-login'), 'the legacy slug is never previewed');
+
+    // An explicit `name` is the other half of the same derivation: the create
+    // lays that name out verbatim, and the panel's typed name is that name.
+    assert.equal(
+      createLib.worktreeDestinationPath(REPO, 'login'),
+      createLib.worktreeDestinationPath(REPO, createLib.defaultWorktreeName('feat/login')),
+      'the derived name and the explicit name name the same directory',
+    );
   });
 });

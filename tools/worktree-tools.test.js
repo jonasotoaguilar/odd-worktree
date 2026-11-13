@@ -12,7 +12,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
+const { EventEmitter } = require('node:events');
 const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
+// The SAME module instance the extension's libRequire reaches: liveness of a setup
+// task is process-wide state, so the test must observe the runner the front uses.
+const setupRunner = require(path.join(LIB_DIR, 'worktree-setup-runner.js'));
 
 const scratch = [];
 function track(dir) {
@@ -650,5 +654,236 @@ describe('the create reports the setup state it can back', { concurrency: false 
     assert.notEqual(created.isError, true, resultText(created));
     assert.match(resultText(created), /^setup: skipped \(no lockfile at root\) · worktree is not ready yet$/m);
     assert.deepEqual(created.details.setup, { status: 'skipped', steps: [], detail: 'no lockfile at root' });
+  });
+});
+
+// ---- S5: the two tools draw their own cards ----
+//
+// The card module and the substrate have their own suites; this block proves the
+// WIRING. The registered `worktree_create` and `worktree_list` definitions the
+// host received must carry both render hooks, and each hook must draw its own
+// tool's card at the requested width. Measurement is the host's
+// `@earendil-works/pi-tui` seam, injected here exactly as the extension injects
+// it at render time. With no metrics the same hooks answer plain text: a host
+// without that package still shows the tool's own answer and never throws.
+const ANSI = /\x1b\[[0-9;]*m/g;
+const stripAnsi = (value) => String(value).replace(ANSI, '');
+const cardColumns = (value) => [...stripAnsi(value)].length;
+
+// The same plain-ASCII text seam tools/worktree-cards.test.js injects: this
+// package ships no node_modules, so measurement is always a seam.
+const cardMetrics = {
+  visibleWidth: (value) => cardColumns(value),
+  truncateToWidth(value, width, ellipsis = '') {
+    if (width <= 0) return '';
+    const chars = [...stripAnsi(value)];
+    if (chars.length <= width) return value;
+    const tail = ellipsis ?? '';
+    return chars.slice(0, Math.max(0, width - [...tail].length)).join('') + tail;
+  },
+  wrapTextWithAnsi(value, width) {
+    const words = stripAnsi(value).split(' ');
+    if (width <= 0) return [stripAnsi(value)];
+    const lines = [];
+    let current = '';
+    for (const word of words) {
+      const candidate = current === '' ? word : `${current} ${word}`;
+      if ([...candidate].length <= width) {
+        current = candidate;
+        continue;
+      }
+      if (current !== '') {
+        lines.push(current);
+        current = '';
+      }
+      if ([...word].length <= width) {
+        current = word;
+        continue;
+      }
+      const rest = [...word];
+      while (rest.length > width) lines.push(rest.splice(0, width).join(''));
+      current = rest.join('');
+    }
+    lines.push(current);
+    return lines;
+  },
+};
+
+const CARD_THEME = { fg: (_role, value) => value };
+
+function assertCardFrame(rows, width) {
+  assert.ok(rows.length >= 2, 'a card draws at least a top and a bottom row');
+  for (const row of rows) {
+    assert.equal(cardColumns(row), width, `"${stripAnsi(row)}" is not ${width} columns wide`);
+  }
+  assert.ok(stripAnsi(rows[0]).startsWith('╭'), 'the card opens with a rounded frame');
+  assert.ok(stripAnsi(rows[rows.length - 1]).startsWith('╰'), 'the card closes with a rounded frame');
+}
+
+function assertResultFrame(rows, width) {
+  for (const row of rows) {
+    assert.equal(cardColumns(row), width, `"${stripAnsi(row)}" is not ${width} columns wide`);
+  }
+  assert.ok(stripAnsi(rows[0]).startsWith('│'), 'the result body sits inside the frame the call opened');
+  assert.ok(stripAnsi(rows[rows.length - 1]).startsWith('╰'), 'the result closes the card');
+}
+
+describe('the two tools draw their own card (S5)', { concurrency: false }, () => {
+  after(() => { extensionMod.setWorktreeToolCardMetrics(undefined); });
+
+  test('both registered definitions carry the call and result hooks', () => {
+    for (const name of ['worktree_create', 'worktree_list']) {
+      const tool = tools.get(name);
+      assert.equal(typeof tool.renderCall, 'function', `${name} renders its call`);
+      assert.equal(typeof tool.renderResult, 'function', `${name} renders its result`);
+    }
+  });
+
+  test('worktree_create renders its call and result as a framed card', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const result = await tools.get('worktree_create').execute('card-create', { branch: 'feat/card' }, undefined, undefined, ctx);
+    assert.notEqual(result.isError, true, resultText(result));
+
+    extensionMod.setWorktreeToolCardMetrics(cardMetrics);
+    const tool = tools.get('worktree_create');
+    const state = {};
+    const callRows = tool.renderCall({ branch: 'feat/card' }, CARD_THEME, { state }).render(60);
+    assertCardFrame(callRows, 60);
+    assert.match(stripAnsi(callRows[0]), /worktree create/);
+    assert.match(stripAnsi(callRows[0]), /feat\/card/);
+
+    const resultRows = tool.renderResult(result, { expanded: false }, CARD_THEME, { state, durationMs: 1234 }).render(60);
+    assertResultFrame(resultRows, 60);
+    assert.ok(
+      stripAnsi(resultRows.join('\n')).includes('worktree created:'),
+      'the card body is the tool’s own answer, never a reformat',
+    );
+  });
+
+  test('worktree_list renders its call and result as a framed card', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const result = await tools.get('worktree_list').execute('card-list', {}, undefined, undefined, ctx);
+    assert.notEqual(result.isError, true, resultText(result));
+
+    extensionMod.setWorktreeToolCardMetrics(cardMetrics);
+    const tool = tools.get('worktree_list');
+    const state = {};
+    const callRows = tool.renderCall({}, CARD_THEME, { state }).render(60);
+    assertCardFrame(callRows, 60);
+    assert.match(stripAnsi(callRows[0]), /worktree list/);
+
+    const resultRows = tool.renderResult(result, { expanded: true }, CARD_THEME, { state, durationMs: 250 }).render(60);
+    assertResultFrame(resultRows, 60);
+    assert.ok(
+      stripAnsi(resultRows.join('\n')).includes(`project: ${path.basename(repo)}`),
+      'the card body is the tool’s own answer, never a reformat',
+    );
+  });
+
+  test('without host metrics both hooks fall back to plain text and never throw', () => {
+    extensionMod.setWorktreeToolCardMetrics(null);
+    const tool = tools.get('worktree_list');
+    assert.deepEqual(
+      tool.renderCall({ all: true }, CARD_THEME, { state: {} }).render(60),
+      ['worktree list all'],
+      'the plain call names the tool and its one argument',
+    );
+    const result = { content: [{ type: 'text', text: 'project: demo\npath: /tmp/demo' }], details: {} };
+    assert.deepEqual(
+      tool.renderResult(result, { expanded: false }, CARD_THEME, { state: {} }).render(60),
+      ['project: demo', 'path: /tmp/demo'],
+      'the plain result IS the tool text',
+    );
+  });
+});
+
+// ---- S12: the list can derive `interrupted` ----
+//
+// `pending` and `interrupted` are part of the closed vocabulary, so they must be
+// reachable. The reconciliation asks a `setupJobLiveness(jobId)` seam, and the
+// front answers from this process's own setup runner: a record's job is live
+// exactly while the runner still runs a task for that record's checkout. A job a
+// dead session left behind therefore reads `interrupted`, while a live one keeps
+// reading `running`, and neither read rewrites the stored record.
+function fakeSetupSpawn() {
+  const calls = [];
+  const spawn = (bin, args, options) => {
+    const child = new EventEmitter();
+    child.kill = () => {};
+    calls.push({ bin, args, options, child });
+    return child;
+  };
+  return { spawn, calls };
+}
+
+const SETUP_SEAMS = {
+  entries: async () => ['package-lock.json'],
+  hasBinary: async (binary) => binary === 'npm',
+};
+
+function cloneDocument(repo) {
+  const commonDir = git(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  return path.join(commonDir, 'pi-worktrees.json');
+}
+
+describe('worktree_list derives the setup liveness of a record (S12)', { concurrency: false }, () => {
+  test('a live setup job keeps its record `running`', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('live-setup', { branch: 'feat/live' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    const target = created.details.path;
+    const storePath = cloneDocument(repo);
+    fs.writeFileSync(path.join(target, 'package-lock.json'), '{}\n');
+    const logRoot = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-live-log-')));
+    const { spawn, calls } = fakeSetupSpawn();
+    const started = await setupRunner.startWorktreeSetup({
+      path: target,
+      name: 'live',
+      storePath,
+      sessionId: 'thread-1',
+      copiedChanges: 0,
+      seams: SETUP_SEAMS,
+      spawn,
+      logRoot,
+      now: () => new Date(),
+    });
+    try {
+      assert.equal(started.started, true);
+      assert.equal(setupRunner.isWorktreeSetupRunning(target), true);
+      const listed = await tools.get('worktree_list').execute('live-setup-list', {}, undefined, undefined, ctx);
+      assert.notEqual(listed.isError, true, resultText(listed));
+      assert.match(resultText(listed), /^1 live feat\/live odd: - running \(npm ci\)$/m);
+    } finally {
+      // Settle the fake child, so the task never outlives this test.
+      calls[0].child.emit('close', 0, null);
+      await started.settled;
+    }
+    assert.equal(setupRunner.isWorktreeSetupRunning(target), false);
+  });
+
+  test('a `running` record whose job is gone derives `interrupted` without a write', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('dead-setup', { branch: 'feat/dead' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    const target = created.details.path;
+    const storePath = cloneDocument(repo);
+
+    const document = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+    const deadSetup = { status: 'running', steps: [{ command: 'npm ci', status: 'running' }], command: 'npm ci', jobId: '0-0-1' };
+    document.records[target].setup = deadSetup;
+    fs.writeFileSync(storePath, JSON.stringify(document));
+
+    const listed = await tools.get('worktree_list').execute('dead-setup-list', {}, undefined, undefined, ctx);
+    assert.notEqual(listed.isError, true, resultText(listed));
+    assert.match(resultText(listed), /^1 dead feat\/dead odd: - interrupted$/m);
+    assert.doesNotMatch(resultText(listed), /running/, 'a dead job never reads busy');
+
+    // The observation is derived, never persisted: the read leaves the record alone.
+    const after = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+    assert.deepEqual(after.records[target].setup, deadSetup, 'the list never rewrites the stored record');
   });
 });

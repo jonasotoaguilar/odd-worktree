@@ -1,21 +1,14 @@
 ## ODD worktrees
 
-Each ODD feature has its own worktree.
+A worktree lives at `<repo-parent>/<repo-name>-worktrees/<odd>`: the directory IS the ODD
+it serves. `worktree_list` finds existing assignments, so resume one instead of
+duplicating it. `worktree_create` creates it; if there are pending changes that belong to
+that work, carry them with `copy_changes: true`.
 
-Starting a new ODD: create its worktree (`worktree_create`) before writing
-anything.
+One ODD, one worktree. Work on the same feature goes into its ODD, adding tasks, and
+therefore into its worktree; a different feature is a different ODD, with another
+worktree. You may delegate several subagents in parallel — on the same or on different
+worktrees — as long as they do not edit the same files.
 
-Resuming an ODD: check with `worktree_list` whether it already has an associated
-worktree. If it does, resume it there; if it does not, create it. ODD work never
-starts in the principal checkout.
-
-`worktree_create` places the checkout at `<repo-parent>/<repo-name>-worktrees/<odd>`.
-The directory IS the ODD, so `odd` is required and names the checkout (`odd: login-ui`
-lands in `…-worktrees/login-ui`), while `branch` only names the git branch, created
-when it does not exist and adopted when it does. Two checkouts for one ODD cannot
-coexist, and the branch never names a directory. Setup runs in the background, so the
-checkout is usable before it finishes; `worktree_list` says where it stands.
-
-Deleting a checkout and warping are the human's actions, taken from `/warp`.
-Never remove a checkout and never warp on your own. Once the work is merged into
-the trunk the branch is kept, and the checkout can be removed from `/warp`.
+After the merge, keep the branch and remove the worktree, unless a session is standing in
+that checkout.

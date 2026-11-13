@@ -149,7 +149,6 @@ describe('the section is prose on disk', () => {
       'the destination is stated once',
     );
     assert.match(prose, /directory IS the ODD/);
-    assert.match(prose, /`branch` only names the git branch/);
     assert.doesNotMatch(prose, /defaults to the branch/i);
     assert.doesNotMatch(prose, /first segment/i);
     assert.doesNotMatch(prose, /<name>/);
@@ -158,5 +157,40 @@ describe('the section is prose on disk', () => {
   test('the section never instructs the agent to warp', () => {
     assert.doesNotMatch(SECTION, /worktree_warp/);
     assert.doesNotMatch(SECTION, /move the session/i);
+  });
+});
+
+// The policy the block states, in its three paragraphs.
+describe('the section states the worktree policy', () => {
+  const prose = () => SECTION.replace(/\s+/g, ' ');
+
+  test('a worktree is the ODD: find the assignment, resume it, create it, carry pending work', () => {
+    const text = prose();
+    assert.match(text, /A worktree lives at `/, text);
+    assert.match(text, /directory IS the ODD/, text);
+    assert.match(text, /`worktree_list` finds existing assignments, so resume one instead of duplicating it/, text);
+    assert.match(text, /`worktree_create` creates it/, text);
+    assert.match(text, /carry them with `copy_changes: true`/, text);
+  });
+
+  test('one ODD, one worktree, and parallel subagents that edit different files', () => {
+    const text = prose();
+    assert.match(text, /One ODD, one worktree\./, text);
+    assert.match(text, /Work on the same feature goes into its ODD, adding tasks/, text);
+    assert.match(text, /a different feature is a different ODD, with another worktree/, text);
+    assert.match(text, /delegate several subagents in parallel/, text);
+    assert.match(text, /as long as they do not edit the same files/, text);
+  });
+
+  test('after the merge the branch is kept and the worktree removed, unless a session stands there', () => {
+    const text = prose();
+    assert.match(text, /After the merge, keep the branch and remove the worktree, unless a session is standing in that checkout/, text);
+    assert.doesNotMatch(text, /never remove/i);
+  });
+
+  // The rule only: no removal mechanism reaches the agent, because none is the
+  // agent's. This is the whole point of the paragraph.
+  test('the section names no removal mechanism', () => {
+    assert.doesNotMatch(SECTION, /ctrl\+d|git worktree remove|worktree_remove|\/warp/);
   });
 });

@@ -311,8 +311,11 @@ Nothing is written to user configuration, and there is no second worktree file.
 ### The `## ODD worktrees` block in the system prompt
 
 The primary session's system prompt gains a short section telling the agent where
-worktrees live, to resume an ODD in its assigned one, and that deleting a
-checkout and moving the session are the human's actions, taken from `/warp`.
+a worktree lives and that the directory is the ODD it serves, that an ODD with an
+existing assignment is resumed instead of duplicated, to carry pending work that
+belongs to it with `copy_changes`, and that after the merge the branch is kept and
+the checkout removed unless a live session stands in it. Moving the session stays
+the human's.
 
 It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other

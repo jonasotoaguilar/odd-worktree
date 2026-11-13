@@ -4876,14 +4876,16 @@ async function askCreatePendingChanges({ ctx, git, fromCheckout }) {
 }
 
 // Create-then-return (S7): the selector's create completion mounts the
-// THREE-STEP panel (the change type, the change name and the ODD) as an overlay,
-// then runs the SAME creation path `worktree_create` uses — which never
-// prompts — and STOPS there. Creation is creation: nothing is warped by
+// TWO-FIELD panel (the change type and the ODD, where the ODD is picked from the
+// ODDs `main` carries with `new odd` as its first entry and its only typed case)
+// as an overlay, then runs the SAME creation path `worktree_create` uses — which
+// never prompts — and STOPS there. Creation is creation: nothing is warped by
 // itself, so the caller can hand the selector back with a fresh listing that
 // includes the checkout just made, and the human picks where the session
 // goes. The ODD names the checkout's directory (S7), so the create carries it
-// and keeps its invalid, duplicate, occupied and principal refusals' shape. A
-// new row is still born without an issue association.
+// and keeps its invalid, duplicate, occupied and principal refusals' shape. There
+// is NO second name: the branch is derived from the type and the ODD. A new row
+// is still born without an issue association.
 //
 // It ALWAYS reports `{ closed: true, created, cancelled?, worktree?, branch? }`
 // once the panel closed, so the caller hands the selector back every time: a
@@ -4915,12 +4917,26 @@ async function warpCreateAndEnter(ctx, git, notify) {
     helpers = null;
   }
   const panelCwd = toolCwd(ctx);
+  // S2: the ODD picker offers the ODDs that exist in `main`, read from its tree
+  // with ONE bounded child here — never on a render or a keystroke, and never
+  // from the working tree of whichever checkout this session happens to stand
+  // in. A read that cannot answer is an EMPTY list: the picker still opens with
+  // its `new odd` entry, so an unreadable `odd/tasks` is never an error.
+  let oddOptions = [];
+  try {
+    if (typeof panelLib.listMainOddTasks === "function") {
+      oddOptions = await panelLib.listMainOddTasks({ runAsync: libRunner(git), cwd: panelCwd });
+    }
+  } catch {
+    oddOptions = [];
+  }
   let out;
   try {
     out = await ctx.ui.custom(
       (hostTui, theme, _keybindings, done) => panelLib.createWarpCreatePanel({
         cwd: panelCwd,
         changeTypes: WARP_CHANGE_TYPES,
+        oddOptions,
         git,
         helpers,
         hostTui,
@@ -4942,18 +4958,18 @@ async function warpCreateAndEnter(ctx, git, notify) {
   // goes, including any checkout just made. `cancelled` distinguishes this from
   // a refusal; closing the RETURNED selector is what ends the flow.
   if (!out || out.ok !== true) return { closed: true, created: false, cancelled: true };
-  // S7: the create's OWN identity is the ODD, so the form must answer it. The
-  // branch is only the git branch: created with the checkout, or adopted when it
-  // already exists.
-  const rawName = typeof out.name === "string" ? out.name.trim() : "";
+  // S1: the create's only identity is the ODD, so the form answers it and nothing
+  // else — there is no second name to combine it with. The branch is only the git
+  // branch, derived from the two things the form asked for: created with the
+  // checkout, or adopted when it already exists.
   const odd = typeof out.odd === "string" ? out.odd.trim() : "";
-  const branch = `${out.type}/${git.slugifyBranch(rawName)}`;
-  if (!WARP_CREATE_BRANCH_RE.test(branch)) {
-    notify?.(`warp: invalid change name ${JSON.stringify(out.name)}: use at least one letter or digit (for example "name-change"); nothing was created.`, "error");
-    return { closed: true, created: false };
-  }
   if (odd === "") {
     notify?.('warp: the ODD is required: it names the checkout\'s directory (for example "login-ui"); nothing was created.', "error");
+    return { closed: true, created: false };
+  }
+  const branch = `${out.type}/${git.slugifyBranch(odd)}`;
+  if (!WARP_CREATE_BRANCH_RE.test(branch)) {
+    notify?.(`warp: the ODD ${JSON.stringify(odd)} does not make a branch name (${branch}): use one with a letter or digit, for example "login-ui"; nothing was created.`, "error");
     return { closed: true, created: false };
   }
   const createParams = { branch, odd };

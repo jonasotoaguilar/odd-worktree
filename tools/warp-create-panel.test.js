@@ -1,23 +1,19 @@
 'use strict';
-// The create panel's live preview: the branch and the target path it derives
-// from the fields the form asks for.
+// The create wizard: `Type · Odd` — the ODD is the one identity, chosen from the
+// ODDs that exist in `main` (first entry `new odd`, the only typed case). There is
+// no `Name` field: the checkout's directory IS the ODD, so a second name would be
+// the same fact asked twice, and the active field's own row never echoes what the
+// list already shows.
 //
-// A human picking a change type wants to see WHICH type they picked before
-// typing anything: `preview branch: feat/` and the worktree root the checkout
-// will occupy (`…/odd-worktree-worktrees`), completed as the form is filled in.
-// S7 splits the two rows by their owner: the BRANCH follows the change type and
-// the change name (`feat/login`), and the PATH is the ODD — the create makes
-// `<repo-parent>/<repo-name>-worktrees/<odd>`, so the preview and the create can
-// never show two different paths, and a branch name never names a directory.
-// The preview is DISPLAY ONLY while a field is empty — an untouched form is
-// still not submittable — so the refusal keeps its own words while the two
-// preview rows stay neutral. Picking another type moves the branch row on the
-// same keystroke and leaves the ODD's path alone.
+// S1 of the ODD (odd/tasks/warp-odd-picker.md): the `Name` field is gone. S2/S3:
+// the ODD is picked, `new odd` first, and the list is main's `odd/tasks/*.md`
+// (`listMainOddTasks`). Nothing here writes a file: the wizard creates nothing, an
+// escape writes nothing, and the document of an ODD is left to the agent.
 //
 // Every test renders headlessly against a real temporary repository (the path
 // derivation reads the real repository identity through the same helpers the
-// create path uses) and asserts each line is exactly the requested width.
-// The temporary repository is removed when the suite ends.
+// create path uses) and asserts each line is exactly the requested width. The
+// temporary repository is removed when the suite ends.
 
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -90,22 +86,18 @@ function openPanel(overrides = {}) {
     helpers: null,
     hostTui: null,
     theme: null,
-    rowsAvailable: () => 24,
+    rowsAvailable: () => 30,
     done: (value) => { finished.push(value); },
     ...overrides,
   });
   return { view, finished };
 }
 
-// The strip holds three fields, so a helper steps to the one it wants from
+// The strip holds TWO fields, so a helper steps to the one it wants from
 // wherever the panel is instead of assuming a starting tab.
 function focusField(view, field) {
-  for (let step = 0; step < 3 && view.state.focus !== field; step += 1) view.handleInput('\t');
+  for (let step = 0; step < 4 && view.state.focus !== field; step += 1) view.handleInput('\t');
   assert.equal(view.state.focus, field, `the panel never reached the ${field} field`);
-}
-
-function focusName(view) {
-  focusField(view, 'name');
 }
 
 function focusOdd(view) {
@@ -122,7 +114,99 @@ function submit(view) {
   view.handleInput('enter');
 }
 
-describe('the create panel previews the branch and the ODD separately', { concurrency: false }, () => {
+// A whole-tree snapshot (relative path -> size), so "writes nothing" is proven
+// against the filesystem and not against a claim.
+function treeSnapshot(root) {
+  const rows = [];
+  const walk = (dir, prefix) => {
+    let names = [];
+    try { names = fs.readdirSync(dir).sort(); } catch { return; }
+    for (const name of names) {
+      const full = path.join(dir, name);
+      let stats;
+      try { stats = fs.lstatSync(full); } catch { continue; }
+      rows.push(`${prefix}${name}:${stats.size}`);
+      if (stats.isDirectory() && name !== '.git') walk(full, `${prefix}${name}/`);
+    }
+  };
+  walk(root, '');
+  return rows;
+}
+
+describe('the create wizard asks for the ODD once', { concurrency: false }, () => {
+  test('the strip is Type · Odd: there is no Name field anywhere', () => {
+    const { view } = openPanel({ oddOptions: ['login-ui'] });
+    const text = allText(renderedLines(view));
+    assert.match(text, /Type · Odd/, 'the strip names the two fields');
+    assert.ok(!/\bName\b/.test(text), `no field or row is called Name\n${text}`);
+    assert.ok(!/Name:/.test(text), 'no Name row renders');
+  });
+
+  test('the fields are tabs: tab and the arrows walk Type → Odd and wrap', () => {
+    const { view } = openPanel();
+    assert.equal(view.state.focus, 'type');
+    view.handleInput('\t');
+    assert.equal(view.state.focus, 'odd', 'tab moves forward');
+    view.handleInput('\t');
+    assert.equal(view.state.focus, 'type', 'the end wraps to the first field');
+    view.handleInput('\x1b[Z');
+    assert.equal(view.state.focus, 'odd', 'shift+tab moves back, wrapping at the first field');
+    view.handleInput('\x1b[D');
+    assert.equal(view.state.focus, 'type', 'left moves back too');
+    view.handleInput('\x1b[C');
+    assert.equal(view.state.focus, 'odd', 'and right moves forward');
+  });
+
+  test('enter on the type reaches the ODD instead of creating', () => {
+    const { view, finished } = openPanel();
+    view.handleInput('enter');
+    assert.equal(view.state.focus, 'odd', 'the type is no longer the last field');
+    assert.deepEqual(finished, [], 'nothing is created while the ODD is unanswered');
+  });
+
+  test('the ODD list is main’s documents, sorted, with new odd first', () => {
+    const { view } = openPanel({ oddOptions: ['worktree-tools-v2', 'login-ui', 'login-ui'] });
+    focusOdd(view);
+    const text = allText(renderedLines(view));
+    const at = (needle) => text.indexOf(needle);
+    assert.ok(at('❯ new odd') >= 0, `the first entry is the new-ODD entry\n${text}`);
+    assert.ok(at('❯ new odd') < at('  login-ui'), 'new odd comes before every document');
+    assert.ok(at('  login-ui') < at('  worktree-tools-v2'), 'the documents are sorted');
+    assert.equal(text.split('login-ui').length - 1, 1, 'a duplicate option is listed once');
+  });
+
+  test('an absent list still offers new odd: an unreadable odd/tasks is never an error', () => {
+    const { view, finished } = openPanel();
+    focusOdd(view);
+    const text = allText(renderedLines(view));
+    assert.match(text, /❯ new odd/);
+    assert.ok(!text.includes('cannot'), `an empty list is not a failure\n${text}`);
+    typeText(view, 'login-ui');
+    view.handleInput('enter');
+    assert.deepEqual(finished, [{ ok: true, type: 'feat', odd: 'login-ui' }], 'a new ODD is still enterable');
+  });
+
+  test('each fact is shown once: the active ODD field has no second Odd: echo', () => {
+    const { view } = openPanel({ oddOptions: ['dagea'], initialOdd: 'dagea' });
+    focusOdd(view);
+    const lines = renderedLines(view).map(stripAnsi).map((line) => line.trimEnd());
+    assert.ok(lines.includes('❯ dagea'), 'the picked document is the list row');
+    assert.equal(lines.filter((line) => /^Odd:/.test(line)).length, 0, `no stray Odd: row renders\n${lines.join('\n')}`);
+    assert.equal(lines.filter((line) => /^Name:/.test(line)).length, 0, 'no stray Name: row renders');
+
+    // And the same while the new-ODD entry is the one being typed into: the typed
+    // value is ONE row (the entry itself), and the previews are the only other
+    // places that mention it.
+    const typed = openPanel();
+    focusOdd(typed.view);
+    typeText(typed.view, 'dagea');
+    const typedLines = renderedLines(typed.view).map(stripAnsi).map((line) => line.trimEnd());
+    assert.equal(typedLines.filter((line) => /^Odd:/.test(line)).length, 0, 'typing a new ODD adds no echoed row');
+    assert.equal(typedLines.filter((line) => line.startsWith('new odd:')).length, 1, 'the typed ODD renders in its own one row');
+  });
+});
+
+describe('the create wizard previews the branch and the ODD separately', { concurrency: false }, () => {
   test('an untouched form previews the type branch prefix and the worktree root', () => {
     const { view } = openPanel();
     assert.equal(previewText(view, 'branch'), 'feat/', 'the branch preview names the picked type');
@@ -136,65 +220,56 @@ describe('the create panel previews the branch and the ODD separately', { concur
     for (const type of panel.CHANGE_TYPES) {
       const { view } = openPanel({ initialType: type.id });
       assert.equal(previewText(view, 'branch'), `${type.id}/`, `${type.id} previews its branch prefix`);
-      // S7: the directory is the ODD, not the branch's last segment, so every type
-      // previews the same root while the ODD is empty.
       assert.equal(previewText(view, 'path'), WORKTREE_ROOT, `${type.id} previews the root the ODD completes into`);
     }
   });
 
-  test('the branch follows the name and the path follows the ODD', () => {
-    const { view } = openPanel();
-    focusName(view);
-    typeText(view, 'my');
-    assert.equal(previewText(view, 'branch'), 'feat/my', 'the branch preview follows the first typed characters');
-    assert.equal(previewText(view, 'path'), WORKTREE_ROOT, 'the name never names the directory (S7)');
-    typeText(view, '-name');
-    assert.equal(previewText(view, 'branch'), 'feat/my-name');
-    assert.equal(previewText(view, 'path'), WORKTREE_ROOT, 'the path stays the root until the ODD is typed');
-
+  test('the branch follows the type and the ODD, the path follows the ODD alone', () => {
+    // The list is sorted, so `dagea` comes before `login-ui` whatever order the
+    // caller read them in.
+    const { view } = openPanel({ oddOptions: ['login-ui', 'dagea'] });
     focusOdd(view);
-    assert.equal(view.state.focus, 'odd');
-    typeText(view, 'login');
-    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'login'), 'the ODD completes the path');
-    typeText(view, '-ui');
+    view.handleInput('\x1b[B'); // down: dagea
+    assert.equal(previewText(view, 'branch'), 'feat/dagea', 'the branch is the type over the ODD slug');
+    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'dagea'), 'the ODD completes the path');
+    view.handleInput('\x1b[B'); // down: login-ui
+    assert.equal(previewText(view, 'branch'), 'feat/login-ui');
     assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'login-ui'));
-    assert.equal(previewText(view, 'branch'), 'feat/my-name', 'the ODD never moves the branch');
-  });
-
-  test('switching the type moves the branch preview and leaves the ODD path alone', () => {
-    const { view, finished } = openPanel();
-    assert.equal(previewText(view, 'branch'), 'feat/');
-    view.handleInput('\x1b[B'); // down: Bug fix
-    assert.equal(previewText(view, 'branch'), 'fix/', 'the branch row follows the picked type immediately');
-    assert.equal(previewText(view, 'path'), WORKTREE_ROOT);
-
-    focusName(view);
-    typeText(view, 'my-name');
-    focusOdd(view);
-    typeText(view, 'login-ui');
+    view.handleInput('\x1b[A'); // up: back to dagea
     view.handleInput('\t'); // back to the type
     assert.equal(view.state.focus, 'type');
-    view.handleInput('\x1b[A'); // up: back to feat
-    assert.equal(previewText(view, 'branch'), 'feat/my-name', 'the typed name survives the type change');
-    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'login-ui'));
-    view.handleInput('\x1b[B'); // down: fix again
-    assert.equal(previewText(view, 'branch'), 'fix/my-name');
-    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'login-ui'), 'the directory is the ODD, never the type nor the name');
-    assert.deepEqual(finished, [], 'changing the type never submits the form');
+    view.handleInput('\x1b[B'); // down: Bug fix
+    assert.equal(previewText(view, 'branch'), 'fix/dagea', 'the type moves the branch and keeps the ODD');
+    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'dagea'), 'the type never names the directory');
   });
 
-  test('the prefix preview never submits: an empty name still refuses with its own words', () => {
+  test('the new-ODD entry takes the typed name', () => {
+    const { view, finished } = openPanel({ oddOptions: ['login-ui'] });
+    focusOdd(view);
+    typeText(view, 'new-odd');
+    assert.equal(previewText(view, 'branch'), 'feat/new-odd');
+    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'new-odd'));
+    view.handleInput('enter');
+    assert.deepEqual(
+      finished,
+      [{ ok: true, type: 'feat', odd: 'new-odd' }],
+      'the completion carries the type and the ODD, and no second name',
+    );
+  });
+
+  test('choosing an existing ODD completes with it and writes nothing', () => {
+    const before = treeSnapshot(REPO);
+    const { view, finished } = openPanel({ oddOptions: ['login-ui', 'dagea'] });
+    focusOdd(view);
+    view.handleInput('\x1b[B'); // down: dagea (the list is sorted)
+    view.handleInput('enter');
+    assert.deepEqual(finished, [{ ok: true, type: 'feat', odd: 'dagea' }]);
+    assert.deepEqual(treeSnapshot(REPO), before, 'choosing an existing ODD writes nothing');
+    assert.equal(fs.existsSync(path.join(WORKTREE_ROOT, 'dagea')), false, 'no file or directory is created either');
+  });
+
+  test('an empty ODD refuses with its own words', () => {
     const { view, finished } = openPanel();
-    submit(view);
-    assert.deepEqual(finished, [], 'an empty name creates nothing');
-    const text = allText(renderedLines(view));
-    assert.match(text, /cannot create: name is empty/, 'the refusal keeps its own words');
-    assert.ok(!text.includes('preview branch: -'), 'the preview rows stay neutral, not blank');
-    assert.equal(previewText(view, 'branch'), 'feat/');
-  });
-
-  test('the ODD is required: an empty ODD refuses with its own words', () => {
-    const { view, finished } = openPanel({ initialName: 'login' });
     submit(view);
     assert.deepEqual(finished, [], 'an empty ODD creates nothing');
     assert.match(allText(renderedLines(view)), /cannot create: odd is empty/);
@@ -202,7 +277,7 @@ describe('the create panel previews the branch and the ODD separately', { concur
   });
 
   test('an ODD that is not one path segment refuses before creating', () => {
-    const { view, finished } = openPanel({ initialName: 'login' });
+    const { view, finished } = openPanel();
     focusOdd(view);
     typeText(view, '../escape');
     assert.equal(previewText(view, 'path'), '-', 'an unusable ODD previews no path');
@@ -211,67 +286,78 @@ describe('the create panel previews the branch and the ODD separately', { concur
     assert.match(allText(renderedLines(view)), /cannot create: invalid odd name: "\.\.\/escape"/);
   });
 
-  test('a name with nothing slug-worthy still previews no branch', () => {
+  test('an ODD with nothing slug-worthy still previews no branch', () => {
     const { view, finished } = openPanel();
-    focusName(view);
+    focusOdd(view);
     typeText(view, '!!!');
-    assert.equal(previewText(view, 'branch'), '-', 'an underivable name previews no branch');
-    assert.equal(previewText(view, 'path'), WORKTREE_ROOT, 'the path belongs to the ODD, so the name cannot blank it');
-    submit(view);
-    assert.deepEqual(finished, [], 'an invalid name still never creates');
-    assert.match(allText(renderedLines(view)), /cannot create: name has no letters or digits/);
-  });
-
-  test('a complete form previews and creates the same branch and path', () => {
-    const { view, finished } = openPanel({ initialName: 'new-change', initialOdd: 'login-ui' });
-    assert.equal(previewText(view, 'branch'), 'feat/new-change');
-    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'login-ui'));
-    submit(view);
-    assert.deepEqual(
-      finished,
-      [{ ok: true, type: 'feat', name: 'new-change', odd: 'login-ui' }],
-      'the completed form creates with the type id, the typed name and the typed ODD',
-    );
-  });
-
-  test('the three fields are tabs: tab and the arrows walk Type → Name → Odd and wrap', () => {
-    const { view } = openPanel();
-    assert.equal(view.state.focus, 'type');
-    view.handleInput('\t');
-    assert.equal(view.state.focus, 'name', 'tab moves forward');
-    view.handleInput('\t');
-    assert.equal(view.state.focus, 'odd');
-    view.handleInput('\t');
-    assert.equal(view.state.focus, 'type', 'the end wraps to the first field');
-    view.handleInput('\x1b[Z');
-    assert.equal(view.state.focus, 'odd', 'shift+tab moves back, wrapping at the first field');
-    view.handleInput('\x1b[D');
-    assert.equal(view.state.focus, 'name', 'left moves back too');
-    view.handleInput('\x1b[C');
-    assert.equal(view.state.focus, 'odd', 'and right moves forward');
-    const text = allText(renderedLines(view));
-    assert.match(text, /Type · Name · Odd/, 'the strip names the three fields');
-  });
-
-  test('enter on the name moves on to the ODD instead of creating', () => {
-    const { view, finished } = openPanel({ initialName: 'login' });
-    focusName(view);
+    assert.equal(previewText(view, 'branch'), '-', 'an underivable branch previews no branch');
+    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, '!!!'), 'the path is the ODD, so it still derives');
     view.handleInput('enter');
-    assert.equal(view.state.focus, 'odd', 'the name is no longer the last field');
-    assert.deepEqual(finished, [], 'nothing is created while the ODD is unanswered');
+    assert.deepEqual(finished, [], 'an ODD with no letters or digits never creates');
+    assert.match(allText(renderedLines(view)), /cannot create: odd has no letters or digits/);
   });
 
-  // The create and the preview must ask ONE function where a checkout goes. S7
-  // makes that function the ODD: `…-worktrees/login-ui`, never `login-ui`'s
-  // branch slug, and never the branch's last segment.
-  test('the preview equals the path the create makes: the ODD, not the branch', () => {
-    const { view } = openPanel({ initialName: 'login', initialOdd: 'login-ui' });
-    assert.equal(previewText(view, 'branch'), 'feat/login');
-    const previewPath = previewText(view, 'path');
+  test('escape cancels the whole form and writes nothing', () => {
+    const before = treeSnapshot(REPO);
+    const { view, finished } = openPanel({ oddOptions: ['login-ui'] });
+    focusOdd(view);
+    view.handleInput('\x1b[B');
+    view.handleInput('\x1b');
+    assert.deepEqual(finished, [null], 'escape is a cancel, exactly once');
+    assert.deepEqual(treeSnapshot(REPO), before, 'a cancel writes nothing');
+    assert.equal(fs.existsSync(WORKTREE_ROOT), false, 'a cancel creates nothing');
+  });
 
-    assert.equal(previewPath, createLib.worktreeDestinationPath(REPO, 'login-ui'));
-    assert.equal(previewPath, path.join(WORKTREE_ROOT, 'login-ui'));
-    assert.notEqual(previewPath, path.join(WORKTREE_ROOT, 'login'), 'the branch never names the directory');
-    assert.notEqual(previewPath, path.join(WORKTREE_ROOT, 'feat-login'), 'the legacy slug is never previewed either');
+  // The create and the preview must ask ONE function where a checkout goes.
+  test('the preview equals the path the create makes: the ODD, not the branch', () => {
+    const { view } = openPanel({ initialOdd: 'login-ui' });
+    assert.equal(previewText(view, 'branch'), 'feat/login-ui');
+    assert.equal(previewText(view, 'path'), createLib.worktreeDestinationPath(REPO, 'login-ui'));
+    assert.equal(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'login-ui'));
+    assert.notEqual(previewText(view, 'path'), path.join(WORKTREE_ROOT, 'feat-login'), 'the legacy slug is never previewed');
+  });
+});
+
+// `main`'s documents are the list's source: the ref's tree, never the checkout
+// the panel runs in, and never a failure — an absent directory, a missing `main`
+// or a failing child is an empty list.
+describe('the ODD list comes from main’s tree', { concurrency: false }, () => {
+  const mainListing = (stdout, status = 0) => async () => ({ status, stdout });
+
+  test('names main’s odd/tasks documents, without the extension, sorted', async () => {
+    const runAsync = mainListing('odd/tasks/worktree-tools-v2.md\0odd/tasks/dagea.md\0');
+    assert.deepEqual(await panel.listMainOddTasks({ runAsync, cwd: REPO }), ['dagea', 'worktree-tools-v2']);
+  });
+
+  test('asks git for the main ref’s odd/tasks tree, never the working tree', async () => {
+    const calls = [];
+    const runAsync = async (bin, args, cwd) => {
+      calls.push({ bin, args, cwd });
+      return { status: 0, stdout: '' };
+    };
+    await panel.listMainOddTasks({ runAsync, cwd: REPO });
+    assert.equal(calls.length, 1, 'one bounded read, no second child');
+    assert.equal(calls[0].bin, 'git');
+    assert.equal(calls[0].cwd, REPO);
+    assert.deepEqual(calls[0].args, ['ls-tree', '-r', '--name-only', '-z', 'refs/heads/main', '--', 'odd/tasks']);
+  });
+
+  test('ignores everything that is not a document directly in odd/tasks', async () => {
+    const stdout = [
+      'odd/tasks/a.md',
+      'odd/tasks/notes.txt',
+      'odd/tasks/nested/b.md',
+      'odd/tasks/.hidden.md',
+      'odd/other.md',
+      'odd\\tasks\\windows.md',
+      '',
+    ].join('\0');
+    assert.deepEqual(await panel.listMainOddTasks({ runAsync: mainListing(stdout), cwd: REPO }), ['a']);
+  });
+
+  test('a missing main, a failing child or no runner is an empty list, never an error', async () => {
+    assert.deepEqual(await panel.listMainOddTasks({ runAsync: mainListing('', 1), cwd: REPO }), []);
+    assert.deepEqual(await panel.listMainOddTasks({ runAsync: async () => { throw new Error('no git'); }, cwd: REPO }), []);
+    assert.deepEqual(await panel.listMainOddTasks({ runAsync: null, cwd: REPO }), []);
   });
 });

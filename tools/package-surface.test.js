@@ -1,10 +1,12 @@
 'use strict';
 // S2/S4 surface: the standalone package always registers /warp, /odd-list and
-// /issues plus the four agent worktree tools, loads without any Herdr binary,
-// and ships none of the removed functionality. S9 adds three /codegraph-*
-// commands that exist ONLY when the session gate finds the CLI, so the exact
-// command list depends on the machine and is asserted conditionally.
-// (customize panel, plugin-tools toggles, worktree mode file, perf tracing).
+// /issues plus the TWO agent worktree tools (S3/S4: `worktree_delete` and
+// `worktree_warp` are not registered, so `/warp` is the only front that moves
+// the session and the panel's ctrl+d the only one that removes a checkout),
+// loads in plain Pi with git as its only external dependency, and ships none of
+// the removed functionality
+// (customize panel, plugin-tools toggles, worktree mode file, perf tracing,
+// CodeGraph commands or a CodeGraph gate).
 // The issues reader, preview formatter and view are the migrated T2 units and
 // are shipped; `/issues` is the T3 command that mounts them, without any
 // worktree↔issue association.
@@ -14,9 +16,8 @@
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { LIB_DIR, SRC, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
+const { LIB_DIR, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -29,11 +30,6 @@ after(() => {
   for (const [key, value] of Object.entries(savedEnv)) process.env[key] = value;
 });
 
-// A nonexistent absolute path is provably not a live Herdr binary, so the
-// shared resolver returns it and every Herdr call fails instead of reaching a
-// real workspace.
-const NO_HERDR = path.join(os.tmpdir(), 'odd-worktree-no-such-herdr-binary');
-
 describe('manifest', () => {
   test('declares one Pi extension entry point and ships only that surface', () => {
     assert.equal(PKG.name, 'pi-odd-worktree');
@@ -45,7 +41,7 @@ describe('manifest', () => {
     assert.equal(PKG.peerDependencies['@earendil-works/pi-coding-agent'], '*');
     assert.equal(PKG.peerDependencies['@earendil-works/pi-tui'], '*');
     assert.ok(!('dependencies' in PKG), 'no runtime dependencies are installed');
-    assert.ok(!JSON.stringify(PKG).includes('herdr'), 'the manifest never requires Herdr');
+    assert.equal(/herdr/i.test(JSON.stringify(PKG)), false, 'the manifest claims no integration the package does not have');
   });
 
   test('ships no module for the removed commands', () => {
@@ -74,19 +70,12 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd-list, /issues and the four worktree tools', async () => {
-    process.env.HERDR_BIN_PATH = NO_HERDR;
+  test('registers /warp, /odd-list, /issues and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    const base = ['issues', 'odd-list', 'warp'];
-    const codegraph = ['codegraph-hook', 'codegraph-init', 'codegraph-sync'];
-    for (const name of base) assert.ok(registered.includes(name), `/${name} is registered`);
-    // S9: the codegraph triple is gated on the CLI, never on anything else.
-    const { hasCodegraph } = require('../lib/codegraph-session.js');
-    const expected = hasCodegraph(process.env) ? [...base, ...codegraph].sort() : base;
-    assert.deepEqual(registered, expected, 'the command list is the base three plus the codegraph triple exactly when the CLI is present');
-    assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_delete', 'worktree_list', 'worktree_warp']);
+    assert.deepEqual(registered, ['issues', 'odd-list', 'warp'], 'the command list is exactly the three panels');
+    assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
 
@@ -98,18 +87,20 @@ describe('registration', () => {
     };
     assert.deepEqual(summary('worktree_create'), { name: 'worktree_create', label: 'Worktree Create' });
     assert.deepEqual(summary('worktree_list'), { name: 'worktree_list', label: 'Worktree List' });
-    assert.deepEqual(summary('worktree_delete'), { name: 'worktree_delete', label: 'Worktree Delete' });
-    assert.deepEqual(summary('worktree_warp'), { name: 'worktree_warp', label: 'Worktree Warp' });
   });
 
-  test('the delete help text names the active-session refusal and no Herdr workspace', async () => {
+  // S3/S4: neither removal nor warp is an agent surface any more, so nothing the
+  // model can call names them. The guard they both used still refuses a live
+  // session (tools/worktree-tools.test.js), and the panel still discloses its
+  // caveats (tools/warp-delete-confirm.test.js) — those are the surviving checks.
+  test('no tool deletes a checkout or moves the session', async () => {
     const { tools } = await loadExtension({});
-    const description = tools.get('worktree_delete').description;
-    assert.match(description, /live Pi session working in that checkout/);
-    assert.match(description, /warp to another checkout first/i);
-    assert.match(description, /git/);
-    assert.equal(/and its Herdr workspace/i.test(description), false, 'no Herdr workspace removal is promised');
-    assert.match(description, /no Herdr workspace is closed, opened or removed/);
+    assert.equal(tools.has('worktree_delete'), false, 'no delete tool is registered');
+    assert.equal(tools.has('worktree_warp'), false, 'no warp tool is registered');
+    const source = stubbedSource();
+    assert.equal(/registerTool\(worktreeCloseTool\)/.test(source), false, 'the close tool stays unregistered');
+    assert.equal(/registerTool\(worktreeWarpTool\)/.test(source), false, 'the warp tool stays unregistered');
+    assert.equal(/herdr/i.test(source), false, 'no Herdr workspace removal is promised anywhere');
   });
 });
 
@@ -122,6 +113,23 @@ describe('removed surface', () => {
     }
     for (const lib of ['worktree-mode.js', 'herdr-plugin-check.js', 'perf-trace.js']) {
       assert.equal(source.includes(`libRequire("${lib}")`), false, `${lib} is not required`);
+    }
+  });
+
+  test('the extension probes, registers and runs no CodeGraph surface (S2)', async () => {
+    const source = stubbedSource();
+    assert.equal(/codegraph/i.test(source), false, 'the extension source mentions no CodeGraph at all');
+    const { commands, hooks } = await loadExtension({});
+    for (const gone of ['codegraph-hook', 'codegraph-init', 'codegraph-sync']) {
+      assert.equal(commands.has(gone), false, `no /${gone} command`);
+    }
+    assert.equal(
+      hooks.some(([name]) => name === 'tool_result') && /scheduleSync/.test(source),
+      false,
+      'no edit/write sync hook is registered',
+    );
+    for (const shipped of fs.readdirSync(path.join(ROOT, 'lib'))) {
+      assert.equal(/^codegraph-/.test(shipped), false, `lib/${shipped} is not shipped`);
     }
   });
 

@@ -1164,8 +1164,7 @@ describe('S1: no issue or ODD association is rendered', () => {
 // ---------------------------------------------------------------------------
 // S11/T9: every footer and header token paints through the ONE shared palette
 // (lib/tui-paint.js) with the injected theme — a shortcut KEY (a button) is
-// accent+bold, its description muted, a TITLE takes the reference UI's `dim`
-// title role (its Agents title: ~/.config/herdr-app/mods/agents/main.js:413),
+// accent+bold, its description muted, a TITLE takes the `dim` title role,
 // ordinary values are the text role and counts/labels are muted
 // or dim — while the focus cue stays monochrome (`▸`), so a theme that answers
 // nothing still reads as a frame.

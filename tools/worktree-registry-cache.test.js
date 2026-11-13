@@ -161,3 +161,36 @@ test('a cached read still carries the hidden drop report a later write needs', (
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a cached read still carries the shared-document keys a later write must hand back', () => {
+  const root = makeRepo();
+  const loaded = loadWithCounter();
+  try {
+    const file = path.join(fs.realpathSync(root), '.git', 'pi-worktrees.json');
+    // The clone file as the metadata side leaves it: its `kind` and `records`
+    // beside the registry's `worktrees` array.
+    const kind = 'pi-odd-worktree.worktree-metadata';
+    const records = {
+      '/tmp/one': { path: '/tmp/one', branch: 'main', createdAt: '2024-01-01T00:00:00.000Z' },
+    };
+    fs.writeFileSync(file, `${JSON.stringify({ kind, version: 1, worktrees: [entry()], records }, null, 2)}\n`);
+    // Two reads: the second one answers from the (inode, size, mtime) cache.
+    assert.equal(loaded.registry.readRegistry(root).worktrees.length, 1);
+    const cached = loaded.registry.readRegistry(root);
+    assert.equal(cached.worktrees.length, 1, 'the second read is the cached one');
+    cached.worktrees.push(entry({ branch: 'feat/mutated' }));
+
+    const updated = loaded.registry.updateWorktree(root, 'feat/one', { issues: [5] });
+    assert.equal(updated.ok, true, `update: ${JSON.stringify(updated)}`);
+    const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(JSON.stringify(after.records), JSON.stringify(records),
+      'the cached document hands the other owner\'s records back byte for byte');
+    assert.equal(after.kind, kind, 'and the kind it does not own');
+    assert.deepEqual(after.worktrees.map((row) => row.branch), ['feat/one'],
+      'a caller mutating what it was handed never reaches the cached document');
+    assert.deepEqual(after.worktrees[0].issues, [5], 'while the edit that was asked for still landed');
+  } finally {
+    loaded.restore();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

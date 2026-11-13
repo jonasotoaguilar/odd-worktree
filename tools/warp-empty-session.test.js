@@ -61,7 +61,6 @@ before(async () => {
   const copy = path.join(dir, 'odd-worktree-tools.mjs');
   fs.writeFileSync(copy, stubbedSource());
   process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
-  process.env.HERDR_BIN_PATH = path.join(dir, 'no-such-herdr-binary');
   process.env.GENTLE_WORKTREE_THREAD = 'thread-1';
   mod = await import(pathToFileURL(copy).href);
   mod.default({

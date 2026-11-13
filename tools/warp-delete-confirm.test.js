@@ -479,9 +479,7 @@ describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () =
   const crypto = require('node:crypto');
   const { loadExtension } = require('./fixtures/load-extension.js');
 
-  const NO_HERDR = path.join(os.tmpdir(), 'odd-worktree-no-such-herdr-binary');
   const HOOK_BIN = track(fs.mkdtempSync(path.join(os.tmpdir(), 'wt-confirm-hookbin-')));
-  fs.writeFileSync(path.join(HOOK_BIN, 'codegraph'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   const AGENT_HOME = track(fs.mkdtempSync(path.join(os.tmpdir(), 'wt-confirm-agent-home-')));
   const PRESENCE = path.join(AGENT_HOME, 'gentle-agents', 'presence');
 
@@ -491,7 +489,6 @@ describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () =
   let restorePath = null;
 
   before(async () => {
-    process.env.HERDR_BIN_PATH = NO_HERDR;
     delete process.env.GENTLE_PI_AGENT_HOME;
     process.env.PI_CODING_AGENT_DIR = AGENT_HOME;
     restorePath = process.env.PATH;
@@ -537,7 +534,7 @@ describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () =
     const repo = makeRepo(`ctrl-d-${tag}`);
     git(repo, ['branch', 'main', 'HEAD']);
     const created = await tools.get('worktree_create').execute(
-      `create-${tag}`, { branch: `feat/${tag}`, changes: 'none' }, undefined, undefined,
+      `create-${tag}`, { branch: `feat/${tag}`, odd: tag }, undefined, undefined,
       {
         cwd: repo,
         hasUI: false,
@@ -547,7 +544,8 @@ describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () =
       },
     );
     assert.notEqual(created.isError, true, JSON.stringify(created));
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, `feat-${tag}`);
+    // The path the create really wrote, not a remembered flattened spelling.
+    const target = created.details.path;
     const notifications = [];
     const confirmations = [];
     let mounts = 0;
@@ -597,6 +595,30 @@ describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () =
       true,
       'the branch is kept',
     );
+  });
+
+  // Invariant 4 (AGENTS.md): the guard's caveats are disclosed, never silently
+  // dropped. The panel's ctrl+d is the only surface that removes a checkout now,
+  // so a stale presence record must reach the human from HERE — the delete tool
+  // whose formatter used to print it is unregistered (T6/S4).
+  test('a stale presence record\u2019s caveat reaches the human on the panel delete', async () => {
+    const { target, notifications, confirmations, ctx } = await panelFixture('stale-caveat');
+    publishSession({
+      sessionId: 'crashed-panel-worker', label: 'Crashed', workspace: target,
+      heartbeat: Date.now() - 10 * 60 * 1000, incarnationIndex: 8,
+    });
+    await commands.get('warp').handler('', ctx);
+
+    assert.equal(confirmations.length, 1, 'the stale record never blocks the question');
+    assert.equal(fs.existsSync(target), false, 'the removal still happens');
+    assert.ok(
+      notifications.some(([level, text]) => level === 'info' && /worktree deleted/.test(String(text))),
+      JSON.stringify(notifications),
+    );
+    const caveat = notifications.find(([, text]) => /stale Gentle Shell presence record ignored/.test(String(text)));
+    assert.ok(caveat, `the stale record is disclosed: ${JSON.stringify(notifications)}`);
+    assert.match(caveat[1], /best effort/);
+    assert.equal(caveat[0], 'warning', 'the caveat is a warning, not a silent info line');
   });
 
   test('a session that appears while the question is open refuses the removal after approval', async () => {

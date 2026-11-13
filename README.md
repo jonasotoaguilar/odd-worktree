@@ -1,8 +1,8 @@
 # pi-odd-worktree
 
 A Pi extension package for agent worktrees, ODD documents and GitHub issues.
-Four agent tools, three panels, one extension entry point. It works in Pi
-alone; Herdr is optional.
+Two agent tools, three panels, one extension entry point. It works in Pi alone,
+with `git` as the only external requirement.
 
 ## What It Does
 
@@ -11,22 +11,23 @@ alone; Herdr is optional.
 
 | Surface | Kind | What it does |
 | --- | --- | --- |
-| `worktree_list` | tool | Lists the principal checkout, then this session's own checkout, then the rest, cross-checked against live git checkouts. Rows whose path is gone are excluded and pruned from the registry. |
-| `worktree_create` | tool | Creates a branch and its checkout from the **local** `main`, registers it, runs the creation hooks, and copies the pending changes you name. |
-| `worktree_warp` | tool | Queues the session move to another checkout as a `/warp` handoff; the command performs the move when the turn ends. |
-| `worktree_delete` | tool | Removes a registered checkout with `git worktree remove`, keeping the branch, and refuses while a live Pi session is working in it. |
-| `/warp` | panel | Moves this session to another checkout: no argument opens the selector (list, create, delete, extended list); `/warp <name>` jumps straight there. A session with no conversation yet changes checkout **silently** — no fork, no `Warp · moved` card, nothing to carry — and warping back from it is the same empty case. |
+| `worktree_create` | tool | Creates `<repo-parent>/<repo-name>-worktrees/<odd>` on `branch`, registers the checkout in this session and in the clone's document, runs the preparation hooks, and starts the install as a tracked background task. |
+| `worktree_list` | tool | Read-only listing: the main checkout first and unnumbered, then numbered rows with ODD, branch and setup state, plus footers counting what it hides. |
+| `/warp` | panel | Moves this session to another checkout, and removes one. No argument opens the selector (list, create, delete, extended list); `/warp <name>` jumps straight there. A session with no conversation yet changes checkout **silently** — no fork, no `Warp · moved` card, nothing to carry — and warping back from it is the same empty case. |
 | `/odd-list` | panel | Two-pane reader of this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
 | `/issues` | panel | Full-screen reader of this checkout's repository issues — My issues / Assigned / Involved / All — with preview, comments, labels, assignees and close, gated on your repository role. |
-| `/codegraph-hook` | command | **Only when the CodeGraph CLI is installed.** Turns the edit/write sync on or off for the session. |
-| `/codegraph-init` | command | **Only when the CLI is installed.** Runs `codegraph init` at the session's current directory and says what happened: `initialized <path> — 1 file, 3 nodes, 3 edges`, or `already initialized at <path> — nothing to do`. |
-| `/codegraph-sync` | command | **Only when the CLI is installed.** Runs `codegraph sync` at the session's current directory and says what happened: `already up to date — nothing to sync`, `synced 3 changed files — 12 nodes`, or `no index in this checkout — run /codegraph-init first`. |
 
-A checkout's **name** is the slug of its branch, and its path is
-`<repo-parent>/<repo-name>-worktrees/<slug>`: the slug lowercases the branch and
-turns every non-alphanumeric run into `-` (`feat/login` → `feat-login`). The
-principal checkout is `principal`. Names, paths and branches are accepted
-interchangeably by `worktree_delete`, and by `/warp`.
+Moving the session and removing a checkout are **human actions only**: `/warp`
+is the only front for both (its `ctrl+d` removes, the selector and a typed name
+move), and no agent tool does either. The agent can create and list.
+
+A checkout has **one identity: its ODD**. Its directory is
+`<repo-parent>/<repo-name>-worktrees/<odd>`, beside the principal checkout, so a
+worktree is never nested inside another checkout and the folder names the ODD the
+checkout serves. `branch` is only the git branch: it is created when it does not
+exist and adopted when it does. Two checkouts for one ODD cannot coexist — a
+second create for the same ODD is refused by `worktree path already exists: …`,
+which is the model, not a limitation.
 
 ## Quick Start
 
@@ -35,7 +36,6 @@ interchangeably by `worktree_delete`, and by `/warp`.
 | Pi (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`) | Peer dependencies at `*`, supplied by the host. The package installs no runtime dependencies. |
 | Node.js >= 18 and `git` | `engines` declares 18 as the floor, and every repository operation is a git child process. |
 | `gh`, authenticated (`gh auth login`) | `/issues` only. Without it the command stays registered, says once per session what is missing, and never opens. |
-| `codegraph` — optional | Keeps each checkout's index fresh: `codegraph init` when a checkout is created, and a background `codegraph sync` after edits and writes. Absent, both stay off for the whole session. |
 | Gentle Shell — recommended | Supplies the presence and transport records the deletion guard reads to see sessions other than this one. |
 
 ```bash
@@ -52,37 +52,65 @@ gentle-shell install npm:pi-odd-worktree
 From a local clone, `pi install .` installs the working copy instead. Neither
 command takes a version, so the install tracks whatever npm publishes.
 
-Herdr is not required; Gentle Shell is recommended for the live-session deletion
-guard.
+It needs only Pi and `git`, with no companion app and no extra service. Gentle
+Shell is recommended only for the live-session deletion guard.
 
 `pi.extensions` in `package.json` points at
 `./extensions/odd-worktree-tools.ts`, so Pi loads it without any extra
 registration. Expected result: `/warp`, `/odd-list` and `/issues` are available
-as commands, and the four `worktree_*` tools are offered to the agent.
+as commands, and the two `worktree_*` tools are offered to the agent.
 
 ## Core Workflow
 
-1. **Create** — ask the agent for a worktree, or press `c` in `/warp`.
-   `worktree_create` needs a `branch` and a mandatory `changes` selection:
-   `"all"`, `"none"`, or a list of checkout-relative paths. It never guesses,
-   and a repository with no local `main` is refused before anything is written.
-   An existing branch is adopted as-is instead of being recreated. **A create is
-   instant**: the checkout and its registry row are the answer, and the slow half
-   of the setup — dependency install, `codegraph init` — continues in a tracked
-   background task on both fronts. The panel notifies you when it finishes; the
-   tool says `setup: running in the background (install, codegraph)` and a later
-   `worktree_create` for the same checkout reports how it ended. Nothing is
-   skipped, and a deferred setup never turns a successful create into an error.
+1. **Create** — `worktree_create` with an `odd` and a `branch`, or press `c` in
+   `/warp`.
+   - `odd` and `branch` are required; `copy_changes` is optional.
+   - `odd` IS the checkout's directory: one path segment (letters, digits, dash,
+     underscore, dot), nothing that could escape the directory it names. The
+     branch never names a directory, so `branch: feat/login` with
+     `odd: login-ui` lands in `…-worktrees/login-ui`.
+   - The base is the local `main` when it resolves, else the branch `origin/HEAD`
+     names, else `init.defaultBranch`. When none of them resolves, the create is
+     refused with `could not resolve a base branch: tried main, origin/HEAD,
+     init.defaultBranch` before anything is written.
+   - Three refusals protect what already exists, each before a single write:
+     `worktree path already exists: …` (remove it or pass a different odd),
+     `branch … is already checked out in …` (use another branch, or work in that
+     worktree), and `branch main is the base branch; pick the branch this worktree
+     should work on`.
+   - A whitespace-only or otherwise unusable `odd` is refused here with
+     `invalid odd name: …` — a deliberate divergence from the reference branch,
+     where it would create a directory nobody can see and a record the store must
+     then refuse. An omitted `odd` gets the same sentence: the schema asks for it,
+     and the plan refuses it if anything reaches the core directly.
+   - An existing branch is adopted as-is — the answer's second line says
+     `branch: <branch> (existing)`, and `(created)` when the branch was made from
+     the base.
+   - The answer and the list both print the ODD; a list row for a record written
+     before the field existed prints `odd: -`.
+   - `copy_changes: true` carries this clone's uncommitted work — staged,
+     unstaged and untracked non-ignored files — into the new checkout, and leaves
+     it in the main checkout too.
+   - **A create is instant.** The checkout, its registry row, its record, the
+     session registration and the preparation hooks (submodules, local inputs,
+     `copy_changes`, build-cache and asset links) settle before the answer. The
+     slow half — the package manager the root's lockfile selects, or nothing when
+     no lockfile matches — continues in one tracked background task with its own
+     log under the system temp directory. The answer says where the setup stands
+     and a later `worktree_list` reports how it ended; a setup problem is never
+     reported as a failed create.
 2. **List** — `worktree_list`, or open `/warp`. Pass `all: true` to the tool (or
-   `v` in the panel) to also see live checkouts the registry does not know.
-3. **Move** — `/warp <name>`, the selector's `enter`, or `worktree_warp`. The
+   `v` in the panel) to also see live checkouts Git knows outside the registry and
+   the records whose checkout no longer exists. The listing is read-only: it
+   writes nothing and prunes nothing, and it shows the state of each row.
+3. **Move** — `/warp <name>`, the selector's `enter`, or a typed name. The
    selector never offers the checkout you are already in; the exclusion is by
    resolved real path, so a differently-spelled path to the same checkout is
-   excluded too.
-4. **Delete** — `worktree_delete` with exactly one of `name`, `path` or `branch`,
-   plus `force: true` for a dirty checkout. Deleting asks for approval when the
-   host offers dialog UI; creating never does, because it touches no existing
-   data.
+   excluded too. No agent tool moves the session.
+4. **Delete** — `/warp`'s `ctrl+d` on the focused checkout, with a forced removal
+   only for a dirty checkout. It asks for confirmation, then re-checks the
+   identity of the checkout and the live-session guard immediately before the
+   removal. No agent tool removes a checkout.
 
 ## Key Features You Should Know About
 
@@ -94,7 +122,7 @@ as commands, and the four `worktree_*` tools are offered to the agent.
 | --- | --- |
 | `↑`/`↓`, `j`/`k` | Move the selection |
 | `enter` | Warp to the focused checkout (`enter` on the `view all worktrees` row opens the extended list) |
-| `c` | Open the create flow |
+| `c` | Open the create flow: pick the change type, type the change name, then the ODD — `tab`/`←`/`→` walk the three fields, `↑`/`↓` pick the type or step between fields, `enter` on the ODD creates, `esc` cancels |
 | `ctrl+d` | Ask to delete the focused checkout; the extension owns the confirmation, the evidence and the removal |
 | `v` | Open the extended list of every other checkout (`↑`/`↓`, `pgUp`/`pgDn`, `enter`, `T` or `/` to filter, `esc` back) |
 | `r` | Reload the listing |
@@ -132,17 +160,20 @@ attempted.
 
 ### The deletion guard, and its honest limit
 
-Deleting a checkout is refused while a live Pi session is working in it, and
-the **same** check runs for `worktree_delete` and for the panel's `ctrl+d`, both
-before the pending-change question and again immediately before the removal.
-This session's own checkout is refused with "warp first"; another session's is
-refused naming its real session id, resolved by joining the published presence
-hash to Gentle Shell's transport activation record. When no record joins, the
-refusal shows the presence hash and says the id could not be resolved — it never
-invents one from a label. Nothing is auto-warped and nothing is closed on your
-behalf.
+Deleting a checkout is refused while a live Pi session is working in it. The
+removal is **`/warp`'s `ctrl+d`**: it runs the guard
+(`lib/worktree-session-guard.js`) before the pending-change question and again
+immediately before the removal, so a session that starts working in the checkout
+while the question is open still refuses there. This session's own checkout is
+refused with "warp first"; another session's is refused naming its real session
+id, resolved by joining the published presence hash to Gentle Shell's transport
+activation record. When no record joins, the refusal shows the presence hash and
+says the id could not be resolved — it never invents one from a label. Nothing is
+auto-warped and nothing is closed on your behalf.
 
-That check is **best effort, not a guarantee**:
+After a successful removal the panel notifies each caveat the guard could not
+resolve, one notice per caveat — never silently dropped. That check is **best
+effort, not a guarantee**:
 
 - It reads Gentle Shell's presence records (heartbeat plus workspace) and its
   transport activation records when Gentle Shell is installed and running, and
@@ -156,8 +187,8 @@ That check is **best effort, not a guarantee**:
   session *created*, not where it is working.
 
 Removal is `git worktree remove <absolute path>`, with `--force` only when the
-caller asked for it. The branch is kept, and **no Herdr workspace is closed,
-opened or removed** on any path.
+caller asked for it. The branch is kept. Nothing else is touched: no other
+application is closed, opened or removed on any path.
 
 ### A warp waits for this session's own agent tasks and background jobs
 
@@ -165,24 +196,17 @@ A warp never lands while this session still has running or queued agent tasks or
 a running background job — and it is never thrown away: the request is
 **queued**.
 
-- The `worktree_warp` tool validates and queues the handoff exactly as it does
-  when the session is idle, and its first line names both workloads: `worktree
-  warp: handoff queued — waiting for 2 running agent task(s) and 1 running
-  background job before the move`. It never claims a move. A second
-  `worktree_warp` call in the same turn is refused, because the request is
-  pending from the moment it is queued.
-- `/warp` — a typed name, the selector, a create's follow-up warp and the agent
-  handoff all share one path — gives both sources a bounded chance to drain
+- `/warp` — a typed name, the selector and a create's follow-up warp all share
+  one path — gives both sources a bounded chance to drain
   (`ODD_WORKTREE_WARP_BUSY_WAIT_MS`, 60 s by default) and then keeps the request
   **pending** instead of switching: the session stays where it is, and a bounded
   background poller re-dispatches the SAME validated handoff once this session
   reports no running or queued agent task and no running job. Nothing switches
-  mid-work.
+  mid-work. A queued handoff never claims a move.
 - **One pending warp per session.** A second warp is refused while one is
-  pending — on the tool and on the panel alike, with `a warp to <name> is
-  already pending for this session — it runs when the pending agent tasks
-  finish; wait for it or let it expire` — and the pending request is never
-  replaced.
+  pending, with `a warp to <name> is already pending for this session — it runs
+  when the pending agent tasks and background jobs finish; wait for it or let it
+  expire` — and the pending request is never replaced.
 - The pending warp expires after `ODD_WORKTREE_WARP_PENDING_MS` (30 minutes by
   default, clamped to a day) and notifies that it expired with nothing moved. It
   re-reads both sources every `ODD_WORKTREE_WARP_PENDING_POLL_MS` (2 s by
@@ -218,84 +242,95 @@ the checkout's remote moves while the reader is open, mutations refuse with
 …); reopen /issues`, and the reads keep the displayed repository. An issue
 number on screen can never be sent to another repository.
 
-### CodeGraph stays fresh, when the CLI is installed
+### Worktree state, and the list that reports it
 
-The probe for `codegraph` on `PATH` runs **once per session** and is cached for
-everything below. Install the CLI mid-session and nothing changes until the next
-start, unless you set `CODEGRAPH_FORCE=1`, which answers "present" without
-probing.
+`worktree_list` prints the main checkout first and unnumbered, then one numbered
+row per checkout this clone created, each with its ODD, its branch and its setup
+state. Footers count the rows the list hides. The text is fixed-field and
+undecorated, so it reads the same on every run:
 
-- **On creation**, `worktree_create` runs `codegraph init` inside the new
-  checkout, so it starts with its own index. It runs in the background half of
-  the create's setup (see *Create* above), so the checkout is usable before the
-  index is written. A session where the gate answered false reports that step as
-  `skipped` and names the gate as the reason; it never silently pretends to have
-  indexed anything.
-- **On edits**, a successful `edit` or `write` schedules `codegraph sync` for the
-  git toplevel of the file touched, so a worktree syncs that worktree. The sync is
-  detached: the tool result never waits for it, and a failure never reaches you.
-- **Debounced and coalesced.** Rapid edits collapse into one sync after ~2s, and
-  an edit that lands while a sync runs starts exactly one more when it ends —
-  never a queue.
-- **One sync at a time across sessions**, guarded by
-  `<root>/.codegraph/pi-sync.lock` holding `{pid, startedAt}`. A lock held by a
-  live process means skip (the other session's sync already covers that tree),
-  with one bounded retry so the edit that raced it still lands. A dead pid or an
-  expired lock is taken over.
-- **Skipped when it would be wasted**: no `.codegraph/` in that checkout, or a
-  live CodeGraph daemon (`<root>/.codegraph/daemon.pid`, either the JSON record
-  1.6 writes or the older bare pid), whose own watcher is already syncing that
-  tree.
-- **Bounded**: a sync that never finishes is terminated after two minutes so a
-  checkout can never be wedged for the rest of the session.
+```text
+project: repo
+path: /code/repo
+main: main 1a2b3c4 active · manual
+1 worktree-tools feat/worktree-tools odd: bug-42 running (npm ci)
+  setup: npm ci · log: /tmp/odd-worktree-setup-abc123/step-1.log
+2 billing feat/billing odd: - ready
+```
 
-Three commands exist **only when the CLI is present**, and they do not appear at
-all otherwise:
+The state vocabulary is closed:
 
-| Command | What it does |
+| State | Meaning |
 | --- | --- |
-| `/codegraph-hook` | Turns the edit/write sync on or off for the whole process. No argument toggles; `on`, `off` and `status` say it explicitly. It starts enabled. |
-| `/codegraph-init` | Runs `codegraph init` at the session's current directory. |
-| `/codegraph-sync` | Runs `codegraph sync` at the session's current directory. |
+| `ready` | the checkout exists and its setup finished |
+| `running` | setup is running now; the parenthesis names the step |
+| `failed` | setup ended in failure; the row names the log to inspect |
+| `skipped` | setup did not run, and the parenthesis says why (no lockfile at the root, or its package manager is not installed) |
+| `pending` | the chain is queued and has not started; the parenthesis says why |
+| `interrupted` | a `running` or `pending` chain this session wrote whose job its runner no longer holds; another session's record stays `running` because this process cannot tell |
+| `active · manual` | the checkout exists and carries no record: Git knows it, this package did not create it |
+| `missing` | the path a record names is gone while Git still lists it |
+| `gone` | a record whose checkout Git no longer lists; `all: true` shows it |
+| `foreign` | the path now belongs to another repository |
 
-The toggle lasts for the session — this package writes nothing to user
-configuration — so `CODEGRAPH_HOOK=0` is how you start a session with it off.
+The listing is **read-only**: it writes nothing, prunes nothing and never
+touches the clone document, so a dead record stays visible as `gone` or `missing`
+with its reason and date until a human acts. When the document cannot be read at
+all, the list says so and shows what Git knows instead of an empty view that
+looks authoritative.
+
+### Where state lives
+
+One document per clone: `<git-common-dir>/pi-worktrees.json`, shared by two
+owners that each preserve the other's key verbatim for documents either module
+wrote, and by value and key order for a hand-edited one.
+
+- `worktrees` — the registry: one row per checkout with its branch, path and
+the session that owns it. The panel and the live-session guard read it.
+- `records` — the metadata: per-worktree `odd`, creator, base ref, hook
+outcomes and setup state, keyed by canonical path and reconciled against
+`git worktree list` on every read.
+
+A version boundary runs through that document. An older release of this package
+reads it safely — it requires `worktrees` to be an array and ignores `records` —
+but its writers build an explicit `{ version, worktrees }` payload, so the next
+registry write from an older process drops `records` and `kind`. Mixing this
+version with an older one, or rolling back to an older one after creating
+worktrees here, therefore keeps the checkouts and their branches and loses what
+`records` held: each worktree's ODD, creator and setup history. Nothing here can
+prevent that, because the deletion happens in the older code, and no migration
+or recovery exists. Finish or park work before switching versions, and treat a
+rollback as losing the metadata, not just the feature.
+
+Session names derived from an ODD write, and the warp's fork/resume bookkeeping,
+travel in the Pi session files the host already owns. The setup logs live under
+the system temp directory (`odd-worktree-setup-*`), one directory per create.
+Nothing is written to user configuration, and there is no second worktree file.
 
 ### The `## ODD worktrees` block in the system prompt
 
 The primary session's system prompt gains a short section telling the agent where
-worktrees live, to resume an ODD in its assigned one, and — when `codegraph` is
-present — that creation indexes the checkout and edits sync it.
+worktrees live, to resume an ODD in its assigned one, and that deleting a
+checkout and moving the session are the human's actions, taken from `/warp`.
 
 It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other
-extension) put there is preserved verbatim and our text lands after it. Two
-variants exist, with and without the CodeGraph sentences, chosen by the same
-session gate. Child and named-agent sessions get nothing, because their own
-instructions are already the bounded task they received. `ODD_WORKTREE_PROMPT=0`
-suppresses the block.
+extension) put there is preserved verbatim and our text lands after it. There is
+one text, read from `lib/odd-prompt/odd-worktrees.md` at load. Child and
+named-agent sessions get nothing, because their own instructions are already the
+bounded task they received. `ODD_WORKTREE_PROMPT=0` suppresses the block.
 
 One limit, stated plainly: a string has no "must be last" flag, so the block's
 position follows extension load order. It can sit before a later extension's
 short hint; it can never land inside or in place of another extension's text.
 
-### Where state lives
-
-The worktree registry is per repository at `<git-common-dir>/pi-worktrees.json`,
-so every worktree of the same clone sees the same rows. Session names derived
-from an ODD write, and the warp's fork/resume bookkeeping, travel in the Pi
-session files the host already owns. The only other file this package writes is
-the short-lived `<root>/.codegraph/pi-sync.lock`. Nothing is written to user
-configuration.
-
 ### Deliberately absent
 
-This package is the worktree / ODD / issues surface only: no customize panel, no
-plugin-tools toggles, no Herdr plugin management, and no worktree↔issue
-association. There is nothing to configure, and `/warp`, `/odd-list` and
-`/issues` are always on (the three `/codegraph-*` commands follow the CLI).
-Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
-never as a shell string.
+This package is the worktree / ODD / issues surface only: two agent tools, three
+panels, no customize panel, no plugin-tools toggles, no CodeGraph work, no
+companion-app integration, and no worktree↔issue association. There is nothing to
+configure, and `/warp`, `/odd-list` and `/issues` are always on. Paths, branches
+and arguments reach `git` and `gh` as fixed argv arrays, never as a shell string.
 
 ## Tests
 
@@ -318,9 +353,9 @@ manifest are asserted from the outside.
 | `pr-check.yml` | pull request opened, edited, reopened or synchronized | the PR title and every non-merge commit subject must follow [Conventional Commits](https://www.conventionalcommits.org/), plus one suite run on Node 22 |
 | `release.yml` | tag `v*` push, or a manual dispatch naming an existing tag | tag/`package.json` version parity, the suite, the GitHub Release, then `npm publish`, then verification |
 
-The npm package is `pi-odd-worktree`, published at 0.1.0. A release is the tag
-`v` plus the exact `package.json` version — the 1.0.0 release is `v1.0.0` — and
-preflight stops the run when the two disagree. Publication uses
+The npm package is `pi-odd-worktree`. A release is the tag `v` plus the exact
+`package.json` version — version 2.1.0 is `v2.1.0` — and preflight stops the run
+when the two disagree. Publication uses
 [Trusted Publishing](https://docs.npmjs.com/trusted-publishers): `id-token:
 write` is granted to the `release` job and nowhere else, and no npm credential
 exists in the workflow or in the protected environment. A version npm already

@@ -1,8 +1,8 @@
 // @ts-nocheck
 // odd-worktree-tools.ts — the standalone odd-worktree Pi extension.
 //
-// One package, one surface: the agent worktree tools (create, list, close,
-// warp) and the two read/inspect panels they belong to.
+// One package, one surface: the two agent worktree tools (create, list) and
+// the three read/inspect panels.
 //
 // Registers three commands:
 //   /warp      move this session to another checkout of the project
@@ -10,11 +10,12 @@
 //   /issues    read this checkout's GitHub issues, with label/assignee,
 //              comment and close actions when the repository permits them
 //
-// and four tools: worktree_create, worktree_list, worktree_delete,
-// worktree_warp. Create and close prompt for approval when the host offers
-// dialog UI; list never mutates anything; warp hands the move to /warp.
+// and two tools: worktree_create and worktree_list. Create prompts for approval
+// when the host offers dialog UI; list never mutates anything; `/warp` is the
+// only way to move the session and the panel's ctrl+d is the only way to remove
+// a checkout, so no agent surface can do either (S3, S4).
 //
-// Worktree creation and removal use git; no Herdr workspace is opened.
+// Worktree creation and removal use git; no other workspace manager takes part.
 //
 // The file is plain JavaScript with a .ts extension (// @ts-nocheck, no type
 // annotations), so the test copy-to-.mjs loading pattern keeps working under
@@ -170,19 +171,8 @@ function isLiveGitRecord(entry, repoRoot) {
 // Marks a TypeBox property optional. Production `Type` is the full TypeBox
 // export, but older test doubles stub only the constructors the tools
 // needed; falling back to the bare schema keeps the module loadable there
-// while production still gets true optionals.
-// Older test doubles stub only the constructors the tools needed;
-// Type.Union is the production shape for string-or-array options, so
-// the one option that needs it degrades to a bare string schema when
-// the host Type has no Union (tests) instead of failing the load.
-function unionSchema(schemas, opts) {
-  try {
-    if (Type && typeof Type.Union === 'function') return Type.Union(schemas, opts);
-  } catch {
-    // Fall through to the stub-compatible shape below.
-  }
-  return Type.String();
-}
+// while production still gets true optionals. (The string-or-array `Union`
+// helper went with the `worktree_warp` tool's `changes` option, T6/S3.)
 function opt(schema) {
   if (Type && typeof Type.Optional === "function") return Type.Optional(schema);
   return schema;
@@ -192,8 +182,8 @@ function opt(schema) {
 // `source` so callers and tests can tell):
 //  1. GENTLE_WORKTREE_THREAD environment override (tests).
 //  2. The Pi host session id via ctx.sessionManager.getSessionId() — the
-//     documented accessor on the session manager, the same one
-//     extensions/gentle-herdr-state.ts uses. Never invented, never guessed.
+//     documented accessor on the session manager. Never invented, never
+//     guessed.
 function resolveThread(ctx) {
   const override = process.env.GENTLE_WORKTREE_THREAD;
   if (typeof override === "string" && override.length > 0) {
@@ -269,68 +259,6 @@ function createSuccessText(branch, target, alreadyExists) {
   return [head, `path: ${warpClean(target, '(unknown path)')}`].join('\n');
 }
 
-// S6: ONE CodeGraph fact per create, read from the creation hooks' own
-// `codegraph-init` step — the initialisation is never re-run or inferred here.
-// `status` is the hook step's status (`done`, `skipped`, `failed`), or
-// `not-run` for a call that reached no hooks at all (the thread's checkout
-// already existed).
-function codegraphStatus(hooks) {
-  const steps = hooks && Array.isArray(hooks.steps) ? hooks.steps : [];
-  const step = steps.find((entry) => entry && entry.name === 'codegraph-init');
-  if (!step) return { status: 'not-run', detail: 'the creation hooks did not run' };
-  if (step.status === 'done') return { status: 'done', detail: '' };
-  // The interactive create hands the slow setup to a background task, so the
-  // honest fact at return time is "not yet", never a claimed init.
-  if (step.status === 'pending') {
-    const detail = typeof step.detail === 'string' && step.detail.length > 0 ? step.detail : 'setup runs in the background';
-    return { status: 'pending', detail };
-  }
-  if (step.status === 'skipped') {
-    const detail = typeof step.detail === 'string' && step.detail.length > 0 ? step.detail : 'skipped';
-    return { status: 'skipped', detail };
-  }
-  return { status: 'failed', detail: 'init failed' };
-}
-
-// S6/S7: the CodeGraph fact for a checkout this call did NOT index. A create
-// never initializes an existing checkout's index (the no-double-init rule), so
-// the honest answer is the state that checkout already has — read from disk
-// (`.codegraph/codegraph.db`, the file `codegraph init` writes) and never
-// created, refreshed or removed here. `present` reads as initialized and
-// `absent` as not initialized: both are readings of the checkout, not the
-// "not run" excuse that said nothing about the index.
-function codegraphIndexState(checkoutPath) {
-  try {
-    const db = path.join(checkoutPath, '.codegraph', 'codegraph.db');
-    if (fs.statSync(db).isFile()) return { status: 'present', detail: '' };
-  } catch {
-    // No readable index: report the absence rather than creating one.
-  }
-  return { status: 'absent', detail: '' };
-}
-
-// The one visible line for that fact: what CodeGraph did, or an honest
-// "not initialized"/"not run" with the reason the hook recorded.
-function codegraphLine(codegraph) {
-  if (!codegraph || typeof codegraph !== 'object') return null;
-  switch (codegraph.status) {
-    case 'done':
-    case 'present':
-      return 'codegraph: initialized';
-    case 'absent':
-      return 'codegraph: not initialized';
-    case 'skipped':
-    case 'failed':
-      return `codegraph: not initialized (${codegraph.detail})`;
-    case 'pending':
-      return `codegraph: pending (${codegraph.detail})`;
-    case 'not-run':
-      return `codegraph: not run (${codegraph.detail})`;
-    default:
-      return null;
-  }
-}
-
 // Warnings are already summarized prose, but a hook can hand over a child's
 // stderr: the create text keeps the one-fact-per-line shape by folding every
 // warning onto a single escape-free line, exactly like the card does.
@@ -348,30 +276,25 @@ function closeSuccessText(branch, branchKept) {
   return `removed: ${slugPart(branch)} · ${name}\n${branchKept === false ? 'branch deleted' : 'branch kept'}`;
 }
 
-// Worktree tool card wiring: each registered
-// tool draws the compact/expandable native card from lib/worktree-card.js
-// through its own renderShell/renderCall/renderResult, so execute,
-// schemas, content and details stay exactly as they are. Width helpers
-// resolve lazily here — never a top-level package import (S6/S10: every
-// test loader stubs only the two package import lines) — preferring the
-// real pi-tui measurement (emoji/wide-char aware) and degrading to the
-// lib's local fallback when the host has no such module. keyHint rides
-// along only when the coding-agent module resolves; otherwise the lib's
-// static ctrl+o hint stands in. Renderers are cached per helpers
-// identity because Pi re-renders every visible card each frame.
+// Warp message card wiring: the warp is a COMMAND, so its one visible
+// confirmation is the `worktree-warp` custom message renderer built on
+// lib/worktree-card.js. Width helpers resolve lazily here — never a
+// top-level package import (S6/S10: every test loader stubs only the two
+// package import lines) — preferring the real pi-tui measurement
+// (emoji/wide-char aware) and degrading to the lib's local fallback when
+// the host has no such module. keyHint rides along only when the
+// coding-agent module resolves; otherwise the lib's static ctrl+o hint
+// stands in.
 let worktreeCardHelpersOverride;
-let worktreeCardCache = null;
 // The runtime resolution below runs once per process: rebuilding the
-// helpers object on every render would defeat the per-identity card
-// cache above (a fresh identity busts it each time). The injectable seam
-// still wins whenever set, and resetting it returns to this stable
-// resolution — never to a fresh rebuild.
+// helpers object on every render would defeat the per-identity deps
+// memo below. The injectable seam still wins whenever set, and resetting
+// it returns to this stable resolution — never to a fresh rebuild.
 let worktreeCardAutoHelpers;
 let worktreeCardAutoResolved = false;
 
 function setWorktreeCardHelpers(helpers) {
   worktreeCardHelpersOverride = helpers;
-  worktreeCardCache = null;
 }
 
 function loadRuntimeCardHelpers() {
@@ -464,59 +387,6 @@ function worktreeCardDeps() {
   return worktreeCardDepsCache.deps;
 }
 
-function worktreeCardFor(toolName) {
-  const helpers = worktreeCardDeps();
-  if (!worktreeCardCache || worktreeCardCache.helpers !== helpers) {
-    worktreeCardCache = { helpers, cards: new Map() };
-  }
-  let card = worktreeCardCache.cards.get(toolName);
-  if (!card) {
-    card = libRequire("worktree-card.js").createWorktreeCardRenderer(toolName, helpers);
-    worktreeCardCache.cards.set(toolName, card);
-  }
-  return card;
-}
-
-// Spreads nothing and keeps the defineTool identity: the card hooks are
-// assigned onto the definition, so a failure anywhere above returns the
-// tool untouched and execution never depends on rendering. The hooks
-// resolve the cached card per invocation (one Map hit) so an injected
-// helpers seam set after load still reaches every render.
-function withWorktreeCardRenderer(tool) {
-  try {
-    const card = worktreeCardFor(tool.name);
-    tool.renderShell = card.renderShell;
-    tool.renderCall = (...args) => worktreeCardFor(tool.name).renderCall(...args);
-    tool.renderResult = (...args) => worktreeCardFor(tool.name).renderResult(...args);
-  } catch {
-    // Rendering stays generic; the tool itself is unaffected.
-  }
-  // Model text and visual cards are independent presentation layers. Keep
-  // backend helpers unchanged so runtime callers retain their raw contract.
-  //
-  const execute = tool.execute;
-  let format = null;
-  try {
-    const candidate = libRequire("worktree-model-result.js").formatWorktreeModelResult;
-    if (typeof candidate === "function") format = candidate;
-  } catch {
-    // An unavailable formatter leaves execution and diagnostics untouched.
-  }
-  if (typeof execute === "function") {
-    tool.execute = async function (...args) {
-      const result = await execute.apply(this, args);
-      if (!format) return result;
-      try {
-        return format(tool.name, result);
-      } catch {
-        // A presentation failure must not hide a completed tool's result.
-        return result;
-      }
-    };
-  }
-  return tool;
-}
-
 // The one sentence every `changes` refusal uses for the accepted forms, so the
 // create cannot drift into describing three different contracts.
 const CHANGES_FORMS = 'pass \"all\" to copy every pending change, \"none\" to create the worktree from the '
@@ -549,277 +419,180 @@ async function resolveCreateBase(runGit, repo) {
   return null;
 }
 
-// A create is INSTANT on BOTH fronts — the `worktree_create` tool and the
-// `/warp` panel: the checkout plus its registry row are all a warp needs, so the
-// SLOW half of the creation hooks — dependency install, `codegraph init` — is
-// handed to this managed background task instead of being awaited. A package
-// manager can run for minutes, and awaiting it is exactly what made a confirmed
-// create feel like a hang.
+// S1/S4: the `/warp` panel's create front.
 //
-// Nothing is skipped and nothing is orphaned:
-//   - the hooks library still runs both phases (through the `setup()` callable
-//     it returns), so the checkout is set up exactly as before;
-//   - every task is tracked here until it settles, and
-//     `awaitPendingCreationSetups` is the seam a test (or a caller) uses to wait
-//     for the last one;
-//   - the settled outcome is recorded per checkout, so a later `worktree_create`
-//     for that same checkout reports what the background work actually did;
-//   - each task settles into at most ONE report, and the task itself never
-//     rejects (nothing is left unobserved);
-//   - a task that settles after `session_shutdown` records and reports nothing:
-//     it belongs to a session whose UI the runtime already invalidated.
-const creationSetups = new Set();
-
-// Session epoch for deferred setups. Shutdown advances it, so late work drops
-// instead of writing into the session that replaced it.
-let creationEpoch = 0;
-
-// The deferred setup's lifecycle record, one entry per checkout path: `running`
-// while the background task owns it, then `done` or `failed` with the steps that
-// really ran. Session state only — never written to disk, cleared on shutdown.
-const creationSetupStates = new Map();
-
-function beginCreationTask() {
-  return creationEpoch;
-}
-
-function creationTaskLive(epoch) {
-  return epoch === creationEpoch;
-}
-
-function forgetCreationSetups() {
-  creationEpoch += 1;
-  creationSetupStates.clear();
-}
-
-// Fold a child's stderr into one escape-free line, the same shape every
-// summary row uses, so a multi-line failure cannot break the notification.
-function setupReportLine(text) {
-  return String(text ?? '')
-    .replace(/\x1b\[[0-9;]*m|\x1b\]8;;.*?\x07/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-// The create result's row for that lifecycle. It states the SETUP's state, never
-// the index on disk (`codegraphIndexState` reads that), so the two rows of one
-// result can never contradict each other.
-function setupStateRow(state) {
-  if (!state || typeof state !== 'object') return null;
-  if (state.status === 'running') return 'setup: running in the background (install, codegraph)';
-  if (state.status === 'failed') {
-    const reason = setupReportLine(state.reason || '');
-    return `setup: finished with problems: ${reason.length > 0 ? reason : 'the setup reported a failure'} — the checkout is usable`;
-  }
-  if (state.status === 'done') return 'setup: finished';
-  return null;
-}
-
-// One settled step, in the words the create's rows use.
-function setupStepLabel(step) {
-  const name = String((step && step.name) || 'setup');
-  if (name === 'codegraph-init') return 'codegraph initialized';
-  return setupReportLine(name.replace(/^install:/, 'install '));
-}
-
-// The ONE reading of a settled setup, shared by the record a later tool result
-// reports and by the notice a caller asked for: the steps that ran, and the
-// reason it went wrong when it did.
-function settledCreationSetup(outcome) {
-  const steps = outcome && Array.isArray(outcome.steps) ? outcome.steps : [];
-  const failed = steps.filter((step) => step && step.status === 'failed');
-  const done = steps.filter((step) => step && step.status === 'done');
-  const warnings = outcome && Array.isArray(outcome.warnings) ? outcome.warnings : [];
-  const wentWrong = failed.length > 0 || !!(outcome && outcome.ok === false) || warnings.length > 0;
-  if (!wentWrong) return { steps, done, problem: null };
-  const reasons = warnings.length > 0 ? warnings : failed.map((step) => `${step.name} failed`);
-  const named = reasons.map(setupReportLine).filter((line) => line.length > 0).join('; ');
-  return { steps, done, problem: named.length > 0 ? named : 'the setup reported a failure' };
-}
-
-// WHERE THE COMPLETION NOTICE GOES. It belongs to the caller that asked for one:
-// only an explicitly supplied `notify` receives it. The `/warp` panel supplies
-// the UI notification a human is watching. The `worktree_create` tool supplies
-// NOTHING — an agent's tool result is its report, so a create never fires a
-// `ui.notify` the call did not ask for, and never reports the deferred setup as
-// an error: a problem is a warning, and the checkout stays usable either way.
-// The agent learns the outcome later from the tool surface: a create for the same
-// checkout reports the recorded state (`setupStateRow`) and its steps.
+// The panel is a SECOND caller of the same create, never a second create: the plan,
+// the refusals, the hook chain, the one-document write, the registry row, the setup
+// runner and the session registration are the ported ones below. The one thing the
+// panel keeps of its own is the selection a human can make instead of the tool's
+// boolean — a list of checkout-relative paths carried by the existing
+// lib/worktree-changes.js transfer once the checkout exists, reported on its own line.
 //
-// A run in which NO step completed reports NOTHING. Every step can be skipped
-// (no lockfile detected, `codegraph` not on PATH), and a "setup finished" toast
-// there announces work that never happened — the no-op success the interactive
-// create used to show on every such checkout. Failures are never suppressed by
-// that rule: a failed step, a failed outcome or any warning is reported first
-// and returns, so silence can only ever mean "nothing ran, nothing failed".
-function reportCreationSetup({ branch, target, settled, notify }) {
-  if (typeof notify !== 'function') return;
-  if (settled.problem !== null) {
-    notify(
-      `warp: setup for ${branch} finished with problems: ${settled.problem} — the checkout at ${target} is usable`,
-      'warning',
-    );
-    return;
-  }
-  if (settled.done.length === 0) return;
-  notify(`warp: setup finished for ${branch}: ${settled.done.map(setupStepLabel).join(', ')}`, 'info');
-}
-
-// Start (and track) the deferred setup. The returned task never rejects: a
-// throwing phase is recorded as a failed setup, never as an unhandled rejection.
-function startCreationSetup({ run, branch, target, key, notify, epoch }) {
-  const task = (async () => {
-    let outcome;
-    try {
-      outcome = await run();
-    } catch (err) {
-      const message = `creation setup failed: ${(err && err.message) || err}`;
-      outcome = { ok: false, steps: [{ name: 'setup', status: 'failed', detail: message }], warnings: [message] };
-    }
-    // A setup whose session ended writes nothing at all: no record, no report.
-    if (!creationTaskLive(epoch)) return;
-    const settled = settledCreationSetup(outcome);
-    creationSetupStates.set(key, settled.problem === null
-      ? { status: 'done', branch, steps: settled.steps }
-      : { status: 'failed', branch, steps: settled.steps, reason: settled.problem });
-    try {
-      reportCreationSetup({ branch, target, settled, notify });
-    } catch {
-      // Reporting is the last step of a settled task: a hostile notify never
-      // leaves the task unobserved or the tracking set dirty.
-    }
-  })();
-  creationSetups.add(task);
-  const forget = () => { creationSetups.delete(task); };
-  task.then(forget, forget);
-  return task;
-}
-
-// Resolves once every tracked setup has settled. The task stays tracked after its
-// session dropped it, so this seam (exported for tests and for a caller that
-// must not leave a child running behind it) still sees the real completion.
-async function awaitPendingCreationSetups() {
-  while (creationSetups.size > 0) {
-    await Promise.all(Array.from(creationSetups));
-  }
-}
-
-// Core of `worktree_create`: validation (S2, S3) then git creation
-// with a git fallback. Exported for unit tests; the registered tool calls
-// it with the live Pi context. It only ever CREATES: the branch plus the
-// `changes` selection (S3/S4), and no issue or ODD association is verified,
-// written or displayed.
-async function executeWorktreeCreate(params, ctx, opts) {
-  const git = libRequire("worktree-git.js");
-  const registry = libRequire("worktree-registry.js");
-  // `backgroundHooks` is the create's speed contract on BOTH fronts: the checkout
-  // plus its registry row are all anyone needs, so the slow half of the hooks
-  // (dependency install, `codegraph init`) is handed to a tracked background task
-  // instead of being awaited. The tool passes it exactly like the panel, so a
-  // create answers as soon as the checkout exists and its result says
-  // `setup: running in the background` instead of implying a finished install.
-  const backgroundHooks = !!(opts && opts.backgroundHooks === true);
-  // S21: BOTH routes are interactive (the tool handler and the create
-  // panel), so both wait for their children on the async runner. The
-  // security property is unchanged: fixed argv arrays, values as separate
-  // elements, never a shell string.
-  const runAsync = libRunner(git);
-  const runGit = (bin, argv, runOpts) => git.runArgvAsync(bin, argv, runOpts);
-
-  const branch = params ? params.branch : undefined;
-  const cwd = toolCwd(ctx);
-
-  // (b) Branch validation, refusing with the returned reason. The
-  // authority is still `git check-ref-format --branch`, awaited.
-  const validated = await git.validateBranchAsync(branch, { runAsync });
-  if (!validated.ok) {
-    return errorResult(
-      `invalid branch name ${JSON.stringify(branch)}: ${validated.reason}`,
-      { branch },
-    );
-  }
-
-  // (b2) S3/S4: the `changes` selection — "all", "none" or an explicit file
-  // list — and it is MANDATORY. The declared parameter is required, so the host
-  // refuses a call that omits it before `execute` runs; this check is the same
-  // refusal for every caller that reaches the core directly (the wizard, an
-  // internal path, a test), and it runs before any child that can WRITE — the
-  // only child before it is the read-only branch-name probe above — so no
-  // branch, checkout, registry row or partial copy can exist when the caller
-  // never stated what to copy. `null` is how a JSON tool call spells "not
-  // provided", so it is refused as an omission too.
-  //
-  // The value is then normalized by the shared helper: an unusable value fails
-  // closed here, for the same reason and with the same three named forms.
-  const changesLib = libRequire('worktree-changes.js');
-  const rawChanges = params ? params.changes : undefined;
-  if (rawChanges === undefined || rawChanges === null) {
-    return errorResult(`invalid changes selection: 'changes' is required — ${CHANGES_FORMS} (nothing was created)`, { branch });
-  }
-  // An empty (or whitespace-only) STRING is a PRESENT but unusable value: the
-  // create must name one of the three forms, so "no text" is refused exactly
-  // like any other invalid value instead of being read as "copy nothing". (The
-  // warp's OPTIONAL `changes` keeps its own, documented rule — omitted, "" or []
-  // copy nothing — because it is a different contract and goes through the
-  // shared helper untouched; an empty ARRAY stays a legal, if empty, list here.)
-  if (typeof rawChanges === 'string' && rawChanges.trim() === '') {
-    return errorResult(`invalid changes selection ${JSON.stringify(rawChanges)}: ${CHANGES_FORMS} (nothing was created)`, { branch });
-  }
-  // S4: the CREATE's own documented value set includes the word "none", while
-  // the SHARED helper keeps its original contract (omitted/""/[] mean no copy and
-  // the word "none" is not one of its values). The create therefore adapts
-  // LOCALLY — "none" becomes the helper's no-copy spelling — instead of widening
-  // a helper `worktree_warp` also uses, whose behavior and error text stay
-  // exactly as they were.
-  const createSelection = typeof rawChanges === 'string' && rawChanges.trim() === 'none' ? [] : rawChanges;
+// One owner per mode, so exactly one line reaches the human:
+//   - "copy everything" becomes `copy_changes: true`, and the ported hook copies and
+//     prints the ported `copy_changes:` line;
+//   - a path list plans and executes with `copy_changes: false`, so the ported hook
+//     never runs the copy (and never prints its line), and the panel's transfer prints
+//     its own `copied:` / `copy_changes (paths):` line instead.
+function panelChangesSelection(changesLib, raw) {
+  // The panel's own selection is optional: omitted means the commit is copied as-is.
+  if (raw === undefined || raw === null) return { ok: true, mode: 'none', paths: [] };
+  // The panel's documented value set includes the word "none" (lib/worktree-changes.js
+  // keeps its own contract, where "none" is spelled by omission), so it is adapted
+  // here instead of widening a helper the warp also uses.
+  if (typeof raw === 'string' && raw.trim() === 'none') return { ok: true, mode: 'none', paths: [] };
+  if (typeof raw === 'string' && raw.trim() === 'all') return { ok: true, mode: 'all', paths: [] };
   let selection;
   try {
-    selection = changesLib.normalizeChangesSelection(createSelection);
+    selection = changesLib.normalizeChangesSelection(raw);
   } catch (err) {
     selection = { ok: false, error: (err && err.message) || String(err) };
   }
   if (!selection || selection.ok !== true) {
     let shown = 'an unusable value';
     try {
-      shown = JSON.stringify(rawChanges);
+      shown = JSON.stringify(raw);
     } catch {
       // A value that cannot even be printed is still refused, never echoed.
     }
-    return errorResult(
-      `invalid changes selection ${shown}: ${CHANGES_FORMS} (${(selection && selection.error) || 'unusable value'}; nothing was created)`,
-      { branch },
-    );
+    return {
+      ok: false,
+      error: `invalid changes selection ${shown}: ${CHANGES_FORMS} (${(selection && selection.error) || 'unusable value'}; nothing was created)`,
+    };
+  }
+  return selection;
+}
+
+async function executeWorktreeCreate(params, ctx, opts) {
+  const changesLib = libRequire('worktree-changes.js');
+  const branch = params ? params.branch : undefined;
+  const selection = panelChangesSelection(changesLib, params ? params.changes : undefined);
+  if (selection.ok !== true) return errorResult(selection.error, { branch });
+  return runPortedWorktreeCreate(
+    {
+      request: {
+        odd: params ? params.odd : undefined,
+        branch,
+        // S18: only "copy everything" becomes the boolean the ported hook owns; a path
+        // list travels through the panel's own transfer below.
+        copy_changes: selection.mode === 'all',
+      },
+      selection,
+      // A completion notice belongs to the caller that asked for one: the panel
+      // supplies the UI a human is watching, the tool front supplies none.
+      notify: opts && typeof opts.notify === 'function' ? opts.notify : null,
+    },
+    ctx,
+  );
+}
+
+// ---- worktree_create (S1, S4) ----
+//
+// The checkout decisions live in lib/worktree-create.js (plan, execute, view), the
+// preparation chain in lib/worktree-hooks.js, the setup state in
+// lib/worktree-setup.js, and the clone's one document in lib/worktree-metadata.js
+// plus lib/worktree-registry.js. This front only joins them: it resolves the
+// canonical main worktree through the package's own Git seam, refuses with the
+// ported sentence untouched, and prints the fixed lines the view built.
+
+// The ported cores answer `{code, stdout}`; the package's one Git seam is the
+// fixed-argv async runner, so this adapter is the only place the two shapes meet and
+// every create-side child is awaited instead of blocking the host event loop.
+function portedGitSeam(runAsync) {
+  return async (cwd, args) => {
+    const answer = await runAsync("git", args, cwd);
+    return {
+      code: answer && typeof answer.status === "number" ? answer.status : 1,
+      stdout: answer && typeof answer.stdout === "string" ? answer.stdout : "",
+    };
+  };
+}
+
+// S20/S22 (ported): the setup chain resolved from the closed table and STARTED as
+// this package's own tracked task (lib/worktree-setup-runner.js). S4 gives this
+// package no configuration file, so setup belongs to every create. The runner owns the
+// child, its log under the system temp directory and the terminal write; this front
+// only starts it and then prints the state the record holds at that moment, so a
+// create never waits for an install and never reports a state it cannot back. The
+// tool call supplies no `notify`: an agent's result is its report, so a create fires
+// no UI notification the call did not ask for.
+async function planPortedWorktreeSetup(input) {
+  const runner = libRequire("worktree-setup-runner.js");
+  const started = await runner.startWorktreeSetup({
+    path: input.path,
+    name: input.name,
+    storePath: input.storePath,
+    sessionId: input.sessionId,
+    copiedChanges: input.copiedChanges,
+    // The completion notice belongs to the caller that asked for one: the panel
+    // supplies the UI a human is watching, the tool supplies none.
+    ...(typeof input.notify === "function" ? { notify: input.notify } : {}),
+  });
+  // The record is the one authority: a later write (the very first command settling,
+  // or a refusal of a second start) is what the create must print.
+  return runner.readWorktreeSetupState({ storePath: input.storePath, path: input.path }) ?? started.setup;
+}
+
+/**
+ * S1: the whole create, from the canonical main worktree to the printed view.
+ *
+ * Every refusal is the ported one, returned verbatim: the plan validates the request
+ * before anything is written, and nothing here rewrites its sentence. The create owns
+ * the same holders the source branch owns — the checkout, the metadata record, the
+ * registry row, the preparation hooks and the session registration — so the line
+ * `worktree register in session` only prints when that registration really happened.
+ *
+ * `input.request` is the ported call (`odd`, `branch`, `copy_changes`).
+ * `input.selection` is the PANEL's own selection (`undefined` on the tool front):
+ * `{mode: 'none'|'all'|'paths', paths: []}`. A boolean "copy everything" still belongs
+ * to the ported `copy_changes` hook, so only `paths` reaches the panel's transfer.
+ * `input.notify` is the completion notice a caller asked for; the tool asks for none.
+ */
+async function runPortedWorktreeCreate(input, ctx) {
+  const git = libRequire("worktree-git.js");
+  const create = libRequire("worktree-create.js");
+  const metadata = libRequire("worktree-metadata.js");
+  const hooks = libRequire("worktree-hooks.js");
+  const registry = libRequire("worktree-registry.js");
+  const sessionRegister = libRequire("session-worktree-register.js");
+  const selection = input.selection;
+  const changesLib = selection === undefined ? null : libRequire("worktree-changes.js");
+  const notify = typeof input.notify === "function" ? input.notify : null;
+  const request = input.request || {};
+  const cwd = toolCwd(ctx);
+  const branch = request.branch;
+  const runAsync = libRunner(git);
+  const portedGit = portedGitSeam(runAsync);
+
+  // The record keeps `createdBy`, so a create without a session identity cannot be
+  // attributed and is refused before anything exists on disk.
+  const createdBy = resolveThread(ctx).thread;
+  if (!createdBy) {
+    return errorResult("cannot resolve thread identity: set GENTLE_WORKTREE_THREAD or run inside a Pi session", { branch });
   }
 
-  // Thread identity resolves before any mutation so a second checkout for
-  // the same thread is never created. Without an identity the call fails
-  // closed: it must never adopt another thread's checkout.
-  const identity = resolveThread(ctx);
-  if (!identity.thread) {
-    return errorResult(
-      "cannot resolve thread identity: set GENTLE_WORKTREE_THREAD or run inside a Pi session",
-      { branch },
-    );
-  }
-  const thread = identity.thread;
-
-  // (c) No association validation happens here: a create takes the branch and
-  // nothing else. An `issues`/`odd` field a caller still sends is ignored — it
-  // is never verified, never refused and never stored (S1/S6).
-
-  // (d) Repository identity and target path.
   let repo;
   try {
     repo = await git.repoIdentityAsync(cwd, { runAsync });
-  } catch (err) {
-    return errorResult(`not a git repository: ${cwd}`, { branch });
+  } catch {
+    return errorResult(create.WORKTREE_NOT_A_REPOSITORY, { tool: "worktree_create" });
   }
-  // (d0) S3/S4: WHICH pending changes travel. The invoking checkout's pending
-  // set is read and the selection matched against it BEFORE the create, so an
-  // unknown file refuses with nothing created — never a half-made worktree
-  // followed by a failed copy.
-  let pendingCopy = null;
-  if (selection.mode !== 'none') {
+  // The canonical main worktree decides the destination AND runs the create, so a
+  // session standing in a linked worktree still creates beside the clone.
+  const listing = await portedGit(cwd, ["worktree", "list", "--porcelain"]);
+  const main = metadata.parseWorktreeListPorcelain(listing.code === 0 ? listing.stdout : "")[0];
+  if (main === undefined) return errorResult(`could not list the worktrees of ${repo.root}`, { branch });
+  let mainRoot = main.path;
+  try {
+    mainRoot = fs.realpathSync(main.path);
+  } catch {
+    // Git's own spelling is all it answered.
+  }
+
+  // The panel's own selection is PREFLIGHTED read-only, before the plan writes anything:
+  // an unknown file refuses with nothing created, exactly as this front always did.
+  // The copy itself still runs after the checkout exists (below).
+  if (selection !== undefined && selection.mode === "paths") {
     let source;
     try {
       source = await changesLib.summarizeChanges(cwd, { git });
@@ -828,601 +601,126 @@ async function executeWorktreeCreate(params, ctx, opts) {
     }
     if (!source || source.ok !== true) {
       return errorResult(
-        `cannot read the pending changes of ${cwd}: ${(source && source.error) || 'unknown error'} (nothing was created)`,
+        `cannot read the pending changes of ${cwd}: ${(source && source.error) || "unknown error"} (nothing was created)`,
         { branch },
       );
     }
-    const matched = changesLib.matchSelection(source, selection.mode, selection.paths);
-    if (!matched || matched.ok !== true) {
-      return errorResult(`${(matched && matched.error) || 'invalid changes selection'} (nothing was created)`, { branch });
-    }
-    // A clean checkout selects nothing: the create is the ordinary one and no
-    // copy step runs at all.
-    if (matched.entries.length > 0) pendingCopy = { mode: selection.mode, paths: selection.paths };
-  }
-  // The layouts are pure functions of the identity just read, so the create
-  // never spawns git a second time for a path it already knows.
-  const target = opts && opts.principalLayout && typeof git.canonicalWorktreePathOf === "function"
-    ? git.canonicalWorktreePathOf(repo, branch)
-    : typeof git.worktreePathOf === "function"
-      ? git.worktreePathOf(repo, branch)
-      : git.worktreePath(repo.root, branch);
-  const resolvedTarget = path.resolve(target);
-
-  let listed;
-  try {
-    listed = await git.listWorktreesAsync(repo.root, { runAsync });
-  } catch (err) {
-    return errorResult(
-      `cannot list worktrees: ${(err && err.message) || err}`,
-      { branch },
-    );
-  }
-
-  // (e) Request idempotency (S9/L31): a session may own SEVERAL worktrees, so
-  // the replay case is the SAME request — this thread already registered a row
-  // for THIS branch — and only then is its checkout handed back instead of a
-  // second one. Another branch is a new checkout with its own row, and a live
-  // checkout already sitting on this request's target path is the
-  // one-owner-per-path refusal below, never an adoption.
-  // This runs BEFORE the (d) refusals on purpose: the thread's own checkout is
-  // by definition checked out at its target, so checking (d) first would make
-  // this return unreachable.
-  const threadRows = (() => {
+    let matched;
     try {
-      const read = registry.readRegistry(repo.root);
-      return read && read.ok === true && Array.isArray(read.worktrees) ? read.worktrees : [];
-    } catch {
-      return [];
-    }
-  })();
-  // Liveness is the consolidated checkoutState: a row is live only when
-  // something exists at its path AND it is a directory AND its resolved
-  // realpath matches a live checkout's realpath, so a row that reaches a live
-  // checkout through a SYMLINK is live and is never dropped as stale while a
-  // hand-deleted checkout git still records is stale (its state has nothing
-  // existing, so it can never match). A relative row path can never match.
-  const ownedStateOf = (row) => ((row && typeof row.path === "string" && path.isAbsolute(row.path))
-    ? checkoutState(row.path, repo.root)
-    : { absolute: null, real: null, exists: false, isDirectory: false });
-  const ownsLiveCheckout = (row) => {
-    const st = ownedStateOf(row);
-    return st.real !== null && st.exists && st.isDirectory && liveIdentities(listed, repo.root).has(st.real);
-  };
-  // Every row is examined, so a duplicate-branch row of another thread ahead of
-  // this thread's own can never hide it.
-  const owned = threadRows.find((row) => row && row.branch === branch && row.thread === thread) || null;
-  if (owned && ownsLiveCheckout(owned)) {
-    // Already-exists truth (S1/S6/S7): the requested branch already has this
-    // session's checkout, so the call creates nothing, writes nothing and runs
-    // no hook — and it says so instead of claiming a create or an update. The
-    // registry row already exists (`registered: unchanged`), and the CodeGraph
-    // row reports the index the checkout really has, read without initializing
-    // anything. The one thing a repeat call can add is the deferred setup this
-    // checkout already carries: its state rides along as its own row, with the
-    // steps that really ran in `details.setup`.
-    const codegraph = codegraphIndexState(owned.path);
-    const setup = creationSetupStates.get(path.resolve(owned.path)) || null;
-    const lines = [createSuccessText(owned.branch, owned.path, true), 'registered: unchanged', codegraphLine(codegraph), setupStateRow(setup)]
-      .filter((line) => typeof line === 'string' && line.length > 0);
-    return textResult(
-      lines.join('\n'),
-      {
-        path: owned.path,
-        branch: owned.branch,
-        alreadyExists: true,
-        registered: 'unchanged',
-        codegraph,
-        ...(setup !== null ? { setup } : {}),
-      },
-      false,
-    );
-  }
-  // Stale entries of THIS session (any branch): dead checkouts its own rows
-  // point at. They are remembered, never dropped here — the drop happens after
-  // the new checkout verifies, so a refusal or a failed creation below still
-  // leaves every row intact with a way back. S9 widened this from the single
-  // owned row to all of the session's dead rows, because a create is no longer
-  // the session's first checkout: its own ghost rows are cleaned with it, while
-  // rows of other sessions are never touched.
-  const staleOwned = threadRows.filter((row) => row
-    && row.thread === thread
-    && !ownsLiveCheckout(row));
-
-  // (d1) S2: a NEW branch is born from LOCAL main, and from nothing else. Both
-  // halves are decided here, before any child that could mutate anything (the
-  // stale-record prune included):
-  //   - adopting an EXISTING branch needs no base at all — it is checked out
-  //     as-is — so the requirement below never touches adoption;
-  //   - creating a branch requires a local `main` to start from. A repository
-  //     without one is refused in plain words with nothing written, instead of
-  //     quietly seeding the branch from whatever the invoking checkout has
-  //     checked out (the old behavior, which put a linked worktree's unmerged
-  //     commits into a "fresh" worktree).
-  let branchExists = false;
-  try {
-    const ref = await runGit("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: repo.root });
-    branchExists = ref.status === 0;
-  } catch {
-    branchExists = false;
-  }
-  const baseInfo = branchExists ? null : await resolveCreateBase(runGit, repo);
-  if (!branchExists && baseInfo === null) {
-    return errorResult(
-      `cannot create worktree for branch '${branch}': this repository has no local 'main' branch, and a new `
-      + `worktree is always born from local main — create it (git branch main <commit>) and retry; `
-      + `nothing was created`,
-      { branch },
-    );
-  }
-
-  // (d) Refusals: the branch already checked out at a LIVE path, the
-  // target already a LIVE worktree, or the target inside any checkout /
-  // the git common dir. Every record is judged through the one predicate
-  // (exists AND is-a-directory): a git record whose path is not a live
-  // checkout never blocks a create on its own. When such stale records are
-  // the ONLY thing holding the branch or the target path, the tool
-  // recovers with a scoped `git worktree prune` (which drops only records
-  // whose directories are missing) and proceeds to create; a branch
-  // genuinely checked out at a LIVE path is refused exactly as before,
-  // with the registry row left intact either way.
-  const branchRecords = listed.filter((entry) => entry.branch === branch);
-  const liveBranchRecords = branchRecords.filter((entry) => isLiveGitRecord(entry, repo.root));
-  const targetRecords = listed.filter((entry) => {
-    const st = checkoutState(entry.path, repo.root);
-    return st.absolute !== null && st.absolute === resolvedTarget;
-  });
-  const liveTargetRecords = targetRecords.filter((entry) => isLiveGitRecord(entry, repo.root));
-  // Stale records recovered below; reported in details.pruned and in the
-  // create warnings so the caller can name what `git worktree prune` took.
-  let prunedStale = [];
-  if (liveBranchRecords.length === 0 && liveTargetRecords.length === 0
-    && (branchRecords.length > 0 || targetRecords.length > 0)) {
-    const stalePaths = [];
-    for (const entry of [...branchRecords, ...targetRecords]) {
-      const st = checkoutState(entry.path, repo.root);
-      if (st.absolute !== null && !stalePaths.includes(st.absolute)) stalePaths.push(st.absolute);
-    }
-    const pruned = await runGit("git", ["worktree", "prune"], { cwd: repo.root });
-    if (pruned.status !== 0) {
-      const reason = ((pruned.stderr || pruned.error || "unknown error") + "").trim();
-      return errorResult(
-        `cannot create worktree for branch '${branch}': the branch or target path is recorded at ${stalePaths.join(", ")} but no live checkout exists there, and 'git worktree prune' failed (${reason}); run 'git worktree prune' by hand and retry; the registry was left untouched`,
-        { branch, path: target, pruned: [], pruneError: reason },
-      );
-    }
-    let relisted;
-    try {
-      relisted = await git.listWorktreesAsync(repo.root, { runAsync });
+      matched = changesLib.matchSelection(source, "paths", selection.paths);
     } catch (err) {
-      return errorResult(
-        `cannot create worktree for branch '${branch}': the branch or target path is recorded at ${stalePaths.join(", ")} but no live checkout exists there, and the worktree list could not be re-read after pruning (${(err && err.message) || err}); the registry was left untouched`,
-        { branch, path: target, pruned: [], pruneError: (err && err.message) || String(err) },
-      );
+      matched = { ok: false, error: (err && err.message) || String(err) };
     }
-    const stillLiveBranch = relisted.filter((entry) => entry.branch === branch && isLiveGitRecord(entry, repo.root));
-    const stillLiveTarget = relisted.filter((entry) => {
-      const st = checkoutState(entry.path, repo.root);
-      return st.absolute !== null && st.absolute === resolvedTarget && isLiveGitRecord(entry, repo.root);
+    if (!matched || matched.ok !== true) {
+      return errorResult(`${(matched && matched.error) || "invalid changes selection"} (nothing was created)`, { branch });
+    }
+  }
+
+  const decision = await create.planWorktreeCreate(
+    {
+      odd: request.odd,
+      branch,
+      // S18: the boolean mode belongs to the ported hook; a path list travels on the
+      // panel's own line instead, so the plan never carries both at once.
+      copy_changes: request.copy_changes === true,
+    },
+    { mainRoot },
+    { git: portedGit, exists: (target) => fs.existsSync(target) },
+  );
+  // S1: a refused plan is the result, sentence for sentence.
+  if (decision.ok === false) return errorResult(decision.error.message, { branch });
+
+  // S4: the clone keeps ONE document. `registryPath` is the same absolute path the
+  // registry reads and writes, so the metadata record, the registry row, the panel and
+  // the live-session guard can never drift onto two files.
+  const storePath = registry.registryPath(repo.root);
+  const execution = await create.executeWorktreeCreatePlan({
+    plan: decision.plan,
+    git: portedGit,
+    createdBy,
+    storePath,
+  });
+  if (execution.ok === false) return errorResult(execution.error.message, { path: decision.plan.path });
+
+  // The registry row is what the panel, the live-session guard and the `warp`
+  // command resolve a name against, so the checkout is registered before the slow work
+  // starts. A row that cannot be written is reported with the checkout that exists,
+  // never hidden and never rolled back.
+  const stored = registry.upsertWorktree(repo.root, {
+    branch: decision.plan.branch,
+    path: decision.plan.path,
+    thread: createdBy,
+    issues: [],
+  });
+  if (!stored || stored.ok !== true) {
+    return errorResult(
+      `worktree created at ${decision.plan.path} but the registry write failed: ${(stored && stored.error) || "unknown registry error"}`,
+      { branch: decision.plan.branch, path: decision.plan.path, createdBy },
+    );
+  }
+
+  // S19: the hooks run once the worktree exists and before the output is rendered.
+  // Nothing here throws: a failing hook is reported by its own outcome, so a create
+  // that succeeded is never reported as failed.
+  const hooksResult = await hooks.runWorktreeHooks({
+    mainRoot,
+    path: decision.plan.path,
+    odd: decision.plan.odd,
+    copyChanges: decision.plan.copyChanges,
+    configPath: hooks.worktreeHooksFilePath(repo.commonDir),
+    seams: {
+      git: portedGit,
+      kind: async (target) => {
+        try {
+          const stats = await fs.promises.lstat(target);
+          if (stats.isSymbolicLink()) return "symlink";
+          return stats.isDirectory() ? "directory" : "file";
+        } catch {
+          return undefined;
+        }
+      },
+      readdir: async (target) => {
+        try { return await fs.promises.readdir(target); } catch { return []; }
+      },
+      readText: async (target) => {
+        try { return await fs.promises.readFile(target, "utf8"); } catch { return undefined; }
+      },
+      copyFile: (from, to) => fs.promises.copyFile(from, to),
+      mkdir: async (target) => { await fs.promises.mkdir(target, { recursive: true }); },
+      symlink: (target, link, type) => fs.promises.symlink(target, link, type),
+      platform: process.platform,
+    },
+  });
+  // S7: the record owns what the hooks did, so a later list reads it from there.
+  if (execution.result.metadata.recorded && hooksResult.results.length > 0) {
+    create.recordWorktreeHooks({
+      storePath,
+      path: decision.plan.path,
+      hooks: hooks.worktreeHookRecords(hooksResult.results),
     });
-    if (stillLiveBranch.length > 0) {
-      return errorResult(
-        `branch '${branch}' is already checked out at ${stillLiveBranch[0].path}: pick another branch or close that worktree first`,
-        { branch, path: stillLiveBranch[0].path, pruned: [] },
-      );
-    }
-    if (stillLiveTarget.length > 0) {
-      return errorResult(
-        `target path ${target} is already a live worktree (branch '${stillLiveTarget[0].branch}'): pick another branch`,
-        { branch, path: target, pruned: [] },
-      );
-    }
-    const relistedAbs = new Set();
-    for (const entry of relisted) {
-      const st = checkoutState(entry.path, repo.root);
-      if (st.absolute !== null) relistedAbs.add(st.absolute);
-    }
-    prunedStale = stalePaths.filter((absolute) => !relistedAbs.has(absolute));
-    listed = relisted;
-  } else {
-    if (liveBranchRecords.length > 0) {
-      return errorResult(
-        `branch '${branch}' is already checked out at ${liveBranchRecords[0].path}: pick another branch or close that worktree first`,
-        { branch, path: liveBranchRecords[0].path },
-      );
-    }
-    const liveAtTarget = liveTargetRecords[0];
-    if (liveAtTarget) {
-      return errorResult(
-        `target path ${target} is already a live worktree (branch '${liveAtTarget.branch}'): pick another branch`,
-        { branch, path: target },
-      );
-    }
-  }
-  if (await git.isPathInAnyCheckoutAsync(repo.root, target, { runAsync, identity: repo, listed })) {
-    return errorResult(
-      `target path ${target} is inside an existing checkout: pick another branch`,
-      { branch, path: target, pruned: prunedStale },
-    );
-  }
-  // (e2) Occupant (S22, widening I3): ANY pre-existing entry at the target
-  // path — an empty or non-empty directory, a file, a FIFO, a symlink, a
-  // dangling symlink — is refused before any backend runs, with an
-  // actionable message naming what is there and what to do (remove it by
-  // hand or pick another branch), never git's raw
-  // `fatal: '<path>' already exists`. The empty directory is included
-  // precisely because git would silently adopt it. No registry row is
-  // written, so removing the occupant lets the next create at the same
-  // path succeed. The single exception is the thread's own registered
-  // checkout, already returned as `created: false` by the idempotency
-  // contract above — everything reaching this point is someone else's
-  // entry or no checkout at all.
-  try {
-    let occupantKind = null;
-    try {
-      const lst = fs.lstatSync(resolvedTarget);
-      if (lst.isSymbolicLink()) {
-        let stat = null;
-        try {
-          stat = fs.statSync(resolvedTarget);
-        } catch {
-          stat = null;
-        }
-        // Name the referent when it resolves: a symlink to a file or to
-        // a directory says so; a dangling link (nothing resolves) stays
-        // a plain symlink with no referent to name.
-        if (!stat) occupantKind = "symlink";
-        else if (stat.isDirectory()) occupantKind = "symlink to a directory";
-        else if (stat.isFile()) occupantKind = "symlink to a file";
-        else occupantKind = "symlink";
-      } else if (lst.isFile()) {
-        occupantKind = "file";
-      } else if (lst.isFIFO()) {
-        occupantKind = "FIFO";
-      } else if (lst.isDirectory()) {
-        let empty = false;
-        try {
-          empty = fs.readdirSync(resolvedTarget).length === 0;
-        } catch {
-          empty = false;
-        }
-        occupantKind = empty ? "empty directory" : "non-empty directory";
-      } else if (lst.isSocket()) {
-        occupantKind = "socket";
-      } else {
-        occupantKind = "non-directory";
-      }
-    } catch {
-      occupantKind = null;
-    }
-    if (occupantKind !== null) {
-      // "a empty directory" reads wrong; the article follows the kind.
-      const article = /^[aeiou]/i.test(occupantKind) ? "an" : "a";
-      return errorResult(
-        `target path ${target} is occupied by ${article} ${occupantKind}: remove it by hand or pick another branch; the registry was left untouched`,
-        { branch, path: target, pruned: prunedStale },
-      );
-    }
-  } catch {
-    // A failed probe never blocks: the backends report their own error.
   }
 
-  // No approval dialog: a create touches no existing data — the checkout and
-  // its registry row are both new — and the panel's create path never asked
-  // either. The confirmation that matters lives in `worktree_delete`.
-
-  // (g) Create. S20 branch adoption is resolved BEFORE creating: when
-  // `refs/heads/<branch>` already exists (and is not checked out at a
-  // live checkout — already refused above), the worktree checks out that
-  // EXISTING branch with `git worktree add <target> <branch>` — no `-b`,
-  // no base, the ref never created, rewritten or deleted — and the result
-  // reports `branchCreated: false` plus a warning naming the adopted
-  // branch. New branches start at local main; existing branches are adopted
-  // unchanged. Both tool and panel creation use git only.
-  const base = baseInfo !== null ? baseInfo.commit : null;
-  let createdBy = null;
-  let createError = null;
-  let branchCreated = null;
-  const adoptWarnings = [];
-  if (branchExists) {
-    // Adopt: check out the existing branch at the fresh path. No `-b`
-    // (the ref already exists), no base (checking out the branch IS the
-    // base) — the ref is never created, rewritten or deleted.
-    const adopted = await runGit("git", ["worktree", "add", target, branch], { cwd: repo.root, timeoutMs: 120000 });
-    if (adopted.status === 0) {
-      createdBy = "git";
-      branchCreated = false;
-      adoptWarnings.push(
-        `adopted existing branch '${branch}' at ${target}: the worktree checks out that branch as-is, the branch ref was left untouched`,
-      );
-    } else {
-      createError = ((adopted.stderr || adopted.error || "unknown error") + "").trim();
-    }
-  } else {
-    const fallbackArgv = ["worktree", "add", "-b", branch, target];
-    if (base) fallbackArgv.push(base);
-    const fallback = await runGit("git", fallbackArgv, { cwd: repo.root, timeoutMs: 120000 });
-    if (fallback.status === 0) {
-      createdBy = "git";
-      branchCreated = true;
-    } else {
-      // Same-branch recovery (H1): the branch ref appeared between the
-      // pre-creation resolution above and the fallback (or survives a
-      // hand-deleted checkout), so `-b` fails with "already exists".
-      // Checking out the existing branch at the fresh path is the
-      // recovery — the same adoption semantics, reported the same way;
-      // anything else keeps the backend's own error.
-      const ref = await runGit("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: repo.root });
-      if (ref.status === 0) {
-        const retry = await runGit("git", ["worktree", "add", target, branch], { cwd: repo.root, timeoutMs: 120000 });
-        if (retry.status === 0) {
-          createdBy = "git";
-          branchCreated = false;
-          adoptWarnings.push(
-            `adopted existing branch '${branch}' at ${target}: the worktree checks out that branch as-is, the branch ref was left untouched`,
-          );
-        } else {
-          createError = ((retry.stderr || retry.error || "unknown error") + "").trim();
-        }
-      } else {
-        createError = ((fallback.stderr || fallback.error || "unknown error") + "").trim();
-      }
-    }
-  }
-  if (!createdBy) {
-    return errorResult(
-      `failed to create worktree for branch '${branch}': ${createError || "git failed"}`,
-      { branch, path: target, pruned: prunedStale },
-    );
-  }
-
-  // (h) Verify against git before claiming success: the new checkout must
-  // be present at the target path.
-  let after;
-  try {
-    after = await git.listWorktreesAsync(repo.root, { runAsync });
-  } catch (err) {
-    return errorResult(
-      `worktree creation could not be verified at ${target}: ${(err && err.message) || err}`,
-      { branch, path: target, createdBy, pruned: prunedStale },
-    );
-  }
-  if (!after.some((entry) => {
-    const st = checkoutState(entry.path, repo.root);
-    return st.absolute !== null && st.absolute === resolvedTarget;
-  })) {
-    return errorResult(
-      `worktree creation could not be verified at ${target}`,
-      { branch, path: target, createdBy, pruned: prunedStale },
-    );
-  }
-
-  // The stale owned row (if any) is dropped only now that the replacement
-  // checkout is verified: every failure above returns with the row intact.
-  // Drop by row identity — the (branch, path) pair of the entry this
-  // thread owned — never by branch alone and never by a path-key lookup
-  // that can match a different row, so a live entry sharing the branch
-  // survives whether the stale path is absolute or relative.
-  for (const staleRow of staleOwned) {
-    try {
-      if (typeof registry.removeWorktreeExact === "function") registry.removeWorktreeExact(repo.root, staleRow.branch, staleRow.path);
-      else if (typeof staleRow.path === "string" && path.isAbsolute(staleRow.path)) registry.removeWorktreeByPath(repo.root, path.resolve(staleRow.path));
-      else registry.removeWorktree(repo.root, staleRow.branch);
-    } catch {
-      // The upsert below still records the new checkout.
-    }
-  }
-
-  // I1 one-owner-per-path: when a create lands on its target path, that
-  // path ends with exactly ONE registry row — the one just created. Any
-  // other row whose path resolves to the same path (whatever its branch or
-  // thread, absolute spelling, trailing-slash spelling, or a symlink to the
-  // target) is stale by definition and is dropped as part of the create.
-  // Never drops a row for a different path; relative rows never match.
-  let replacedRows = [];
-  try {
-    const reread = registry.readRegistry(repo.root);
-    const rows = reread && reread.ok === true && Array.isArray(reread.worktrees) ? reread.worktrees : [];
-    const targetState = checkoutState(target, repo.root);
-    for (const row of rows) {
-      if (!row || typeof row.path !== "string" || !path.isAbsolute(row.path)) continue;
-      // Skip a stale-owned row already dropped above (same identity).
-      if (staleOwned.some((staleRow) => staleRow.branch === row.branch && staleRow.path === row.path)) continue;
-      let same = false;
-      try {
-        const rowState = checkoutState(row.path, repo.root);
-        if (rowState.absolute !== null && targetState.absolute !== null && rowState.absolute === targetState.absolute) same = true;
-        else if (rowState.real !== null && targetState.real !== null && rowState.real === targetState.real) same = true;
-      } catch {
-        same = false;
-      }
-      if (same) replacedRows.push(row);
-    }
-    for (const row of replacedRows) {
-      try {
-        if (typeof registry.removeWorktreeExact === "function") registry.removeWorktreeExact(repo.root, row.branch, row.path);
-        else registry.removeWorktree(repo.root, row.branch);
-      } catch {
-        // Best effort: the upsert below still records the new checkout.
-      }
-    }
-  } catch {
-    replacedRows = [];
-  }
-
-  // (i) Registry: upsert the entry owned by this thread. A hand-written
-  // row that carries this branch but points at a DIFFERENT live checkout
-  // is never replaced: that checkout keeps its registration, the new
-  // checkout is recorded alongside it, and the conflict is reported as a
-  // warning naming the kept checkout. Liveness is the consolidated
-  // checkoutState (exists AND is a directory AND realpath equality, never
-  // the process cwd), so a row that reaches a live checkout through a
-  // symlink is live while a row whose path git still lists but which no
-  // longer exists is never a live conflict. EVERY
-  // same-branch row is examined, so a live row is warned about regardless
-  // of whether a dead row comes first. Only an absolute row path can name
-  // a live checkout (never resolved against the process cwd).
-  let stored;
-  const conflictWarnings = [];
-  // S7: what the registry write below ACTUALLY did, reported as its own row.
-  // `new` = the branch had no row, `replaced` = an existing row for this
-  // branch was overwritten, `appended` = a live checkout at another path kept
-  // the branch so the new row was recorded alongside it. It is a statement
-  // about the registry, never a created/updated outcome of the tool.
-  let registeredOutcome = null;
-  try {
-    const afterIds = liveIdentities(after, repo.root);
-    const targetReal = checkoutState(target, repo.root).real;
-    let conflictLive = null;
-    // The row this upsert would replace: its legacy association fields are
-    // kept, never invented and never discarded (S1: the create writes no
-    // association).
-    let legacyRow = null;
-    try {
-      const reread = registry.readRegistry(repo.root);
-      const rows = reread && reread.ok === true && Array.isArray(reread.worktrees)
-        ? reread.worktrees
-        : [];
-      for (const row of rows) {
-        if (!row || row.branch !== branch) continue;
-        if (legacyRow === null) legacyRow = row;
-        if (typeof row.path !== "string" || !path.isAbsolute(row.path)) continue;
-        const rowState = checkoutState(row.path, repo.root);
-        if (!rowState.exists || !rowState.isDirectory) continue;
-        if (rowState.real === null || !afterIds.has(rowState.real)) continue;
-        if (targetReal !== null && rowState.real === targetReal) continue;
-        conflictLive = row;
-        break;
-      }
-    } catch {
-      conflictLive = null;
-    }
-    // `issues` is a required registry field, so it is always supplied: a
-    // replaced row keeps what it already stored, a brand-new row records an
-    // empty list. `odd` is omitted on purpose — the registry keeps a replaced
-    // row's stored document and gives a new row none.
-    const legacyIssues = legacyRow && Array.isArray(legacyRow.issues) ? legacyRow.issues.slice() : [];
-    if (conflictLive) {
-      // A row for another live checkout is never copied from: the new row
-      // records no association of its own.
-      stored = registry.appendWorktree(repo.root, { branch, path: target, thread, issues: [] });
-      registeredOutcome = 'appended';
-      if (stored.ok) {
-        conflictWarnings.push(
-          `kept the existing registration for branch '${branch}' at ${conflictLive.path}: a live checkout is recorded there, so the new checkout at ${target} was registered alongside it`,
-        );
-      }
-    } else {
-      stored = registry.upsertWorktree(repo.root, { branch, path: target, thread, issues: legacyIssues });
-      registeredOutcome = legacyRow === null ? 'new' : 'replaced';
-    }
-  } catch (err) {
-    stored = { ok: false, error: (err && err.message) || String(err) };
-  }
-  if (!stored.ok) {
-    return errorResult(
-      `worktree created at ${target} but the registry write failed: ${stored.error}`,
-      { branch, path: target, createdBy },
-    );
-  }
-
-  // (i2) Creation hooks (S8 as narrowed by S21, P2-S3, round-3 S3/L4): copy
-  // unversioned files, install by detected stack, codegraph init when
-  // available, and link the principal's git-ignored agent/ODD entries
-  // (`.agents`, `.pi`, `.claude`, `odd`) — ONCE, inside the hooks themselves,
-  // identically for the sync and async runners, never over an existing path.
-  // The create therefore adds no link step of its own. Hooks never turn a
-  // successful creation into an error: every outcome, including a thrown
-  // hook, is reported inside `details.hooks`, and the exact success text
-  // stays unchanged. A failed step stays visible via steps + warnings.
-  let hooks = { ok: true, steps: [], warnings: [] };
-  // The deferred half of the hooks, when the caller asked for it: it is started
-  // AFTER the pending-change copy, never before (see (i4)).
-  let deferredSetup = null;
-  try {
-    const hooksLib = libRequire("worktree-hooks.js");
-    // The principal checkout owns the shared sources. repo.root is the
-    // toplevel of the caller (which may itself be a linked worktree), so
-    // the principal is recovered from the shared common dir: for a normal
-    // repository <principal>/.git is the common dir.
-    const principalRoot = path.basename(repo.commonDir) === ".git"
-      ? path.dirname(repo.commonDir)
-      : repo.root;
-    if (typeof hooksLib.runCreationHooksAsync === 'function') {
-      // S21: EVERY create runs the async twin now — the tool handler is as
-      // interactive as the wizard. It owns every child until settle
-      // (timeout/abort SIGTERMs, waits a bounded grace for close, then
-      // SIGKILLs and reaps — POSIX group-wide) while the event loop stays
-      // responsive, and awaiting it here preserves ready-before-warp ordering
-      // (hooks settle before the warp) without blocking Pi input/render. Both
-      // routes take this branch, so the sync runner is never reached; the
-      // fallback below only survives for a lib build that predates the twin.
-      const runHooksAsync = (bin, argv, runOpts) => git.runArgvAsync(bin, argv, {
-        ...runOpts,
-        // Abort reaches the effective runner only when the caller supplies
-        // a signal (the wizard currently passes none, so none is claimed).
-        ...(opts && opts.signal ? { signal: opts.signal } : {}),
-      });
-      hooks = await hooksLib.runCreationHooksAsync({
-        principalRoot,
-        worktreePath: target,
-        root: repo.root,
-        env: process.env,
-        runAsync: runHooksAsync,
-        ...(opts && opts.signal ? { signal: opts.signal } : {}),
-        ...(opts && Number.isFinite(opts.killGraceMs) && opts.killGraceMs > 0 ? { killGraceMs: opts.killGraceMs } : {}),
-        ...(backgroundHooks ? { deferSetup: true } : {}),
-      });
-      // The deferred phases travel as a callable, never as a step list: the
-      // steps the create REPORTS are the ones that really ran plus one honest
-      // `pending` row per deferred phase.
-      if (hooks && typeof hooks.setup === 'function') {
-        deferredSetup = hooks.setup;
-        const { setup: _deferred, ...summary } = hooks;
-        hooks = summary;
-      }
-    } else {
-      hooks = hooksLib.runCreationHooks({
-        principalRoot,
-        worktreePath: target,
-        root: repo.root,
-        env: process.env,
-      });
-    }
-  } catch (err) {
-    const message = `creation hooks failed: ${(err && err.message) || err}`;
-    hooks = {
-      ok: false,
-      steps: [{ name: "hooks", status: "failed", detail: message }],
-      warnings: [message],
-    };
-  }
-
-  // (i3) S3/S4: carry the selected pending changes — now that the checkout
-  // exists, is verified, is registered and its hooks have run, so the copy can
-  // never be applied to a half-made worktree. The transfer is the shared
-  // lib/worktree-changes.js one (source and destination indices preserved, a
-  // destination overlap rejects, a dry-run precedes any write), and every
-  // child runs on the async runner, so an interactive create stays responsive
-  // while it copies. A failed copy is REPORTED, never hidden: the worktree is
-  // already there, so the result names it AND the copy failure instead of
-  // pretending the whole call failed or claiming a copy that did not happen.
-  let copiedInfo = null;
-  let copyError = null;
-  if (pendingCopy !== null) {
+  // S18 (panel only): the explicitly selected paths travel through the shared
+  // lib/worktree-changes.js transfer ONCE the checkout exists, and after the hooks so
+  // nothing they linked or copied is overwritten by a stale read of the source. The
+  // boolean mode never reaches here: the tool's `copy_changes` and the panel's "copy
+  // everything" are the ported hook's, so one owner runs per mode.
+  let panelCopy = null;
+  let panelCopyError = null;
+  if (selection !== undefined && selection.mode === "paths") {
     let outcome;
     try {
       outcome = await changesLib.copyChanges(
-        { from: cwd, to: target, selectMode: pendingCopy.mode, selection: pendingCopy.paths },
+        { from: cwd, to: decision.plan.path, selectMode: "paths", selection: selection.paths },
         { git },
       );
     } catch (err) {
       outcome = { ok: false, error: (err && err.message) || String(err) };
     }
     if (!outcome || outcome.ok !== true) {
-      copyError = (outcome && outcome.error) || 'cannot copy the pending changes';
+      panelCopyError = (outcome && outcome.error) || "cannot copy the selected changes";
     } else {
-      copiedInfo = {
+      panelCopy = {
         files: outcome.files,
         added: outcome.added,
         deleted: outcome.deleted,
@@ -1431,565 +729,270 @@ async function executeWorktreeCreate(params, ctx, opts) {
     }
   }
 
-  // (i4) The deferred half of the hooks (install, codegraph) starts HERE —
-  // after the copy, never before it. A `codegraph init` writing into the
-  // destination while the copy preflights it would read as a destination
-  // overlap and turn a good copy into a reported failure, so the copy is the
-  // last awaited step and the setup runs behind it. The create returns as soon
-  // as the copy settles (or fails, and says so): the setup's own outcome is
-  // recorded for a later create and reported to a caller that asked for a
-  // notice, never awaited here.
-  let setupPending = false;
-  if (deferredSetup !== null) {
-    setupPending = true;
-    creationSetupStates.set(resolvedTarget, { status: 'running', branch });
-    startCreationSetup({
-      run: deferredSetup,
-      branch,
-      target,
-      key: resolvedTarget,
-      epoch: beginCreationTask(),
-      // Only a caller that supplied a notice gets one: the panel's UI. The tool
-      // front supplies none, so no create notifies behind the agent's back.
-      notify: opts && typeof opts.notify === 'function' ? opts.notify : null,
-    });
-  }
+  // S17: only a registration that really happened may claim it did.
+  const registered = await sessionRegister.registerSessionWorktree(ctx, decision.plan.path);
+  // S21 (ported): the copied count decides whether a lockfile flag may stay frozen.
+  // Only one owner ever copied, so the two counts can never both be non-zero.
+  const hookCopied = hooksResult.results.find((result) => result.name === "copy_changes")?.copyChanges?.copied ?? 0;
+  const copiedChanges = hookCopied + (panelCopy === null ? 0 : panelCopy.files);
+  const setup = await planPortedWorktreeSetup({
+    storePath,
+    path: decision.plan.path,
+    // S7: the checkout IS the ODD, so that is the name the setup reports.
+    name: decision.plan.odd,
+    sessionId: createdBy,
+    copiedChanges,
+    notify,
+  });
 
-  // (j) Terse success text (S9), whichever backend performed the creation.
-  // Hook steps and warnings travel inside details; a failed step is
-  // visible there and never becomes an error result. When the write
-  // replaced a malformed registry, the sibling backup path travels along
-  // so the caller can name it. When no backup could be written the
-  // failure travels as registryBackupError (best-effort, never fatal).
-  const backupDetails = {};
-  if (stored.backup) backupDetails.registryBackup = stored.backup;
-  if (stored.backupError) backupDetails.registryBackupError = stored.backupError;
-  const pruneWarnings = prunedStale.length > 0
-    ? [`pruned ${prunedStale.length} stale worktree record(s) via 'git worktree prune': ${prunedStale.join(", ")}; git no longer records the missing checkout`]
-    : [];
-  const replacedWarnings = replacedRows.length > 0
-    ? [`replaced ${replacedRows.length} stale registry row(s) at the same path ${target}: ${replacedRows.map((r) => `branch '${r.branch}' at ${r.path}`).join(", ")}; one path has one owner, so the row just created is the only registration`]
-    : [];
-  // S1: a create neither accepts nor records an association, so none can be
-  // dropped here — an omitted association leaves the stored row exactly as it
-  // is on disk (rows the write does not address are carried through byte for
-  // byte). No ODD document therefore reaches the text, the warnings or the
-  // details.
-  const warnings = [...((hooks && hooks.warnings) || []), ...conflictWarnings, ...pruneWarnings, ...replacedWarnings, ...adoptWarnings];
-  // S6: the ONE CodeGraph fact of this create, read from the hooks that just
-  // ran (never re-run, never inferred).
-  const codegraph = codegraphStatus(hooks);
-  // Report whether the branch was created or adopted.
-  const adoptionDetails = { branchCreated };
-  // (l) T41/S50 changes registration: register the checkout just
-  // created on the CURRENT session through gentle-shell's
-  // `session_worktree_register` host tool, but ONLY when that tool is
-  // actually available (listed in ctx.tools and callable through
-  // ctx.executeTool — the injectable seam). On success the output ends
-  // with ONE short line so the agent does not repeat the call; when
-  // the tool is unavailable, the call fails, or anything throws, do
-  // nothing and append nothing — the create never fails because of this.
-  let changesRegistered = false;
-  try {
-    const registerLib = libRequire("session-worktree-register.js");
-    if (registerLib && typeof registerLib.registerSessionWorktree === "function") {
-      changesRegistered = await registerLib.registerSessionWorktree(ctx, target) === true;
-    }
-  } catch {
-    changesRegistered = false;
-  }
-  // S7: the registry-write fact sits right after the identity rows, before the
-  // hook fact: it is the tool's own bookkeeping and must never be inferred.
-  const successText = [createSuccessText(branch, target, false), `registered: ${registeredOutcome}`, codegraphLine(codegraph)].filter((line) => typeof line === "string" && line.length > 0);
-  if (setupPending) successText.push(setupStateRow({ status: 'running' }));
-  if (changesRegistered) successText.push("changes: already registered for this session");
-  // S3/S4: what the copy actually did, in the same `N files, +A/-B` shape the
-  // rest of the worktree surface uses. A clean selection adds no row.
-  if (copiedInfo !== null) {
-    successText.push(`copied: ${copiedInfo.files} file${copiedInfo.files === 1 ? '' : 's'}, +${copiedInfo.added}/-${copiedInfo.deleted}`);
-  }
-  // Every summarized warning follows the create rows exactly once, so a
-  // dropped/adopted/pruned fact or a failed hook step stays visible to the
-  // agent even when it never opens the card.
-  for (const warning of warnings) {
-    const row = warningRow(warning);
-    if (row !== null) successText.push(row);
-  }
-  const successBody = successText.join("\n");
-  const successDetails = {
-    path: target,
-    branch,
-    registered: registeredOutcome,
-    codegraph,
-    hooks,
-    warnings,
-    pruned: prunedStale,
-    replacedRows: replacedRows.map((r) => ({ branch: r.branch, path: r.path })),
-    changesRegistered,
-    ...(setupPending ? { setupPending: true } : {}),
-    // S2: the base is reported only when one was used — an ADOPTED branch is
-    // checked out as-is, so it has no base to name.
-    ...(baseInfo !== null ? { base: baseInfo } : {}),
-    ...adoptionDetails,
-    ...backupDetails,
-    ...(copiedInfo !== null ? { copied: copiedInfo } : {}),
-  };
-  if (copyError !== null) {
-    // The checkout exists and is registered: the failure is the COPY, so the
-    // result is an error that still names the worktree the caller now owns, and
-    // the details carry the same facts plus the reason. Nothing here rolls the
-    // creation back — a created checkout is never silently removed (S2).
+  const view = create.worktreeCreateView({
+    plan: decision.plan,
+    adminId: execution.result.adminId,
+    metadata: execution.result.metadata,
+    registered,
+    hooks: hooksResult.results,
+    setup,
+  });
+  // The panel's transfer reports on ITS OWN line, never the ported `copy_changes:` one
+  // (that line belongs to the boolean mode): a reader sees one line naming the mode
+  // that ran. A failure still names the checkout the human now owns.
+  if (panelCopyError !== null) {
     return errorResult(
-      `${createSuccessText(branch, target, false)}\n`
-      // "not in full" is the only claim the evidence supports: a copy that
-      // failed partway leaves the files it landed in the destination (its own
-      // error counts them), so the result may never say the copy did not happen.
-      + `worktree created at ${target} but the pending changes were NOT copied in full: ${copyError}`,
-      { ...successDetails, copyError },
-      true,
+      `${view.text}\ncopy_changes (paths): ${panelCopyError}`,
+      { ...view.details, copyError: panelCopyError },
     );
   }
-  return textResult(
-    successBody,
-    successDetails,
-    false,
-  );
-}
-
-// S3/S4: the `changes` parameter the create requires — "all", "none", or an
-// explicit list of checkout-relative file paths.
-//
-// It is NOT optional. The host validates a tool call against this declaration
-// BEFORE `execute` runs, so a call that omits the field is refused there ("must
-// have required property 'changes'") and the create never starts; a value that
-// is none of the three forms is refused by the same validation and, for any
-// caller that reaches the core directly, by the selection check inside it.
-//
-// The union is spelled with TypeBox's Union/Literal. A Type double without them
-// (the plain-node loaders stub the package import) gets the widest shape it can
-// build instead of throwing while the module loads, and the value is normalized
-// again through lib/worktree-changes.js at the tool boundary — nothing is
-// accepted here that the create does not understand.
-const CHANGES_DESCRIPTION = "Pending changes of the current checkout to carry into the new worktree (required): "
-  + "\"all\" copies every uncommitted change, \"none\" copies nothing so the worktree is born from the commit, "
-  + "or a list of checkout-relative file paths copies exactly those. An unusable value, an unknown file "
-  + "or a destination that already modifies a selected path refuses the whole create before anything is written.";
-
-function changesParameterSchema(description) {
-  try {
-    if (typeof Type.Union === "function" && typeof Type.Literal === "function") {
-      return Type.Union([Type.Literal("all"), Type.Literal("none"), Type.Array(Type.String())], { description });
-    }
-  } catch {
-    // Fall through to the plain list declaration below.
+  if (panelCopy !== null) {
+    return textResult(
+      `${view.text}\ncopied: ${panelCopy.files} file${panelCopy.files === 1 ? "" : "s"}, +${panelCopy.added}/-${panelCopy.deleted}`,
+      { ...view.details, copied: panelCopy },
+      false,
+    );
   }
-  return Type.Array(Type.String(), { description });
+  // No renderer is wired to this shape yet: the text and its details are the result,
+  // and the card is a later task.
+  return textResult(view.text, view.details, false);
 }
 
-const worktreeCreateTool = withWorktreeCardRenderer(defineTool({
+// ---- S5: the two tools' own cards ----
+//
+// Both tool definitions render their call and result through
+// lib/worktree-cards.js, the renderer that draws on the substrate of
+// lib/shell-card.js (S5). The host seam is `renderCall` / `renderResult` on a
+// ToolDefinition registered through `defineTool` + `pi.registerTool`
+// (@earendil-works/pi-coding-agent `dist/core/extensions/types.d.ts`).
+//
+// The text measurement those cards need (`visibleWidth`, `truncateToWidth`,
+// `wrapTextWithAnsi`) belongs to @earendil-works/pi-tui and is resolved INSIDE
+// the hook, never imported at load: this package ships no node_modules, and the
+// test loader stubs only the two package import lines. When the host has no such
+// module the same hooks answer PLAIN TEXT — the tool's own call name and its own
+// result text — so a missing TUI package only costs the frame, never the answer,
+// and nothing can throw while the extension loads.
+let worktreeToolCardMetricsOverride;
+let worktreeToolCardMetricsAuto;
+let worktreeToolCardMetricsResolved = false;
+let worktreeToolCardsCache;
+
+/** The measurement seam tests inject; `undefined` restores the runtime lookup. */
+function setWorktreeToolCardMetrics(metrics) {
+  worktreeToolCardMetricsOverride = metrics;
+}
+
+function loadRuntimeToolCardMetrics() {
+  try {
+    const tui = require("@earendil-works/pi-tui");
+    if (!tui) return null;
+    const { visibleWidth, truncateToWidth, wrapTextWithAnsi } = tui;
+    if (
+      typeof visibleWidth !== "function"
+      || typeof truncateToWidth !== "function"
+      || typeof wrapTextWithAnsi !== "function"
+    ) return null;
+    return {
+      visibleWidth: (text) => visibleWidth(text),
+      truncateToWidth: (text, width, ellipsis) => truncateToWidth(text, width, ellipsis),
+      wrapTextWithAnsi: (text, width) => wrapTextWithAnsi(text, width),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolveWorktreeToolCardMetrics() {
+  if (worktreeToolCardMetricsOverride !== undefined) return worktreeToolCardMetricsOverride || null;
+  if (!worktreeToolCardMetricsResolved) {
+    worktreeToolCardMetricsResolved = true;
+    worktreeToolCardMetricsAuto = loadRuntimeToolCardMetrics();
+  }
+  return worktreeToolCardMetricsAuto || null;
+}
+
+// One factory per metrics identity, so a render never rebuilds the cards and an
+// injected seam still takes effect on the next render.
+function worktreeCardRenderer(toolName, metrics) {
+  if (worktreeToolCardsCache === undefined || worktreeToolCardsCache.metrics !== metrics) {
+    const cards = libRequire("worktree-cards.js").createWorktreeCards({ metrics });
+    worktreeToolCardsCache = { metrics, cards };
+  }
+  return worktreeToolCardsCache.cards.renderer(toolName);
+}
+
+function plainTextComponent(text) {
+  const lines = String(text).split("\n");
+  return {
+    render() { return lines; },
+    invalidate() {},
+  };
+}
+
+// The heading the plain fallback shows: the tool's own name plus the one
+// argument that changes what it does, in the same words the card's detail uses.
+function worktreeCallPlainText(toolName, args) {
+  const value = args !== null && typeof args === "object" ? args : {};
+  const detail = toolName === "worktree_create"
+    ? (typeof value.branch === "string" && value.branch.length > 0 ? ` ${value.branch}` : "")
+    : (value.all === true ? " all" : "");
+  return `${toolName.replace("_", " ")}${detail}`;
+}
+
+/** The two render hooks one tool definition carries, bound to that tool's card. */
+function worktreeToolRenderers(toolName) {
+  return {
+    renderCall(args, theme, context) {
+      const metrics = resolveWorktreeToolCardMetrics();
+      if (metrics !== null) {
+        try {
+          return worktreeCardRenderer(toolName, metrics).renderCall(args, theme, context);
+        } catch {
+          // The card is presentation; the call is never lost to it.
+        }
+      }
+      return plainTextComponent(worktreeCallPlainText(toolName, args));
+    },
+    renderResult(result, options, theme, context) {
+      const metrics = resolveWorktreeToolCardMetrics();
+      if (metrics !== null) {
+        try {
+          return worktreeCardRenderer(toolName, metrics).renderResult(result, options, theme, context);
+        } catch {
+          // The card is presentation; the tool's own answer is never lost to it.
+        }
+      }
+      return plainTextComponent(toolResultText(result));
+    },
+  };
+}
+
+/** S1: the `worktree_create` tool's own front — the ported request and nothing else. */
+async function executePortedWorktreeCreate(params, ctx) {
+  return runPortedWorktreeCreate({
+    request: {
+      odd: params ? params.odd : undefined,
+      branch: params ? params.branch : undefined,
+      copy_changes: params ? params.copy_changes === true : false,
+    },
+  }, ctx);
+}
+
+const worktreeCreateTool = defineTool({
   name: "worktree_create",
   label: "Worktree Create",
   exposure: "codemode",
-  description: "Create an agent worktree for a branch at the flattened worktree path, born from local main (a repository without a local main is refused; an existing branch is adopted as-is). A session may own several checkouts: the requested branch is created and registered even when this thread already owns another one, and only the same branch already registered for this thread is reported back instead of created again. `changes` is required and selects which pending changes of the current checkout travel with the new worktree: \"all\", \"none\", or a list of file paths.",
+  description: "Create a Git worktree for this clone at <repo-parent>/<repo-name>-worktrees/<odd>, starting from the base branch (main when it exists). `odd` names the ODD this worktree serves and is REQUIRED: it IS the checkout's directory name. The branch is created with the worktree when it does not exist and checked out when it is free; no command ever passes --force.",
   parameters: Type.Object({
-    branch: Type.String({ description: "Branch name to create the worktree for" }),
-    changes: changesParameterSchema(CHANGES_DESCRIPTION),
+    odd: Type.String({ description: "The ODD this worktree serves, and the name of its directory under <repo-name>-worktrees. One path segment (letters, digits, dash, underscore, dot). It need not exist as a file." }),
+    branch: Type.String({ description: "The branch this worktree works on. It is created with the worktree when it does not exist and checked out when it is free." }),
+    copy_changes: opt(Type.Boolean({ description: "Omitted or false copies nothing. true carries this clone's uncommitted changes, staged and unstaged plus untracked non-ignored files, into the new worktree and leaves them in the main worktree too." })),
   }),
+  ...worktreeToolRenderers("worktree_create"),
   async execute(toolCallId, params, signal, onUpdate, ctx) {
-    // Instant create: the checkout and its registry row settle, the slow setup
-    // (install, codegraph) keeps running in a tracked background task. No notify
-    // callback is passed, so this front never fires a `ui.notify` the agent's
-    // call did not ask for; the result reports the setup state and a later
-    // create for the same checkout reports how the background work ended.
-    return executeWorktreeCreate(params, ctx, { backgroundHooks: true });
+    return executePortedWorktreeCreate(params || {}, ctx);
   },
-}));
+});
 
-// `worktree_list` output contract (S6, S9, S19, S24) — terse, one line per
-// checkout, pinned in tools/worktree-list.test.js. The FIRST column is the
-// NAME (S24): the flattened branch slug, or `principal` for the principal
-// checkout, so the printed identifier is exactly what `warp` accepts and
-// what `close` can take. The absolute path is not dropped: it stays in
-// `details.worktrees[].path` (plus `details.worktrees[].name`).
-// A worktree carries no issue and no ODD association (S1), so the line names
-// the checkout only — there is no `issues=` and no `odd=` cell, and the
-// details carry no association field either (the registry keeps its legacy
-// records; a listing never rewrites or republishes them):
-//   worktree list: <name> <branch> principal
-//   worktree list: <name> <branch> thread=<thread>
-// A registered entry whose path is not a live checkout gains ` missing`:
-//   worktree list: <name> <branch> thread=<thread> missing
-// With `all: true`, live checkouts the registry does not know about are
-// listed (the principal checkout is never listed as unregistered); the
-// session's own one follows the principal and the rest stay path-sorted:
-//   worktree list: <name> <branch> unregistered
-// The principal checkout (S19) is always listed when git's listing names it,
-// and it LEADS (S9: principal, then the session's own checkout, then the
-// rest — never duplicating them when the session is in the principal);
-// `worktree list: none` is retired and only survives as the degenerate
-// fallback when the principal cannot be determined and nothing else is
-// listed.
-// S16 self-heal: an ABSOLUTE registry path that no longer exists on disk
-// (the user deleted the checkout by hand) is removed from the listing AND
-// pruned from the registry in one atomic write, so the tool always
-// exposes only real checkouts. The pruned paths travel in
-// `details.pruned` and in a `details.warnings` line that also says git may
-// still record the checkout until `git worktree prune`; when the prune
-// write itself fails, the listing still excludes them and says so (plus
-// `details.pruneError`). A path that EXISTS but git no longer lists stays
-// `missing` and is never pruned. A non-absolute entry can never be
-// existence-checked without resolving against the process cwd, so it
-// stays listed as `missing` (never live), exactly as before.
-async function executeWorktreeList(params, ctx) {
+// ---- worktree_list (S1, S4) ----
+//
+// The reconciliation answers what exists and which state each worktree is in
+// (lib/worktree-metadata.js); lib/worktree-list.js decides what a reader sees. This
+// front only feeds them. The listing is READ-ONLY: the metadata document, the
+// registry rows and Git's own worktree set stay exactly as the call found them, so a
+// dead record is reported as `gone`/`missing` instead of being pruned behind the
+// caller's back.
+
+// S12: `interrupted` is reachable only when the reconciliation can ask whether a
+// record's job is still alive. This process's own setup runner owns that answer
+// (`lib/worktree-setup-runner.js` keeps its running tasks keyed by checkout
+// path), but only for records THIS session wrote: a job named by another
+// session's record may be running in another Pi process this one cannot see.
+// So `interrupted` is derived only when `createdBy` is this session's id and the
+// runner no longer holds a task for that checkout; every other record keeps its
+// persisted `running`, because this process cannot tell. The stored record is
+// never rewritten here.
+function setupJobLiveness(records, runner, sessionId) {
+  const owners = new Map();
+  for (const [worktreePath, record] of Object.entries(records)) {
+    const jobId = record && record.setup ? record.setup.jobId : undefined;
+    if (typeof jobId !== "string" || jobId.length === 0) continue;
+    const held = owners.get(jobId) || [];
+    held.push({ worktreePath, mine: sessionId !== undefined && record.createdBy === sessionId });
+    owners.set(jobId, held);
+  }
+  return (jobId) => {
+    const held = owners.get(jobId);
+    // A job this process cannot attribute to itself is UNKNOWN, never dead.
+    if (held === undefined || held.some((owner) => !owner.mine)) return true;
+    return held.some((owner) => {
+      try {
+        return runner.isWorktreeSetupRunning(owner.worktreePath) === true;
+      } catch {
+        return false;
+      }
+    });
+  };
+}
+
+async function executePortedWorktreeList(params, ctx) {
   const git = libRequire("worktree-git.js");
+  const metadata = libRequire("worktree-metadata.js");
   const registry = libRequire("worktree-registry.js");
+  const list = libRequire("worktree-list.js");
+  const runner = libRequire("worktree-setup-runner.js");
   const cwd = toolCwd(ctx);
+  const runAsync = libRunner(git);
+  const portedGit = portedGitSeam(runAsync);
 
   let repo;
-  const runAsync = libRunner(git);
   try {
-    // S21: awaited reads only — listing worktrees is an interactive tool.
     repo = await git.repoIdentityAsync(cwd, { runAsync });
-  } catch (err) {
+  } catch {
     return errorResult(`not a git repository: ${cwd}`, { tool: "worktree_list" });
   }
-  const all = !!params && params.all === true;
-  const read = registry.readRegistry(repo.root);
-  if (!read.ok) {
-    return errorResult(
-      `cannot read worktree registry: ${read.error}`,
-      { tool: "worktree_list" },
-    );
-  }
-  let live;
-  try {
-    live = await git.listWorktreesAsync(repo.root, { runAsync });
-  } catch (err) {
-    return errorResult(
-      `cannot list worktrees: ${(err && err.message) || err}`,
-      { tool: "worktree_list" },
-    );
-  }
+  const listing = await portedGit(cwd, ["worktree", "list", "--porcelain"]);
+  const entries = listing.code === 0 ? metadata.parseWorktreeListPorcelain(listing.stdout) : [];
+  const main = entries[0];
+  if (main === undefined) return errorResult(`could not list the worktrees of ${repo.root}`, { tool: "worktree_list" });
 
-  // Cross-check the registry against git, then self-heal (S16), all
-  // through the consolidated checkoutState. A row is live only when its
-  // state exists AND is a directory AND its resolved identity (realpath,
-  // absolute fallback) matches a live checkout's — so a row reaching a
-  // live checkout through a symlink is live, while a FILE is never live
-  // even when git names its path. A row is pruned only when nothing exists
-  // at its path (a FILE exists, so it stays missing and is never pruned).
-  // A registry path that is not absolute is never resolved against the
-  // process cwd, so it can never match a live checkout and is reported
-  // missing (and never pruned). Git's own listing paths resolve through
-  // the same predicate, so a relative listing path resolves against the
-  // repository root, never the process cwd.
-  const liveIds = liveIdentities(live, repo.root);
-  // S19: the principal checkout is the main worktree of git's listing.
-  // repo.root is the toplevel of the CALLER's checkout (a linked worktree
-  // when the session runs inside one), so the main root is recovered from
-  // the shared common dir instead — for a normal repository
-  // <principal>/.git is the common dir, the same recovery runCreationHooks
-  // uses for its sources. The principal is the listing entry whose
-  // resolved identity equals that main root: realpath with an absolute
-  // fallback (the same rule checkoutState uses, never the process cwd),
-  // so a symlink spelling of the principal still finds it. It is printed
-  // distinguished (`principal`, never thread=/issues=), is never pruned
-  // (the registry holds agent rows only) and is never reported as
-  // unregistered. When no listing entry matches, no principal line is
-  // invented.
-  let principalEntry = null;
-  let principalPath = null;
-  if (typeof repo.commonDir === "string" && path.basename(repo.commonDir) === ".git") {
-    try {
-      const rawPrincipal = path.resolve(path.dirname(repo.commonDir));
-      const principalState = checkoutState(rawPrincipal, repo.root);
-      principalPath = principalState.real !== null ? principalState.real : principalState.absolute;
-    } catch {
-      principalPath = null;
-    }
-  }
-  if (principalPath !== null) {
-    for (const entry of live) {
-      if (!entry || typeof entry.path !== "string" || entry.path.length === 0) continue;
-      const st = checkoutState(entry.path, repo.root);
-      if (st.absolute === null) continue;
-      const entryId = st.real !== null ? st.real : st.absolute;
-      if (entryId === principalPath) {
-        principalEntry = entry;
-        break;
-      }
-    }
-    if (!principalEntry) principalPath = null;
-  }
-  let principalLine = null;
-  let principalItem = null;
-  if (principalEntry && principalPath !== null) {
-    const principalBranch = principalEntry.branch || "(detached)";
-    // S24: the first column is the NAME (`principal`), never the path.
-    principalLine = `worktree list: principal ${principalBranch} principal`;
-    // S1: the principal holds no registry row and a worktree carries no
-    // association, so the item is its identity — no `issues`, no `odd` and no
-    // `assignedOdd` field is invented for it.
-    principalItem = { name: "principal", path: principalPath, branch: principalBranch, thread: null, status: "live", kind: "principal" };
-  }
-  const agentRows = [];
-  const deadPaths = [];
-  // S39 current branch from git (shared helper); the registry field is
-  // the fallback. Sole claimants print the live branch; shared checkouts
-  // keep their stored names so the ambiguity keeps resolving.
-  const liveBranchById = liveBranchMap(live, repo.root);
-  const claimCounts = registryClaimCounts(read.worktrees, repo.root);
-  for (const entry of read.worktrees) {
-    const isAbsoluteRow = typeof entry.path === "string" && path.isAbsolute(entry.path);
-    const st = isAbsoluteRow ? checkoutState(entry.path, repo.root) : null;
-    const absolute = st ? st.absolute : null;
-    // Consolidated existence probe: nothing present (missing checkout,
-    // dangling symlink) is pruned; a FILE is present, so it stays listed
-    // as missing and is never pruned. Liveness additionally requires a
-    // directory (checked below).
-    if (absolute !== null && !st.exists) {
-      deadPaths.push(entry.path);
-      continue;
-    }
-    // S10: the principal's own registry row is printed as the principal
-    // line above, never repeated as an agent row.
-    if (principalPath !== null && st && st.absolute !== null) {
-      const rowIdentity = st.real !== null ? st.real : st.absolute;
-      if (rowIdentity === principalPath) continue;
-    }
-    // A FILE is never live even when git names its path, and a symlink
-    // spelling of a live checkout IS live: liveness is exists AND
-    // is-a-directory AND resolved-identity membership, the one predicate.
-    const liveHit = st && st.absolute !== null && st.exists && st.isDirectory
-      && (st.real !== null ? liveIds.has(st.real) : liveIds.has(st.absolute))
-      ? true
-      : undefined;
-    const thread = typeof entry.thread === "string" && entry.thread.length > 0
-      ? entry.thread
-      : "unknown";
-    const status = liveHit ? "live" : "missing";
-    // S24: the first column is the NAME (flattened branch slug); the
-    // absolute path stays in details, never in the printed line.
-    // S39: a sole claimant shows the CURRENT git branch, not the stale row.
-    const rowId = st && st.absolute !== null ? (st.real !== null ? st.real : st.absolute) : null;
-    const liveShown = rowId !== null && (claimCounts.get(rowId) || 0) === 1 ? liveBranchById.get(rowId) : undefined;
-    const shownBranch = liveShown || entry.branch;
-    let rowName = "worktree";
-    try {
-      rowName = git.slugifyBranch(typeof shownBranch === "string" ? shownBranch : "worktree");
-    } catch {
-      rowName = "worktree";
-    }
-    agentRows.push({
-      // S1: no `issues=` and no `odd=` cell — a worktree carries neither, and
-      // the listing neither reads the stored association nor scans the
-      // checkout's `odd/` directory for an inventory.
-      line: `worktree list: ${rowName} ${shownBranch} thread=${thread}`
-        + (liveHit ? "" : " missing"),
-      // Identity only: the legacy association fields the registry still stores
-      // stay there (preserved bytes) and are deliberately not republished.
-      item: { name: rowName, path: entry.path, branch: shownBranch, thread, status, kind: "agent" },
-    });
-  }
-  // Prune exactly the dead rows in one atomic registry write, best
-  // effort: when the write fails the listing below still excludes them
-  // and the warning says so.
-  let pruned = [];
-  let pruneError = null;
-  if (deadPaths.length > 0) {
-    try {
-      const outcome = registry.pruneWorktrees(repo.root, deadPaths);
-      if (outcome && outcome.ok) {
-        pruned = Array.isArray(outcome.pruned) ? outcome.pruned : [];
-        // The prune also reports any legacy ODD associations that went with
-        // the removed rows; S1 removed associations from every worktree
-        // surface, so no notice about them is emitted here.
-      } else {
-        pruneError = (outcome && outcome.error) || "unknown prune error";
-      }
-    } catch (err) {
-      pruneError = (err && err.message) || String(err);
-    }
-  }
-  // S9: the listing order is the PRINCIPAL checkout first, then the session's
-  // own checkout, then everything else in registry order. Identity is the
-  // resolved realpath with an absolute fallback on both legs (never the
-  // process cwd and never a lexical resolve alone), so a symlink spelling of a
-  // checkout — or of a subdirectory inside one — still matches that checkout.
-  // When the session already sits in the principal there is nothing to add:
-  // the principal line IS the current line and is never duplicated. The
-  // agent-row text contract is unchanged.
-  const sessionState = checkoutState(cwd, repo.root);
-  const sessionTarget = sessionState.real !== null ? sessionState.real : sessionState.absolute;
-  const containsOrEquals = (base, target) => target === base || target.startsWith(base + path.sep);
-  let sessionAgent = -1;
-  let bestLen = -1;
-  if (principalItem !== null && sessionTarget !== null) {
-    const principalState = checkoutState(principalItem.path, repo.root);
-    const principalBase = principalState.real !== null ? principalState.real : principalState.absolute;
-    if (principalBase !== null && containsOrEquals(principalBase, sessionTarget)) {
-      bestLen = principalBase.length;
-    }
-  }
-  agentRows.forEach((row, index) => {
-    if (typeof row.item.path !== "string" || !path.isAbsolute(row.item.path)) return;
-    if (sessionTarget === null) return;
-    const rowState = checkoutState(row.item.path, repo.root);
-    const base = rowState.real !== null ? rowState.real : rowState.absolute;
-    if (base === null) return;
-    if (containsOrEquals(base, sessionTarget) && base.length > bestLen) {
-      sessionAgent = index;
-      bestLen = base.length;
-    }
+  const store = metadata.readWorktreeMetadataStore(registry.registryPath(repo.root));
+  // A store this version cannot read loses the filter it feeds, so the list shows
+  // what Git knows and says why, instead of an empty view that looks authoritative.
+  const lost = store.status === "unreadable" || store.status === "unsupported";
+  const records = store.status === "valid" ? store.file.records : {};
+  const view = list.worktreeListView({
+    reconciliation: metadata.reconcileWorktrees({
+      entries,
+      records,
+      commonDir: repo.commonDir,
+      setupJobLiveness: setupJobLiveness(records, runner, resolveThread(ctx).thread),
+    }),
+    project: path.basename(main.path),
+    main: { path: main.path, branch: main.branch || "-", shortSha: (main.head || "").slice(0, 7) },
+    all: lost || (params && params.all === true),
   });
-  const lines = [];
-  const items = [];
-  if (principalLine !== null) {
-    lines.push(principalLine);
-    items.push(principalItem);
-  }
-  if (sessionAgent >= 0) {
-    lines.push(agentRows[sessionAgent].line);
-    items.push(agentRows[sessionAgent].item);
-  }
-  agentRows.forEach((row, index) => {
-    if (index === sessionAgent) return;
-    lines.push(row.line);
-    items.push(row.item);
-  });
-  const warnings = [];
-  if (deadPaths.length > 0) {
-    if (pruneError) {
-      warnings.push(
-        `could not prune ${deadPaths.length} stale worktree path(s) from the registry (${deadPaths.join(", ")}): ${pruneError}; the listing still excludes them, and git may still record the checkout until 'git worktree prune'`,
-      );
-    } else {
-      warnings.push(
-        `pruned ${pruned.length} stale worktree path(s) from the registry: ${pruned.join(", ")}; git may still record the checkout until 'git worktree prune'`,
-      );
-    }
-  }
-  if (all) {
-    // Only absolute registry paths participate: anything else cannot name
-    // a live checkout without resolving against the process cwd. The set
-    // comes from the POST-prune registry (re-read; when the re-read fails
-    // the pre-prune set minus the pruned paths stands in), so a row pruned
-    // above never reappears as "unregistered" just because git still
-    // records it. Every git entry is existence-checked on its absolute
-    // form (relative entries resolve against the repository root, never
-    // the process cwd): a path that does not exist is never reported, in
-    // any status, and stays out of details.worktrees as well.
-    let postPrune = null;
-    try {
-      const reread = registry.readRegistry(repo.root);
-      if (reread && reread.ok === true && Array.isArray(reread.worktrees)) postPrune = reread.worktrees;
-    } catch {
-      postPrune = null;
-    }
-    const registered = new Set();
-    for (const entry of postPrune || read.worktrees) {
-      if (typeof entry.path !== "string" || !path.isAbsolute(entry.path)) continue;
-      const st = checkoutState(entry.path, repo.root);
-      // Both spellings count: a symlink row and the git spelling of the
-      // same checkout share the realpath, so the checkout is never
-      // double-reported as unregistered.
-      if (st.absolute !== null) registered.add(st.absolute);
-      if (st.real !== null) registered.add(st.real);
-    }
-    if (!postPrune) {
-      for (const dropped of pruned) {
-        try {
-          registered.delete(path.resolve(dropped));
-        } catch {
-          // Nothing to delete.
-        }
-      }
-    }
-    // The principal checkout is never an extra: it already has its
-    // distinguished line. Any other live checkout the registry does not
-    // know about — including the session's own checkout when it is
-    // unregistered — is reported. The principal exclusion is by resolved
-    // identity (realpath with absolute fallback), so a symlink spelling
-    // of the principal never surfaces as unregistered. When no principal
-    // could be determined, the caller's checkout keeps the old exclusion
-    // so the degenerate listing stays exactly `worktree list: none`.
-    const self = principalPath !== null ? principalPath : path.resolve(repo.root);
-    const extra = live
-      .filter((entry) => {
-        if (!entry || typeof entry.path !== "string" || entry.path.length === 0) return false;
-        // Consolidated predicate: only an existing DIRECTORY surfaces,
-        // relative entries resolving against the repository root.
-        const st = checkoutState(entry.path, repo.root);
-        if (st.absolute === null || !st.exists || !st.isDirectory) return false;
-        if (registered.has(st.absolute)) return false;
-        if (st.real !== null && registered.has(st.real)) return false;
-        const entryId = st.real !== null ? st.real : st.absolute;
-        if (entryId === self) return false;
-        return true;
-      })
-      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-    // S9: the same order holds for unregistered rows. The session's OWN
-    // unregistered checkout sits directly after the principal (never
-    // duplicated when the session is in the principal), and the remaining
-    // extras follow in path order. The match is deepest-containing on
-    // resolved identity, the same rule as the registered session match above.
-    let sessionExtra = -1;
-    let sessionBest = -1;
-    if (sessionTarget !== null) {
-      extra.forEach((entry, index) => {
-        const st = checkoutState(entry.path, repo.root);
-        const base = st.real !== null ? st.real : st.absolute;
-        if (base === null) return;
-        if (containsOrEquals(base, sessionTarget) && base.length > sessionBest) {
-          sessionExtra = index;
-          sessionBest = base.length;
-        }
-      });
-    }
-    const orderedExtra = sessionExtra >= 0
-      ? [extra[sessionExtra], ...extra.filter((_, index) => index !== sessionExtra)]
-      : extra;
-    const extraLines = [];
-    for (const entry of orderedExtra) {
-      const branch = entry.branch || "(detached)";
-      // Report the resolved absolute form so details.worktrees never
-      // carries a relative spelling or a path that does not exist.
-      const shown = checkoutState(entry.path, repo.root).absolute || entry.path;
-      // S24: the first column is the NAME, exactly what `warp` accepts.
-      let extraName = "worktree";
-      try {
-        extraName = git.slugifyBranch(branch);
-      } catch {
-        extraName = "worktree";
-      }
-      extraLines.push({
-        line: `worktree list: ${extraName} ${branch} unregistered`,
-        // An unregistered checkout has no registry row: the item is its
-        // identity, with no association field invented for it (S1).
-        item: { name: extraName, path: shown, branch, thread: null, status: "unregistered", kind: "unregistered" },
-      });
-    }
-    const primaryExtra = sessionExtra >= 0 ? extraLines[0] : null;
-    const restExtra = sessionExtra >= 0 ? extraLines.slice(1) : extraLines;
-    const insertAt = principalItem !== null ? 1 : 0;
-    if (primaryExtra) {
-      lines.splice(insertAt, 0, primaryExtra.line);
-      items.splice(insertAt, 0, primaryExtra.item);
-    }
-    // Only the current checkout jumps ahead; unrelated unregistered rows
-    // retain their previous place after the registered rows.
-    lines.push(...restExtra.map((entry) => entry.line));
-    items.push(...restExtra.map((entry) => entry.item));
-  }
-  // S19 retires `worktree list: none`: with the principal line always
-  // present there is always something to list. This fallback survives
-  // only for the degenerate case where the principal cannot be determined
-  // from git's listing and nothing else is listed either.
-  if (lines.length === 0) {
-    return textResult("worktree list: none", { worktrees: [], count: 0, all, pruned, warnings, pruneError }, false);
-  }
-  return textResult(lines.join("\n"), { worktrees: items, count: items.length, all, pruned, warnings, pruneError }, false);
+  const text = lost ? `${view.text}\nmetadata unreadable; showing what Git knows` : view.text;
+  return textResult(text, view.details, false);
 }
+
 
 // Rank registry entries by common-prefix score against the query so an
 // unregistered close target can name the closest registered candidates.
@@ -2105,8 +1108,8 @@ async function vanishedCheckouts(git, repoRoot, live, resolvedTarget, after) {
 }
 
 // S24 name resolution — the ONE place checkout names resolve to
-// checkouts. `worktree_delete` (by `name`) and the `warp` command verb
-// both call this, never separate logic. A name is the flattened branch
+// checkouts. The `/warp` command and the removal path both call this, never
+// separate logic. A name is the flattened branch
 // slug (`slugifyBranch`, already exported by lib/worktree-git.js), or
 // `principal` for the principal checkout.
 //
@@ -2402,18 +1405,18 @@ function closeSessionString(ctx, method) {
   }
 }
 
-// S7/S8/S9: the active-session refusal, shared by `worktree_delete` and the warp
-// panel's Ctrl+D (lib/worktree-session-guard.js).
+// S7/S8/S9: the active-session refusal, shared by the removal path the warp
+// panel's Ctrl+D drives (lib/worktree-session-guard.js).
 //
 // The guard answers one question per checkout: is a live Pi session working
 // there? It reads Gentle Shell's published presence records (heartbeat +
 // workspace) and, deterministically, the checkout THIS session stands on. Both
-// callers run it, so the tool and the panel can never disagree.
+// callers run it, so the panel's refusal and the close can never disagree.
 //
 // Two outcomes refuse with nothing mutated:
 //   - this session is in the checkout: the human is told to warp first
-//     (`/warp`), then close. The tool NEVER warps by itself and never closes or
-//     opens a Herdr pane/workspace: a destructive action that first moves the
+//     (`/warp`), then close. The tool NEVER warps by itself and never closes a
+//     pane or workspace: a destructive action that first moves the
 //     session would hide the state it was approved on;
 //   - another session is in the checkout: the refusal names its RAW session id,
 //     joined from the published transport record whose id hashes to that
@@ -2526,18 +1529,17 @@ async function yoloActiveFor(ctx) {
   }
 }
 
-// Core of `worktree_delete` (S7, D6, S6-S9): remove the checkout, keep the
-// branch, drop the registry entry. Exported for unit tests; the registered tool
-// calls it with the live Pi context, and the warp panel's Ctrl+D calls it with
-// `opts.approved` after its own question.
+// Core of a removal (S7, D6, S6-S9): remove the checkout, keep the branch, drop
+// the registry entry. Exported for unit tests and called by the warp panel's
+// Ctrl+D with `opts.approved` after its own question — it is the panel's only
+// removal path, because no agent tool deletes a checkout (S4).
 //
 // The S7 rule is that the BRANCH IS KEPT: this function never deletes a
 // branch, never passes `--trust-repository`, and passes `--force` only when the
 // caller asked for it. Removal is `git worktree remove` and nothing else (S6):
-// no Herdr workspace is closed, created or retired, and Herdr is never asked to
-// remove a checkout. A dirty checkout without `force` fails with the backend's
-// own reason and nothing is mutated. The registry entry is dropped only after
-// `listWorktrees` confirms the path is gone.
+// no other process is asked to remove a checkout. A dirty checkout without
+// `force` fails with the backend's own reason and nothing is mutated. The
+// registry entry is dropped only after `listWorktrees` confirms the path is gone.
 //
 // S7-S9: a live Pi session working in the target refuses the close — before the
 // approval question and again immediately before the removal — through the
@@ -2558,7 +1560,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   const hasName = typeof rawName === "string" && rawName.length > 0;
   if (!hasPath && !hasBranch && !hasName) {
     return errorResult(
-      "worktree_delete requires a path or a branch or a name: pass the worktree path, branch, or name to close",
+      "closing a worktree requires a path or a branch or a name: pass the worktree path, branch, or name to close",
       { force },
     );
   }
@@ -2567,7 +1569,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   // agree-or-disagree behaviour below.)
   if (hasName && (hasPath || hasBranch)) {
     return errorResult(
-      "worktree_delete accepts only one of path, branch, or name: pass only one",
+      "closing a worktree accepts only one of path, branch, or name: pass only one",
       { path: rawPath, branch: rawBranch, name: rawName, force },
     );
   }
@@ -2588,7 +1590,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   const byBranch = hasBranch && !hasName ? registry.findByBranch(repo.root, rawBranch) : null;
   if (hasPath && hasBranch && byPath && byBranch && byPath.branch !== byBranch.branch) {
     return errorResult(
-      `worktree_delete path and branch disagree: path resolves to branch '${byPath.branch}' but branch '${rawBranch}' is registered elsewhere; pass only one`,
+      `closing a worktree: path and branch disagree: path resolves to branch '${byPath.branch}' but branch '${rawBranch}' is registered elsewhere; pass only one`,
       { path: rawPath, branch: rawBranch, force },
     );
   }
@@ -2621,7 +1623,7 @@ async function executeWorktreeClose(params, ctx, opts) {
       }
     } else if (resolved.kind === "principal") {
       return errorResult(
-        `cannot close the principal checkout at ${resolved.path}: worktree_delete only closes registered agent worktrees; the checkout and the registry were left untouched`,
+        `cannot close the principal checkout at ${resolved.path}: the removal path only closes registered agent worktrees; the checkout and the registry were left untouched`,
         { name: rawName, path: resolved.path, branch: resolved.branch, force },
       );
     } else {
@@ -2639,7 +1641,7 @@ async function executeWorktreeClose(params, ctx, opts) {
         const pid = pst.real !== null ? pst.real : pst.absolute;
         if (entryId !== null && pid !== null && entryId === pid) {
           return errorResult(
-            `cannot close the principal checkout at ${principalRef.path}: worktree_delete only closes registered agent worktrees; the checkout and the registry were left untouched`,
+            `cannot close the principal checkout at ${principalRef.path}: the removal path only closes registered agent worktrees; the checkout and the registry were left untouched`,
             { name: rawName, path: principalRef.path, branch: principalRef.branch, force },
           );
         }
@@ -2716,8 +1718,8 @@ async function executeWorktreeClose(params, ctx, opts) {
   // before any pre-removal side effect, and again immediately before a remover
   // is invoked. Without that, a path replaced by a symbolic link while the
   // human answered would be handed to `git worktree remove`, which resolves the
-  // spelling it is given and would name ANOTHER checkout. No tool reaches this:
-  // `worktree_delete` calls this function without options.
+  // spelling it is given and would name ANOTHER checkout. Only the panel's
+  // ctrl+d reaches this function and it always passes its approved identity.
   const expectedReal = opts && typeof opts.expectedReal === "string" && opts.expectedReal.length > 0
     ? opts.expectedReal
     : null;
@@ -2784,8 +1786,8 @@ async function executeWorktreeClose(params, ctx, opts) {
   // selector's keyboard delete, which never consults YOLO at all
   // (`warpDeleteCheckout`). It suppresses the second dialog only: every check
   // above and below, the live-session protections and the removal itself are
-  // unchanged, and no tool can reach this flag because `worktree_delete` calls
-  // this function without options.
+  // unchanged, and no caller reaches it without an approval: the panel's
+  // ctrl+d is the only removal path.
   const alreadyApproved = !!(opts && opts.approved === true);
   if (ctx && ctx.hasUI && !alreadyApproved) {
     const canAsk = ctx.ui && typeof ctx.ui.confirm === "function";
@@ -2835,7 +1837,7 @@ async function executeWorktreeClose(params, ctx, opts) {
   // closed instead of falling back to a hand-rolled child.
   let closeLib;
   try {
-    closeLib = libRequire("worktree-close-herdr.js");
+    closeLib = libRequire("worktree-remove.js");
   } catch (err) {
     return errorResult(
       `cannot remove the worktree at ${target}: the removal module is unavailable (${(err && err.message) || err}); the checkout and the registry were left untouched`,
@@ -2854,19 +1856,19 @@ async function executeWorktreeClose(params, ctx, opts) {
     });
   }
 
-  // S6: git is the ONLY remover. The Herdr workspace reconcile (closing every
-  // workspace of the checkout's group and opening one at the principal) and
-  // `herdr worktree remove` are gone: a close never closes, opens or retires a
-  // Herdr panel, and it never asks Herdr to remove the checkout. `git worktree
-  // remove` runs with a fixed argv, the absolute verified path, and `--force`
-  // only when the caller asked for it; the branch is never deleted and
-  // --trust-repository is never passed.
+  // S6: git is the ONLY remover. The workspace reconcile (closing every
+  // workspace of the checkout's group and opening one at the principal) and an
+  // out-of-process `worktree remove` are gone: a close never closes, opens or
+  // retires a pane, and it never asks another program to remove the checkout.
+  // `git worktree remove` runs with a fixed argv, the absolute verified path,
+  // and `--force` only when the caller asked for it; the branch is never
+  // deleted and --trust-repository is never passed.
   //
   // ORDER IS PART OF THE PROTECTION, not an implementation detail. The
   // active-session recheck just above is an await, and an await is the longest
   // window a swap gets between an identity check and a remover. So the recheck
   // resolves FIRST and the final identity check runs after it, with NO await
-  // between that check and the spawn (lib/worktree-close-herdr.js spawns the
+  // between that check and the spawn (lib/worktree-remove.js spawns the
   // git child synchronously, before it returns its promise).
   //
   // LIMITATION, stated rather than papered over: `git worktree remove` takes a
@@ -2917,7 +1919,8 @@ async function executeWorktreeClose(params, ctx, opts) {
   // The check never depends on the post-removal listing alone: when the
   // listing itself fails, the existence fallback above still names a
   // vanished checkout (registry kept) instead of hiding it behind an
-  // unverifiable-removal message. Covers both the herdr and git paths.
+  // unverifiable-removal message. Covers the removal path whether or not the
+  // post-removal listing succeeds.
   let after;
   try {
     after = await git.listWorktreesAsync(repo.root, { runAsync });
@@ -2937,9 +1940,8 @@ async function executeWorktreeClose(params, ctx, opts) {
   // R4-2: the backend must not have removed anything but the target. A
   // hostile or confused remover that deleted another checkout fails
   // loudly here: the vanished path is named, the close is not treated as
-  // successful, and the registry entry is left in place. Covers both the
-  // herdr and the git removal paths; a legitimate single-checkout removal
-  // (only the target gone) never trips it.
+  // successful, and the registry entry is left in place. A legitimate
+  // single-checkout removal (only the target gone) never trips it.
   const vanished = await vanishedCheckouts(git, repo.root, live, resolvedTarget, after);
   if (vanished.length > 0) {
     return errorResult(
@@ -2994,33 +1996,18 @@ async function executeWorktreeClose(params, ctx, opts) {
   );
 }
 
-const worktreeListTool = withWorktreeCardRenderer(defineTool({
+const worktreeListTool = defineTool({
   name: "worktree_list",
   label: "Worktree List",
-  description: "List the principal checkout plus the agent worktrees registered for this repository, cross-checked against live checkouts with their owning thread. The principal leads, then the session's own checkout, then the rest. Pass all:true to also show live checkouts the registry does not know about. Rows whose paths no longer exist are excluded and pruned from the registry.",
+  description: "List this clone's Git worktrees: the main worktree first, then the worktrees created for this clone with their ODD, branch and setup state. Read-only; it never writes the worktree metadata. Pass all:true to also show the worktrees Git knows outside the list and the records whose worktree no longer exists.",
   parameters: Type.Object({
-    all: opt(Type.Boolean({ description: "Include live checkouts the registry does not know about" })),
+    all: opt(Type.Boolean({ description: "Omitted lists only the registered worktrees. true also shows the worktrees Git knows outside the list and the records whose worktree no longer exists." })),
   }),
+  ...worktreeToolRenderers("worktree_list"),
   async execute(toolCallId, params, signal, onUpdate, ctx) {
-    return executeWorktreeList(params, ctx);
+    return executePortedWorktreeList(params, ctx);
   },
-}));
-
-const worktreeCloseTool = withWorktreeCardRenderer(defineTool({
-  name: "worktree_delete",
-  label: "Worktree Delete",
-  exposure: "codemode",
-  description: "Remove a registered agent worktree checkout while keeping the branch. Pass the worktree name, path, or branch (only one), plus force:true to delete a dirty checkout. A live Pi session working in that checkout — this session or another — refuses the deletion: warp to another checkout first, or let that session finish. The checkout is removed with git; no Herdr workspace is closed, opened or removed.",
-  parameters: Type.Object({
-    name: opt(Type.String({ description: "Name of the registered worktree to delete (the flattened branch slug, or principal)" })),
-    path: opt(Type.String({ description: "Path of the registered worktree to delete" })),
-    branch: opt(Type.String({ description: "Branch of the registered worktree to delete" })),
-    force: opt(Type.Boolean({ description: "Delete even when the checkout is dirty" })),
-  }),
-  async execute(toolCallId, params, signal, onUpdate, ctx) {
-    return executeWorktreeClose(params, ctx);
-  },
-}));
+});
 
 function warpForkSourceUsable(file) {
   try {
@@ -3100,41 +2087,6 @@ function warpCreatePreflight(ctx) {
   return { ok: true };
 }
 
-// S61 tool-side handling of the `changes` option: it VALIDATES the selection and
-// nothing more. The copy itself belongs to the command (see
-// `warpHandoffCopyChanges`), because the tool only QUEUES the move — a copy made
-// here would land in a checkout the command can still refuse, and the retry the
-// refusal asks for would then fail on its own stranded copy.
-// Resolves to {isError:false, selection} or {isError:true, result} with nothing
-// queued. Never throws.
-function warpToolChangesSelection(params) {
-  let raw;
-  try {
-    raw = params ? params.changes : undefined;
-  } catch {
-    raw = undefined;
-  }
-  let changesLib = null;
-  try {
-    changesLib = libRequire('worktree-changes.js');
-  } catch (err) {
-    return { isError: false, selection: { mode: 'none', paths: [] } };
-  }
-  let normalized;
-  try {
-    normalized = changesLib.normalizeChangesSelection(raw);
-  } catch (err) {
-    return {
-      isError: true,
-      result: errorResult(`worktree warp: ${(err && err.message) || err}`, { tool: 'worktree_warp' }),
-    };
-  }
-  if (!normalized.ok) {
-    return { isError: true, result: errorResult(`worktree warp: ${normalized.error}`, { tool: 'worktree_warp' }) };
-  }
-  return { isError: false, selection: { mode: normalized.mode, paths: normalized.paths.slice() } };
-}
-
 // The handoff's change selection, applied at MOVE time by the command: after
 // every refusal check above and before the switch. A handoff refused before this
 // point mutates NOTHING, and the copy that does run never mutates the source or
@@ -3165,42 +2117,6 @@ async function warpHandoffCopyChanges({ git, fromCheckout, targetCwd, changes })
     return { error: (copied && copied.error) || 'cannot copy changes' };
   }
   return { ok: true, copied };
-}
-
-// The tool's selection preflight: a selection naming a file that is NOT pending
-// must refuse BEFORE the handoff is queued, because the command can only refuse
-// it — a queued request the command always rejects is the same false success the
-// token cap had. Read-only: the shared summary and matcher decide, nothing is
-// written. Destination state is deliberately NOT checked here: an overlap may be
-// this handoff's own earlier copy, which the command proves byte for byte and
-// skips at move time. Never throws.
-async function warpHandoffSelectionCheck({ git, fromCheckout, changes }) {
-  if (!changes || changes.mode === 'none') return { ok: true };
-  let changesLib = null;
-  try {
-    changesLib = libRequire('worktree-changes.js');
-  } catch (err) {
-    return { ok: true };
-  }
-  let summary;
-  try {
-    summary = await changesLib.summarizeChanges(fromCheckout, { git });
-  } catch (err) {
-    return { ok: false, error: `cannot read the pending changes: ${(err && err.message) || err} (nothing was queued)` };
-  }
-  if (!summary || summary.ok !== true) {
-    return { ok: false, error: `${(summary && summary.error) || 'cannot read the pending changes'} (nothing was queued)` };
-  }
-  let matched;
-  try {
-    matched = changesLib.matchSelection(summary, changes.mode, changes.paths);
-  } catch (err) {
-    return { ok: false, error: `cannot match the changes selection: ${(err && err.message) || err} (nothing was queued)` };
-  }
-  if (!matched || matched.ok !== true) {
-    return { ok: false, error: `${(matched && matched.error) || 'cannot match the changes selection'}; nothing was queued` };
-  }
-  return { ok: true };
 }
 
 // One side of the proof: what this process can actually observe at a path.
@@ -3311,13 +2227,13 @@ function warpCopyFilesSummary(files) {
   return { count, line: `${count} file${count === 1 ? '' : 's'}${detail}` };
 }
 // ---------------------------------------------------------------------------
-// The warp handoff (`worktree_warp` -> `/warp`).
+// The warp handoff (`/warp @<token>`).
 //
 // The host keeps session control on the extension COMMAND context: a tool's
 // context carries no `switchSession`, and awaiting `waitForIdle` from inside a
 // tool is a self-deadlock (the tool runs inside the turn it would wait for).
-// Tools therefore cannot move the session themselves. The one supported route
-// is the host's own documented one for this case (see the installed
+// No agent tool warps any more (S3), but the QUEUE still re-dispatches its own
+// validated handoff through the host's documented route (see the installed
 // `examples/extensions/reload-runtime.ts`): queue the extension COMMAND that
 // owns the privileged action with `pi.sendUserMessage(text, {
 // expandPromptTemplates: true })`. That dispatches the command immediately —
@@ -3340,7 +2256,8 @@ const WARP_HANDOFF_MAX_TOKEN = 2048;
 const WARP_HANDOFF_MAX_NAME = 200;
 
 // The host API captured at load: `sendUserMessage` is the only supported way
-// for a tool to reach a command context. Null until the extension loads.
+// to re-dispatch the queued `/warp` command from the queue's own timer. Null
+// until the extension loads.
 let warpHandoffPi = null;
 
 // The ONE token contract, shared by the encode and the decode side: a non-empty
@@ -3539,309 +2456,6 @@ function normalizeWarpHandoff(value) {
     return null;
   }
 }
-
-async function executeWorktreeWarpTool(params, ctx, opts) {
-  const options = opts || {};  // A tool never switches the session: it queues the handoff to the command
-  // that can (see `dispatchWarpHandoff`). A host with no route refuses before
-  // any read, so nothing is resolved, copied or claimed.
-  if (!warpHandoffPi || typeof warpHandoffPi.sendUserMessage !== "function") {
-    return errorResult(
-      "worktree warp is unavailable here: the host cannot dispatch the warp command",
-      { tool: "worktree_warp" },
-    );
-  }
-  const git = libRequire("worktree-git.js");
-  const registry = libRequire("worktree-registry.js");
-  const warpSessions = libRequire("worktree-warp-sessions.js");
-  const raw = params && typeof params.name === "string" ? params.name.trim() : "";
-  const fromCwd = toolCwd(ctx);
-  // S5: one pending warp per session. While one waits, a second request is
-  // REFUSED here — before anything is resolved, copied or queued — and the
-  // pending request is never disturbed: it is the move someone already asked
-  // for, and the refusal says where it stands.
-  const pendingGate = warpPendingGate(ctx, fromCwd, null);
-  if (pendingGate.pending) {
-    return errorResult(`worktree warp: ${warpPendingRefusalText(pendingGate.pending, raw)}`, {
-      tool: "worktree_warp", name: raw, pending: true,
-    });
-  }
-  // S21: the warp is interactive too, so its preflight reads are awaited.
-  const runAsync = libRunner(git);
-  let repo;
-  try {
-    repo = await git.repoIdentityAsync(fromCwd, { runAsync });
-  } catch (err) {
-    return errorResult(notGitRepositoryLine(fromCwd), { tool: "worktree_warp" });
-  }
-  const read = registry.readRegistry(repo.root);
-  if (!read.ok) {
-    return errorResult(`worktree warp: cannot read worktree registry: ${read.error}`, { tool: "worktree_warp" });
-  }
-  let live;
-  try {
-    live = await git.listWorktreesAsync(repo.root, { runAsync });
-  } catch (err) {
-    return errorResult(`worktree warp: cannot list worktrees: ${(err && err.message) || err}`, { tool: "worktree_warp" });
-  }
-  noteWarpDiscovery(repo.root, live);
-  const principal = principalForName(git, repo.root, repo, live);
-  // The refusal listing: every live selectable checkout as `<name> — <path>`,
-  // so the agent can pick without a human.
-  const availableCheckouts = () => {
-    try {
-      const offered = warpOfferedCheckouts(git, read, principal, live, repo.root);
-      const listed = offered.map((entry) => `${entry.name} — ${entry.path}`);
-      return listed.length > 0 ? listed.join(", ") : "(none)";
-    } catch {
-      return "(none)";
-    }
-  };
-  if (raw === "") {
-    return errorResult(
-      `worktree_warp needs a name: pass the worktree name or path; available checkouts: ${availableCheckouts()}`,
-      { tool: "worktree_warp" },
-    );
-  }
-  // Name first, then path — one candidate; unknown, foreign or ambiguous
-  // fails closed with the listing, exactly like the command's resolver plus
-  // the shared path leg.
-  let resolved = resolveCheckoutByName(raw, git, read, principal, live, repo.root, { allowUnregistered: true });
-  if (!resolved.ok) {
-    const pathEntry = resolveClosePathEntry(raw, git, read, live, repo.root);
-    if (pathEntry) {
-      const entrySlug = slugOf(git, pathEntry.branch);
-      resolved = {
-        ok: true, kind: "agent", name: entrySlug !== null ? entrySlug : raw,
-        path: pathEntry.path, branch: pathEntry.branch, entry: pathEntry,
-      };
-    } else {
-      // A live checkout of this repository reached by path — including one
-      // the registry does not own (the warp's lone-unregistered rule) — is
-      // not foreign; anything else keeps the name refusal with the listing.
-      let byPath = null;
-      try {
-        const st = checkoutState(raw, repo.root);
-        const id = st.real !== null ? st.real : st.absolute;
-        if (st.absolute !== null && st.exists && st.isDirectory && id !== null && liveIdentities(live, repo.root).has(id)) {
-          let isPrincipal = false;
-          try {
-            if (principal && typeof principal.path === "string" && principal.path.length > 0) {
-              const pst = checkoutState(principal.path, repo.root);
-              const pid = pst.real !== null ? pst.real : pst.absolute;
-              isPrincipal = pid !== null && pid === id;
-            }
-          } catch {
-            isPrincipal = false;
-          }
-          if (isPrincipal) {
-            byPath = { ok: true, kind: "principal", name: "principal", path: principal.path, branch: principal.branch, entry: null };
-          } else {
-            let liveBranch = null;
-            for (const entry of live) {
-              if (!entry || typeof entry.path !== "string" || entry.path.length === 0) continue;
-              const est = checkoutState(entry.path, repo.root);
-              const eid = est.real !== null ? est.real : est.absolute;
-              if (eid !== null && eid === id && typeof entry.branch === "string" && entry.branch.length > 0) { liveBranch = entry.branch; break; }
-            }
-            const rows = read && Array.isArray(read.worktrees) ? read.worktrees : [];
-            const claimants = rows.filter((row) => {
-              try {
-                if (!row || typeof row.path !== "string" || !path.isAbsolute(row.path)) return false;
-                const rst = checkoutState(row.path, repo.root);
-                const rid = rst.real !== null ? rst.real : rst.absolute;
-                return rid !== null && rid === id;
-              } catch {
-                return false;
-              }
-            });
-            if (claimants.length <= 1) {
-              const branch = liveBranch || (claimants.length === 1 ? claimants[0].branch : null);
-              if (typeof branch === "string" && branch.length > 0) {
-                const slug = slugOf(git, branch);
-                byPath = {
-                  ok: true, kind: claimants.length === 1 ? "agent" : "unregistered",
-                  name: slug !== null ? slug : raw, path: id, branch,
-                  entry: claimants.length === 1 ? claimants[0] : null,
-                };
-              }
-            }
-          }
-        }
-      } catch {
-        byPath = null;
-      }
-      if (byPath) {
-        resolved = byPath;
-      } else {
-        return errorResult(
-          `worktree warp: ${resolved.error}; available checkouts: ${availableCheckouts()}`,
-          { tool: "worktree_warp", name: raw, candidates: resolved.candidates },
-        );
-      }
-    }
-  }
-  // S39 fail-closed: the target must exist as a directory AND still be a
-  // checkout of this repository in git's listing — no fork, no notice, no
-  // record write when it is missing or foreign.
-  const targetState = checkoutState(resolved.path, repo.root);
-  const targetCwd = targetState.real !== null ? targetState.real
-    : targetState.absolute !== null ? targetState.absolute
-    : path.resolve(resolved.path);
-  if (!targetState.exists || !targetState.isDirectory || !liveIdentities(live, repo.root).has(targetCwd)) {
-    return errorResult(
-      `worktree warp: no live checkout for "${raw}" at ${targetCwd}: the path is missing or is not a checkout of this repository; available checkouts: ${availableCheckouts()}`,
-      { tool: "worktree_warp", name: raw },
-    );
-  }
-  // S39 current branch: the registry row keeps the branch recorded at
-  // creation time, so the warp shows the checkout's CURRENT branch from git.
-  const liveBranch = (registryClaimCounts(read.worktrees, repo.root).get(targetCwd) || 0) <= 1
-    ? warpLiveBranchFor(targetCwd, live, repo.root)
-    : null;
-  let displayName = resolved.name;
-  let displayBranch = resolved.branch;
-  if (typeof liveBranch === "string" && liveBranch.length > 0) {
-    displayBranch = liveBranch;
-    if (resolved.kind !== "principal") {
-      const liveSlug = slugOf(git, liveBranch);
-      if (liveSlug !== null) displayName = liveSlug;
-    }
-  }
-  // Already there: the deepest live checkout containing the session, the
-  // rule the listing already uses. No fork, no switch, no message.
-  const sessionId = warpSessionIdentity(fromCwd, repo.root);
-  const sessionCheckout = warpDeepestContaining(sessionId, [targetCwd, ...warpLiveIdentities(live, repo.root)]);
-  if (sessionCheckout !== null && sessionCheckout === targetCwd) {
-    return textResult(
-      `worktree warp: ${raw} (already there)`,
-      { tool: "worktree_warp", name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: true, cancelled: false },
-      false,
-    );
-  }
-  // S61: the tool's `changes` option (named changes, never copy):
-  // omitted/empty [] or "" copies nothing, "all" copies every pending
-  // change, a list of files copies only those. The selection is VALIDATED here
-  // and carried in the handoff token; the copy itself runs inside the command,
-  // at move time, after its refusal checks (see `warpHandoffCopyChanges`) — a
-  // copy made here would land in a checkout the command can still refuse, and
-  // the retry would then fail on its own stranded copy. No human selector in
-  // the tool: the selection copies working-tree changes only (the source is
-  // retained, the destination index preserved) through the same
-  // lib/worktree-changes.js transfer the command uses.
-  const toolChangesGate = warpToolChangesSelection(params);
-  if (toolChangesGate && toolChangesGate.isError) return toolChangesGate.result;
-  const toolChanges = toolChangesGate && toolChangesGate.selection
-    ? toolChangesGate.selection
-    : { mode: "none", paths: [] };
-  // A selection that names no pending file is refused HERE: the command could
-  // only refuse it later, and queueing a request that is already known to fail
-  // is the same false "handoff queued" the token cap produced.
-  const toolSelectionCheck = await warpHandoffSelectionCheck({
-    git, fromCheckout: sessionCheckout || fromCwd, changes: toolChanges,
-  });
-  if (toolSelectionCheck && toolSelectionCheck.ok !== true) {
-    return errorResult(`worktree warp: ${toolSelectionCheck.error}`, { tool: "worktree_warp" });
-  }
-  // The host keeps session control on the COMMAND context, so this tool never
-  // moves the session itself: it resolves and validates the request and then
-  // HANDS THE MOVE to the one verb that can perform it
-  // (`/warp`, see `dispatchWarpHandoff`). The switch therefore
-  // happens only AFTER this turn settles — the command handler waits for idle
-  // first — so no message, tool result or pending change is torn mid-turn.
-  //
-  // The handoff is PREPARED before it is queued: the token is encoded, bounded
-  // and round-tripped through the command's own decoder, so "handoff queued" is
-  // only ever claimed for a request the command will accept. A refusal here
-  // queues nothing and touches no checkout.
-  //
-  // What this tool may claim: the handoff is QUEUED, never completed. The
-  // first line says so, and the details carry no completed-move row (no
-  // `fromName`/`name`/`path`/`branch`), so the card falls back to that line
-  // instead of painting a move that has not happened. The one visible "moved"
-  // card comes from the switched-to session once the move is real.
-  // S5/S9: this session's own workloads no longer refuse the handoff — the
-  // request is QUEUED exactly as it is when idle, and the command's pending warp
-  // performs the move once no agent task and no background job is running. What
-  // this tool reports is always the QUEUE, never a move: the idle wording is
-  // byte-identical to before, a busy session gets the waiting line naming both
-  // workloads, and the `queue:` line appears only when the job state could not
-  // be read at all.
-  const toolActivity = await warpSessionActivity(ctx);
-  const toolBusy = !!(toolActivity && toolActivity.busy === true);
-  const preparedToolHandoff = prepareWarpHandoff({
-    name: displayName,
-    target: targetCwd,
-    from: fromCwd,
-    branch: displayBranch,
-    changes: toolChanges,
-  });
-  if (!preparedToolHandoff.ok) {
-    return errorResult(
-      `worktree warp: ${preparedToolHandoff.error}`,
-      { tool: "worktree_warp", name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: false, cancelled: false },
-    );
-  }
-  // S6: the request becomes this session's ONE pending warp at QUEUE time, not
-  // when the command finally runs, so a second `worktree_warp` in the same turn
-  // meets the gate above instead of queueing another handoff. The record is
-  // created only after every validation above passed, so a request refused for
-  // another reason queues nothing, and every terminal outcome on the command
-  // front (moved, refused, cancelled, expired, shutdown) clears this same record.
-  const toolQueue = warpQueuePending({ ctx, fromCwd, name: displayName, prepared: preparedToolHandoff });
-  if (!toolQueue.ok && toolQueue.pending) {
-    return errorResult(`worktree warp: ${warpPendingRefusalText(toolQueue.pending, raw)}`, {
-      tool: "worktree_warp", name: raw, pending: true,
-    });
-  }
-  const handoffDispatched = dispatchWarpHandoff(preparedToolHandoff);
-  if (!handoffDispatched.ok) {
-    // Nothing was handed off, so nothing may stay pending.
-    if (toolQueue.ok && toolQueue.pending) warpSettlePending(toolQueue.pending.key);
-    return errorResult(
-      `worktree warp: ${handoffDispatched.error}`,
-      { tool: "worktree_warp", name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: false, cancelled: false },
-    );
-  }
-  if (toolQueue.ok && toolQueue.pending) warpMarkDispatched(toolQueue.pending.key);
-  const changesNote = toolChanges.mode === "all"
-    ? "\nchanges: all (copied when the move lands)"
-    : toolChanges.mode === "paths"
-      ? `\nchanges: ${toolChanges.paths.length} file${toolChanges.paths.length === 1 ? "" : "s"} (copied when the move lands)`
-      : "";
-  const jobsNote = toolBusy ? warpJobsUnknownText(toolActivity) : "";
-  const pendingText = [
-    toolBusy
-      ? `worktree warp: ${warpQueuedText(toolActivity)}`
-      : "worktree warp: handoff queued — the session moves when this turn ends",
-    `to: ${warpClean(displayName, "worktree")}`,
-    `path: ${warpClean(targetCwd, "(unknown checkout)")}`,
-    `branch: ${warpClean(displayBranch, "(detached)")}${changesNote}`,
-    ...(jobsNote.length > 0 ? [`queue: ${jobsNote}`] : []),
-  ].join("\n");
-  return textResult(
-    pendingText,
-    {
-      tool: "worktree_warp", handoff: true, pending: true,
-      pendingName: displayName, pendingPath: targetCwd, pendingBranch: displayBranch,
-      from: fromCwd, target: targetCwd, kind: resolved.kind,
-      ...(toolBusy ? { busy: true, queued: true } : {}),
-    },
-    false,
-  );
-}
-
-const worktreeWarpTool = withWorktreeCardRenderer(defineTool({
-  name: "worktree_warp",
-  label: "Worktree Warp",
-  description: "Move this session to another checkout of the project and continue the task there: pass the worktree name or path (no selector). Resumes the checkout's session when it holds the same content, otherwise forks one, then continues working in the new checkout.",
-  parameters: Type.Object({
-    name: Type.String({ description: "Name of the checkout to move to (the flattened branch slug, or principal), or its path" }),
-    changes: opt(unionSchema([Type.String(), Type.Array(Type.String())], { description: "Pending changes to copy into the destination checkout: omit or pass \"\" or [] for no copy, \"all\" for everything, or a list of files for selected changes only" })),
-  }),
-  async execute(toolCallId, params, signal, onUpdate, ctx) {
-    return executeWorktreeWarpTool(params, ctx);
-  },
-}));
 
 // ---------------------------------------------------------------------------
 // Session auto-naming from ODD writes (S1 as narrowed by D7).
@@ -4151,10 +2765,10 @@ function handleWorktreeOddEvent(event, ctx, pi, allowPhaseTrigger) {
 //
 // The platform keeps session control (`waitForIdle`/`switchSession`) on
 // the extension COMMAND context, and that is exactly why the warp is a
-// command verb. The agent's `worktree_warp` tool cannot call either, so it
-// queues THIS command through `pi.sendUserMessage(..., {
+// command verb. Nothing else can call either, so the queue re-dispatches THIS
+// command through `pi.sendUserMessage(..., {
 // expandPromptTemplates: true })` (S14, `dispatchWarpHandoff`): one
-// implementation of the move, reached by two front doors. The name is
+// implementation of the move, queued by the same verb that performs it. The name is
 // the flattened branch slug S24 prints (or `principal`), resolved through
 // the SAME `resolveCheckoutByName` the close-by-name path uses — one
 // place, never two.
@@ -4162,9 +2776,8 @@ function handleWorktreeOddEvent(event, ctx, pi, allowPhaseTrigger) {
 // Measured scope of the move (nothing over-promised): the SESSION cwd
 // changes and the tools operate in the target, while the PROCESS cwd does
 // not (Pi never calls `process.chdir`); emitting OSC-7 tells the TERMINAL
-// the new cwd, and Herdr honours it natively (ghostty-vt parses OSC 7
-// into its pane pwd, so new panes/tabs/workspaces with
-// `new_cwd = "follow"` inherit it); the interactive bash shell in that
+// the new cwd, and a terminal that parses OSC 7 updates its own pane pwd, so
+// new panes/tabs/workspaces inherit it; the interactive bash shell in that
 // pane does NOT change directory, because a child process cannot change
 // its parent shell's cwd.
 // ---------------------------------------------------------------------------
@@ -4253,13 +2866,9 @@ async function warpSessionActivityById(sessionId, host) {
   }
 }
 
-function warpSessionActivity(ctx) {
-  return warpSessionActivityById(closeSessionString(ctx, "getSessionId"), warpJobHost(ctx));
-}
-
 // S5: the queue texts come from the module that produced the counters, so the
-// tool result, the command notice and the expiry notice cannot drift apart. A
-// missing module falls back to the same sentences.
+// command notice and the expiry notice cannot drift apart. A missing module
+// falls back to the same sentences.
 function warpQueuedText(activity) {
   try {
     const lib = libRequire("worktree-warp-busy.js");
@@ -4394,19 +3003,6 @@ function warpResumePending(key) {
     if (lib && typeof lib.resumePendingWarp === "function") lib.resumePendingWarp(key);
   } catch {
     // The dispatched retry settles or expires on its own.
-  }
-}
-
-// The tool front already handed its request to the command: the record it just
-// created only has to refuse a second warp and wait for that dispatch to settle
-// (or expire), never to send a second copy of the same handoff.
-function warpMarkDispatched(key) {
-  if (typeof key !== "string" || key.length === 0) return;
-  try {
-    const lib = libRequire("worktree-warp-busy.js");
-    if (lib && typeof lib.markPendingWarpDispatched === "function") lib.markPendingWarpDispatched(key);
-  } catch {
-    // Without the module the queue does not exist, so there is nothing to mark.
   }
 }
 
@@ -4817,7 +3413,7 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
   const options = opts || {};
   const git = libRequire("worktree-git.js");
   const registry = libRequire("worktree-registry.js");
-  // A handoff (queued by the `worktree_warp` tool) names the checkout it
+  // A handoff (queued by this session's own pending warp) names the checkout it
   // resolved, so this invocation never re-picks a destination: it re-checks
   // that the very same live checkout is still the one the name resolves to
   // and refuses otherwise. An ordinary invocation (a human typing
@@ -4957,7 +3553,7 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
   // same rule the already-there check uses); outside every checkout the
   // session cwd itself is summarized.
   //
-  // A HANDOFF never asks: its caller (`worktree_warp`) already validated the
+  // A HANDOFF never asks: the queue already validated the
   // requested selection and an interactive picker fired from a queued command
   // would block the move on a prompt nobody asked for. It carries the selection
   // in its token instead, and the copy happens HERE — after every refusal check
@@ -6275,14 +4871,14 @@ async function askCreatePendingChanges({ ctx, git, fromCheckout }) {
 }
 
 // Create-then-return (S7): the selector's create completion mounts the
-// TWO-STEP panel (S6: the change type, then the change name) as an overlay,
+// THREE-STEP panel (the change type, the change name and the ODD) as an overlay,
 // then runs the SAME creation path `worktree_create` uses — which never
 // prompts — and STOPS there. Creation is creation: nothing is warped by
 // itself, so the caller can hand the selector back with a fresh listing that
 // includes the checkout just made, and the human picks where the session
-// goes. The creation carries neither `issues` nor `odd`, so a new row is born
-// without an association and the invalid, duplicate, occupied and principal
-// refusals keep their shape.
+// goes. The ODD names the checkout's directory (S7), so the create carries it
+// and keeps its invalid, duplicate, occupied and principal refusals' shape. A
+// new row is still born without an issue association.
 //
 // It ALWAYS reports `{ closed: true, created, cancelled?, worktree?, branch? }`
 // once the panel closed, so the caller hands the selector back every time: a
@@ -6341,13 +4937,21 @@ async function warpCreateAndEnter(ctx, git, notify) {
   // goes, including any checkout just made. `cancelled` distinguishes this from
   // a refusal; closing the RETURNED selector is what ends the flow.
   if (!out || out.ok !== true) return { closed: true, created: false, cancelled: true };
+  // S7: the create's OWN identity is the ODD, so the form must answer it. The
+  // branch is only the git branch: created with the checkout, or adopted when it
+  // already exists.
   const rawName = typeof out.name === "string" ? out.name.trim() : "";
+  const odd = typeof out.odd === "string" ? out.odd.trim() : "";
   const branch = `${out.type}/${git.slugifyBranch(rawName)}`;
   if (!WARP_CREATE_BRANCH_RE.test(branch)) {
     notify?.(`warp: invalid change name ${JSON.stringify(out.name)}: use at least one letter or digit (for example "name-change"); nothing was created.`, "error");
     return { closed: true, created: false };
   }
-  const createParams = { branch };
+  if (odd === "") {
+    notify?.('warp: the ODD is required: it names the checkout\'s directory (for example "login-ui"); nothing was created.', "error");
+    return { closed: true, created: false };
+  }
+  const createParams = { branch, odd };
   // S2: before anything is written, offer the invoking checkout's pending work:
   // the new worktree is either born from the commit or carries what is pending
   // here. A cancel (Esc / Ctrl+C at the question) is a real outcome — no
@@ -6375,7 +4979,7 @@ async function warpCreateAndEnter(ctx, git, notify) {
   // branch base is local main (S2).
   //
   // `backgroundHooks` is what makes a confirmed create feel instant: the
-  // checkout path is all the warp needs, so the slow setup (install, codegraph)
+  // checkout path is all the warp needs, so the slow setup (install)
   // runs behind it and reports itself when it settles. The pending-change copy
   // is still AWAITED inside the create — it must be complete before the session
   // can move, or the human would switch into a checkout that is missing the
@@ -6472,7 +5076,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     }
   }
 
-  // S7/S8/S9: the SAME active-session guard `worktree_delete` runs, and it runs
+  // S7/S8/S9: the SAME active-session guard the close runs, and it runs
   // BEFORE anything reads the pending changes or builds the deletion question.
   // A keypress may never turn into a confirmation dialog for a checkout a live
   // Pi session is working in: the human is told to finish/warp that session
@@ -6531,7 +5135,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
   // realpath comparison cannot see. An unreadable pair is a REFUSAL: without it
   // the removal cannot say which directory it is about to destroy.
   if (typeof before.identity.dev !== "number" || typeof before.identity.ino !== "number") {
-    notify?.(`warp: refusing to delete ${target.path}: the identity of its directory could not be read, so a path replaced by another directory could not be told apart; nothing was removed — retry, or close it with the worktree_delete tool.`, "error");
+    notify?.(`warp: refusing to delete ${target.path}: the identity of its directory could not be read, so a path replaced by another directory could not be told apart; nothing was removed — retry.`, "error");
     return;
   }
   const approvedPin = { real: approvedReal, dev: before.identity.dev, ino: before.identity.ino };
@@ -6547,7 +5151,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     const reason = changes && typeof changes.reason === "string" && changes.reason.length > 0
       ? changes.reason
       : "the change summary failed";
-    notify?.(`warp: refusing to delete ${target.path}: its uncommitted changes could not be read (${reason}), so nothing can say what would be lost; nothing was removed — retry, or close it with the worktree_delete tool.`, "error");
+    notify?.(`warp: refusing to delete ${target.path}: its uncommitted changes could not be read (${reason}), so nothing can say what would be lost; nothing was removed — retry.`, "error");
     return;
   }
   const content = evidence.content && typeof evidence.content === "object" ? evidence.content : null;
@@ -6555,7 +5159,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     const reason = content && typeof content.reason === "string" && content.reason.length > 0
       ? content.reason
       : "the pending content could not be fingerprinted";
-    notify?.(`warp: refusing to delete ${target.path}: what is pending in it could not be fingerprinted (${reason}), so an identical +/- count could hide different work; nothing was removed — retry, or close it with the worktree_delete tool.`, "error");
+    notify?.(`warp: refusing to delete ${target.path}: what is pending in it could not be fingerprinted (${reason}), so an identical +/- count could hide different work; nothing was removed — retry.`, "error");
     return;
   }
   const ignored = evidence.ignored && typeof evidence.ignored === "object" ? evidence.ignored : null;
@@ -6563,7 +5167,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     const reason = ignored && typeof ignored.reason === "string" && ignored.reason.length > 0
       ? ignored.reason
       : "the ignored-file listing failed";
-    notify?.(`warp: refusing to delete ${target.path}: the files git ignores there could not be listed (${reason}), so the removal could destroy work nobody was shown; nothing was removed — retry, or close it with the worktree_delete tool.`, "error");
+    notify?.(`warp: refusing to delete ${target.path}: the files git ignores there could not be listed (${reason}), so the removal could destroy work nobody was shown; nothing was removed — retry.`, "error");
     return;
   }
 
@@ -6623,6 +5227,20 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     return;
   }
   notify?.(`worktree deleted: ${target.name} · ${target.path}; the branch '${target.branch}' is kept.`, "info");
+  const caveats = result && result.details && Array.isArray(result.details.warnings)
+    ? result.details.warnings
+    : [];
+  for (const caveat of caveats) {
+    if (typeof caveat !== "string" || caveat.length === 0) continue;
+    notify?.(caveat, "warning");
+  }
+  // S7/S8/S9 as they reach the HUMAN: the shared close publishes the
+  // active-session guard's caveats in `details.warnings` — a stale presence
+  // record, a session it could not attribute, a truncated scan — and this panel
+  // is the only surface that removes a checkout now, so here is where that
+  // evidence is disclosed (AGENTS.md invariant 4: disclosed, never silently
+  // dropped). The guard's own strings are passed through verbatim; one notice
+  // per caveat, and none of them changes the fact that the removal happened.
 }
 
 // The EXACT checkout a deletion names, read on both sides of the question.
@@ -7079,7 +5697,7 @@ function registerWarpCommand(pi) {
         notify?.(`worktree warp: ${warpPendingRefusalText(earlyGate.pending, raw)}`, "error");
         return;
       }
-      // An agent handoff (queued by the `worktree_warp` tool) travels as ONE
+      // A handoff (this session's own queued warp) travels as ONE
       // `@<token>` argument. It is decoded and re-validated here; a rejected
       // token changes nothing and names no part of what it carried. Everything
       // after this point is the ordinary warpath: the same resolver, the same
@@ -8057,79 +6675,16 @@ function registerIssuesCommand(pi) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// `/codegraph-hook`, `/codegraph-init`, `/codegraph-sync` (T5 S9): the sync
-// hook's switch and the two on-demand CLI runs. The bodies live in
-// lib/codegraph-commands.js so they are testable without a host; this file only
-// registers them and hands their one-line result to the session UI.
-//
-// GATED REGISTRATION: the three commands do not exist at all in a session whose
-// gate says the `codegraph` CLI is absent, so they never appear in that
-// session's command list. The gate caches its answer per process (S3), so
-// asking at registration time costs one PATH probe for the whole session.
-function codegraphCommandsAvailable() {
-  try {
-    return libRequire("codegraph-session.js").hasCodegraph(process.env) === true;
-  } catch {
-    return false;
-  }
-}
-
-function registerCodegraphCommands(pi) {
-  if (typeof pi?.registerCommand !== "function") return;
-  if (!codegraphCommandsAvailable()) return;
-  const render = (ctx, result) => {
-    const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
-    if (typeof notify === "function") notify(result.text, result.level);
-    return result;
-  };
-  // A command never throws into the host: the lib returns a failure line
-  // instead of rejecting, and anything unforeseen is swallowed here.
-  const run = async (ctx, work) => {
-    try {
-      render(ctx, await work());
-    } catch {
-      // Nothing to report that the lib did not already describe.
-    }
-  };
-  pi.registerCommand("codegraph-hook", {
-    description: "Turn the automatic edit/write CodeGraph sync on or off: on, off, status (no argument toggles)",
-    handler: async (args, ctx) => {
-      await run(ctx, () => libRequire("codegraph-commands.js").codegraphHook(args));
-    },
-  });
-  pi.registerCommand("codegraph-init", {
-    description: "Initialize a CodeGraph index in this session's checkout: codegraph init .",
-    handler: async (args, ctx) => {
-      await run(ctx, () => libRequire("codegraph-commands.js").codegraphInit(args, ctx, {
-        run: libRunner(libRequire("worktree-git.js")),
-      }));
-    },
-  });
-  pi.registerCommand("codegraph-sync", {
-    description: "Sync this session's checkout CodeGraph index: codegraph sync .",
-    handler: async (args, ctx) => {
-      await run(ctx, () => libRequire("codegraph-commands.js").codegraphSync(args, ctx, {
-        run: libRunner(libRequire("worktree-git.js")),
-      }));
-    },
-  });
-}
-
 export default function (pi) {
-  // A TOOL context has no session control, so `worktree_warp` queues the
-  // `/warp` COMMAND through this handle (`sendUserMessage` with
-  // prompt-template expansion) — the host-supported way in from a tool.
+  // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
+  // moves the session, so the command is where a handoff waits and lands.
   warpHandoffPi = pi;
   registerWarpMessageRenderer(pi);
   registerWarpCommand(pi);
   registerOddCommand(pi);
   registerIssuesCommand(pi);
-  registerCodegraphCommands(pi);
   pi.registerTool(worktreeCreateTool);
   pi.registerTool(worktreeListTool);
-  pi.registerTool(worktreeCloseTool);
-  pi.registerTool(worktreeWarpTool);
   if (typeof pi?.on !== "function") return;
   // The card click seam's session lifecycle: remember the live UI on every
   // session start and drop it on shutdown, so no render path ever reaches a
@@ -8147,30 +6702,13 @@ export default function (pi) {
     forgetPendingWarp(ctx);
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,
-  // so work still in flight drops instead of writing into the session that
-  // replaced it, and it drops the deferred creation setups with it — a late
-  // settle records and reports nothing.
+  // so startup work still in flight drops instead of writing into the session
+  // that replaced it.
   pi.on("session_shutdown", () => {
     startupEpoch += 1;
-    forgetCreationSetups();
   });
   pi.on("tool_call", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi));
   pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
-  // S1/S3: a successful edit or write asks for ONE background `codegraph sync`
-  // of that file's checkout. The call is fire-and-forget — never awaited, its
-  // decision never reaches the tool result, and a failure here is swallowed
-  // instead of surfacing as a broken edit.
-  pi.on("tool_result", (event) => {
-    try {
-      if (!event || (event.toolName !== "edit" && event.toolName !== "write")) return;
-      if (event.isError) return;
-      const filePath = event.input && event.input.path;
-      if (typeof filePath !== "string" || filePath.length === 0) return;
-      libRequire("codegraph-session.js").scheduleSync(filePath);
-    } catch {
-      // Index freshness is best effort and never touches the tool result.
-    }
-  });
   // S7: the ODD worktree rules ride the prompt options, appended after the
   // harness's own text. Sync mutation, so the host reads the final string.
   pi.on("before_agent_start", (event) => {
@@ -8210,4 +6748,4 @@ export default function (pi) {
   });
 }
 
-export { executeWorktreeCreate, executeWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, executeWorktreeWarpTool, emitOsc7, awaitPendingCreationSetups, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable };

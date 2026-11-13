@@ -1,9 +1,9 @@
 'use strict';
-// S2/S4 behavior of the three checkout tools, exercised through the REGISTERED
-// tool objects against a real temporary repository. Herdr is deliberately
-// unusable (HERDR_BIN_PATH names a binary that does not exist), so every
-// create/list/close below proves the plain git route: the package has no Herdr
-// requirement at all.
+// S2/S4 behavior of the two registered checkout tools, exercised through the
+// REGISTERED tool objects against a real temporary repository, plus the shared
+// removal the warp panel's ctrl+d drives (`executeWorktreeClose`) — the agent
+// tool that used to wrap it is unregistered (T6/S4), so the close cases call it
+// directly.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -12,7 +12,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
+const { EventEmitter } = require('node:events');
 const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
+// The SAME module instance the extension's libRequire reaches: liveness of a setup
+// task is process-wide state, so the test must observe the runner the front uses.
+const setupRunner = require(path.join(LIB_DIR, 'worktree-setup-runner.js'));
 
 const scratch = [];
 function track(dir) {
@@ -31,12 +35,9 @@ after(() => {
   }
 });
 
-// A deterministic `codegraph` shim keeps the creation hooks off the developer's
+// An empty bin directory ahead of PATH keeps a create off the developer's
 // PATH-dependent tooling; the rest of PATH is preserved so git still resolves.
 const HOOK_BIN = path.resolve(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-hookbin-'))));
-fs.writeFileSync(path.join(HOOK_BIN, 'codegraph'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-// No Herdr workspace can be created from this path: it does not exist.
-const NO_HERDR = path.join(os.tmpdir(), 'odd-worktree-no-such-herdr-binary');
 
 function git(cwd, args) {
   const out = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -85,6 +86,11 @@ function listWorktreePaths(root) {
 
 function branches(root) {
   return git(root, ['branch', '--format=%(refname:short)']).split('\n').filter(Boolean).sort();
+}
+
+// The abbreviation the ported listing and the create both print for the base commit.
+function shortHead(root) {
+  return git(root, ['rev-parse', '--short=7', 'HEAD']);
 }
 
 // S7/S8/S9: the active-session guard reads Gentle Shell's published presence
@@ -172,7 +178,6 @@ let tools;
 let extensionMod;
 let extensionHooks;
 before(async () => {
-  process.env.HERDR_BIN_PATH = NO_HERDR;
   process.env.GENTLE_WORKTREE_THREAD = 'thread-1';
   process.env.PATH = `${HOOK_BIN}${path.delimiter}${savedEnv.PATH || ''}`;
   delete process.env.GENTLE_PI_AGENT_HOME;
@@ -180,11 +185,10 @@ before(async () => {
   ({ tools, mod: extensionMod, hooks: extensionHooks } = await loadExtensionWithModule({}));
 });
 
-// The create is instant on BOTH fronts, and its deferred setup is tracked by the
-// module instance that registered the tool. `awaitPendingCreationSetups` is that
-// instance's own exported seam (the same one a shutdown path uses), so this file
-// loads the extension itself — same stubs, same lib override, same fake host as
-// the shared fixture — and keeps the module namespace beside the registrations.
+// The create is instant on BOTH fronts, and its setup runs on the ported
+// `lib/worktree-setup-runner.js` task rather than on any seam this file could
+// reach; this file therefore loads the extension itself — same stubs, same lib
+// override, same fake host as the shared fixture — and keeps the registrations.
 async function loadExtensionWithModule(pi) {
   process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-ext-'));
@@ -214,13 +218,16 @@ describe('worktree_list', () => {
     const { ctx } = makeCtx(repo);
     const result = await tools.get('worktree_list').execute('call-1', {}, undefined, undefined, ctx);
     assert.notEqual(result.isError, true, resultText(result));
-    assert.equal(
-      resultText(result),
-      `worktrees: 1 (name · branch · path)\nprincipal · main · ${fs.realpathSync(repo)}`,
-    );
-    assert.equal(result.details.count, 1);
-    assert.deepEqual(result.details.worktrees.map((row) => row.kind), ['principal']);
+    assert.deepEqual(resultText(result).split('\n'), [
+      `project: ${path.basename(repo)}`,
+      `path: ${fs.realpathSync(repo)}`,
+      `main: main ${shortHead(repo)} active · manual`,
+    ]);
+    assert.equal(result.details.worktrees.length, 1);
+    assert.deepEqual(result.details.worktrees.map((row) => row.provenance), ['manual']);
     assert.equal(result.details.worktrees[0].path, fs.realpathSync(repo));
+    assert.equal(result.details.hiddenOutside, 0);
+    assert.equal(result.details.hiddenGone, 0);
   });
 
   test('a directory outside a repository is refused by the help text', async () => {
@@ -234,117 +241,184 @@ describe('worktree_list', () => {
 
 describe('worktree_create', () => {
   for (const existing of [false, true]) {
-    test(`never invokes Herdr for ${existing ? 'an existing' : 'a new'} branch`, async () => {
+    test(`reports branchState ${existing ? 'existing' : 'created'} for a ${existing ? 'pre-existing' : 'new'} branch`, async () => {
       const repo = makeRepo();
       const branch = existing ? 'feat/existing' : 'feat/new';
       if (existing) git(repo, ['branch', branch]);
-      const gitLib = require('../lib/worktree-git.js');
-      const original = gitLib.runArgvAsync;
-      const binaries = [];
-      gitLib.runArgvAsync = async (bin, ...args) => {
-        binaries.push(bin);
-        return original(bin, ...args);
-      };
-      try {
-        const { ctx } = makeCtx(repo);
-        const result = await tools.get('worktree_create').execute('no-herdr', { branch, changes: 'none' }, undefined, undefined, ctx);
-        assert.notEqual(result.isError, true, resultText(result));
-        assert.equal(result.details.branchCreated, !existing);
-        assert.ok(binaries.includes('git'));
-        assert.ok(!binaries.includes(NO_HERDR), `unexpected Herdr execution: ${binaries}`);
-      } finally {
-        gitLib.runArgvAsync = original;
-      }
+      const { ctx } = makeCtx(repo);
+      const result = await tools.get('worktree_create').execute('call-branch', { branch, odd: 'odd-branch' }, undefined, undefined, ctx);
+      assert.notEqual(result.isError, true, resultText(result));
+      assert.equal(result.details.branchState, existing ? 'existing' : 'created');
+      assert.ok(branches(repo).includes(branch), 'the branch exists');
     });
   }
-  test('creates the checkout and its registry row without Herdr', async () => {
+  test('creates the checkout, its record and its registry row in the clone\u2019s one document', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
     const result = await tools.get('worktree_create').execute(
       'call-3',
-      { branch: 'feat/x', changes: 'none' },
+      { branch: 'feat/x', odd: 'odd-x' },
       undefined,
       undefined,
       ctx,
     );
     assert.notEqual(result.isError, true, resultText(result));
-    const rows = resultText(result).split('\n');
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-x');
-    assert.equal(rows[0], 'created: feat-x · feat/x');
-    assert.equal(rows[1], `path: ${target}`);
-    assert.equal(rows[2], 'registered: new');
+    // S7: the checkout IS the ODD, so the branch (`feat/x`) names nothing on disk.
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'odd-x');
+    assert.deepEqual(resultText(result).split('\n'), [
+      `worktree created: ${target}`,
+      'branch: feat/x (created)',
+      'odd: odd-x',
+      `base: main@${shortHead(repo)}`,
+      'worktree register failed',
+      'setup: skipped (no lockfile at root) · worktree is not ready yet',
+    ]);
+    assert.equal(result.details.name, 'odd-x', 'the printed name is the directory basename');
     assert.ok(fs.existsSync(target), 'the checkout exists on disk');
     assert.ok(listWorktreePaths(repo).includes(target), 'git knows the checkout');
     assert.ok(branches(repo).includes('feat/x'), 'the branch exists');
 
+    // S4: ONE clone document. The metadata record this create wrote and the registry
+    // row the panel and the live-session guard resolve names against both live in
+    // <git-common-dir>/pi-worktrees.json, so the two sides can never drift apart.
+    const commonDir = git(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    const document = JSON.parse(fs.readFileSync(path.join(commonDir, 'pi-worktrees.json'), 'utf8'));
+    assert.equal(document.kind, 'pi-odd-worktree.worktree-metadata');
+    assert.deepEqual(document.worktrees.map((row) => row.path), [target], 'the registry row is in the same document');
+    assert.equal(document.records[target].odd, 'odd-x', 'the metadata record is in the same document');
+    assert.equal(document.records[target].createdBy, 'thread-1');
+
     const listed = await tools.get('worktree_list').execute('call-4', {}, undefined, undefined, ctx);
-    assert.equal(
-      resultText(listed),
-      `worktrees: 2 (name · branch · path)\nprincipal · main · ${fs.realpathSync(repo)}\nfeat-x · feat/x · ${target}`,
-    );
+    assert.deepEqual(resultText(listed).split('\n'), [
+      `project: ${path.basename(repo)}`,
+      `path: ${fs.realpathSync(repo)}`,
+      `main: main ${shortHead(repo)} active · manual`,
+      '1 odd-x feat/x odd: odd-x skipped',
+    ]);
   });
 
-  test('refuses an invalid branch name and writes nothing', async () => {
+  test('an omitted odd is refused with the odd segment sentence and writes nothing', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const before = { paths: listWorktreePaths(repo), branches: branches(repo) };
+    const result = await tools.get('worktree_create').execute('call-nodd', { branch: 'feat/no-odd' }, undefined, undefined, ctx);
+    assert.equal(result.isError, true);
+    assert.equal(
+      resultText(result),
+      'invalid odd name: undefined\nodd must be a single path segment (letters, digits, dash, underscore, dot)',
+    );
+    assert.deepEqual({ paths: listWorktreePaths(repo), branches: branches(repo) }, before, 'nothing was created');
+    assert.equal(fs.existsSync(path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'no-odd')), false);
+  });
+
+  test('a refused odd writes neither section of the clone document', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const result = await tools.get('worktree_create').execute('call-nodd-doc', { branch: 'feat/no-odd-doc', odd: 'a/b' }, undefined, undefined, ctx);
+    assert.equal(result.isError, true);
+    assert.equal(
+      resultText(result),
+      'invalid odd name: "a/b"\nodd must be a single path segment (letters, digits, dash, underscore, dot)',
+    );
+    assert.equal(fs.existsSync(cloneDocument(repo)), false, 'no document is written');
+    assert.equal(fs.existsSync(path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`)), false, 'no checkout directory');
+  });
+
+  test('the registration line only prints when the host tool accepted the path', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const registered = [];
+    const hostCtx = {
+      ...ctx,
+      tools: [{ name: 'session_worktree_register' }],
+      executeTool: async (name, args) => {
+        registered.push([name, args]);
+        return { isError: false };
+      },
+    };
+    const result = await tools.get('worktree_create').execute('call-reg', { branch: 'feat/reg', odd: 'reg' }, undefined, undefined, hostCtx);
+    assert.notEqual(result.isError, true, resultText(result));
+    assert.match(resultText(result), /^worktree register in session$/m);
+    assert.equal(result.details.registered, true);
+    assert.deepEqual(registered, [
+      ['session_worktree_register', { path: path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'reg') }],
+    ]);
+  });
+
+  test('refuses an odd that is not one path segment, and writes nothing', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
     const before = { paths: listWorktreePaths(repo), branches: branches(repo) };
     const result = await tools.get('worktree_create').execute(
       'call-5',
-      { branch: 'bad..name', changes: 'none' },
+      { branch: 'feat/login', odd: '../escape' },
       undefined,
       undefined,
       ctx,
     );
     assert.equal(result.isError, true);
-    assert.match(resultText(result), /^invalid branch name/);
+    assert.equal(
+      resultText(result),
+      'invalid odd name: "../escape"\nodd must be a single path segment (letters, digits, dash, underscore, dot)',
+    );
     assert.deepEqual({ paths: listWorktreePaths(repo), branches: branches(repo) }, before);
   });
 
-  test('refuses a call that never states what to copy', async () => {
+  test('refuses the base branch as the worktree branch and writes nothing', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    const result = await tools.get('worktree_create').execute('call-6', { branch: 'feat/y' }, undefined, undefined, ctx);
+    const before = { paths: listWorktreePaths(repo), branches: branches(repo) };
+    const result = await tools.get('worktree_create').execute('call-6', { branch: 'main', odd: 'base' }, undefined, undefined, ctx);
     assert.equal(result.isError, true);
-    assert.match(resultText(result), /^invalid changes selection: 'changes' is required/);
-    assert.equal(listWorktreePaths(repo).length, 1, 'no checkout was added');
+    assert.equal(resultText(result), 'branch main is the base branch; pick the branch this worktree should work on');
+    assert.deepEqual({ paths: listWorktreePaths(repo), branches: branches(repo) }, before);
   });
 });
 
-describe('worktree_delete', () => {
+describe('the shared close the panel deletion drives', () => {
   test('removes the checkout and keeps the branch', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
     const created = await tools.get('worktree_create').execute(
       'call-7',
-      { branch: 'feat/close-me', changes: 'none' },
+      { branch: 'feat/close-me', odd: 'close-me' },
       undefined,
       undefined,
       ctx,
     );
     assert.notEqual(created.isError, true, resultText(created));
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-close-me');
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'close-me');
 
-    const closed = await tools.get('worktree_delete').execute('call-8', { name: 'feat-close-me' }, undefined, undefined, ctx);
+    const closed = await extensionMod.executeWorktreeClose({ name: 'feat-close-me' }, ctx);
     assert.notEqual(closed.isError, true, resultText(closed));
     assert.equal(
       resultText(closed),
-      `outcome: removed\nname: feat-close-me\nbranch: feat/close-me\npath: ${target}\nbranch state: kept`,
+      'removed: feat-close-me · feat/close-me\nbranch kept',
+      'the close reports the removal and the kept branch in its own words',
+    );
+    assert.deepEqual(
+      { path: closed.details.path, branch: closed.details.branch, removed: closed.details.removed, branchKept: closed.details.branchKept },
+      { path: target, branch: 'feat/close-me', removed: true, branchKept: true },
     );
     assert.equal(fs.existsSync(target), false, 'the checkout is gone');
     assert.equal(listWorktreePaths(repo).includes(target), false);
     assert.ok(branches(repo).includes('feat/close-me'), 'the branch is kept');
 
     const listed = await tools.get('worktree_list').execute('call-9', {}, undefined, undefined, ctx);
-    assert.equal(
-      resultText(listed),
-      `worktrees: 1 (name · branch · path)\nprincipal · main · ${fs.realpathSync(repo)}`,
-    );
+    // S4: the listing writes nothing, so the record of the removed checkout survives
+    // and is reported as a hidden gone row instead of being pruned behind the caller.
+    assert.deepEqual(resultText(listed).split('\n'), [
+      `project: ${path.basename(repo)}`,
+      `path: ${fs.realpathSync(repo)}`,
+      `main: main ${shortHead(repo)} active · manual`,
+      '1 registered worktree no longer exists (--all to list it)',
+    ]);
   });
 
   test('an unknown name is refused and leaves the repository untouched', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    const result = await tools.get('worktree_delete').execute('call-10', { name: 'nope' }, undefined, undefined, ctx);
+    const result = await extensionMod.executeWorktreeClose({ name: 'nope' }, ctx);
     assert.equal(result.isError, true);
     assert.equal(resultText(result), 'no registered worktree for "nope": no worktrees are registered');
     assert.equal(listWorktreePaths(repo).length, 1);
@@ -356,12 +430,12 @@ describe('worktree_delete', () => {
   test('another live Gentle Shell session in the target refuses the close', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('call-s1', { branch: 'feat/busy', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('call-s1', { branch: 'feat/busy', odd: 'busy' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-busy');
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'busy');
     const sessionHash = publishSession({ sessionId: 'worker-9', label: 'Worker', workspace: target });
 
-    const closed = await tools.get('worktree_delete').execute('call-s2', { name: 'feat-busy' }, undefined, undefined, ctx);
+    const closed = await extensionMod.executeWorktreeClose({ name: 'feat-busy' }, ctx);
     assert.equal(closed.isError, true, 'a live session blocks the close');
     const text = resultText(closed);
     assert.match(text, /working in that checkout/);
@@ -374,19 +448,19 @@ describe('worktree_delete', () => {
     assert.ok(listWorktreePaths(repo).includes(target), 'git still knows the checkout');
     assert.ok(branches(repo).includes('feat/busy'), 'the branch is untouched');
     const listed = await tools.get('worktree_list').execute('call-s3', {}, undefined, undefined, ctx);
-    assert.equal(resultText(listed).split('\n').length, 3, 'the registry row is kept');
+    assert.equal(resultText(listed).split('\n').length, 4, 'the registry row is kept and still listed');
   });
 
   test('this session\u2019s own checkout is refused with a warp instruction, never auto-warped', async () => {
     const repo = makeRepo();
     const { ctx: creator } = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('call-s4', { branch: 'feat/mine', changes: 'none' }, undefined, undefined, creator);
+    const created = await tools.get('worktree_create').execute('call-s4', { branch: 'feat/mine', odd: 'mine' }, undefined, undefined, creator);
     assert.notEqual(created.isError, true, resultText(created));
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-mine');
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'mine');
     // The session now STANDS in the checkout: no presence record is needed for
     // the deterministic cwd check to catch it.
     const { ctx } = makeCtx(target);
-    const closed = await tools.get('worktree_delete').execute('call-s5', { name: 'feat-mine' }, undefined, undefined, ctx);
+    const closed = await extensionMod.executeWorktreeClose({ name: 'feat-mine' }, ctx);
     assert.equal(closed.isError, true);
     const text = resultText(closed);
     assert.match(text, /this session is working in that checkout/);
@@ -400,11 +474,11 @@ describe('worktree_delete', () => {
   test('a blocked close never asks for approval', async () => {
     const repo = makeRepo();
     const { ctx: creator } = makeCtx(repo);
-    await tools.get('worktree_create').execute('call-s6', { branch: 'feat/blocked-ui', changes: 'none' }, undefined, undefined, creator);
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-blocked-ui');
+    await tools.get('worktree_create').execute('call-s6', { branch: 'feat/blocked-ui', odd: 'blocked-ui' }, undefined, undefined, creator);
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'blocked-ui');
     publishSession({ sessionId: 'ui-worker', label: 'UI Worker', workspace: target, incarnationIndex: 2 });
     const { ctx, confirmations } = makeUiCtx(repo);
-    const closed = await tools.get('worktree_delete').execute('call-s7', { name: 'feat/blocked-ui' }, undefined, undefined, ctx);
+    const closed = await extensionMod.executeWorktreeClose({ name: 'feat/blocked-ui' }, ctx);
     assert.equal(closed.isError, true);
     assert.equal(confirmations.length, 0, 'the session check runs before the approval question');
     assert.ok(fs.existsSync(target));
@@ -413,10 +487,10 @@ describe('worktree_delete', () => {
   test('a live session in another checkout does not block', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    await tools.get('worktree_create').execute('call-s8', { branch: 'feat/free', changes: 'none' }, undefined, undefined, ctx);
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-free');
+    await tools.get('worktree_create').execute('call-s8', { branch: 'feat/free', odd: 'free' }, undefined, undefined, ctx);
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'free');
     publishSession({ sessionId: 'other-worker', label: 'Other', workspace: repo, incarnationIndex: 3 });
-    const closed = await tools.get('worktree_delete').execute('call-s9', { name: 'feat-free' }, undefined, undefined, ctx);
+    const closed = await extensionMod.executeWorktreeClose({ name: 'feat-free' }, ctx);
     assert.notEqual(closed.isError, true, resultText(closed));
     assert.equal(fs.existsSync(target), false);
   });
@@ -424,12 +498,12 @@ describe('worktree_delete', () => {
   test('the refusal names the RAW session id joined from the transport registry', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    await tools.get('worktree_create').execute('call-s12', { branch: 'feat/joined', changes: 'none' }, undefined, undefined, ctx);
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-joined');
+    await tools.get('worktree_create').execute('call-s12', { branch: 'feat/joined', odd: 'joined' }, undefined, undefined, ctx);
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'joined');
     const sessionHash = publishSession({ sessionId: 'raw-worker-9', label: 'Raw', workspace: target, incarnationIndex: 7 });
     publishTransport({ sessionId: 'raw-worker-9' });
 
-    const closed = await tools.get('worktree_delete').execute('call-s13', { name: 'feat-joined' }, undefined, undefined, ctx);
+    const closed = await extensionMod.executeWorktreeClose({ name: 'feat-joined' }, ctx);
     assert.equal(closed.isError, true);
     const text = resultText(closed);
     assert.ok(text.includes('id raw-worker-9'), text);
@@ -442,11 +516,11 @@ describe('worktree_delete', () => {
   test('without a transport record the refusal discloses that the id could not be resolved', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    await tools.get('worktree_create').execute('call-s14', { branch: 'feat/unjoined', changes: 'none' }, undefined, undefined, ctx);
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-unjoined');
+    await tools.get('worktree_create').execute('call-s14', { branch: 'feat/unjoined', odd: 'unjoined' }, undefined, undefined, ctx);
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'unjoined');
     const sessionHash = publishSession({ sessionId: 'unjoined-worker', label: 'Unjoined', workspace: target, incarnationIndex: 8 });
 
-    const closed = await tools.get('worktree_delete').execute('call-s15', { name: 'feat-unjoined' }, undefined, undefined, ctx);
+    const closed = await extensionMod.executeWorktreeClose({ name: 'feat-unjoined' }, ctx);
     assert.equal(closed.isError, true);
     const text = resultText(closed);
     assert.ok(text.includes(sessionHash.slice(0, 12)), text);
@@ -458,165 +532,408 @@ describe('worktree_delete', () => {
   test('live-but-unattributable evidence is disclosed in the close output and never blocks', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    await tools.get('worktree_create').execute('call-s16', { branch: 'feat/advisory', changes: 'none' }, undefined, undefined, ctx);
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-advisory');
+    await tools.get('worktree_create').execute('call-s16', { branch: 'feat/advisory', odd: 'advisory' }, undefined, undefined, ctx);
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'advisory');
     publishSession({ sessionId: 'legacy-peer', label: 'Legacy', workspace: null, heartbeat: Date.now(), incarnationIndex: 9, discovery: false });
 
-    const closed = await tools.get('worktree_delete').execute('call-s17', { name: 'feat-advisory' }, undefined, undefined, ctx);
+    const closed = await extensionMod.executeWorktreeClose({ name: 'feat-advisory' }, ctx);
     assert.notEqual(closed.isError, true, resultText(closed));
-    assert.match(resultText(closed), /published no workspace/);
-    assert.match(resultText(closed), /best effort/);
+    assert.deepEqual(
+      closed.details.warnings.filter((warning) => /published no workspace|best effort/.test(warning)).length,
+      closed.details.warnings.filter((warning) => /published no workspace/.test(warning)).length,
+      `every caveat says it is best effort: ${JSON.stringify(closed.details.warnings)}`,
+    );
+    assert.ok(closed.details.warnings.some((warning) => /published no workspace/.test(warning)), JSON.stringify(closed.details.warnings));
     assert.equal(fs.existsSync(target), false, 'the unattributable record does not block removal');
   });
 
   test('a stale record is disclosed as best effort and does not block', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    await tools.get('worktree_create').execute('call-s10', { branch: 'feat/stale', changes: 'none' }, undefined, undefined, ctx);
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-stale');
+    await tools.get('worktree_create').execute('call-s10', { branch: 'feat/stale', odd: 'stale' }, undefined, undefined, ctx);
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'stale');
     publishSession({
       sessionId: 'crashed-worker', label: 'Crashed', workspace: target,
       heartbeat: Date.now() - 10 * 60 * 1000, incarnationIndex: 4,
     });
-    const closed = await tools.get('worktree_delete').execute('call-s11', { name: 'feat-stale' }, undefined, undefined, ctx);
+    const closed = await extensionMod.executeWorktreeClose({ name: 'feat-stale' }, ctx);
     assert.notEqual(closed.isError, true, resultText(closed));
-    const text = resultText(closed);
-    assert.match(text, /stale Gentle Shell presence record ignored/);
-    assert.match(text, /best effort/);
+    const caveats = closed.details.warnings || [];
+    assert.ok(caveats.some((warning) => /stale Gentle Shell presence record ignored/.test(warning)), JSON.stringify(caveats));
+    assert.ok(caveats.some((warning) => /best effort/.test(warning)), JSON.stringify(caveats));
     assert.equal(fs.existsSync(target), false);
     assert.ok(branches(repo).includes('feat/stale'), 'the branch is kept');
   });
 });
 
 // ---------------------------------------------------------------------------
-// The create is INSTANT on both fronts: the checkout and its registry row are
-// the answer, and the slow half of the setup (dependency install, `codegraph
-// init`) finishes behind it in a tracked task. Nothing is skipped, and the tool
-// front never notifies a UI its call did not ask for.
+// S4/S22: the create starts the setup chain on this package's own tracked task.
+// The tool returns in milliseconds, the record already says `running`, and the
+// ported table's command finishes afterwards. The tool front never notifies a UI
+// its call did not ask for.
 // ---------------------------------------------------------------------------
-describe('an instant create finishes its setup in the background', { concurrency: false }, () => {
-  // A `codegraph` that is visibly SLOW: it records that it started, waits, then
-  // records that it finished. A create that awaited the setup could never return
-  // between the two lines.
-  function slowCodegraph(markerPath) {
-    const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-slowbin-')));
-    fs.writeFileSync(
-      path.join(dir, 'codegraph'),
-      `#!/bin/sh\nprintf 'started\\n' >> '${markerPath}'\nsleep 0.5\nprintf 'finished\\n' >> '${markerPath}'\n`,
-      { mode: 0o755 },
-    );
-    return dir;
-  }
-
-  function markerFile() {
-    return path.join(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-marker-'))), 'codegraph.log');
-  }
-
-  function readMarker(marker) {
-    return fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8') : '';
-  }
-
+describe('the create reports the setup state it can back', { concurrency: false }, () => {
   function binWith(name, script) {
     const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-bin-')));
     fs.writeFileSync(path.join(dir, name), script, { mode: 0o755 });
     return dir;
   }
 
-  test('the result returns first, the codegraph step still runs to the end, and a later create reports it', async () => {
+  test('a lockfile starts the ported install, and the create returns before it finishes', async () => {
     const repo = makeRepo();
-    const marker = markerFile();
+    const markerDir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-marker-')));
+    const argvLog = path.join(markerDir, 'argv.log');
+    const doneLog = path.join(markerDir, 'done.log');
+    fs.writeFileSync(path.join(repo, 'package-lock.json'), '{}\n');
+    git(repo, ['add', 'package-lock.json']);
+    git(repo, ['commit', '-m', 'lockfile']);
+    // The shim records its argv at once, then sleeps, so "finished" is an
+    // observation about the child, not about a string that happens to match.
+    const bin = binWith('npm', [
+      '#!/bin/sh',
+      `printf '%s\\n' "$*" >> '${argvLog}'`,
+      "printf 'npm starting\\n'",
+      'sleep 1',
+      "printf 'npm done\\n'",
+      `printf '%s\\n' "$*" >> '${doneLog}'`,
+      '',
+    ].join('\n'));
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'setup');
+    const storePath = path.join(
+      git(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
+      'pi-worktrees.json',
+    );
     const savedPath = process.env.PATH;
-    process.env.PATH = `${slowCodegraph(marker)}${path.delimiter}${savedPath}`;
+    process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
+    let logDirectory;
     try {
       const { ctx, notifications } = makeCtx(repo);
-      const created = await tools.get('worktree_create').execute('instant-1', { branch: 'feat/instant', changes: 'none' }, undefined, undefined, ctx);
+      const returnedAt = Date.now();
+      const created = await tools.get('worktree_create').execute('setup-1', { branch: 'feat/setup', odd: 'setup' }, undefined, undefined, ctx);
       assert.notEqual(created.isError, true, resultText(created));
-      const text = resultText(created);
-      assert.match(text, /^created: feat-instant · feat\/instant$/m);
-      assert.match(text, /^setup: running in the background \(install, codegraph\)$/m, text);
-      assert.match(text, /^codegraph: pending /m, 'the create states the step is not done yet');
-      assert.equal(created.details.setupPending, true);
-      assert.equal(/finished/.test(readMarker(marker)), false, 'the create returned only after its setup had finished');
-      assert.ok(fs.existsSync(path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-instant')), 'the checkout is usable at return time');
 
-      // Nothing is skipped: the deferred task still reaches the end of the
-      // codegraph step, observed through the module's own
-      // `awaitPendingCreationSetups` seam.
-      await extensionMod.awaitPendingCreationSetups();
-      assert.equal(readMarker(marker).includes('finished'), true, 'the background codegraph step never ran to the end');
+      // 1. The create prints the state the record holds at that moment.
+      assert.match(resultText(created), /^setup: running \(npm ci\) · worktree is not ready yet$/m);
+      assert.equal(created.details.setup.status, 'running');
+      assert.equal(created.details.setup.command, 'npm ci');
 
-      // The settled lifecycle is readable through the tool surface: asking again
-      // for the same checkout reports the state and the steps that really ran.
-      const replay = await tools.get('worktree_create').execute('instant-2', { branch: 'feat/instant', changes: 'none' }, undefined, undefined, ctx);
-      assert.notEqual(replay.isError, true, resultText(replay));
-      assert.match(resultText(replay), /^registered: unchanged$/m);
-      assert.match(resultText(replay), /^setup: finished$/m, resultText(replay));
+      // 2. Observed ordering: the command has NOT finished when the call returns.
+      assert.equal(fs.existsSync(doneLog), false, 'the install was still running when the create returned');
+
+      // 4. Exactly one log for the step, under the system temp directory, and
+      //    never inside either checkout.
+      const logPath = created.details.setup.logPath;
+      logDirectory = path.dirname(logPath);
+      assert.deepEqual(fs.readdirSync(logDirectory), ['step-1.log'], 'one log file for the one step');
+      assert.ok(logPath.startsWith(`${os.tmpdir()}${path.sep}`), `the log is under the system temp directory (${logPath})`);
+      assert.equal(logPath.startsWith(`${repo}${path.sep}`), false, 'the log is never inside the main checkout');
+      assert.equal(logPath.startsWith(`${target}${path.sep}`), false, 'the log is never inside the created checkout');
+
+      // 5. The record settles afterwards, later than the create's return.
+      const readSetup = () => JSON.parse(fs.readFileSync(storePath, 'utf8')).records[target].setup;
+      let settled = readSetup();
+      const deadline = Date.now() + 10_000;
+      while (settled.status === 'running' && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        settled = readSetup();
+      }
+      assert.equal(settled.status, 'ready', `the install settled ready (${settled.detail || settled.status})`);
       assert.ok(
-        replay.details.setup.steps.some((step) => step.name === 'codegraph-init' && step.status === 'done'),
-        `the codegraph step is reported as done: ${JSON.stringify(replay.details.setup.steps)}`,
+        Date.parse(settled.endedAt) > returnedAt,
+        `the install ended after the create returned (${settled.endedAt})`,
       );
+      assert.equal(fs.readFileSync(logPath, 'utf8').includes('npm done'), true, 'the log carries the command output');
+
+      // 3. The ported table's command ran exactly once, with the argv it chose.
+      assert.deepEqual(fs.readFileSync(argvLog, 'utf8').trim().split('\n'), ['ci'], 'one npm invocation, argv ci');
+      assert.equal(fs.readFileSync(doneLog, 'utf8').trim(), 'ci', 'the command completed exactly once');
+
+      // 6. No notification the call did not ask for.
       assert.deepEqual(notifications, [], 'the tool front never notifies a UI its call did not ask for');
     } finally {
       process.env.PATH = savedPath;
+      if (logDirectory !== undefined) {
+        try { fs.rmSync(logDirectory, { recursive: true, force: true }); } catch { /* best effort */ }
+      }
     }
   });
 
-  test('only a caller that asks for the notice gets it, and a session that ends gets none', async () => {
+  test('a root with no lockfile is skipped for its own reason', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    const notes = [];
-    const notify = (message, level) => { notes.push([level, message]); };
-    const created = await extensionMod.executeWorktreeCreate(
-      { branch: 'feat/notified', changes: 'none' },
-      ctx,
-      { backgroundHooks: true, notify },
-    );
+    const created = await tools.get('worktree_create').execute('setup-2', { branch: 'feat/plain', odd: 'plain' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
-    await extensionMod.awaitPendingCreationSetups();
-    assert.deepEqual(notes, [['info', 'warp: setup finished for feat/notified: codegraph initialized']]);
+    assert.match(resultText(created), /^setup: skipped \(no lockfile at root\) · worktree is not ready yet$/m);
+    assert.deepEqual(created.details.setup, { status: 'skipped', steps: [], detail: 'no lockfile at root' });
+  });
+});
 
-    // A setup that settles after its session ended records and reports nothing:
-    // the session it belonged to is gone, so there is no UI to write into.
-    const marker = markerFile();
-    const savedPath = process.env.PATH;
-    process.env.PATH = `${slowCodegraph(marker)}${path.delimiter}${savedPath}`;
-    try {
-      const late = await extensionMod.executeWorktreeCreate(
-        { branch: 'feat/late', changes: 'none' },
-        ctx,
-        { backgroundHooks: true, notify },
-      );
-      assert.notEqual(late.isError, true, resultText(late));
-      notes.length = 0;
-      // The shutdown hooks of the SAME instance that owns the deferred task: it
-      // is the session that created the checkout that ends here.
-      for (const [, handler] of extensionHooks.filter(([name]) => name === 'session_shutdown')) await handler({}, ctx);
-      await extensionMod.awaitPendingCreationSetups();
-      assert.deepEqual(notes, [], 'a setup that settles after shutdown reports nothing');
-    } finally {
-      process.env.PATH = savedPath;
+// ---- S5: the two tools draw their own cards ----
+//
+// The card module and the substrate have their own suites; this block proves the
+// WIRING. The registered `worktree_create` and `worktree_list` definitions the
+// host received must carry both render hooks, and each hook must draw its own
+// tool's card at the requested width. Measurement is the host's
+// `@earendil-works/pi-tui` seam, injected here exactly as the extension injects
+// it at render time. With no metrics the same hooks answer plain text: a host
+// without that package still shows the tool's own answer and never throws.
+const ANSI = /\x1b\[[0-9;]*m/g;
+const stripAnsi = (value) => String(value).replace(ANSI, '');
+const cardColumns = (value) => [...stripAnsi(value)].length;
+
+// The same plain-ASCII text seam tools/worktree-cards.test.js injects: this
+// package ships no node_modules, so measurement is always a seam.
+const cardMetrics = {
+  visibleWidth: (value) => cardColumns(value),
+  truncateToWidth(value, width, ellipsis = '') {
+    if (width <= 0) return '';
+    const chars = [...stripAnsi(value)];
+    if (chars.length <= width) return value;
+    const tail = ellipsis ?? '';
+    return chars.slice(0, Math.max(0, width - [...tail].length)).join('') + tail;
+  },
+  wrapTextWithAnsi(value, width) {
+    const words = stripAnsi(value).split(' ');
+    if (width <= 0) return [stripAnsi(value)];
+    const lines = [];
+    let current = '';
+    for (const word of words) {
+      const candidate = current === '' ? word : `${current} ${word}`;
+      if ([...candidate].length <= width) {
+        current = candidate;
+        continue;
+      }
+      if (current !== '') {
+        lines.push(current);
+        current = '';
+      }
+      if ([...word].length <= width) {
+        current = word;
+        continue;
+      }
+      const rest = [...word];
+      while (rest.length > width) lines.push(rest.splice(0, width).join(''));
+      current = rest.join('');
+    }
+    lines.push(current);
+    return lines;
+  },
+};
+
+const CARD_THEME = { fg: (_role, value) => value };
+
+function assertCardFrame(rows, width) {
+  assert.ok(rows.length >= 2, 'a card draws at least a top and a bottom row');
+  for (const row of rows) {
+    assert.equal(cardColumns(row), width, `"${stripAnsi(row)}" is not ${width} columns wide`);
+  }
+  assert.ok(stripAnsi(rows[0]).startsWith('╭'), 'the card opens with a rounded frame');
+  assert.ok(stripAnsi(rows[rows.length - 1]).startsWith('╰'), 'the card closes with a rounded frame');
+}
+
+function assertResultFrame(rows, width) {
+  for (const row of rows) {
+    assert.equal(cardColumns(row), width, `"${stripAnsi(row)}" is not ${width} columns wide`);
+  }
+  assert.ok(stripAnsi(rows[0]).startsWith('│'), 'the result body sits inside the frame the call opened');
+  assert.ok(stripAnsi(rows[rows.length - 1]).startsWith('╰'), 'the result closes the card');
+}
+
+describe('the two tools draw their own card (S5)', { concurrency: false }, () => {
+  after(() => { extensionMod.setWorktreeToolCardMetrics(undefined); });
+
+  test('both registered definitions carry the call and result hooks', () => {
+    for (const name of ['worktree_create', 'worktree_list']) {
+      const tool = tools.get(name);
+      assert.equal(typeof tool.renderCall, 'function', `${name} renders its call`);
+      assert.equal(typeof tool.renderResult, 'function', `${name} renders its result`);
     }
   });
 
-  test('a problem in the deferred setup is a warning, never an error', async () => {
+  test('worktree_create renders its call and result as a framed card', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    const notes = [];
-    const savedPath = process.env.PATH;
-    process.env.PATH = `${binWith('codegraph', '#!/bin/sh\nexit 1\n')}${path.delimiter}${savedPath}`;
+    const result = await tools.get('worktree_create').execute('card-create', { branch: 'feat/card', odd: 'card' }, undefined, undefined, ctx);
+    assert.notEqual(result.isError, true, resultText(result));
+
+    extensionMod.setWorktreeToolCardMetrics(cardMetrics);
+    const tool = tools.get('worktree_create');
+    const state = {};
+    const callRows = tool.renderCall({ branch: 'feat/card' }, CARD_THEME, { state }).render(60);
+    assertCardFrame(callRows, 60);
+    assert.match(stripAnsi(callRows[0]), /worktree create/);
+    assert.match(stripAnsi(callRows[0]), /feat\/card/);
+
+    const resultRows = tool.renderResult(result, { expanded: false }, CARD_THEME, { state, durationMs: 1234 }).render(60);
+    assertResultFrame(resultRows, 60);
+    assert.ok(
+      stripAnsi(resultRows.join('\n')).includes('worktree created:'),
+      'the card body is the tool’s own answer, never a reformat',
+    );
+  });
+
+  test('worktree_list renders its call and result as a framed card', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const result = await tools.get('worktree_list').execute('card-list', {}, undefined, undefined, ctx);
+    assert.notEqual(result.isError, true, resultText(result));
+
+    extensionMod.setWorktreeToolCardMetrics(cardMetrics);
+    const tool = tools.get('worktree_list');
+    const state = {};
+    const callRows = tool.renderCall({}, CARD_THEME, { state }).render(60);
+    assertCardFrame(callRows, 60);
+    assert.match(stripAnsi(callRows[0]), /worktree list/);
+
+    const resultRows = tool.renderResult(result, { expanded: true }, CARD_THEME, { state, durationMs: 250 }).render(60);
+    assertResultFrame(resultRows, 60);
+    assert.ok(
+      stripAnsi(resultRows.join('\n')).includes(`project: ${path.basename(repo)}`),
+      'the card body is the tool’s own answer, never a reformat',
+    );
+  });
+
+  test('without host metrics both hooks fall back to plain text and never throw', () => {
+    extensionMod.setWorktreeToolCardMetrics(null);
+    const tool = tools.get('worktree_list');
+    assert.deepEqual(
+      tool.renderCall({ all: true }, CARD_THEME, { state: {} }).render(60),
+      ['worktree list all'],
+      'the plain call names the tool and its one argument',
+    );
+    const result = { content: [{ type: 'text', text: 'project: demo\npath: /tmp/demo' }], details: {} };
+    assert.deepEqual(
+      tool.renderResult(result, { expanded: false }, CARD_THEME, { state: {} }).render(60),
+      ['project: demo', 'path: /tmp/demo'],
+      'the plain result IS the tool text',
+    );
+  });
+});
+
+// ---- S12: the list can derive `interrupted` ----
+//
+// `pending` and `interrupted` are part of the closed vocabulary, so they must be
+// reachable. The reconciliation asks a `setupJobLiveness(jobId)` seam, and the
+// front answers from this process's own setup runner: a record's job is live
+// exactly while the runner still runs a task for that record's checkout. A job a
+// dead session left behind therefore reads `interrupted`, while a live one keeps
+// reading `running`, and neither read rewrites the stored record.
+function fakeSetupSpawn() {
+  const calls = [];
+  const spawn = (bin, args, options) => {
+    const child = new EventEmitter();
+    child.kill = () => {};
+    calls.push({ bin, args, options, child });
+    return child;
+  };
+  return { spawn, calls };
+}
+
+const SETUP_SEAMS = {
+  entries: async () => ['package-lock.json'],
+  hasBinary: async (binary) => binary === 'npm',
+};
+
+// The runner's timeout and kill-grace timers are unref'd on purpose: a background
+// setup task must never keep the host process alive. A test that awaits a
+// settlement carried by those timers would leave the event loop empty while its
+// own promise is still pending, and the test runner on Node 18/20/22 refuses that
+// with "Promise resolution is still pending but the event loop has already
+// resolved" (Node 24 tolerates it). One ref'd keep-alive, held only for the
+// duration of the await and cleared in `finally`, keeps those runners honest
+// while production keeps its unref'd timers.
+async function holdLoop(promise) {
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    return await promise;
+  } finally {
+    clearInterval(keepAlive);
+  }
+}
+
+function cloneDocument(repo) {
+  const commonDir = git(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  return path.join(commonDir, 'pi-worktrees.json');
+}
+
+describe('worktree_list derives the setup liveness of a record (S12)', { concurrency: false }, () => {
+  test('a live setup job keeps its record `running`', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('live-setup', { branch: 'feat/live', odd: 'live' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    const target = created.details.path;
+    const storePath = cloneDocument(repo);
+    fs.writeFileSync(path.join(target, 'package-lock.json'), '{}\n');
+    const logRoot = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-live-log-')));
+    const { spawn, calls } = fakeSetupSpawn();
+    const started = await setupRunner.startWorktreeSetup({
+      path: target,
+      name: 'live',
+      storePath,
+      sessionId: 'thread-1',
+      copiedChanges: 0,
+      seams: SETUP_SEAMS,
+      spawn,
+      logRoot,
+      now: () => new Date(),
+    });
     try {
-      const created = await extensionMod.executeWorktreeCreate(
-        { branch: 'feat/broken', changes: 'none' },
-        ctx,
-        { backgroundHooks: true, notify: (message, level) => { notes.push([level, message]); } },
-      );
-      assert.notEqual(created.isError, true, resultText(created));
-      await extensionMod.awaitPendingCreationSetups();
-      assert.deepEqual(notes.map(([level]) => level), ['warning'], JSON.stringify(notes));
-      assert.match(notes[0][1], /^warp: setup for feat\/broken finished with problems: codegraph-init: codegraph init failed/);
-      assert.match(notes[0][1], / — the checkout at .+ is usable$/);
+      assert.equal(started.started, true);
+      assert.equal(setupRunner.isWorktreeSetupRunning(target), true);
+      const listed = await tools.get('worktree_list').execute('live-setup-list', {}, undefined, undefined, ctx);
+      assert.notEqual(listed.isError, true, resultText(listed));
+      assert.match(resultText(listed), /^1 live feat\/live odd: live running \(npm ci\)$/m);
     } finally {
-      process.env.PATH = savedPath;
+      // Settle the fake child, so the task never outlives this test.
+      calls[0].child.emit('close', 0, null);
+      await holdLoop(started.settled);
     }
+    assert.equal(setupRunner.isWorktreeSetupRunning(target), false);
+  });
+
+  test('a `running` record whose job is gone derives `interrupted` without a write', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('dead-setup', { branch: 'feat/dead', odd: 'dead' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    const target = created.details.path;
+    const storePath = cloneDocument(repo);
+
+    const document = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+    const deadSetup = { status: 'running', steps: [{ command: 'npm ci', status: 'running' }], command: 'npm ci', jobId: '0-0-1' };
+    document.records[target].setup = deadSetup;
+    fs.writeFileSync(storePath, JSON.stringify(document));
+
+    const listed = await tools.get('worktree_list').execute('dead-setup-list', {}, undefined, undefined, ctx);
+    assert.notEqual(listed.isError, true, resultText(listed));
+    assert.match(resultText(listed), /^1 dead feat\/dead odd: dead interrupted$/m);
+    assert.doesNotMatch(resultText(listed), /running/, 'a dead job never reads busy');
+
+    // The observation is derived, never persisted: the read leaves the record alone.
+    const after = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+    assert.deepEqual(after.records[target].setup, deadSetup, 'the list never rewrites the stored record');
+  });
+
+  test('a record another session created is never guessed `interrupted`', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('foreign-setup', { branch: 'feat/foreign', odd: 'foreign' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    const target = created.details.path;
+    const storePath = cloneDocument(repo);
+
+    // This process's runner holds no job for the checkout, but the record is not
+    // ours: another Pi process may be installing it right now, so the truthful
+    // answer is `running`, never `interrupted` derived from ignorance.
+    const document = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+    document.records[target].createdBy = 'another-live-session';
+    document.records[target].setup = { status: 'running', steps: [{ command: 'npm ci', status: 'running' }], command: 'npm ci', jobId: '9-9-9' };
+    fs.writeFileSync(storePath, JSON.stringify(document));
+
+    const listed = await tools.get('worktree_list').execute('foreign-setup-list', {}, undefined, undefined, ctx);
+    assert.notEqual(listed.isError, true, resultText(listed));
+    assert.match(resultText(listed), /^1 foreign feat\/foreign odd: foreign running \(npm ci\)$/m);
+    assert.doesNotMatch(resultText(listed), /interrupted/, 'this process cannot tell, so it never claims death');
   });
 });

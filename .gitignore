@@ -1,1 +1,7 @@
 node_modules/
+
+# ODD task documents are part of the change record, not scratch: the global
+# excludes file ignores `odd`, which would keep every feature document out of
+# the repository it describes.
+!odd/
+!odd/**

@@ -100,8 +100,6 @@ async function loadExtension() {
     on: (event, handler) => { hooks.push([event, handler]); return () => {}; },
   };
   process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
-  // The worktree plan's own Herdr calls stay isolated from a live workspace.
-  process.env.HERDR_BIN_PATH = path.join(dir, 'no-such-herdr-binary');
   const mod = await import(pathToFileURL(copy).href);
   const factory = mod.default;
   factory(api);

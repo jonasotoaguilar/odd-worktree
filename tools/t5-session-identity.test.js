@@ -14,8 +14,9 @@
 // names that session. Nothing else may: no label, no prefix, no saved history.
 //
 // These cases are written against the PUBLIC surfaces only — the two exported
-// guard functions and the registered `worktree_delete` tool — so they keep
-// working if internals move. Every fixture is a throwaway repository and agent
+// guard functions and the extension's exported `executeWorktreeClose` (the seam
+// the warp panel's ctrl+d drives; the `worktree_delete` tool is unregistered,
+// T6/S4) — so they keep working if internals move. Every fixture is a throwaway repository and agent
 // home under the system temp directory; no real worktree, presence store or
 // session is touched.
 
@@ -26,7 +27,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { loadExtension } = require('./fixtures/load-extension.js');
+const { pathToFileURL } = require('node:url');
+const { LIB_DIR, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
 
 const guard = require('../lib/worktree-session-guard.js');
 
@@ -191,22 +193,37 @@ describe('S7 identity join: hash -> raw session id', () => {
   });
 });
 
-describe('S7 identity join through the registered tool', () => {
+describe('S7 identity join through the removal the panel drives', () => {
   const savedEnv = { ...process.env };
-  const NO_HERDR = path.join(os.tmpdir(), 't5-identity-no-such-herdr');
   const HOOK_BIN = track(fs.mkdtempSync(path.join(os.tmpdir(), 't5-identity-hookbin-')));
-  fs.writeFileSync(path.join(HOOK_BIN, 'codegraph'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   const AGENT_HOME = agentHome();
 
   let tools;
+  let mod;
   before(async () => {
-    process.env.HERDR_BIN_PATH = NO_HERDR;
     process.env.GENTLE_WORKTREE_THREAD = 't5-thread';
     delete process.env.GENTLE_PI_AGENT_HOME;
     process.env.PI_CODING_AGENT_DIR = AGENT_HOME;
     process.env.PATH = `${HOOK_BIN}${path.delimiter}${process.env.PATH || ''}`;
     ({ tools } = await loadExtension({}));
+    mod = await loadStubbedModule();
   });
+
+  // The removal these refusals are observed through is the extension module's
+  // exported close — the seam the warp panel's ctrl+d drives. The
+  // `worktree_delete` TOOL that used to wrap it is unregistered (T6/S4), so the
+  // namespace is loaded beside the registrations: same stubs, same lib override.
+  async function loadStubbedModule() {
+    process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 't5-identity-mod-'));
+    try {
+      const copy = path.join(dir, 'odd-worktree-tools.mjs');
+      fs.writeFileSync(copy, stubbedSource());
+      return await import(pathToFileURL(copy).href);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
 
   after(() => {
     for (const key of Object.keys(process.env)) {
@@ -246,16 +263,16 @@ describe('S7 identity join through the registered tool', () => {
     return (result.content || []).map((part) => (part && part.text) || '').join('\n');
   }
 
-  test('the tool refusal shows the raw id and leaves the checkout, branch and registry intact', async () => {
+  test('the refusal shows the raw id and leaves the checkout, branch and registry intact', async () => {
     const repo = makeRepo('joined');
     const ctx = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('t5-c1', { branch: 'feat/t5-joined', changes: 'none' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('t5-c1', { branch: 'feat/t5-joined', odd: 't5-joined' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-t5-joined');
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 't5-joined');
     const sessionHash = publishPresence(AGENT_HOME, { sessionId: 'raw-session-7', label: 'Worker', workspace: target, heartbeat: Date.now(), incarnationIndex: 4 });
     publishTransport(AGENT_HOME, { sessionId: 'raw-session-7' });
 
-    const closed = await tools.get('worktree_delete').execute('t5-c2', { name: 'feat-t5-joined' }, undefined, undefined, ctx);
+    const closed = await mod.executeWorktreeClose({ name: 'feat-t5-joined' }, ctx);
     assert.equal(closed.isError, true);
     const text = resultText(closed);
     assert.ok(text.includes('id raw-session-7'), text);
@@ -267,17 +284,17 @@ describe('S7 identity join through the registered tool', () => {
     assert.ok(git(repo, ['worktree', 'list', '--porcelain']).includes(target), 'git still lists it');
     assert.ok(git(repo, ['branch', '--format=%(refname:short)']).split('\n').includes('feat/t5-joined'), 'the branch survives');
     const listed = await tools.get('worktree_list').execute('t5-c3', {}, undefined, undefined, ctx);
-    assert.equal(resultText(listed).split('\n').length, 3, 'the registry row survives');
+    assert.equal(resultText(listed).split('\n').length, 4, 'the registry row survives');
   });
 
-  test('the tool refusal discloses an unresolved id instead of inventing one', async () => {
+  test('the refusal discloses an unresolved id instead of inventing one', async () => {
     const repo = makeRepo('unjoined');
     const ctx = makeCtx(repo);
-    await tools.get('worktree_create').execute('t5-c4', { branch: 'feat/t5-unjoined', changes: 'none' }, undefined, undefined, ctx);
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-t5-unjoined');
+    await tools.get('worktree_create').execute('t5-c4', { branch: 'feat/t5-unjoined', odd: 't5-unjoined' }, undefined, undefined, ctx);
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 't5-unjoined');
     const sessionHash = publishPresence(AGENT_HOME, { sessionId: 'raw-session-8', label: 'Worker', workspace: target, heartbeat: Date.now(), incarnationIndex: 5 });
 
-    const closed = await tools.get('worktree_delete').execute('t5-c5', { name: 'feat-t5-unjoined' }, undefined, undefined, ctx);
+    const closed = await mod.executeWorktreeClose({ name: 'feat-t5-unjoined' }, ctx);
     assert.equal(closed.isError, true);
     const text = resultText(closed);
     assert.ok(text.includes(`presence ${sessionHash.slice(0, 12)}`), text);
@@ -289,18 +306,23 @@ describe('S7 identity join through the registered tool', () => {
   test('the clear path shows the best-effort notices and still removes the checkout', async () => {
     const repo = makeRepo('notices');
     const ctx = makeCtx(repo);
-    await tools.get('worktree_create').execute('t5-c6', { branch: 'feat/t5-notice', changes: 'none' }, undefined, undefined, ctx);
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'feat-t5-notice');
+    await tools.get('worktree_create').execute('t5-c6', { branch: 'feat/t5-notice', odd: 't5-notice' }, undefined, undefined, ctx);
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 't5-notice');
     // A live peer whose discovery sidecar never published a workspace: it can
     // never be attributed to this checkout, and it must never block.
     publishPresence(AGENT_HOME, { sessionId: 'legacy-peer', label: 'Legacy', heartbeat: Date.now(), incarnationIndex: 6, discovery: false });
 
-    const closed = await tools.get('worktree_delete').execute('t5-c7', { name: 'feat-t5-notice' }, undefined, undefined, ctx);
+    const closed = await mod.executeWorktreeClose({ name: 'feat-t5-notice' }, ctx);
     assert.notEqual(closed.isError, true, resultText(closed));
-    const text = resultText(closed);
-    assert.match(text, /published no workspace/);
-    assert.match(text, /best effort/);
     assert.ok(Array.isArray(closed.details.warnings) && closed.details.warnings.length > 0, 'the notice travels in details');
+    assert.ok(
+      closed.details.warnings.some((warning) => /published no workspace/.test(warning)),
+      JSON.stringify(closed.details.warnings),
+    );
+    assert.ok(
+      closed.details.warnings.every((warning) => /best effort/.test(warning)),
+      `every caveat is disclosed as best effort: ${JSON.stringify(closed.details.warnings)}`,
+    );
     assert.equal(fs.existsSync(target), false, 'the notice never blocks the removal');
   });
 });

@@ -91,6 +91,23 @@ function clock() {
 	};
 }
 
+// S25 and the timeout path settle through the runner's own timers, and those are
+// unref'd on purpose: a background setup task must never keep the host process
+// alive. A test that awaits such a settlement would leave the event loop empty
+// while its own promise is still pending, and the test runner on Node 18/20/22
+// refuses that with "Promise resolution is still pending but the event loop has
+// already resolved" (Node 24 tolerates it). One ref'd keep-alive, held only for
+// the duration of the await and cleared in `finally`, keeps those runners honest
+// while production keeps its unref'd timers.
+async function holdLoop(promise) {
+	const keepAlive = setInterval(() => {}, 1_000);
+	try {
+		return await promise;
+	} finally {
+		clearInterval(keepAlive);
+	}
+}
+
 const NPM_SEAMS = {
 	entries: async () => ['package-lock.json'],
 	hasBinary: async (command) => command === 'npm',
@@ -144,7 +161,7 @@ test('S22/S24: the create returns while the install runs and the record settles 
 	// The command settles after the call that started it already returned.
 	time.advance(65_000);
 	calls[0].child.emit('close', 0, null);
-	const settled = await started.settled;
+	const settled = await holdLoop(started.settled);
 
 	assert.equal(settled.recorded, true, 'the terminal write was proven by re-reading the record');
 	assert.equal(isWorktreeSetupRunning(clone.worktreePath), false, 'a settled task clears its record');
@@ -179,7 +196,7 @@ test('S23/S24: a non-zero exit settles failed with its exit code, log and elapse
 
 	time.advance(5_000);
 	calls[0].child.emit('close', 2, null);
-	const settled = await started.settled;
+	const settled = await holdLoop(started.settled);
 
 	assert.equal(settled.recorded, true);
 	const failed = readWorktreeSetupState({ storePath: clone.storePath, path: clone.worktreePath });
@@ -217,7 +234,7 @@ test('S21: a binary missing from PATH is the ported skipped case, not a failure'
 		steps: [],
 		detail: 'npm not found',
 	});
-	await started.settled;
+	await holdLoop(started.settled);
 	assert.deepEqual(notices, [], 'a skip has nothing to announce');
 });
 
@@ -251,7 +268,7 @@ test('S25: a command that never finishes is terminated, recorded and announced o
 	assert.equal(isWorktreeSetupRunning(clone.worktreePath), true);
 
 	time.advance(20);
-	const settled = await started.settled;
+	const settled = await holdLoop(started.settled);
 	assert.deepEqual(calls[0].child.killed, ['SIGTERM', 'SIGKILL'], 'the hung child is terminated');
 
 	const failed = readWorktreeSetupState({ storePath: clone.storePath, path: clone.worktreePath });
@@ -289,8 +306,8 @@ test('S25: a second start for a checkout already running refuses instead of inst
 	assert.equal(worktreeSetupSummary(second.setup), 'running (npm ci)');
 
 	calls[0].child.emit('close', 0, null);
-	await first.settled;
-	await second.settled;
+	await holdLoop(first.settled);
+	await holdLoop(second.settled);
 	assert.equal(notices.length, 1, 'the refused start announces nothing');
 });
 
@@ -310,12 +327,12 @@ test('S25: two checkouts at once are two independent tracked tasks', async () =>
 	assert.equal(isWorktreeSetupRunning(two.worktreePath), true);
 
 	calls[1].child.emit('close', 0, null);
-	await second.settled;
+	await holdLoop(second.settled);
 	assert.equal(readWorktreeSetupState({ storePath: one.storePath, path: one.worktreePath }).status, 'running');
 	assert.equal(readWorktreeSetupState({ storePath: two.storePath, path: two.worktreePath }).status, 'ready');
 
 	calls[0].child.emit('close', 1, null);
-	await first.settled;
+	await holdLoop(first.settled);
 	assert.equal(readWorktreeSetupState({ storePath: one.storePath, path: one.worktreePath }).status, 'failed');
 });
 
@@ -326,7 +343,7 @@ test('S23: a checkout with no metadata record starts nothing and claims nothing'
 
 	assert.equal(started.started, false, 'an unrecordable setup is never started');
 	assert.equal(calls.length, 0);
-	const settled = await started.settled;
+	const settled = await holdLoop(started.settled);
 	assert.equal(settled.recorded, false, 'the unrecorded state is reported, never claimed');
 	assert.equal(readWorktreeSetupState({ storePath: clone.storePath, path: clone.worktreePath }), undefined);
 });
@@ -359,7 +376,7 @@ test('S24: a two-step chain announces exactly once, when the last step settles',
 
 	time.advance(2_000);
 	calls[1].child.emit('close', 0, null);
-	await started.settled;
+	await holdLoop(started.settled);
 	assert.equal(notices.length, 1, 'one notice for the whole chain');
 	assert.equal(notices[0][1], worktreeSetupReadyText({ name: 'demo', steps: 2, durationMs: 3_000 }));
 	const ready = readWorktreeSetupState({ storePath: clone.storePath, path: clone.worktreePath });

@@ -834,6 +834,23 @@ const SETUP_SEAMS = {
   hasBinary: async (binary) => binary === 'npm',
 };
 
+// The runner's timeout and kill-grace timers are unref'd on purpose: a background
+// setup task must never keep the host process alive. A test that awaits a
+// settlement carried by those timers would leave the event loop empty while its
+// own promise is still pending, and the test runner on Node 18/20/22 refuses that
+// with "Promise resolution is still pending but the event loop has already
+// resolved" (Node 24 tolerates it). One ref'd keep-alive, held only for the
+// duration of the await and cleared in `finally`, keeps those runners honest
+// while production keeps its unref'd timers.
+async function holdLoop(promise) {
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    return await promise;
+  } finally {
+    clearInterval(keepAlive);
+  }
+}
+
 function cloneDocument(repo) {
   const commonDir = git(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   return path.join(commonDir, 'pi-worktrees.json');
@@ -870,7 +887,7 @@ describe('worktree_list derives the setup liveness of a record (S12)', { concurr
     } finally {
       // Settle the fake child, so the task never outlives this test.
       calls[0].child.emit('close', 0, null);
-      await started.settled;
+      await holdLoop(started.settled);
     }
     assert.equal(setupRunner.isWorktreeSetupRunning(target), false);
   });

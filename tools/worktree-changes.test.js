@@ -1,7 +1,7 @@
 'use strict';
 // S61/T47 tests: lib/worktree-changes.js — the shared pending-changes
-// helper (dirty summary + safe copy). Real isolated git repos; no live
-// Herdr/gh/Pi/UI. Every assertion goes through the public functions,
+// helper (dirty summary + safe copy). Real isolated git repos; the helper
+// shells out to git only. Every assertion goes through the public functions,
 // never internals.
 
 const { test, describe, after } = require('node:test');
@@ -321,9 +321,8 @@ describe('copyChanges', { concurrency: false }, () => {
 // PENDING edit must still travel there — and the source branch's COMMITTED
 // delta must not: diffing the destination HEAD against the source working tree
 // would import it and overwrite destination-only content. Both consumers (the
-// human `/herdr-gentle:warp` command and the agent `worktree_warp` /
-// `worktree_create` tools) go through this one helper, so these cases are the
-// regression evidence for both.
+// human `/warp` command and the `worktree_create` tool) go through this one
+// helper, so these cases are the regression evidence for both.
 describe('copyChanges onto a destination built from another base', { concurrency: false }, () => {
   const EIGHT = 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n';
 

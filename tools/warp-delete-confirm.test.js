@@ -479,7 +479,6 @@ describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () =
   const crypto = require('node:crypto');
   const { loadExtension } = require('./fixtures/load-extension.js');
 
-  const NO_HERDR = path.join(os.tmpdir(), 'odd-worktree-no-such-herdr-binary');
   const HOOK_BIN = track(fs.mkdtempSync(path.join(os.tmpdir(), 'wt-confirm-hookbin-')));
   const AGENT_HOME = track(fs.mkdtempSync(path.join(os.tmpdir(), 'wt-confirm-agent-home-')));
   const PRESENCE = path.join(AGENT_HOME, 'gentle-agents', 'presence');
@@ -490,7 +489,6 @@ describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () =
   let restorePath = null;
 
   before(async () => {
-    process.env.HERDR_BIN_PATH = NO_HERDR;
     delete process.env.GENTLE_PI_AGENT_HOME;
     process.env.PI_CODING_AGENT_DIR = AGENT_HOME;
     restorePath = process.env.PATH;

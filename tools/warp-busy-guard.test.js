@@ -48,7 +48,6 @@ after(() => {
 });
 
 const HOOK_BIN = path.resolve(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-busy-hookbin-'))));
-const NO_HERDR = path.join(os.tmpdir(), 'odd-worktree-no-such-herdr-binary');
 const AGENT_HOME = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-busy-agent-home-')));
 const PRESENCE = path.join(AGENT_HOME, 'gentle-agents', 'presence');
 const SESSION_ID = 'thread-1';
@@ -216,7 +215,6 @@ let tools;
 let hooks;
 let mod;
 before(async () => {
-  process.env.HERDR_BIN_PATH = NO_HERDR;
   process.env.GENTLE_WORKTREE_THREAD = SESSION_ID;
   process.env.PATH = `${HOOK_BIN}${path.delimiter}${savedEnv.PATH || ''}`;
   delete process.env.GENTLE_PI_AGENT_HOME;

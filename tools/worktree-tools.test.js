@@ -3,9 +3,7 @@
 // REGISTERED tool objects against a real temporary repository, plus the shared
 // removal the warp panel's ctrl+d drives (`executeWorktreeClose`) — the agent
 // tool that used to wrap it is unregistered (T6/S4), so the close cases call it
-// directly. Herdr is deliberately unusable (HERDR_BIN_PATH names a binary that
-// does not exist), so every create/list/close below proves the plain git route:
-// the package has no Herdr requirement at all.
+// directly.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -36,8 +34,6 @@ after(() => {
 // An empty bin directory ahead of PATH keeps a create off the developer's
 // PATH-dependent tooling; the rest of PATH is preserved so git still resolves.
 const HOOK_BIN = path.resolve(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-hookbin-'))));
-// No Herdr workspace can be created from this path: it does not exist.
-const NO_HERDR = path.join(os.tmpdir(), 'odd-worktree-no-such-herdr-binary');
 
 function git(cwd, args) {
   const out = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -178,7 +174,6 @@ let tools;
 let extensionMod;
 let extensionHooks;
 before(async () => {
-  process.env.HERDR_BIN_PATH = NO_HERDR;
   process.env.GENTLE_WORKTREE_THREAD = 'thread-1';
   process.env.PATH = `${HOOK_BIN}${path.delimiter}${savedEnv.PATH || ''}`;
   delete process.env.GENTLE_PI_AGENT_HOME;
@@ -242,27 +237,15 @@ describe('worktree_list', () => {
 
 describe('worktree_create', () => {
   for (const existing of [false, true]) {
-    test(`never invokes Herdr for ${existing ? 'an existing' : 'a new'} branch`, async () => {
+    test(`reports branchState ${existing ? 'existing' : 'created'} for a ${existing ? 'pre-existing' : 'new'} branch`, async () => {
       const repo = makeRepo();
       const branch = existing ? 'feat/existing' : 'feat/new';
       if (existing) git(repo, ['branch', branch]);
-      const gitLib = require('../lib/worktree-git.js');
-      const original = gitLib.runArgvAsync;
-      const binaries = [];
-      gitLib.runArgvAsync = async (bin, ...args) => {
-        binaries.push(bin);
-        return original(bin, ...args);
-      };
-      try {
-        const { ctx } = makeCtx(repo);
-        const result = await tools.get('worktree_create').execute('no-herdr', { branch, odd: 'no-herdr' }, undefined, undefined, ctx);
-        assert.notEqual(result.isError, true, resultText(result));
-        assert.equal(result.details.branchState, existing ? 'existing' : 'created');
-        assert.ok(binaries.includes('git'));
-        assert.ok(!binaries.includes(NO_HERDR), `unexpected Herdr execution: ${binaries}`);
-      } finally {
-        gitLib.runArgvAsync = original;
-      }
+      const { ctx } = makeCtx(repo);
+      const result = await tools.get('worktree_create').execute('call-branch', { branch, odd: 'odd-branch' }, undefined, undefined, ctx);
+      assert.notEqual(result.isError, true, resultText(result));
+      assert.equal(result.details.branchState, existing ? 'existing' : 'created');
+      assert.ok(branches(repo).includes(branch), 'the branch exists');
     });
   }
   test('creates the checkout, its record and its registry row in the clone\u2019s one document', async () => {

@@ -195,14 +195,12 @@ describe('S7 identity join: hash -> raw session id', () => {
 
 describe('S7 identity join through the removal the panel drives', () => {
   const savedEnv = { ...process.env };
-  const NO_HERDR = path.join(os.tmpdir(), 't5-identity-no-such-herdr');
   const HOOK_BIN = track(fs.mkdtempSync(path.join(os.tmpdir(), 't5-identity-hookbin-')));
   const AGENT_HOME = agentHome();
 
   let tools;
   let mod;
   before(async () => {
-    process.env.HERDR_BIN_PATH = NO_HERDR;
     process.env.GENTLE_WORKTREE_THREAD = 't5-thread';
     delete process.env.GENTLE_PI_AGENT_HOME;
     process.env.PI_CODING_AGENT_DIR = AGENT_HOME;

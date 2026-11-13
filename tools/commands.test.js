@@ -32,7 +32,6 @@ after(() => {
 });
 
 const HOOK_BIN = path.resolve(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-cmd-hookbin-'))));
-const NO_HERDR = path.join(os.tmpdir(), 'odd-worktree-no-such-herdr-binary');
 
 function git(cwd, args) {
   const out = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -74,7 +73,6 @@ let commands;
 let tools;
 let mod;
 before(async () => {
-  process.env.HERDR_BIN_PATH = NO_HERDR;
   process.env.GENTLE_WORKTREE_THREAD = 'thread-1';
   process.env.PATH = `${HOOK_BIN}${path.delimiter}${savedEnv.PATH || ''}`;
   const sent = [];

@@ -1108,8 +1108,8 @@ describe('S2: one-row key legends', { concurrency: false }, () => {
 
 // S11/T9: every picker footer and header paints through the ONE shared palette
 // (lib/tui-paint.js) with the injected theme — a shortcut KEY (a button) is
-// accent+bold and its description muted, a TITLE takes the reference UI's `dim`
-// title role and stays bold, a static label is dim, a live value (the typed
+// accent+bold and its description muted, a TITLE takes the `dim` title role
+// and stays bold, a static label is dim, a live value (the typed
 // query, the typed name) is the normal text role, a count is muted, and a rule
 // takes the border role. A hostile or absent theme degrades to plain text, and
 // the one-row compaction keeps the key role at every width.
@@ -1117,9 +1117,8 @@ describe('S2: one-row key legends', { concurrency: false }, () => {
 // with their skip messages, so the palette's error role has no call site here.
 describe('S11: the shared palette', { concurrency: false }, () => {
   const ROLE_SGR = { accent: 96, customMessageLabel: 33, muted: 90, dim: 2, border: 34, error: 91, text: 39, mdHeading: 35 };
-  // T9 (S13): the title role is the reference UI's `dim` (its Agents title:
-  // ~/.config/herdr-app/mods/agents/main.js:413), asserted LITERALLY — the test
-  // pins the decision instead of reading it back out of the table.
+  // T9 (S13): the title role is `dim` and stays bold, asserted LITERALLY — the
+  // test pins the decision instead of reading it back out of the table.
   const TITLE_PAINT = '\x1b[1m\x1b[33m';
   const VALUE_PAINT = '\x1b[39m';
 

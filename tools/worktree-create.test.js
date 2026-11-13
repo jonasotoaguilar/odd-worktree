@@ -563,7 +563,7 @@ test('S16/S18: the copy_changes line follows the hooks summary and the details c
 
 	assert.deepEqual(view.text.split('\n').slice(5), [
 		'hooks: 1 applied, 1 skipped',
-		'copy_changes: 3 changes copied (main keeps its uncommitted changes)',
+		'copy_changes: 3 changes copied',
 	]);
 	assert.deepEqual(view.details.copyChanges, { copied: 3, failed: [] });
 });
@@ -584,7 +584,7 @@ test('S18: a conflict is reported with its failing paths in the copy_changes lin
 
 	assert.deepEqual(view.text.split('\n').slice(5), [
 		'hooks: 1 failed: copy_changes (could not copy: conflict.txt)',
-		'copy_changes: 1 changes copied (main keeps its uncommitted changes); failed: conflict.txt',
+		'copy_changes: 1 changes copied; failed: conflict.txt',
 	]);
 	assert.deepEqual(view.details.copyChanges, { copied: 1, failed: ['conflict.txt'] });
 });
@@ -601,7 +601,7 @@ test('S16/S21/S25: the setup line follows the hooks summary and comes before the
 	assert.deepEqual(view.text.split('\n').slice(5), [
 		'hooks: 1 applied, 1 skipped',
 		'setup: running (pnpm install) · worktree is not ready yet',
-		'copy_changes: 2 changes copied (main keeps its uncommitted changes)',
+		'copy_changes: 2 changes copied',
 	]);
 	assert.deepEqual(view.details.setup, setup, 'the details carry the persisted setup state the line was derived from');
 });

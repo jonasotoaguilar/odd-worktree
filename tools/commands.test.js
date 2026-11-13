@@ -258,7 +258,7 @@ describe('the /warp panel create front', () => {
     const out = await mod.executeWorktreeCreate({ branch: 'feat/all-copy', odd: 'all-copy', changes: 'all' }, makeCtx(repo));
     assert.notEqual(out.isError, true, resultText(out));
     const text = resultText(out);
-    assert.match(text, /^copy_changes: 1 changes copied \(main keeps its uncommitted changes\)$/m);
+    assert.match(text, /^copy_changes: 1 changes copied$/m);
     assert.doesNotMatch(text, /^copied:/m, 'the panel line belongs to the path mode only');
     assert.equal(fs.readFileSync(path.join(target, 'pending.txt'), 'utf8'), 'pending\n', 'the ported hook copied it once');
   });

@@ -664,6 +664,11 @@ async function runPortedWorktreeCreate(input, ctx) {
   // that succeeded is never reported as failed.
   const hooksResult = await hooks.runWorktreeHooks({
     mainRoot,
+    // S18: `copy_changes` copies the uncommitted delta of the checkout the call was
+    // made in — the session's own checkout, which is not necessarily the canonical
+    // main worktree — so a session standing on another branch copies its own line of
+    // work instead of main's. `mainRoot` still feeds the main-relative steps.
+    changesRoot: cwd,
     path: decision.plan.path,
     odd: decision.plan.odd,
     copyChanges: decision.plan.copyChanges,
@@ -899,11 +904,11 @@ const worktreeCreateTool = defineTool({
   name: "worktree_create",
   label: "Worktree Create",
   exposure: "codemode",
-  description: "Create a Git worktree for this clone at <repo-parent>/<repo-name>-worktrees/<odd>, starting from the base branch (main when it exists). `odd` names the ODD this worktree serves and is REQUIRED: it IS the checkout's directory name. The branch is created with the worktree when it does not exist and checked out when it is free; no command ever passes --force.",
+  description: "Create a Git worktree for this clone at <repo-parent>/<repo-name>-worktrees/<odd>, starting from the base branch (main when it exists). `odd` names the ODD this worktree serves and is REQUIRED: it IS the checkout's directory name. The branch is created with the worktree when it does not exist and checked out when it is free; no command ever passes --force. `copy_changes` carries the uncommitted changes of the checkout the call was made from — not necessarily the canonical main checkout — and that source checkout keeps them.",
   parameters: Type.Object({
     odd: Type.String({ description: "The ODD this worktree serves, and the name of its directory under <repo-name>-worktrees. One path segment (letters, digits, dash, underscore, dot). It need not exist as a file." }),
     branch: Type.String({ description: "The branch this worktree works on. It is created with the worktree when it does not exist and checked out when it is free." }),
-    copy_changes: opt(Type.Boolean({ description: "Omitted or false copies nothing. true carries this clone's uncommitted changes, staged and unstaged plus untracked non-ignored files, into the new worktree and leaves them in the main worktree too." })),
+    copy_changes: opt(Type.Boolean({ description: "Omitted or false copies nothing. true carries the uncommitted changes of the checkout the call was made from — the one the session stands in, not necessarily the main checkout — staged and unstaged plus untracked non-ignored files, into the new worktree; the source checkout keeps them." })),
   }),
   ...worktreeToolRenderers("worktree_create"),
   async execute(toolCallId, params, signal, onUpdate, ctx) {

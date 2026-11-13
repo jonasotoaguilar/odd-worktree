@@ -88,9 +88,10 @@ as commands, and the two `worktree_*` tools are offered to the agent.
      the base.
    - The answer and the list both print the ODD; a list row for a record written
      before the field existed prints `odd: -`.
-   - `copy_changes: true` carries this clone's uncommitted work — staged,
-     unstaged and untracked non-ignored files — into the new checkout, and leaves
-     it in the main checkout too.
+   - `copy_changes: true` carries the uncommitted work of the checkout the call
+     was made from — the one the session stands in, not necessarily the main
+     checkout — into the new checkout: staged, unstaged and untracked
+     non-ignored files. The source checkout keeps those changes.
    - **A create is instant.** The checkout, its registry row, its record, the
      session registration and the preparation hooks (submodules, local inputs,
      `copy_changes`, build-cache and asset links) settle before the answer. The

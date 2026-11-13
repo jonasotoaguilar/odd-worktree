@@ -279,6 +279,17 @@ the session that owns it. The panel and the live-session guard read it.
 outcomes and setup state, keyed by canonical path and reconciled against
 `git worktree list` on every read.
 
+A version boundary runs through that document. An older release of this package
+reads it safely — it requires `worktrees` to be an array and ignores `records` —
+but its writers build an explicit `{ version, worktrees }` payload, so the next
+registry write from an older process drops `records` and `kind`. Mixing this
+version with an older one, or rolling back to an older one after creating
+worktrees here, therefore keeps the checkouts and their branches and loses what
+`records` held: each worktree's ODD, creator and setup history. Nothing here can
+prevent that, because the deletion happens in the older code, and no migration
+or recovery exists. Finish or park work before switching versions, and treat a
+rollback as losing the metadata, not just the feature.
+
 Session names derived from an ODD write, and the warp's fork/resume bookkeeping,
 travel in the Pi session files the host already owns. The setup logs live under
 the system temp directory (`odd-worktree-setup-*`), one directory per create.

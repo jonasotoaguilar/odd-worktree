@@ -211,7 +211,9 @@ describe('the /warp panel create front', () => {
       const repo = makeRepo();
       if (existing) git(repo, ['branch', branch]);
       const target = portedDestination(repo, name);
-      const ui = warpCreateUi({ ok: true, type: 'feat', name, odd: name });
+      // S1: the panel answers with the type and the ODD, and the branch is
+      // derived from them — there is no second name in the completion.
+      const ui = warpCreateUi({ ok: true, type: 'feat', odd: name });
       notifications.length = 0;
       await commands.get('warp').handler('', makeCtx(repo, { custom: ui.custom }));
       assert.ok(fs.existsSync(target), `the /warp create made no checkout (notifications: ${JSON.stringify(notifications)})`);

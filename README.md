@@ -123,7 +123,7 @@ as commands, and the two `worktree_*` tools are offered to the agent.
 | --- | --- |
 | `↑`/`↓`, `j`/`k` | Move the selection |
 | `enter` | Warp to the focused checkout (`enter` on the `view all worktrees` row opens the extended list) |
-| `c` | Open the create flow: pick the change type, type the change name, then the ODD — `tab`/`←`/`→` walk the three fields, `↑`/`↓` pick the type or step between fields, `enter` on the ODD creates, `esc` cancels |
+| `c` | Open the create flow: pick the change type, then the ODD — `tab`/`←`/`→` switch between the two fields, `↑`/`↓` pick from the active list, the ODD list's first entry is `new odd` (the only one that takes a typed name) and its other entries are the ODDs that exist in `main`, `enter` on the ODD creates, `esc` cancels |
 | `ctrl+d` | Ask to delete the focused checkout; the extension owns the confirmation, the evidence and the removal |
 | `v` | Open the extended list of every other checkout (`↑`/`↓`, `pgUp`/`pgDn`, `enter`, `T` or `/` to filter, `esc` back) |
 | `r` | Reload the listing |

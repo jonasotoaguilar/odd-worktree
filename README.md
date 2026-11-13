@@ -11,7 +11,7 @@ with `git` as the only external requirement.
 
 | Surface | Kind | What it does |
 | --- | --- | --- |
-| `worktree_create` | tool | Creates `<repo-parent>/<repo-name>-worktrees/<name>` on `branch`, registers the checkout in this session and in the clone's document, runs the preparation hooks, and starts the install as a tracked background task. |
+| `worktree_create` | tool | Creates `<repo-parent>/<repo-name>-worktrees/<odd>` on `branch`, registers the checkout in this session and in the clone's document, runs the preparation hooks, and starts the install as a tracked background task. |
 | `worktree_list` | tool | Read-only listing: the main checkout first and unnumbered, then numbered rows with ODD, branch and setup state, plus footers counting what it hides. |
 | `/warp` | panel | Moves this session to another checkout, and removes one. No argument opens the selector (list, create, delete, extended list); `/warp <name>` jumps straight there. A session with no conversation yet changes checkout **silently** — no fork, no `Warp · moved` card, nothing to carry — and warping back from it is the same empty case. |
 | `/odd-list` | panel | Two-pane reader of this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
@@ -21,12 +21,13 @@ Moving the session and removing a checkout are **human actions only**: `/warp`
 is the only front for both (its `ctrl+d` removes, the selector and a typed name
 move), and no agent tool does either. The agent can create and list.
 
-A checkout's **directory name** is `<name>`: what `worktree_create` was given, or
-by default the branch with its first segment dropped and every remaining
-separator turned into a dash — `feat/worktree-tools` becomes `worktree-tools`,
-`feat/a/b` becomes `a-b`, and a branch with no `/` is the name itself. Its path is
-`<repo-parent>/<repo-name>-worktrees/<name>`, beside the principal checkout, so a
-worktree is never nested inside another checkout.
+A checkout has **one identity: its ODD**. Its directory is
+`<repo-parent>/<repo-name>-worktrees/<odd>`, beside the principal checkout, so a
+worktree is never nested inside another checkout and the folder names the ODD the
+checkout serves. `branch` is only the git branch: it is created when it does not
+exist and adopted when it does. Two checkouts for one ODD cannot coexist — a
+second create for the same ODD is refused by `worktree path already exists: …`,
+which is the model, not a limitation.
 
 ## Quick Start
 
@@ -61,8 +62,13 @@ as commands, and the two `worktree_*` tools are offered to the agent.
 
 ## Core Workflow
 
-1. **Create** — `worktree_create` with a `branch`, or press `c` in `/warp`.
-   - `branch` is required; `odd`, `name` and `copy_changes` are optional.
+1. **Create** — `worktree_create` with an `odd` and a `branch`, or press `c` in
+   `/warp`.
+   - `odd` and `branch` are required; `copy_changes` is optional.
+   - `odd` IS the checkout's directory: one path segment (letters, digits, dash,
+     underscore, dot), nothing that could escape the directory it names. The
+     branch never names a directory, so `branch: feat/login` with
+     `odd: login-ui` lands in `…-worktrees/login-ui`.
    - The base is the local `main` when it resolves, else the branch `origin/HEAD`
      names, else `init.defaultBranch`. When none of them resolves, the create is
      refused with `could not resolve a base branch: tried main, origin/HEAD,
@@ -72,15 +78,16 @@ as commands, and the two `worktree_*` tools are offered to the agent.
      `branch … is already checked out in …` (use another branch, or work in that
      worktree), and `branch main is the base branch; pick the branch this worktree
      should work on`.
-   - A whitespace-only `odd` or `name` is refused here — a deliberate divergence
-     from the reference branch, where it would create a directory nobody can see
-     and a record the store must then refuse.
+   - A whitespace-only or otherwise unusable `odd` is refused here with
+     `invalid odd name: …` — a deliberate divergence from the reference branch,
+     where it would create a directory nobody can see and a record the store must
+     then refuse. An omitted `odd` gets the same sentence: the schema asks for it,
+     and the plan refuses it if anything reaches the core directly.
    - An existing branch is adopted as-is — the answer's second line says
      `branch: <branch> (existing)`, and `(created)` when the branch was made from
      the base.
-   - An omitted `odd` is a real absence, not a missing value: neither the record
-     nor the registry row carries the key, and both the create's answer and the
-     list print `odd: -`.
+   - The answer and the list both print the ODD; a list row for a record written
+     before the field existed prints `odd: -`.
    - `copy_changes: true` carries this clone's uncommitted work — staged,
      unstaged and untracked non-ignored files — into the new checkout, and leaves
      it in the main checkout too.
@@ -115,7 +122,7 @@ as commands, and the two `worktree_*` tools are offered to the agent.
 | --- | --- |
 | `↑`/`↓`, `j`/`k` | Move the selection |
 | `enter` | Warp to the focused checkout (`enter` on the `view all worktrees` row opens the extended list) |
-| `c` | Open the create flow |
+| `c` | Open the create flow: pick the change type, type the change name, then the ODD — `tab`/`←`/`→` walk the three fields, `↑`/`↓` pick the type or step between fields, `enter` on the ODD creates, `esc` cancels |
 | `ctrl+d` | Ask to delete the focused checkout; the extension owns the confirmation, the evidence and the removal |
 | `v` | Open the extended list of every other checkout (`↑`/`↓`, `pgUp`/`pgDn`, `enter`, `T` or `/` to filter, `esc` back) |
 | `r` | Reload the listing |

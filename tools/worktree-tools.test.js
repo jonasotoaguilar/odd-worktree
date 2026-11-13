@@ -263,7 +263,8 @@ describe('worktree_create', () => {
       ctx,
     );
     assert.notEqual(result.isError, true, resultText(result));
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'x');
+    // S7: the checkout IS the ODD, so the branch (`feat/x`) names nothing on disk.
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'odd-x');
     assert.deepEqual(resultText(result).split('\n'), [
       `worktree created: ${target}`,
       'branch: feat/x (created)',
@@ -272,6 +273,7 @@ describe('worktree_create', () => {
       'worktree register failed',
       'setup: skipped (no lockfile at root) · worktree is not ready yet',
     ]);
+    assert.equal(result.details.name, 'odd-x', 'the printed name is the directory basename');
     assert.ok(fs.existsSync(target), 'the checkout exists on disk');
     assert.ok(listWorktreePaths(repo).includes(target), 'git knows the checkout');
     assert.ok(branches(repo).includes('feat/x'), 'the branch exists');
@@ -291,42 +293,35 @@ describe('worktree_create', () => {
       `project: ${path.basename(repo)}`,
       `path: ${fs.realpathSync(repo)}`,
       `main: main ${shortHead(repo)} active · manual`,
-      '1 x feat/x odd: odd-x skipped',
+      '1 odd-x feat/x odd: odd-x skipped',
     ]);
   });
 
-  test('an omitted odd keeps the fixed line order and prints odd: -', async () => {
+  test('an omitted odd is refused with the odd segment sentence and writes nothing', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
+    const before = { paths: listWorktreePaths(repo), branches: branches(repo) };
     const result = await tools.get('worktree_create').execute('call-nodd', { branch: 'feat/no-odd' }, undefined, undefined, ctx);
-    assert.notEqual(result.isError, true, resultText(result));
-    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'no-odd');
-    assert.deepEqual(resultText(result).split('\n').slice(0, 5), [
-      `worktree created: ${target}`,
-      'branch: feat/no-odd (created)',
-      'odd: -',
-      `base: main@${shortHead(repo)}`,
-      'worktree register failed',
-    ]);
-    assert.equal(result.details.odd, null, 'the plan carries no odd');
-    assert.equal(result.details.name, 'no-odd');
-    assert.ok(fs.existsSync(target));
+    assert.equal(result.isError, true);
+    assert.equal(
+      resultText(result),
+      'invalid odd name: undefined\nodd must be a single path segment (letters, digits, dash, underscore, dot)',
+    );
+    assert.deepEqual({ paths: listWorktreePaths(repo), branches: branches(repo) }, before, 'nothing was created');
+    assert.equal(fs.existsSync(path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'no-odd')), false);
   });
 
-  test('an omitted odd is absent from BOTH sections of the clone document', async () => {
+  test('a refused odd writes neither section of the clone document', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    const result = await tools.get('worktree_create').execute('call-nodd-doc', { branch: 'feat/no-odd-doc' }, undefined, undefined, ctx);
-    assert.notEqual(result.isError, true, resultText(result));
-    const target = result.details.path;
-    const document = JSON.parse(fs.readFileSync(cloneDocument(repo), 'utf8'));
-    assert.equal(Object.prototype.hasOwnProperty.call(document.records[target], 'odd'), false,
-      'the record omits the absent association');
-    const row = document.worktrees.find((entry) => entry.path === target);
-    assert.ok(row, 'the registry row is in the same document');
-    assert.equal(Object.prototype.hasOwnProperty.call(row, 'odd'), false,
-      'the registry row omits it too: one absence, one spelling');
-    assert.equal(JSON.stringify(document).includes('"odd":null'), false, 'no null spelling anywhere');
+    const result = await tools.get('worktree_create').execute('call-nodd-doc', { branch: 'feat/no-odd-doc', odd: 'a/b' }, undefined, undefined, ctx);
+    assert.equal(result.isError, true);
+    assert.equal(
+      resultText(result),
+      'invalid odd name: "a/b"\nodd must be a single path segment (letters, digits, dash, underscore, dot)',
+    );
+    assert.equal(fs.existsSync(cloneDocument(repo)), false, 'no document is written');
+    assert.equal(fs.existsSync(path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`)), false, 'no checkout directory');
   });
 
   test('the registration line only prints when the host tool accepted the path', async () => {
@@ -350,13 +345,13 @@ describe('worktree_create', () => {
     ]);
   });
 
-  test('refuses a branch whose derived directory name is not one path segment, and writes nothing', async () => {
+  test('refuses an odd that is not one path segment, and writes nothing', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
     const before = { paths: listWorktreePaths(repo), branches: branches(repo) };
     const result = await tools.get('worktree_create').execute(
       'call-5',
-      { branch: 'bad..name', odd: 'bad' },
+      { branch: 'feat/login', odd: '../escape' },
       undefined,
       undefined,
       ctx,
@@ -364,7 +359,7 @@ describe('worktree_create', () => {
     assert.equal(result.isError, true);
     assert.equal(
       resultText(result),
-      'invalid name: "bad..name"\nname must be a single path segment (letters, digits, dash, underscore, dot)',
+      'invalid odd name: "../escape"\nodd must be a single path segment (letters, digits, dash, underscore, dot)',
     );
     assert.deepEqual({ paths: listWorktreePaths(repo), branches: branches(repo) }, before);
   });
@@ -758,7 +753,7 @@ describe('the two tools draw their own card (S5)', { concurrency: false }, () =>
   test('worktree_create renders its call and result as a framed card', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    const result = await tools.get('worktree_create').execute('card-create', { branch: 'feat/card' }, undefined, undefined, ctx);
+    const result = await tools.get('worktree_create').execute('card-create', { branch: 'feat/card', odd: 'card' }, undefined, undefined, ctx);
     assert.notEqual(result.isError, true, resultText(result));
 
     extensionMod.setWorktreeToolCardMetrics(cardMetrics);
@@ -848,7 +843,7 @@ describe('worktree_list derives the setup liveness of a record (S12)', { concurr
   test('a live setup job keeps its record `running`', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('live-setup', { branch: 'feat/live' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('live-setup', { branch: 'feat/live', odd: 'live' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
     const target = created.details.path;
     const storePath = cloneDocument(repo);
@@ -871,7 +866,7 @@ describe('worktree_list derives the setup liveness of a record (S12)', { concurr
       assert.equal(setupRunner.isWorktreeSetupRunning(target), true);
       const listed = await tools.get('worktree_list').execute('live-setup-list', {}, undefined, undefined, ctx);
       assert.notEqual(listed.isError, true, resultText(listed));
-      assert.match(resultText(listed), /^1 live feat\/live odd: - running \(npm ci\)$/m);
+      assert.match(resultText(listed), /^1 live feat\/live odd: live running \(npm ci\)$/m);
     } finally {
       // Settle the fake child, so the task never outlives this test.
       calls[0].child.emit('close', 0, null);
@@ -883,7 +878,7 @@ describe('worktree_list derives the setup liveness of a record (S12)', { concurr
   test('a `running` record whose job is gone derives `interrupted` without a write', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('dead-setup', { branch: 'feat/dead' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('dead-setup', { branch: 'feat/dead', odd: 'dead' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
     const target = created.details.path;
     const storePath = cloneDocument(repo);
@@ -895,7 +890,7 @@ describe('worktree_list derives the setup liveness of a record (S12)', { concurr
 
     const listed = await tools.get('worktree_list').execute('dead-setup-list', {}, undefined, undefined, ctx);
     assert.notEqual(listed.isError, true, resultText(listed));
-    assert.match(resultText(listed), /^1 dead feat\/dead odd: - interrupted$/m);
+    assert.match(resultText(listed), /^1 dead feat\/dead odd: dead interrupted$/m);
     assert.doesNotMatch(resultText(listed), /running/, 'a dead job never reads busy');
 
     // The observation is derived, never persisted: the read leaves the record alone.
@@ -906,7 +901,7 @@ describe('worktree_list derives the setup liveness of a record (S12)', { concurr
   test('a record another session created is never guessed `interrupted`', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('foreign-setup', { branch: 'feat/foreign' }, undefined, undefined, ctx);
+    const created = await tools.get('worktree_create').execute('foreign-setup', { branch: 'feat/foreign', odd: 'foreign' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
     const target = created.details.path;
     const storePath = cloneDocument(repo);
@@ -921,7 +916,7 @@ describe('worktree_list derives the setup liveness of a record (S12)', { concurr
 
     const listed = await tools.get('worktree_list').execute('foreign-setup-list', {}, undefined, undefined, ctx);
     assert.notEqual(listed.isError, true, resultText(listed));
-    assert.match(resultText(listed), /^1 foreign feat\/foreign odd: - running \(npm ci\)$/m);
+    assert.match(resultText(listed), /^1 foreign feat\/foreign odd: foreign running \(npm ci\)$/m);
     assert.doesNotMatch(resultText(listed), /interrupted/, 'this process cannot tell, so it never claims death');
   });
 });

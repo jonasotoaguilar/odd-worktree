@@ -473,7 +473,6 @@ async function executeWorktreeCreate(params, ctx, opts) {
       request: {
         odd: params ? params.odd : undefined,
         branch,
-        name: params ? params.name : undefined,
         // S18: only "copy everything" becomes the boolean the ported hook owns; a path
         // list travels through the panel's own transfer below.
         copy_changes: selection.mode === 'all',
@@ -543,7 +542,7 @@ async function planPortedWorktreeSetup(input) {
  * registry row, the preparation hooks and the session registration — so the line
  * `worktree register in session` only prints when that registration really happened.
  *
- * `input.request` is the ported call (`odd`, `branch`, `name`, `copy_changes`).
+ * `input.request` is the ported call (`odd`, `branch`, `copy_changes`).
  * `input.selection` is the PANEL's own selection (`undefined` on the tool front):
  * `{mode: 'none'|'all'|'paths', paths: []}`. A boolean "copy everything" still belongs
  * to the ported `copy_changes` hook, so only `paths` reaches the panel's transfer.
@@ -621,7 +620,6 @@ async function runPortedWorktreeCreate(input, ctx) {
     {
       odd: request.odd,
       branch,
-      name: request.name,
       // S18: the boolean mode belongs to the ported hook; a path list travels on the
       // panel's own line instead, so the plan never carries both at once.
       copy_changes: request.copy_changes === true,
@@ -740,7 +738,8 @@ async function runPortedWorktreeCreate(input, ctx) {
   const setup = await planPortedWorktreeSetup({
     storePath,
     path: decision.plan.path,
-    name: decision.plan.name,
+    // S7: the checkout IS the ODD, so that is the name the setup reports.
+    name: decision.plan.odd,
     sessionId: createdBy,
     copiedChanges,
     notify,
@@ -891,7 +890,6 @@ async function executePortedWorktreeCreate(params, ctx) {
     request: {
       odd: params ? params.odd : undefined,
       branch: params ? params.branch : undefined,
-      name: params ? params.name : undefined,
       copy_changes: params ? params.copy_changes === true : false,
     },
   }, ctx);
@@ -901,11 +899,10 @@ const worktreeCreateTool = defineTool({
   name: "worktree_create",
   label: "Worktree Create",
   exposure: "codemode",
-  description: "Create a Git worktree for this clone at <repo-parent>/<repo-name>-worktrees/<name>, starting from the base branch (main when it exists). `odd` names the ODD this worktree serves and is optional. The branch is created with the worktree when it does not exist and checked out when it is free; no command ever passes --force.",
+  description: "Create a Git worktree for this clone at <repo-parent>/<repo-name>-worktrees/<odd>, starting from the base branch (main when it exists). `odd` names the ODD this worktree serves and is REQUIRED: it IS the checkout's directory name. The branch is created with the worktree when it does not exist and checked out when it is free; no command ever passes --force.",
   parameters: Type.Object({
+    odd: Type.String({ description: "The ODD this worktree serves, and the name of its directory under <repo-name>-worktrees. One path segment (letters, digits, dash, underscore, dot). It need not exist as a file." }),
     branch: Type.String({ description: "The branch this worktree works on. It is created with the worktree when it does not exist and checked out when it is free." }),
-    odd: opt(Type.String({ description: "The ODD this worktree serves. It need not exist as a file." })),
-    name: opt(Type.String({ description: "Directory name under <repo-name>-worktrees. Omitted derives it from the branch: feat/worktree-tools becomes worktree-tools." })),
     copy_changes: opt(Type.Boolean({ description: "Omitted or false copies nothing. true carries this clone's uncommitted changes, staged and unstaged plus untracked non-ignored files, into the new worktree and leaves them in the main worktree too." })),
   }),
   ...worktreeToolRenderers("worktree_create"),
@@ -4874,14 +4871,14 @@ async function askCreatePendingChanges({ ctx, git, fromCheckout }) {
 }
 
 // Create-then-return (S7): the selector's create completion mounts the
-// TWO-STEP panel (S6: the change type, then the change name) as an overlay,
+// THREE-STEP panel (the change type, the change name and the ODD) as an overlay,
 // then runs the SAME creation path `worktree_create` uses — which never
 // prompts — and STOPS there. Creation is creation: nothing is warped by
 // itself, so the caller can hand the selector back with a fresh listing that
 // includes the checkout just made, and the human picks where the session
-// goes. The creation carries neither `issues` nor `odd`, so a new row is born
-// without an association and the invalid, duplicate, occupied and principal
-// refusals keep their shape.
+// goes. The ODD names the checkout's directory (S7), so the create carries it
+// and keeps its invalid, duplicate, occupied and principal refusals' shape. A
+// new row is still born without an issue association.
 //
 // It ALWAYS reports `{ closed: true, created, cancelled?, worktree?, branch? }`
 // once the panel closed, so the caller hands the selector back every time: a
@@ -4940,13 +4937,21 @@ async function warpCreateAndEnter(ctx, git, notify) {
   // goes, including any checkout just made. `cancelled` distinguishes this from
   // a refusal; closing the RETURNED selector is what ends the flow.
   if (!out || out.ok !== true) return { closed: true, created: false, cancelled: true };
+  // S7: the create's OWN identity is the ODD, so the form must answer it. The
+  // branch is only the git branch: created with the checkout, or adopted when it
+  // already exists.
   const rawName = typeof out.name === "string" ? out.name.trim() : "";
+  const odd = typeof out.odd === "string" ? out.odd.trim() : "";
   const branch = `${out.type}/${git.slugifyBranch(rawName)}`;
   if (!WARP_CREATE_BRANCH_RE.test(branch)) {
     notify?.(`warp: invalid change name ${JSON.stringify(out.name)}: use at least one letter or digit (for example "name-change"); nothing was created.`, "error");
     return { closed: true, created: false };
   }
-  const createParams = { branch };
+  if (odd === "") {
+    notify?.('warp: the ODD is required: it names the checkout\'s directory (for example "login-ui"); nothing was created.', "error");
+    return { closed: true, created: false };
+  }
+  const createParams = { branch, odd };
   // S2: before anything is written, offer the invoking checkout's pending work:
   // the new worktree is either born from the commit or carries what is pending
   // here. A cancel (Esc / Ctrl+C at the question) is a real outcome — no

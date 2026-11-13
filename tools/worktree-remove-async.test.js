@@ -190,8 +190,12 @@ describe('a real close removes with git alone', () => {
   }
 
   async function createCheckout(toolsByName, repo, branch) {
+    // S7: the checkout's directory is the ODD, so it is the branch's own last
+    // segment — one ODD per create, and the branch lookup below still finds the
+    // checkout the create wrote.
+    const odd = branch.slice(branch.lastIndexOf('/') + 1);
     const created = await toolsByName.get('worktree_create').execute(
-      'remove-create', { branch }, undefined, undefined, makeCtx(repo),
+      'remove-create', { branch, odd }, undefined, undefined, makeCtx(repo),
     );
     assert.notEqual(created.isError, true, resultText(created));
     const target = checkoutFor(repo, branch);

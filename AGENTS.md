@@ -27,7 +27,7 @@ its presence records.
 | `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the canonical target path `<repo-parent>/<repo-name>-worktrees/<slug>` and its helpers, and the async argv runner. |
 | `lib/worktree-registry.js` | The `worktrees` side of the clone document: one row per checkout (branch, path, owning thread), read by the panel and the live-session guard. |
 | `lib/worktree-metadata.js` | The `records` side of that same document: per-worktree `odd`, creator, base ref, hook outcomes and setup state; reconciliation against `git worktree list`; the closed state vocabulary; and the strict whitelist that reads the file. |
-| `lib/worktree-create.js` | `worktree_create`'s core: request validation, base resolution, the destination name, the refusals sentence for sentence, plan execution and the fixed output lines. |
+| `lib/worktree-create.js` | `worktree_create`'s core: request validation, base resolution, the ODD-named destination, the refusals sentence for sentence, plan execution and the fixed output lines. |
 | `lib/worktree-list.js` | `worktree_list`'s rendering: rows, order, detail lines and footers, from one structured row list. It writes nothing. |
 | `lib/worktree-hooks.js` | The preparation chain of a create: submodules, local inputs, `copy_changes`, build-cache and asset links, the setup slot, and the clone-local `gentle-ai/worktree-hooks.json` that extends the lists. |
 | `lib/worktree-setup.js` | The setup chain: the closed command table one lockfile selects, the plan, the state machine and its vocabulary. |
@@ -129,8 +129,17 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     `missing`, `gone`, `foreign` — and every surface derives its wording from
     `lib/worktree-metadata.js` instead of repeating literals. The main checkout
     prints first and unnumbered, then numbered rows, and the footers count the
-    rows they hide, which the tool's `all: true` then lists.
-12. **A create never waits for its setup.** `worktree_create` and the panel's
+    rows they hide, which the tool's `all: true` then lists. A row's `name` is its
+    directory's basename, which for anything this package creates IS the ODD.
+12. **One identity per worktree: the directory is the ODD.** A create lands at
+    `<repo-parent>/<repo-name>-worktrees/<odd>`; `odd` is a required parameter and
+    a required plan input (one path segment, refused with `invalid odd name: …`),
+    and there is no second identity to override — no `name` parameter, no
+    branch-derived naming. `branch` only decides the git branch, created when it
+    is absent and adopted when it exists, so two creates for one ODD are refused
+    by `worktree path already exists` naming the ODD path. Existing checkouts are
+    never renamed and no record is rewritten to match.
+13. **A create never waits for its setup.** `worktree_create` and the panel's
     create both plan the chain in `lib/worktree-setup.js` and start it through
     `lib/worktree-setup-runner.js` as one tracked task per checkout: the task
     spawns the planned command with its own log under the system temp directory
@@ -143,13 +152,13 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     supplied a `notify` (the panel); the tool front supplies none, so a create
     never fires a `ui.notify` its call did not ask for, and a setup problem is
     never reported as a failed create.
-13. **The prompt block is append-only.** The `## ODD worktrees` section reaches
+14. **The prompt block is append-only.** The `## ODD worktrees` section reaches
     the model only through `systemPromptOptions.appendSystemPrompt`; no handler
     returns a replacement `systemPrompt` (the bridge drops it) and no existing
     text is removed. It is one text (`lib/odd-prompt/odd-worktrees.md`) with no
     variant selection, idempotent by content, primary sessions only, and
     `ODD_WORKTREE_PROMPT=0` suppresses it.
-14. **A warp waits for this session's own agent tasks AND background jobs, and it
+15. **A warp waits for this session's own agent tasks AND background jobs, and it
     is queued, never thrown away.** While `lib/worktree-warp-busy.js` reports a
     running or queued agent task, or an active job, `/warp` keeps the validated
     handoff PENDING instead of switching, and re-dispatches the same

@@ -115,11 +115,11 @@ async function loadExtensionWithModule(pi) {
 }
 
 // The destination the ported pipeline really writes, read from the pipeline's
-// own rule (<repo-parent>/<repo-name>-worktrees/<name>) instead of remembering
+// own rule (<repo-parent>/<repo-name>-worktrees/<odd>) instead of remembering
 // a flattened spelling.
-function portedDestination(repo, branch) {
+function portedDestination(repo, odd) {
   const create = require('../lib/worktree-create.js');
-  return create.worktreeDestinationPath(fs.realpathSync(repo), create.defaultWorktreeName(branch));
+  return create.worktreeDestinationPath(fs.realpathSync(repo), odd);
 }
 
 function readSharedDocument(repo) {
@@ -171,7 +171,7 @@ describe('/warp', () => {
     const ctx = makeCtx(repo);
     const created = await tools.get('worktree_create').execute(
       'call-1',
-      { branch: 'feat/warp-me' },
+      { branch: 'feat/warp-me', odd: 'warp-me' },
       undefined,
       undefined,
       ctx,
@@ -210,8 +210,8 @@ describe('the /warp panel create front', () => {
     test(`${existing ? 'adopts an existing' : 'creates a new'} branch and reports the create without a stray notice`, async () => {
       const repo = makeRepo();
       if (existing) git(repo, ['branch', branch]);
-      const target = portedDestination(repo, branch);
-      const ui = warpCreateUi({ ok: true, type: 'feat', name });
+      const target = portedDestination(repo, name);
+      const ui = warpCreateUi({ ok: true, type: 'feat', name, odd: name });
       notifications.length = 0;
       await commands.get('warp').handler('', makeCtx(repo, { custom: ui.custom }));
       assert.ok(fs.existsSync(target), `the /warp create made no checkout (notifications: ${JSON.stringify(notifications)})`);
@@ -230,21 +230,32 @@ describe('the /warp panel create front', () => {
 
   test('a refused panel create is the ported sentence, verbatim, and writes nothing', async () => {
     const repo = makeRepo();
-    const out = await mod.executeWorktreeCreate({ branch: 'bad..name' }, makeCtx(repo));
+    const out = await mod.executeWorktreeCreate({ branch: 'feat/login', odd: 'a/b' }, makeCtx(repo));
     assert.equal(out.isError, true);
     assert.equal(
       resultText(out),
-      'invalid name: "bad..name"\nname must be a single path segment (letters, digits, dash, underscore, dot)',
+      'invalid odd name: "a/b"\nodd must be a single path segment (letters, digits, dash, underscore, dot)',
     );
-    assert.equal(fs.existsSync(portedDestination(repo, 'bad..name')), false);
+    assert.equal(fs.existsSync(portedDestination(repo, 'a/b')), false);
+    assert.equal(fs.existsSync(path.join(fs.realpathSync(repo), '.git', 'pi-worktrees.json')), false, 'no document is written');
+  });
+
+  test('a panel create with no ODD is refused: the ODD names the checkout', async () => {
+    const repo = makeRepo();
+    const out = await mod.executeWorktreeCreate({ branch: 'feat/no-odd' }, makeCtx(repo));
+    assert.equal(out.isError, true);
+    assert.equal(
+      resultText(out),
+      'invalid odd name: undefined\nodd must be a single path segment (letters, digits, dash, underscore, dot)',
+    );
     assert.equal(fs.existsSync(path.join(fs.realpathSync(repo), '.git', 'pi-worktrees.json')), false, 'no document is written');
   });
 
   test('"copy everything" becomes the ported boolean and prints only the ported line', async () => {
     const repo = makeRepo();
     fs.writeFileSync(path.join(repo, 'pending.txt'), 'pending\n');
-    const target = portedDestination(repo, 'feat/all-copy');
-    const out = await mod.executeWorktreeCreate({ branch: 'feat/all-copy', changes: 'all' }, makeCtx(repo));
+    const target = portedDestination(repo, 'all-copy');
+    const out = await mod.executeWorktreeCreate({ branch: 'feat/all-copy', odd: 'all-copy', changes: 'all' }, makeCtx(repo));
     assert.notEqual(out.isError, true, resultText(out));
     const text = resultText(out);
     assert.match(text, /^copy_changes: 1 changes copied \(main keeps its uncommitted changes\)$/m);
@@ -256,9 +267,9 @@ describe('the /warp panel create front', () => {
     const repo = makeRepo();
     fs.writeFileSync(path.join(repo, 'selected.txt'), 'selected\n');
     fs.writeFileSync(path.join(repo, 'skipped.txt'), 'skipped\n');
-    const target = portedDestination(repo, 'feat/selected');
+    const target = portedDestination(repo, 'selected');
     const out = await mod.executeWorktreeCreate(
-      { branch: 'feat/selected', changes: ['selected.txt'] },
+      { branch: 'feat/selected', odd: 'selected', changes: ['selected.txt'] },
       makeCtx(repo),
     );
     assert.notEqual(out.isError, true, resultText(out));
@@ -279,10 +290,10 @@ describe('the /warp panel create front', () => {
 
   test('an unknown selected path refuses before anything is created', async () => {
     const repo = makeRepo();
-    const out = await mod.executeWorktreeCreate({ branch: 'feat/unknown', changes: ['missing.txt'] }, makeCtx(repo));
+    const out = await mod.executeWorktreeCreate({ branch: 'feat/unknown', odd: 'unknown', changes: ['missing.txt'] }, makeCtx(repo));
     assert.equal(out.isError, true);
     assert.match(resultText(out), /unknown changed file: "missing.txt" \(nothing was copied\) \(nothing was created\)$/);
-    assert.equal(fs.existsSync(portedDestination(repo, 'feat/unknown')), false);
+    assert.equal(fs.existsSync(portedDestination(repo, 'unknown')), false);
   });
 });
 

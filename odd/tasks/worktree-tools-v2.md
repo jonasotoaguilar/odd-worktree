@@ -52,7 +52,11 @@ custom result card in the style of the `cards-bash-v2` branch.
     come from theme roles through an injected `fg(role, text)`, never hardcoded
     ANSI.
 
+- **S7** — user: «que el nombre del worktree, la carpeta sea el mismo que odd, con la rama creada o tomada si existia del campo branch, por odd diria que se distingue mejor». One identity per worktree: the directory is `<repo-parent>/<repo-name>-worktrees/<odd>`, so the folder names the ODD the checkout serves. The `branch` parameter decides the git branch, created when it does not exist and adopted when it does; `odd` becomes required because it is the name, and the `name` parameter is removed as redundant. Two worktrees for one ODD cannot coexist, which is the model rather than a limitation. S1's branch-derived naming is superseded for new creates; existing checkouts keep their paths and are never renamed.
+
 ## Tasks
+
+> Superseded by S7: T11 renames the create target to `odd` and removes `name`. Tasks T1-T10 below stay as the record of what landed before that decision.
 
 Every task is closed, with the commit that holds it and the check observed at the time. `✔` marks a landed task; a task naming a defect found in review records the commit that closes it.
 
@@ -83,3 +87,4 @@ Every task is closed, with the commit that holds it and the check observed at th
 Code complete and verified; **not delivered**. The branch has no upstream, nothing is pushed, no PR exists, nothing is merged, and no release was cut. `feat/worktree-tools-v2` is 7 commits and 11,552 insertions over `origin/main`, past any single review slice, so it needs a chained PR. That is the only decision left with the maintainer.
 
 Resolved while closing: the two `*.0.1.0.tgz` archives that were tracked at the repository root are removed, and `odd/` is trackable again through a repository-local negation in `.gitignore`, so this document can travel with the change that produced it.
+- **T11** — S7 · the create target is the `odd`; `odd` required, `name` removed, the panel asks for the ODD, every suite and the docs follow · supersedes the naming part of T1-T10

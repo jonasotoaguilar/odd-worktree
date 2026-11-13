@@ -534,7 +534,7 @@ describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () =
     const repo = makeRepo(`ctrl-d-${tag}`);
     git(repo, ['branch', 'main', 'HEAD']);
     const created = await tools.get('worktree_create').execute(
-      `create-${tag}`, { branch: `feat/${tag}` }, undefined, undefined,
+      `create-${tag}`, { branch: `feat/${tag}`, odd: tag }, undefined, undefined,
       {
         cwd: repo,
         hasUI: false,

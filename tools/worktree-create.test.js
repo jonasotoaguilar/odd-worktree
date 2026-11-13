@@ -11,10 +11,8 @@ const { basename, dirname, join } = require('node:path');
 const test = require('node:test');
 
 const {
-	WORKTREE_NAME_SEGMENT_HINT,
 	WORKTREE_NOT_A_REPOSITORY,
 	WORKTREE_SEGMENT_HINT,
-	defaultWorktreeName,
 	executeWorktreeCreatePlan,
 	planWorktreeCreate,
 	recordWorktreeHooks,
@@ -170,8 +168,8 @@ test('S1: the destination sits beside the canonical main worktree', async () => 
 	const plan = await expectedPlan(REQUEST, REPOSITORY, seams);
 
 	assert.equal(plan.path, DESTINATION);
-	assert.equal(plan.name, 'worktree-tools');
 	assert.equal(plan.odd, 'worktree-tools');
+	assert.equal(basename(plan.path), plan.odd, 'S7: the directory IS the ODD');
 	assert.equal(plan.branch, 'feat/worktree-tools');
 	assert.equal(plan.branchState, 'created');
 	assert.equal(plan.base, 'main');
@@ -184,46 +182,45 @@ test('S1: the destination sits beside the canonical main worktree', async () => 
 	assert.equal(worktreeDestinationPath(MAIN_ROOT, 'a-b'), '/dev/projects/repo-worktrees/a-b');
 });
 
-test('S1: the first branch segment is dropped and the rest names the directory', async () => {
-	assert.equal(defaultWorktreeName('feat/worktree-tools'), 'worktree-tools');
-	assert.equal(defaultWorktreeName('feat/x'), 'x');
-	assert.equal(defaultWorktreeName('feat/a/b'), 'a-b');
-	assert.equal(defaultWorktreeName('feat/'), '', 'only an empty remainder derives nothing');
-
+test('S7: the directory is the ODD, whatever the branch says', async () => {
 	const deep = await expectedPlan({ odd: 'a-b', branch: 'feat/a/b' }, REPOSITORY, seamsFor(gitStub().git).seams);
-	assert.equal(deep.name, 'a-b');
 	assert.equal(deep.path, '/dev/projects/repo-worktrees/a-b');
+	assert.equal(deep.branch, 'feat/a/b', 'the branch is whatever the request said');
+	assert.equal('name' in deep, false, 'S7: the plan carries no second identity beside the ODD');
 
-	const named = await expectedPlan({ odd: 'a-b', branch: 'feat/a/b', name: 'custom' }, REPOSITORY, seamsFor(gitStub().git).seams);
-	assert.equal(named.path, '/dev/projects/repo-worktrees/custom');
-	assert.equal(named.name, 'custom');
+	const moved = await expectedPlan({ odd: 'login-ui', branch: 'feat/login' }, REPOSITORY, seamsFor(gitStub().git).seams);
+	assert.equal(moved.path, '/dev/projects/repo-worktrees/login-ui', 'the branch never names the directory');
 
-	const empty = await expectedError({ odd: 'a-b', branch: 'feat/' }, REPOSITORY, seamsFor(gitStub().git).seams);
-	assert.deepEqual(empty, { code: 'invalid-name', message: `invalid name: ""\n${WORKTREE_NAME_SEGMENT_HINT}` });
+	// Two branches, two ODDs: two directories named after the ODDs.
+	const first = await expectedPlan({ odd: 'login-ui', branch: 'feat/login' }, REPOSITORY, seamsFor(gitStub().git).seams);
+	const second = await expectedPlan({ odd: 'billing', branch: 'feat/billing' }, REPOSITORY, seamsFor(gitStub().git).seams);
+	assert.deepEqual(
+		[first.path, second.path],
+		['/dev/projects/repo-worktrees/login-ui', '/dev/projects/repo-worktrees/billing'],
+		'the ODD alone decides the directory',
+	);
 });
 
 test('S27: the outside-a-repository sentence is the contract\'s exact text', () => {
 	assert.equal(WORKTREE_NOT_A_REPOSITORY, 'not inside a Git worktree, so there is no repository to create a worktree from');
 });
 
-test('S1: a branch with no separator names the directory itself', async () => {
+test('S7: the ODD segment vocabulary is the one rule and the one sentence', async () => {
 	assert.equal(WORKTREE_SEGMENT_HINT, 'odd must be a single path segment (letters, digits, dash, underscore, dot)');
-	assert.equal(WORKTREE_NAME_SEGMENT_HINT, 'name must be a single path segment (letters, digits, dash, underscore, dot)');
-	assert.equal(defaultWorktreeName('dev-abyss'), 'dev-abyss');
-	assert.equal(defaultWorktreeName('worktree-tools'), 'worktree-tools');
 
 	const plain = await expectedPlan({ odd: 'dev-abyss', branch: 'dev-abyss' }, REPOSITORY, seamsFor(gitStub().git).seams);
-	assert.equal(plain.name, 'dev-abyss');
 	assert.equal(plain.path, '/dev/projects/repo-worktrees/dev-abyss');
 
 	const single = await expectedPlan({ odd: 'x', branch: 'feat/x' }, REPOSITORY, seamsFor(gitStub().git).seams);
-	assert.equal(single.name, 'x');
 	assert.equal(single.path, '/dev/projects/repo-worktrees/x');
+
+	const other = await expectedPlan({ odd: 'login-ui', branch: 'dev-abyss' }, REPOSITORY, seamsFor(gitStub().git).seams);
+	assert.equal(other.path, '/dev/projects/repo-worktrees/login-ui', 'a branch with no separator names nothing');
 });
 
 // ---- S5: input safety ----
 
-test('S5: odd and name are single path segments, refused before anything is touched', async () => {
+test('S5: the ODD is one path segment, refused before anything is touched', async () => {
 	for (const odd of ['../escape', 'a/b', '/absolute', 'a\\b', 'tab\there', '', '   ', '..', 'a\u0000b']) {
 		const stub = gitStub();
 		const { seams, existsCalls } = seamsFor(stub.git);
@@ -232,70 +229,48 @@ test('S5: odd and name are single path segments, refused before anything is touc
 		assert.deepEqual(stub.calls, [], `${JSON.stringify(odd)}: no Git command ran`);
 		assert.deepEqual(existsCalls, [], `${JSON.stringify(odd)}: the filesystem was not touched`);
 	}
-	for (const name of ['../escape', 'a/b', '/absolute', 'a\u0000b']) {
-		const stub = gitStub();
-		const { seams, existsCalls } = seamsFor(stub.git);
-		const error = await expectedError({ odd: 'worktree-tools', branch: 'feat/worktree-tools', name }, REPOSITORY, seams);
-		assert.deepEqual(error, { code: 'invalid-name', message: `invalid name: ${JSON.stringify(name)}\n${WORKTREE_NAME_SEGMENT_HINT}` }, name);
-		assert.deepEqual(stub.calls, [], `${JSON.stringify(name)}: no Git command ran`);
-		assert.deepEqual(existsCalls, [], `${JSON.stringify(name)}: the filesystem was not touched`);
-	}
-	const both = await expectedError({ odd: '../escape', branch: 'feat/worktree-tools', name: '../escape' }, REPOSITORY, seamsFor(gitStub().git).seams);
-	assert.deepEqual(both, { code: 'invalid-odd', message: `invalid odd name: "../escape"\n${WORKTREE_SEGMENT_HINT}` }, 'both invalid: odd is refused first');
 	const accepted = await expectedPlan({ odd: 'work.tree_tools-1', branch: 'feat/worktree-tools' }, REPOSITORY, seamsFor(gitStub().git).seams);
 	assert.equal(accepted.odd, 'work.tree_tools-1', 'letters, digits, dash, underscore and dot stay valid');
 });
 
-// ---- S4: `odd` is optional ----
+// ---- S7: `odd` is required ----
 
-test('S4: an omitted odd is not validated, plans null and prints odd: -', async () => {
-	const omitted = await expectedPlan({ branch: 'feat/worktree-tools' }, REPOSITORY, seamsFor(gitStub().git).seams);
-	const present = await expectedPlan(REQUEST, REPOSITORY, seamsFor(gitStub().git).seams);
-	assert.equal(omitted.odd, null, 'the plan carries no odd');
-	assert.deepEqual({ ...omitted, odd: 'worktree-tools' }, present, 'omitting the odd changes nothing else about the plan');
+test('S7: an omitted odd is refused with the segment sentence, before Git runs', async () => {
+	const stub = gitStub();
+	const { seams, existsCalls } = seamsFor(stub.git);
+	const error = await expectedError({ branch: 'feat/worktree-tools' }, REPOSITORY, seams);
 
-	const view = worktreeCreateView({ plan: omitted, metadata: { recorded: true }, registered: true });
-	assert.deepEqual(view.text.split('\n'), [
-		`worktree created: ${DESTINATION}`,
-		'branch: feat/worktree-tools (created)',
-		'odd: -',
-		`base: main@${SHORT_BASE}`,
-		'worktree register in session',
-	], 'an omitted odd keeps the fixed line count and the same order');
-	assert.equal(view.details.odd, null);
+	assert.deepEqual(error, { code: 'invalid-odd', message: `invalid odd name: undefined\n${WORKTREE_SEGMENT_HINT}` });
+	assert.deepEqual(stub.calls, [], 'no Git command ran');
+	assert.deepEqual(existsCalls, [], 'the filesystem was not touched');
 });
 
-test('S4: an omitted odd is stored as an absent field', async (t) => {
+test('S7: the ODD is what the record stores, and the view prints it', async (t) => {
 	const storePath = temporaryStore(t);
 	const stub = gitStub();
-	const plan = await expectedPlan({ branch: 'feat/worktree-tools' }, REPOSITORY, seamsFor(stub.git).seams);
+	const plan = await expectedPlan({ odd: 'login-ui', branch: 'feat/login' }, REPOSITORY, seamsFor(stub.git).seams);
 	const execution = await executeWorktreeCreatePlan({ plan, git: stub.git, createdBy: 'session-1', storePath });
 
 	assert.equal(execution.ok, true);
 	if (execution.ok === false) return;
 	assert.deepEqual(execution.result.metadata, { recorded: true }, 'the record is stored, not refused');
 
-	// The record really is in the shared document's `records`, with no odd key at all.
 	const stored = readWorktreeMetadataStore(storePath);
 	assert.equal(stored.status, 'valid');
 	if (stored.status !== 'valid') return;
-	assert.deepEqual(stored.drops, [], 'the odd-less record is not dropped on the way back in');
-	assert.equal('odd' in stored.file.records[DESTINATION], false, 'the stored record carries no odd at all');
-	const raw = JSON.parse(readFileSync(storePath, 'utf8'));
-	assert.equal('odd' in raw.records[DESTINATION], false, 'the bytes carry no odd key');
-	assert.equal(raw.records[DESTINATION].createdBy, 'session-1');
+	assert.deepEqual(stored.drops, []);
+	assert.equal(stored.file.records['/dev/projects/repo-worktrees/login-ui'].odd, 'login-ui');
 
-	// And the printed lines never carry a metadata notice for it.
 	const view = worktreeCreateView({ plan, metadata: execution.result.metadata, registered: true });
 	assert.deepEqual(view.text.split('\n'), [
-		`worktree created: ${DESTINATION}`,
-		'branch: feat/worktree-tools (created)',
-		'odd: -',
+		'worktree created: /dev/projects/repo-worktrees/login-ui',
+		'branch: feat/login (created)',
+		'odd: login-ui',
 		`base: main@${SHORT_BASE}`,
 		'worktree register in session',
 	]);
-	assert.equal(/metadata:/.test(view.text), false, 'an odd-less create never reports a metadata failure');
-	assert.equal(view.details.metadataRecorded, true);
+	assert.equal(view.details.name, 'login-ui', 'S7: the printed name is the directory basename');
+	assert.equal(view.details.odd, 'login-ui');
 });
 
 // ---- S2: base resolution ----
@@ -372,6 +347,17 @@ test('S3: no plan and no executed command ever passes --force', async (t) => {
 });
 
 // ---- S4: destination collision ----
+
+test('S7: a second create for the same ODD is refused by the ODD path, whatever its branch', async () => {
+	const stub = gitStub();
+	const error = await expectedError({ odd: 'login-ui', branch: 'fix/login' }, REPOSITORY, seamsFor(stub.git, ['/dev/projects/repo-worktrees/login-ui']).seams);
+
+	assert.deepEqual(error, {
+		code: 'path-exists',
+		message: 'worktree path already exists: /dev/projects/repo-worktrees/login-ui\nRemove it or pass a different name.',
+	});
+	assert.ok(!stub.calls.some((call) => call.args[1] === 'add'), 'nothing was created');
+});
 
 test('S4: an occupied destination is refused without asking Git to create it', async () => {
 	const stub = gitStub();
@@ -748,12 +734,47 @@ test('S1/S3/S7: a real clone creates the worktree, its branch and its record', a
 	);
 });
 
+test('S7: two branches and two ODDs land in two directories named after the ODDs', async (t) => {
+	const repository = repositoryFixture(t);
+	const stub = repository.seam();
+	const seams = { git: stub.git, exists: (path) => existsSync(path) };
+	const storePath = worktreeMetadataFilePath(repository.commonDir);
+	const create = async (odd, branch) => {
+		const decision = await planWorktreeCreate({ odd, branch }, { mainRoot: repository.root }, seams);
+		if (decision.ok === false) assert.fail(decision.error.message);
+		const execution = await executeWorktreeCreatePlan({ plan: decision.plan, git: stub.git, createdBy: 'session-1', storePath });
+		if (execution.ok === false) assert.fail(execution.error.message);
+		return decision.plan;
+	};
+
+	const login = await create('login-ui', 'feat/login');
+	const billing = await create('billing', 'feat/billing');
+
+	const loginPath = join(dirname(repository.root), 'repo-worktrees', 'login-ui');
+	const billingPath = join(dirname(repository.root), 'repo-worktrees', 'billing');
+	assert.equal(login.path, loginPath, 'the branch never names the directory');
+	assert.equal(billing.path, billingPath);
+	assert.ok(existsSync(join(loginPath, 'tracked.txt')), 'the first checkout exists');
+	assert.ok(existsSync(join(billingPath, 'tracked.txt')), 'the second checkout exists');
+	assert.equal(repository.git(loginPath, ['rev-parse', '--abbrev-ref', 'HEAD']).trim(), 'feat/login', 'the branch is whatever `branch` said');
+	assert.equal(repository.git(billingPath, ['rev-parse', '--abbrev-ref', 'HEAD']).trim(), 'feat/billing');
+
+	const stored = readWorktreeMetadataStore(storePath);
+	assert.equal(stored.status, 'valid');
+	if (stored.status !== 'valid') return;
+	assert.deepEqual(
+		[stored.file.records[loginPath].odd, stored.file.records[billingPath].odd],
+		['login-ui', 'billing'],
+		'each record carries its own ODD',
+	);
+});
+
 test('S3: a real free branch is reused instead of recreated', async (t) => {
 	const repository = repositoryFixture(t);
 	repository.git(repository.root, ['branch', 'chore/free']);
 	const stub = repository.seam();
 	const seams = { git: stub.git, exists: (path) => existsSync(path) };
-	const decision = await planWorktreeCreate({ odd: 'free', branch: 'chore/free', name: 'free' }, { mainRoot: repository.root }, seams);
+	const decision = await planWorktreeCreate({ odd: 'free', branch: 'chore/free' }, { mainRoot: repository.root }, seams);
 	if (decision.ok === false) assert.fail(decision.error.message);
 	const execution = await executeWorktreeCreatePlan({
 		plan: decision.plan,

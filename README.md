@@ -72,11 +72,15 @@ as commands, and the two `worktree_*` tools are offered to the agent.
      `branch … is already checked out in …` (use another branch, or work in that
      worktree), and `branch main is the base branch; pick the branch this worktree
      should work on`.
+   - A whitespace-only `odd` or `name` is refused here — a deliberate divergence
+     from the reference branch, where it would create a directory nobody can see
+     and a record the store must then refuse.
    - An existing branch is adopted as-is — the answer's second line says
      `branch: <branch> (existing)`, and `(created)` when the branch was made from
      the base.
-   - An omitted `odd` is a real absence, not a missing value: the record stores
-     nothing and both the create's answer and the list print `odd: -`.
+   - An omitted `odd` is a real absence, not a missing value: neither the record
+     nor the registry row carries the key, and both the create's answer and the
+     list print `odd: -`.
    - `copy_changes: true` carries this clone's uncommitted work — staged,
      unstaged and untracked non-ignored files — into the new checkout, and leaves
      it in the main checkout too.
@@ -256,7 +260,7 @@ The state vocabulary is closed:
 | `failed` | setup ended in failure; the row names the log to inspect |
 | `skipped` | setup did not run, and the parenthesis says why (no lockfile at the root, or its package manager is not installed) |
 | `pending` | the chain is queued and has not started; the parenthesis says why |
-| `interrupted` | a `running` or `pending` chain whose job is no longer live — the session that started it is gone |
+| `interrupted` | a `running` or `pending` chain this session wrote whose job its runner no longer holds; another session's record stays `running` because this process cannot tell |
 | `active · manual` | the checkout exists and carries no record: Git knows it, this package did not create it |
 | `missing` | the path a record names is gone while Git still lists it |
 | `gone` | a record whose checkout Git no longer lists; `all: true` shows it |
@@ -271,7 +275,8 @@ looks authoritative.
 ### Where state lives
 
 One document per clone: `<git-common-dir>/pi-worktrees.json`, shared by two
-owners that each preserve the other's key byte for byte.
+owners that each preserve the other's key verbatim for documents either module
+wrote, and by value and key order for a hand-edited one.
 
 - `worktrees` — the registry: one row per checkout with its branch, path and
 the session that owns it. The panel and the live-session guard read it.

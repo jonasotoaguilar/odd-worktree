@@ -172,6 +172,29 @@ describe('S1: a registry write never destroys an association it does not address
     assert.equal(JSON.stringify(stored), JSON.stringify(bare), 'the row is byte-identical');
   });
 
+  test('a row created without an association omits the key instead of writing null', () => {
+    const root = makeRepo('absent-odd');
+    const target = row('feat/absent-odd', root);
+    const written = registryLib.upsertWorktree(root, target);
+    assert.equal(written.ok, true, JSON.stringify(written));
+    assert.equal(Object.prototype.hasOwnProperty.call(storedRow(root, target.branch), 'odd'), false,
+      'the document omits the absent association');
+    assert.equal(Object.prototype.hasOwnProperty.call(written.entry, 'odd'), false,
+      'and so does the row the write returns');
+  });
+
+  test('an update that omits an absent association never invents odd: null', () => {
+    const root = makeRepo('absent-odd-update');
+    const target = row('feat/absent-update', root);
+    assert.equal(registryLib.upsertWorktree(root, target).ok, true);
+    const updated = registryLib.updateWorktree(root, target.branch, { issues: [1] });
+    assert.equal(updated.ok, true, JSON.stringify(updated));
+    assert.equal(Object.prototype.hasOwnProperty.call(storedRow(root, target.branch), 'odd'), false,
+      'the absent association stays absent through a later update');
+    assert.equal(Object.prototype.hasOwnProperty.call(updated.entry, 'odd'), false,
+      'and the returned row agrees');
+  });
+
   test('a malformed registry is still replaced behind a backup, never merged', () => {
     const root = makeRepo('malformed');
     const file = registryLib.registryPath(root);

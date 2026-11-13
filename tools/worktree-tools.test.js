@@ -313,6 +313,22 @@ describe('worktree_create', () => {
     assert.ok(fs.existsSync(target));
   });
 
+  test('an omitted odd is absent from BOTH sections of the clone document', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const result = await tools.get('worktree_create').execute('call-nodd-doc', { branch: 'feat/no-odd-doc' }, undefined, undefined, ctx);
+    assert.notEqual(result.isError, true, resultText(result));
+    const target = result.details.path;
+    const document = JSON.parse(fs.readFileSync(cloneDocument(repo), 'utf8'));
+    assert.equal(Object.prototype.hasOwnProperty.call(document.records[target], 'odd'), false,
+      'the record omits the absent association');
+    const row = document.worktrees.find((entry) => entry.path === target);
+    assert.ok(row, 'the registry row is in the same document');
+    assert.equal(Object.prototype.hasOwnProperty.call(row, 'odd'), false,
+      'the registry row omits it too: one absence, one spelling');
+    assert.equal(JSON.stringify(document).includes('"odd":null'), false, 'no null spelling anywhere');
+  });
+
   test('the registration line only prints when the host tool accepted the path', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
@@ -885,5 +901,27 @@ describe('worktree_list derives the setup liveness of a record (S12)', { concurr
     // The observation is derived, never persisted: the read leaves the record alone.
     const after = JSON.parse(fs.readFileSync(storePath, 'utf8'));
     assert.deepEqual(after.records[target].setup, deadSetup, 'the list never rewrites the stored record');
+  });
+
+  test('a record another session created is never guessed `interrupted`', async () => {
+    const repo = makeRepo();
+    const { ctx } = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('foreign-setup', { branch: 'feat/foreign' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    const target = created.details.path;
+    const storePath = cloneDocument(repo);
+
+    // This process's runner holds no job for the checkout, but the record is not
+    // ours: another Pi process may be installing it right now, so the truthful
+    // answer is `running`, never `interrupted` derived from ignorance.
+    const document = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+    document.records[target].createdBy = 'another-live-session';
+    document.records[target].setup = { status: 'running', steps: [{ command: 'npm ci', status: 'running' }], command: 'npm ci', jobId: '9-9-9' };
+    fs.writeFileSync(storePath, JSON.stringify(document));
+
+    const listed = await tools.get('worktree_list').execute('foreign-setup-list', {}, undefined, undefined, ctx);
+    assert.notEqual(listed.isError, true, resultText(listed));
+    assert.match(resultText(listed), /^1 foreign feat\/foreign odd: - running \(npm ci\)$/m);
+    assert.doesNotMatch(resultText(listed), /interrupted/, 'this process cannot tell, so it never claims death');
   });
 });

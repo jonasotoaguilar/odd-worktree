@@ -926,24 +926,33 @@ const worktreeCreateTool = defineTool({
 // S12: `interrupted` is reachable only when the reconciliation can ask whether a
 // record's job is still alive. This process's own setup runner owns that answer
 // (`lib/worktree-setup-runner.js` keeps its running tasks keyed by checkout
-// path), so the join is each record's `setup.jobId`: a job is live exactly while
-// the runner still runs a task for the checkout that record belongs to. A record
-// a dead session left `running` therefore derives `interrupted` instead of
-// printing a stale `running` forever; the stored record is never rewritten here.
-function setupJobLiveness(records, runner) {
-  const live = new Set();
+// path), but only for records THIS session wrote: a job named by another
+// session's record may be running in another Pi process this one cannot see.
+// So `interrupted` is derived only when `createdBy` is this session's id and the
+// runner no longer holds a task for that checkout; every other record keeps its
+// persisted `running`, because this process cannot tell. The stored record is
+// never rewritten here.
+function setupJobLiveness(records, runner, sessionId) {
+  const owners = new Map();
   for (const [worktreePath, record] of Object.entries(records)) {
     const jobId = record && record.setup ? record.setup.jobId : undefined;
     if (typeof jobId !== "string" || jobId.length === 0) continue;
-    let running = false;
-    try {
-      running = runner.isWorktreeSetupRunning(worktreePath) === true;
-    } catch {
-      running = false;
-    }
-    if (running) live.add(jobId);
+    const held = owners.get(jobId) || [];
+    held.push({ worktreePath, mine: sessionId !== undefined && record.createdBy === sessionId });
+    owners.set(jobId, held);
   }
-  return (jobId) => live.has(jobId);
+  return (jobId) => {
+    const held = owners.get(jobId);
+    // A job this process cannot attribute to itself is UNKNOWN, never dead.
+    if (held === undefined || held.some((owner) => !owner.mine)) return true;
+    return held.some((owner) => {
+      try {
+        return runner.isWorktreeSetupRunning(owner.worktreePath) === true;
+      } catch {
+        return false;
+      }
+    });
+  };
 }
 
 async function executePortedWorktreeList(params, ctx) {
@@ -977,7 +986,7 @@ async function executePortedWorktreeList(params, ctx) {
       entries,
       records,
       commonDir: repo.commonDir,
-      setupJobLiveness: setupJobLiveness(records, runner),
+      setupJobLiveness: setupJobLiveness(records, runner, resolveThread(ctx).thread),
     }),
     project: path.basename(main.path),
     main: { path: main.path, branch: main.branch || "-", shortSha: (main.head || "").slice(0, 7) },

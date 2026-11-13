@@ -113,9 +113,10 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     `<git-common-dir>/pi-worktrees.json` carries `worktrees` — the registry
     `lib/worktree-registry.js` owns — and `records` — the metadata
     `lib/worktree-metadata.js` owns (odd, creator, base ref, hook outcomes,
-    setup state). Each side preserves the key it does not own, byte for byte, on
-    read and on write, and neither gains authority over the other's. A second
-    file is never the answer. Two consequences are limits, not open work:
+    setup state). Each side preserves the key it does not own — verbatim for
+    documents either module wrote, and by value and key order for a hand-edited
+    one — on read and on write, and neither gains authority over the other's. A
+    second file is never the answer. Two consequences are limits, not open work:
     `version` is written by both sides, so a format bump changes both in the same
     change, and the metadata side keeps a strict whitelist (`kind`, `version`,
     `worktrees`, `records`), so a third key must be whitelisted there in the

@@ -25,13 +25,12 @@ its presence records.
 | --- | --- |
 | `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the three commands, the two tools, the `worktree-warp` message renderer, and the `session_start` / `session_shutdown` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
 | `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the canonical target path `<repo-parent>/<repo-name>-worktrees/<slug>` and its helpers, and the async argv runner. |
-| `lib/worktree-registry.js` | The `worktrees` side of the clone document: one row per checkout (branch, path, owning thread), read by the panel and the live-session guard. |
-| `lib/worktree-metadata.js` | The `records` side of that same document: per-worktree `odd`, creator, base ref, hook outcomes and setup state; reconciliation against `git worktree list`; the closed state vocabulary; and the strict whitelist that reads the file. |
+| `lib/worktree-registry.js` | The one ownership rule, with no file: a checkout this package created is a directory under `<repo-parent>/<repo-name>-worktrees`, so the path decides. Partitions Git's listing into ours and outside, and parses `git worktree list --porcelain` for the create path. |
 | `lib/worktree-create.js` | `worktree_create`'s core: request validation, base resolution, the ODD-named destination, the refusals sentence for sentence, plan execution and the fixed output lines. |
 | `lib/worktree-list.js` | `worktree_list`'s rendering: rows, order, detail lines and footers, from one structured row list. It writes nothing. |
 | `lib/worktree-hooks.js` | The preparation chain of a create: submodules, local inputs, `copy_changes`, build-cache and asset links, the setup slot, and the clone-local `gentle-ai/worktree-hooks.json` that extends the lists. |
-| `lib/worktree-setup.js` | The setup chain: the closed command table one lockfile selects, the plan, the state machine and its vocabulary. |
-| `lib/worktree-setup-runner.js` | The tracked background task of a create: spawns the planned command, sends its output to its own log under the system temp directory, persists the state and reports one notice. |
+| `lib/worktree-setup.js` | The setup chain: the closed command table one lockfile selects, the plan, and the two notice sentences. |
+| `lib/worktree-setup-runner.js` | The tracked background task of a create: runs the planned commands one child at a time, sends their output to its own log under the system temp directory, and reports one notice built from the child process outcome. No state is persisted. |
 | `lib/worktree-remove.js` | Git-only removal: `git worktree remove <absolute path>`, branch kept. |
 | `lib/worktree-symlinks.js` | Symlink policy for a checkout. |
 | `lib/worktree-changes.js` | Pending-change snapshot and transfer (the panel's `changes` selection, and a typed warp's copy). |
@@ -39,7 +38,8 @@ its presence records.
 | `lib/worktree-warp-busy.js` | This session's busy evidence for a warp: agent-task counters, its `job_list` jobs, and the one pending handoff. |
 | `lib/worktree-warp-sessions.js` | Warp/fork bookkeeping in the session files the host owns. |
 | `lib/checkout-facts.js` | The facts one checkout row shows in the selector. |
-| `lib/worktree-card.js` | The `worktree-warp` message renderer (the moved/queued card). |
+| `lib/worktree-card.js` | The `worktree-warp` message renderer (the moved/queued card), composed on the card substrate like the tool cards. |
+| `lib/card-style.js` | The one style reader: the live process-wide slot Gentle Shell publishes, then the strict `<home>/card-style.json`, then `float`. It reports the source and the reason it fell back, caches only the document branch, and is re-read on `session_start`. |
 | `lib/shell-card.js`, `lib/worktree-cards.js` | The card substrate (rounded frame, palette, tone, elapsed) and the two tools' call/result card factory built on it. |
 | `lib/warp-*.js` | The panel: selector and extended list (`warp-selector-view.js`), create wizard (`warp-create-panel.js`, `warp-create-picker.js`), delete confirmation (`warp-delete-confirm.js`). |
 | `lib/odd-*.js` | `odd-docs.js` (document discovery and ordering), `odd-view.js` (two-pane reader), `odd-markdown.js` (the shared markdown renderer). |
@@ -93,7 +93,7 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
 5. **Deletion is git only.** Removal is `git worktree remove <absolute path>`
    (with `--force` only when the caller asked) and the branch is kept. No other
    application is closed, opened or removed on any path — including the panel's
-   create and `worktree_create`, which use git and the registry alone.
+   create and `worktree_create`, which use git and the canonical directory alone.
 6. **`/issues` keeps repository identity pinning.** The identity
    (`<host>/<owner>/<repo>`) is pinned when the list loads and bound to every
    read, every mutation and the `o` browser opener. A checkout whose remote moved
@@ -109,28 +109,24 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    managers) gets a binary plus an argument array with a bounded timeout.
    Interactive paths await the async runner; nothing blocks the host event loop
    with `spawnSync`.
-10. **The clone keeps one document with two owners.**
-    `<git-common-dir>/pi-worktrees.json` carries `worktrees` — the registry
-    `lib/worktree-registry.js` owns — and `records` — the metadata
-    `lib/worktree-metadata.js` owns (odd, creator, base ref, hook outcomes,
-    setup state). Each side preserves the key it does not own — verbatim for
-    documents either module wrote, and by value and key order for a hand-edited
-    one — on read and on write, and neither gains authority over the other's. A
-    second file is never the answer. Two consequences are limits, not open work:
-    `version` is written by both sides, so a format bump changes both in the same
-    change, and the metadata side keeps a strict whitelist (`kind`, `version`,
-    `worktrees`, `records`), so a third key must be whitelisted there in the
-    change that introduces it. Nothing deletes a record behind a reader's back;
-    `gone` is how the list reports one.
-11. **The listing is read-only.** `worktree_list` writes nothing, prunes nothing
-    and never touches the document: a dead checkout is reported as `gone` or
-    `missing` with its reason and date. The state vocabulary is closed — `ready`,
-    `running`, `failed`, `skipped`, `pending`, `interrupted`, `active · manual`,
-    `missing`, `gone`, `foreign` — and every surface derives its wording from
-    `lib/worktree-metadata.js` instead of repeating literals. The main checkout
-    prints first and unnumbered, then numbered rows, and the footers count the
-    rows they hide, which the tool's `all: true` then lists. A row's `name` is its
-    directory's basename, which for anything this package creates IS the ODD.
+10. **There is no worktree document.** A create always lands at
+    `<repo-parent>/<repo-name>-worktrees/<odd>`, so the path is the whole record:
+    which checkouts this package created and which ODD each one serves. No
+    `<git-common-dir>/pi-worktrees.json`, no `records`, no lock file, and no second
+    file in their place. `lib/worktree-registry.js` answers the one question the
+    path answers — is this checkout ours — and nothing reads or writes stored state.
+    Two consequences are limits, not open work: a worktree moved somewhere else by
+    hand stops being ours (nothing is rewritten to match), and there is nothing to
+    migrate or reconcile, so no version boundary can lose a row.
+11. **The listing is read-only and has no state.** `worktree_list` reads Git's own
+    worktree set and writes nothing, prunes nothing and reads no document: the main
+    checkout prints first and unnumbered, then the checkouts under
+    `<repo-name>-worktrees` by name, and `all: true` adds the worktrees Git knows
+    outside that directory. A row is its directory's basename — which IS the ODD —
+    and its branch; there is no `odd:` field, no date, no setup or hooks line and no
+    state vocabulary. A directory that exists is a worktree and one that does not is
+    simply not listed; nothing is reported as `gone` or `missing`, because nothing
+    was stored to go stale. The footer counts the outside worktrees it hides.
 12. **One identity per worktree: the directory is the ODD.** A create lands at
     `<repo-parent>/<repo-name>-worktrees/<odd>`; `odd` is a required parameter and
     a required plan input (one path segment, refused with `invalid odd name: …`),

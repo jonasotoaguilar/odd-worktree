@@ -135,8 +135,10 @@ function portedDestination(repo, odd) {
   return create.worktreeDestinationPath(fs.realpathSync(repo), odd);
 }
 
-function readSharedDocument(repo) {
-  return JSON.parse(fs.readFileSync(path.join(fs.realpathSync(repo), '.git', 'pi-worktrees.json'), 'utf8'));
+// S3/S4: the list document this package used to keep. It is gone, so every case that
+// used to read it now asserts it was never written.
+function sharedDocumentPath(repo) {
+  return path.join(fs.realpathSync(repo), '.git', 'pi-worktrees.json');
 }
 
 // The selector's create action, then the create panel's answer, then the
@@ -236,11 +238,8 @@ describe('the /warp panel create front', () => {
       // create; the click asked for none of these notices.
       assert.ok(ui.mounts >= 3, `the selector was not handed back after the create (${ui.mounts} mounts)`);
       assert.deepEqual(notifications, [], 'a clean create fires no notification it did not ask for');
-      // One shared document carries both owners' keys and this create's row.
-      const document = readSharedDocument(repo);
-      assert.deepEqual(Object.keys(document).sort(), ['kind', 'records', 'version', 'worktrees']);
-      assert.deepEqual(document.worktrees.map((row) => row.branch), [branch]);
-      assert.ok(document.records[fs.realpathSync(target)], 'the metadata record is keyed by the checkout path');
+      // S3/S4: the checkout's directory is the whole record — no list file exists.
+      assert.equal(fs.existsSync(sharedDocumentPath(repo)), false, 'no list document is written');
     });
   }
 
@@ -266,7 +265,6 @@ describe('the /warp panel create front', () => {
     );
     assert.notEqual(first.isError, true, resultText(first));
     const target = first.details.path;
-    const documentBefore = fs.readFileSync(path.join(fs.realpathSync(repo), '.git', 'pi-worktrees.json'), 'utf8');
 
     const second = await tools.get('worktree_create').execute(
       'call-2', { branch: 'feat/taken-again', odd: 'taken' }, undefined, undefined, makeCtx(repo),
@@ -280,7 +278,7 @@ describe('the /warp panel create front', () => {
     // document is byte-identical to what the first create left.
     assert.equal(fs.existsSync(`${target}-again`), false, 'no directory is made');
     assert.equal(git(repo, ['branch', '--list', 'feat/taken-again']), '', 'no branch is created');
-    assert.equal(fs.readFileSync(path.join(fs.realpathSync(repo), '.git', 'pi-worktrees.json'), 'utf8'), documentBefore, 'no record is written');
+    assert.equal(fs.existsSync(sharedDocumentPath(repo)), false, 'no document is written by either create');
   });
 
   test('a plain directory at the ODD destination keeps the core’s own refusal', async () => {
@@ -381,14 +379,8 @@ describe('the /warp panel create front', () => {
     assert.doesNotMatch(text, /^copy_changes:/m, 'the boolean mode\u2019s line is not printed by the path mode');
     assert.equal(fs.readFileSync(path.join(target, 'selected.txt'), 'utf8'), 'selected\n');
     assert.equal(fs.existsSync(path.join(target, 'skipped.txt')), false, 'only the selected path travelled');
-    // The record stores the hooks that ran; the panel's transfer is not a ported
-    // hook, so no copy_changes row is invented for it.
-    const document = readSharedDocument(repo);
-    assert.deepEqual(Object.keys(document).sort(), ['kind', 'records', 'version', 'worktrees']);
-    const record = document.records[fs.realpathSync(target)];
-    assert.equal(record.branchAtCreation, 'feat/selected');
-    assert.equal(record.createdBy, 'thread-1');
-    assert.ok(!(record.hooks || []).some((hook) => hook.name === 'copy_changes'));
+    // S3: nothing about the transfer is stored — there is no record to hold it.
+    assert.equal(fs.existsSync(sharedDocumentPath(repo)), false, 'no document is written');
   });
 
   test('an unknown selected path refuses before anything is created', async () => {

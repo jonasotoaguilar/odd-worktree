@@ -8,12 +8,14 @@
 // this package has no node_modules, so width measurement, truncation and wrapping
 // are injected, and colour only ever arrives as `theme.fg(role, text)`.
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
+const { mkdtempSync, readFileSync, rmSync } = require('node:fs');
+const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const test = require('node:test');
+const { before, after, test } = require('node:test');
 
 const { ELLIPSIS, WORKTREE_CARD_TOOLS, createWorktreeCards } = require('../lib/worktree-cards.js');
 const { worktreeListView } = require('../lib/worktree-list.js');
+const { CARD_STYLE } = require('../lib/card-style.js');
 
 // ---- the injected text seam (fakes: plain ASCII, each character one column) ----
 
@@ -85,6 +87,57 @@ function recordingTheme() {
 	};
 }
 
+// S5: the style seam — the process-wide slot Gentle Shell publishes — and a
+// scratch preference home, so no case reads or writes the real user's document.
+const CARD_STYLE_SLOT = Symbol.for('gentle-pi.card-style');
+const BG_RESET = '\x1b[49m';
+
+function useStyle(style) {
+	if (style === undefined) delete globalThis[CARD_STYLE_SLOT];
+	else globalThis[CARD_STYLE_SLOT] = style;
+}
+
+function withStyle(style, run) {
+	useStyle(style);
+	try {
+		return run();
+	} finally {
+		useStyle(undefined);
+	}
+}
+
+/** A plain theme that can also paint the float background, so the text stays readable. */
+function paintTheme() {
+	const roles = { fg: [], bg: [] };
+	return {
+		roles,
+		fg(role, value) {
+			roles.fg.push(role);
+			return value;
+		},
+		bg(role, value) {
+			roles.bg.push(role);
+			return `\x1b[48;5;240m${value}${BG_RESET}`;
+		},
+	};
+}
+
+const savedHome = process.env.GENTLE_PI_CONFIG_HOME;
+let configHome;
+
+before(() => {
+	configHome = mkdtempSync(join(tmpdir(), 'odd-worktree-card-style-'));
+	process.env.GENTLE_PI_CONFIG_HOME = configHome;
+	useStyle(undefined);
+});
+
+after(() => {
+	useStyle(undefined);
+	if (savedHome === undefined) delete process.env.GENTLE_PI_CONFIG_HOME;
+	else process.env.GENTLE_PI_CONFIG_HOME = savedHome;
+	rmSync(configHome, { recursive: true, force: true });
+});
+
 // ---- the factory, and the two calls every case makes ----
 
 const cards = createWorktreeCards({ metrics });
@@ -131,27 +184,17 @@ const REFUSAL_TEXT = [
 ].join('\n');
 
 function listViewOf(all) {
+	// S3: the list's real input — Git's own worktree listing and the canonical main
+	// root. The main checkout is listed first and unnumbered; the checkout under
+	// `<repo-name>-worktrees` is one this package created, named by its directory.
 	return worktreeListView({
 		project: 'gentle-shell',
 		all,
-		main: { path: '/clone', branch: 'main', shortSha: '1a2b3c4' },
-		reconciliation: {
-			worktrees: [
-				{ path: '/clone', branch: 'main', state: { id: 'active-manual' } },
-				{
-					path: '/clone-worktrees/cards-v2',
-					branch: 'feat/cards-v2',
-					state: { id: 'ready' },
-					record: {
-						odd: 'worktree-tools',
-						createdAt: '2026-01-02T03:04:05.000Z',
-						branchAtCreation: 'feat/cards-v2',
-						setup: { status: 'ready', steps: [] },
-						lastSeen: { at: '2026-01-02T03:04:05.000Z', branch: 'feat/cards-v2', status: 'active' },
-					},
-				},
-			],
-		},
+		mainRoot: '/clone',
+		entries: [
+			{ path: '/clone', branch: 'main', head: '1a2b3c4' },
+			{ path: '/clone-worktrees/cards-v2', branch: 'feat/cards-v2', head: '9f8e7d6' },
+		],
 	});
 }
 
@@ -294,8 +337,8 @@ test("a result body is the tool's own text, wrapped, padded and closed by one ru
 	const listBody = listRows.slice(0, -1).map(bodyText);
 	assert.equal(listBody[0], 'project: gentle-shell');
 	assert.equal(listBody[1], 'path: /clone');
-	assert.match(listBody[2], /^main: main 1a2b3c4 /);
-	assert.ok(listBody.join(' ').includes('worktree-tools'), 'the listed worktree reaches the card');
+	assert.equal(listBody[2], 'main: main 1a2b3c4', 'the main row carries no stored state suffix');
+	assert.equal(listBody[3], '1 cards-v2 feat/cards-v2', 'the row carries the checkout name and its branch');
 });
 
 test('a collapsed result shows at most three body rows and marks what it hides', () => {
@@ -405,5 +448,112 @@ test('the same inputs draw the same lines, and the source imports no host packag
 	assert.doesNotMatch(source, /require\(['"](?!\.\/|node:)/, 'the only imports are the substrate and Node builtins, if any');
 	for (const forbidden of ['Date', 'process.', 'Math.random']) {
 		assert.doesNotMatch(source, new RegExp(forbidden.replace('.', '\\.')), `${forbidden} stays out: the module is a pure function of its inputs`);
+	}
+});
+
+// ---- S5: the two styles, one card ----
+
+/** The card's text with every chrome cell removed: what the reader actually reads. */
+function contentOf(rows) {
+	return rows
+		.map((row) => stripAnsi(row).replace(/[╭╮╰╯─│▎]/g, ' ').replace(/\s+/g, ' ').trim())
+		.filter((text) => text.length > 0)
+		.join(' | ');
+}
+
+// Short lines only, so neither style's two-column difference can move a wrap
+// boundary: this is the "same text, different chrome" card.
+const SHORT_LIST = ['project: gentle-shell', 'path: /clone', 'main: main 1a2b3c4', '1 cards-v2 feat/cards-v2'].join('\n');
+const CREATE_SHORT = ['worktree created: /clone-worktrees/cards-v2', 'branch: feat/cards-v2 (created)'].join('\n');
+
+test('the same result card is the same text in float and in neon, and only the chrome differs', () => {
+	const theme = paintTheme();
+	for (const [tool, text] of [['worktree_list', SHORT_LIST], ['worktree_create', CREATE_SHORT]]) {
+		for (const expanded of [false, true]) {
+			const neon = withStyle(CARD_STYLE.NEON, () => resultRows(tool, textResult(text), { expanded, isPartial: false }, theme, { durationMs: 1200 }, 60));
+			const float = withStyle(CARD_STYLE.FLOAT, () => resultRows(tool, textResult(text), { expanded, isPartial: false }, theme, { durationMs: 1200 }, 60));
+			assert.equal(contentOf(float), contentOf(neon), `${tool} expanded=${expanded}: same body, same elapsed time`);
+			assert.equal(neon.some((row) => row.includes('▎')), false, `${tool}: neon draws no rail`);
+			assert.equal(float.some((row) => /[╭╮╰╯─│]/.test(row)), false, `${tool}: float draws no box`);
+			assert.ok(contentOf(float).endsWith('1.2s'), `${tool}: the elapsed time survives in both styles`);
+			for (const row of float) assert.equal(metrics.visibleWidth(row), 60, `${tool}: a float row is the width it was given`);
+		}
+	}
+});
+
+test('the collapsed three-row preview and its overflow mark survive the float style', () => {
+	const theme = paintTheme();
+	const long = Array.from({ length: 6 }, (_, index) => `row ${index + 1}`).join('\n');
+	const neon = withStyle(CARD_STYLE.NEON, () => resultRows('worktree_list', textResult(long), { expanded: false, isPartial: false }, theme, {}, 40));
+	const float = withStyle(CARD_STYLE.FLOAT, () => resultRows('worktree_list', textResult(long), { expanded: false, isPartial: false }, theme, {}, 40));
+	assert.equal(contentOf(float), contentOf(neon), 'three preview rows and the same overflow mark');
+	assert.match(contentOf(float), /row 3…/);
+	assert.equal(contentOf(float).includes('row 4'), false, 'the fourth row is still hidden');
+});
+
+test('a float card paints the accent rail and the tone background, and draws no frame', () => {
+	const theme = paintTheme();
+	const pending = withStyle(CARD_STYLE.FLOAT, () => call('worktree_create', CREATE_ARGS, theme, { isPartial: true }, 40));
+	for (const row of pending) {
+		assert.equal(metrics.visibleWidth(row), 40, `"${stripAnsi(row)}" is not 40 wide`);
+		assert.ok(row.startsWith(' \x1b[48;5;240m▎'), 'the margin, the background and the rail open every row');
+		assert.ok(row.endsWith('\x1b[49m '), 'the background closes before the right margin');
+	}
+	assert.deepEqual(theme.roles.bg, ['toolPendingBg'], 'the pending tone paints the pending background');
+	assert.equal(theme.roles.fg.includes('warning'), true, 'the rail and the label take the theme accent');
+	assert.equal(theme.roles.fg.includes('error'), false);
+	const visible = pending.map(stripAnsi);
+	assert.equal(visible[0].trim(), '▎', 'a padding row sits above the heading');
+	assert.match(visible[1], /^ ▎ ⎇ worktree create · feat\/cards-v2 +$/, 'the heading rides the rail');
+	assert.equal(visible[2].trim(), '▎', 'and a separator row sits between the heading and the body');
+	assert.match(visible[3], /^ ▎ running… +$/, 'the running row is painted like the rest of the card');
+
+	// The state still reaches the background; the accent stays the theme orange.
+	const settled = paintTheme();
+	withStyle(CARD_STYLE.FLOAT, () => resultRows('worktree_list', textResult(SHORT_LIST), { expanded: true, isPartial: false }, settled, {}, 40));
+	assert.deepEqual(settled.roles.bg, ['toolSuccessBg']);
+	assert.equal(settled.roles.fg.includes('warning'), true);
+
+	const failed = paintTheme();
+	withStyle(CARD_STYLE.FLOAT, () => resultRows('worktree_list', textResult(REFUSAL_TEXT, true), { expanded: true, isPartial: false }, failed, {}, 40));
+	assert.deepEqual(failed.roles.bg, ['toolErrorBg']);
+	assert.equal(failed.roles.fg.includes('warning'), true, 'a refusal keeps its accent and its error background');
+});
+
+test('a call and its result share one float card, set off by the separator row', () => {
+	const theme = paintTheme();
+	const result = withStyle(CARD_STYLE.FLOAT, () => resultRows('worktree_list', textResult(SHORT_LIST), { expanded: true, isPartial: false }, theme, {}, 40));
+	assert.equal(stripAnsi(result[0]).trim(), '▎', 'the result body opens with the separator row under the call above');
+	assert.match(stripAnsi(result[1]), /^ ▎ project: gentle-shell +$/);
+	assert.match(stripAnsi(result.at(-1)), /^ ▎ +$/, 'the closing row is the painted rule');
+
+	const partial = withStyle(CARD_STYLE.FLOAT, () => resultRows('worktree_list', textResult(SHORT_LIST), { expanded: true, isPartial: true }, theme, {}, 40));
+	assert.equal(stripAnsi(partial.at(-1)).includes('▎'), true, 'a streamed result still paints its rows');
+	assert.equal(partial.length, result.length - 1, 'but leaves the closing row to the final result');
+});
+
+test('too narrow for float, or a theme without the background, the neon card answers', () => {
+	const theme = paintTheme();
+	const narrow = withStyle(CARD_STYLE.FLOAT, () => call('worktree_list', {}, theme, { isPartial: false }, 9));
+	assert.match(stripAnsi(narrow[0]), /^╭─ /, 'nine columns is the neon frame');
+	assert.equal(narrow.some((row) => row.includes('\x1b')), false, 'and nothing is painted behind it');
+	assert.deepEqual(theme.roles.bg, [], 'the narrow card never asks for a background');
+
+	const noBackground = withStyle(CARD_STYLE.FLOAT, () => call('worktree_list', {}, plainTheme, { isPartial: false }, 40));
+	assert.match(stripAnsi(noBackground[0]), /^╭─ /, 'a theme with no bg keeps the frame');
+});
+
+test('the style is read on every render, so a live change reaches the very next card', () => {
+	const theme = paintTheme();
+	useStyle(CARD_STYLE.NEON);
+	try {
+		assert.match(stripAnsi(call('worktree_list', {}, theme, { isPartial: false }, 40)[0]), /^╭─ /);
+		useStyle(CARD_STYLE.FLOAT);
+		const float = call('worktree_list', {}, theme, { isPartial: false }, 40);
+		assert.match(stripAnsi(float[0]), /^ ▎ /, 'the same renderer, the next style');
+		useStyle(CARD_STYLE.NEON);
+		assert.match(stripAnsi(call('worktree_list', {}, theme, { isPartial: false }, 40)[0]), /^╭─ /, 'and back again, with no rebuild');
+	} finally {
+		useStyle(undefined);
 	}
 });

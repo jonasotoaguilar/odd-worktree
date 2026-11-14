@@ -524,14 +524,13 @@ describe('/issues overlay and arguments', () => {
 });
 
 describe('/issues is read-only about the worktree association', () => {
+  // S3/S4: the association's document is gone. The property this case proves is the
+  // one that survives it — /issues is handed no association option and every read and
+  // keypress writes nothing at all.
   test('the mounted view is handed no association option and reading writes nothing', async () => {
     const root = makeRepo({ tag: 'issues-readonly' });
     const file = registryFile(root);
-    fs.writeFileSync(file, `${JSON.stringify({
-      version: 1,
-      worktrees: [{ branch: git(root, ['branch', '--show-current']).trim(), path: root, thread: 't', issues: [76], odd: null }],
-    }, null, 2)}\n`);
-    const before = fs.readFileSync(file, 'utf8');
+    assert.equal(fs.existsSync(file), false, 'the fixture starts with no worktree document');
     const { runner } = makeIssuesRunner();
     const capture = captureIssuesView();
     try {
@@ -543,15 +542,14 @@ describe('/issues is read-only about the worktree association', () => {
     } finally {
       capture.restore();
     }
-    assert.equal(fs.readFileSync(file, 'utf8'), before, 'reading writes nothing');
+    assert.equal(fs.existsSync(file), false, 'reading writes no worktree document');
 
     const { component } = await openIssues(root, { runner });
-    assert.match(clean(component.render(110).join('\n')), /76/, 'the stored issue still lists');
     component.handleInput('down');
     component.handleInput('space');
     component.handleInput('ctrl+s');
     await tick();
-    assert.equal(fs.readFileSync(file, 'utf8'), before, 'the removed association keys write nothing');
+    assert.equal(fs.existsSync(file), false, 'the removed association keys write nothing');
   });
 });
 

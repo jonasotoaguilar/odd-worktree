@@ -489,11 +489,12 @@ async function executeWorktreeCreate(params, ctx, opts) {
 // ---- worktree_create (S1, S4) ----
 //
 // The checkout decisions live in lib/worktree-create.js (plan, execute, view), the
-// preparation chain in lib/worktree-hooks.js, the setup state in
-// lib/worktree-setup.js, and the clone's one document in lib/worktree-metadata.js
-// plus lib/worktree-registry.js. This front only joins them: it resolves the
-// canonical main worktree through the package's own Git seam, refuses with the
-// ported sentence untouched, and prints the fixed lines the view built.
+// preparation chain in lib/worktree-hooks.js, the setup plan and its background task
+// in lib/worktree-setup.js plus lib/worktree-setup-runner.js, and the one ownership
+// rule in lib/worktree-registry.js (the canonical directory, no document). This front
+// only joins them: it resolves the canonical main worktree through the package's own
+// Git seam, refuses with the ported sentence untouched, and prints the fixed lines the
+// view built.
 
 // The ported cores answer `{code, stdout}`; the package's one Git seam is the
 // fixed-argv async runner, so this adapter is the only place the two shapes meet and
@@ -511,26 +512,22 @@ function portedGitSeam(runAsync) {
 // S20/S22 (ported): the setup chain resolved from the closed table and STARTED as
 // this package's own tracked task (lib/worktree-setup-runner.js). S4 gives this
 // package no configuration file, so setup belongs to every create. The runner owns the
-// child, its log under the system temp directory and the terminal write; this front
-// only starts it and then prints the state the record holds at that moment, so a
-// create never waits for an install and never reports a state it cannot back. The
-// tool call supplies no `notify`: an agent's result is its report, so a create fires
-// no UI notification the call did not ask for.
+// child, its log under the system temp directory and the completion notice; this front
+// only starts it. No state is persisted anywhere (S1/S3): a create never waits for an
+// install, prints no setup line and never reports a state it cannot back. The tool
+// call supplies no `notify`: an agent's result is its report, so a create fires no UI
+// notification the call did not ask for.
 async function planPortedWorktreeSetup(input) {
   const runner = libRequire("worktree-setup-runner.js");
-  const started = await runner.startWorktreeSetup({
+  return runner.startWorktreeSetup({
     path: input.path,
     name: input.name,
-    storePath: input.storePath,
     sessionId: input.sessionId,
     copiedChanges: input.copiedChanges,
     // The completion notice belongs to the caller that asked for one: the panel
     // supplies the UI a human is watching, the tool supplies none.
     ...(typeof input.notify === "function" ? { notify: input.notify } : {}),
   });
-  // The record is the one authority: a later write (the very first command settling,
-  // or a refusal of a second start) is what the create must print.
-  return runner.readWorktreeSetupState({ storePath: input.storePath, path: input.path }) ?? started.setup;
 }
 
 /**
@@ -538,9 +535,10 @@ async function planPortedWorktreeSetup(input) {
  *
  * Every refusal is the ported one, returned verbatim: the plan validates the request
  * before anything is written, and nothing here rewrites its sentence. The create owns
- * the same holders the source branch owns — the checkout, the metadata record, the
- * registry row, the preparation hooks and the session registration — so the line
- * `worktree register in session` only prints when that registration really happened.
+ * the same holders the source branch owns — the checkout, the preparation hooks and
+ * the session registration — so the line `worktree register in session` only prints
+ * when that registration really happened. No record and no registry row is written:
+ * the directory the checkout lands in is the only record there is.
  *
  * `input.request` is the ported call (`odd`, `branch`, `copy_changes`).
  * `input.selection` is the PANEL's own selection (`undefined` on the tool front):
@@ -551,7 +549,6 @@ async function planPortedWorktreeSetup(input) {
 async function runPortedWorktreeCreate(input, ctx) {
   const git = libRequire("worktree-git.js");
   const create = libRequire("worktree-create.js");
-  const metadata = libRequire("worktree-metadata.js");
   const hooks = libRequire("worktree-hooks.js");
   const registry = libRequire("worktree-registry.js");
   const sessionRegister = libRequire("session-worktree-register.js");
@@ -564,8 +561,8 @@ async function runPortedWorktreeCreate(input, ctx) {
   const runAsync = libRunner(git);
   const portedGit = portedGitSeam(runAsync);
 
-  // The record keeps `createdBy`, so a create without a session identity cannot be
-  // attributed and is refused before anything exists on disk.
+  // A create is attributed in the session registration, so one without a session
+  // identity is refused before anything exists on disk.
   const createdBy = resolveThread(ctx).thread;
   if (!createdBy) {
     return errorResult("cannot resolve thread identity: set GENTLE_WORKTREE_THREAD or run inside a Pi session", { branch });
@@ -580,7 +577,7 @@ async function runPortedWorktreeCreate(input, ctx) {
   // The canonical main worktree decides the destination AND runs the create, so a
   // session standing in a linked worktree still creates beside the clone.
   const listing = await portedGit(cwd, ["worktree", "list", "--porcelain"]);
-  const liveEntries = metadata.parseWorktreeListPorcelain(listing.code === 0 ? listing.stdout : "");
+  const liveEntries = registry.parseWorktreePorcelain(listing.code === 0 ? listing.stdout : "");
   const main = liveEntries[0];
   if (main === undefined) return errorResult(`could not list the worktrees of ${repo.root}`, { branch });
   let mainRoot = main.path;
@@ -661,34 +658,14 @@ async function runPortedWorktreeCreate(input, ctx) {
   // S1: a refused plan is the result, sentence for sentence.
   if (decision.ok === false) return errorResult(decision.error.message, { branch });
 
-  // S4: the clone keeps ONE document. `registryPath` is the same absolute path the
-  // registry reads and writes, so the metadata record, the registry row, the panel and
-  // the live-session guard can never drift onto two files.
-  const storePath = registry.registryPath(repo.root);
+  // S3/S4: no document, no row, no record. The checkout exists at
+  // `<repo-name>-worktrees/<odd>`, and that path is the whole record: the panel, the
+  // `warp` resolver and a later list all derive this checkout from it.
   const execution = await create.executeWorktreeCreatePlan({
     plan: decision.plan,
     git: portedGit,
-    createdBy,
-    storePath,
   });
   if (execution.ok === false) return errorResult(execution.error.message, { path: decision.plan.path });
-
-  // The registry row is what the panel, the live-session guard and the `warp`
-  // command resolve a name against, so the checkout is registered before the slow work
-  // starts. A row that cannot be written is reported with the checkout that exists,
-  // never hidden and never rolled back.
-  const stored = registry.upsertWorktree(repo.root, {
-    branch: decision.plan.branch,
-    path: decision.plan.path,
-    thread: createdBy,
-    issues: [],
-  });
-  if (!stored || stored.ok !== true) {
-    return errorResult(
-      `worktree created at ${decision.plan.path} but the registry write failed: ${(stored && stored.error) || "unknown registry error"}`,
-      { branch: decision.plan.branch, path: decision.plan.path, createdBy },
-    );
-  }
 
   // S19: the hooks run once the worktree exists and before the output is rendered.
   // Nothing here throws: a failing hook is reported by its own outcome, so a create
@@ -727,14 +704,6 @@ async function runPortedWorktreeCreate(input, ctx) {
       platform: process.platform,
     },
   });
-  // S7: the record owns what the hooks did, so a later list reads it from there.
-  if (execution.result.metadata.recorded && hooksResult.results.length > 0) {
-    create.recordWorktreeHooks({
-      storePath,
-      path: decision.plan.path,
-      hooks: hooks.worktreeHookRecords(hooksResult.results),
-    });
-  }
 
   // S18 (panel only): the explicitly selected paths travel through the shared
   // lib/worktree-changes.js transfer ONCE the checkout exists, and after the hooks so
@@ -771,10 +740,11 @@ async function runPortedWorktreeCreate(input, ctx) {
   // Only one owner ever copied, so the two counts can never both be non-zero.
   const hookCopied = hooksResult.results.find((result) => result.name === "copy_changes")?.copyChanges?.copied ?? 0;
   const copiedChanges = hookCopied + (panelCopy === null ? 0 : panelCopy.files);
-  const setup = await planPortedWorktreeSetup({
-    storePath,
+  // S1/S3: the chain is started and left behind; it persists no state, so nothing here
+  // waits for it and the create prints no setup line.
+  await planPortedWorktreeSetup({
     path: decision.plan.path,
-    // S7: the checkout IS the ODD, so that is the name the setup reports.
+    // The checkout IS the ODD, so that is the name the setup reports.
     name: decision.plan.odd,
     sessionId: createdBy,
     copiedChanges,
@@ -783,11 +753,8 @@ async function runPortedWorktreeCreate(input, ctx) {
 
   const view = create.worktreeCreateView({
     plan: decision.plan,
-    adminId: execution.result.adminId,
-    metadata: execution.result.metadata,
     registered,
     hooks: hooksResult.results,
-    setup,
   });
   // The panel's transfer reports on ITS OWN line, never the ported `copy_changes:` one
   // (that line belongs to the boolean mode): a reader sees one line naming the mode
@@ -947,56 +914,20 @@ const worktreeCreateTool = defineTool({
   },
 });
 
-// ---- worktree_list (S1, S4) ----
+// ---- worktree_list (S2, S3) ----
 //
-// The reconciliation answers what exists and which state each worktree is in
-// (lib/worktree-metadata.js); lib/worktree-list.js decides what a reader sees. This
-// front only feeds them. The listing is READ-ONLY: the metadata document, the
-// registry rows and Git's own worktree set stay exactly as the call found them, so a
-// dead record is reported as `gone`/`missing` instead of being pruned behind the
-// caller's back.
-
-// S12: `interrupted` is reachable only when the reconciliation can ask whether a
-// record's job is still alive. This process's own setup runner owns that answer
-// (`lib/worktree-setup-runner.js` keeps its running tasks keyed by checkout
-// path), but only for records THIS session wrote: a job named by another
-// session's record may be running in another Pi process this one cannot see.
-// So `interrupted` is derived only when `createdBy` is this session's id and the
-// runner no longer holds a task for that checkout; every other record keeps its
-// persisted `running`, because this process cannot tell. The stored record is
-// never rewritten here.
-function setupJobLiveness(records, runner, sessionId) {
-  const owners = new Map();
-  for (const [worktreePath, record] of Object.entries(records)) {
-    const jobId = record && record.setup ? record.setup.jobId : undefined;
-    if (typeof jobId !== "string" || jobId.length === 0) continue;
-    const held = owners.get(jobId) || [];
-    held.push({ worktreePath, mine: sessionId !== undefined && record.createdBy === sessionId });
-    owners.set(jobId, held);
-  }
-  return (jobId) => {
-    const held = owners.get(jobId);
-    // A job this process cannot attribute to itself is UNKNOWN, never dead.
-    if (held === undefined || held.some((owner) => !owner.mine)) return true;
-    return held.some((owner) => {
-      try {
-        return runner.isWorktreeSetupRunning(owner.worktreePath) === true;
-      } catch {
-        return false;
-      }
-    });
-  };
-}
+// Git's own listing is the whole answer: which checkouts exist and which branch each
+// one holds. lib/worktree-registry.js adds the one rule Git does not carry — which of
+// them this package created, by the canonical
+// `<repo-parent>/<repo-name>-worktrees/<odd>` directory — and lib/worktree-list.js
+// decides what a reader sees. This front only feeds them. The listing is READ-ONLY:
+// it reads no document (there is none), writes nothing and prunes nothing.
 
 async function executePortedWorktreeList(params, ctx) {
   const git = libRequire("worktree-git.js");
-  const metadata = libRequire("worktree-metadata.js");
-  const registry = libRequire("worktree-registry.js");
   const list = libRequire("worktree-list.js");
-  const runner = libRequire("worktree-setup-runner.js");
   const cwd = toolCwd(ctx);
   const runAsync = libRunner(git);
-  const portedGit = portedGitSeam(runAsync);
 
   let repo;
   try {
@@ -1004,29 +935,29 @@ async function executePortedWorktreeList(params, ctx) {
   } catch {
     return errorResult(`not a git repository: ${cwd}`, { tool: "worktree_list" });
   }
-  const listing = await portedGit(cwd, ["worktree", "list", "--porcelain"]);
-  const entries = listing.code === 0 ? metadata.parseWorktreeListPorcelain(listing.stdout) : [];
+  let entries;
+  try {
+    entries = await git.listWorktreesAsync(repo.root, { runAsync });
+  } catch (err) {
+    return errorResult(`could not list the worktrees of ${repo.root}: ${(err && err.message) || err}`, { tool: "worktree_list" });
+  }
   const main = entries[0];
   if (main === undefined) return errorResult(`could not list the worktrees of ${repo.root}`, { tool: "worktree_list" });
-
-  const store = metadata.readWorktreeMetadataStore(registry.registryPath(repo.root));
-  // A store this version cannot read loses the filter it feeds, so the list shows
-  // what Git knows and says why, instead of an empty view that looks authoritative.
-  const lost = store.status === "unreadable" || store.status === "unsupported";
-  const records = store.status === "valid" ? store.file.records : {};
+  // The canonical main root decides the directory a checkout must live in to be one
+  // of ours, so a session standing in a linked worktree still lists the same set.
+  let mainRoot = main.path;
+  try {
+    mainRoot = fs.realpathSync(main.path);
+  } catch {
+    // Git's own spelling is all it answered.
+  }
   const view = list.worktreeListView({
-    reconciliation: metadata.reconcileWorktrees({
-      entries,
-      records,
-      commonDir: repo.commonDir,
-      setupJobLiveness: setupJobLiveness(records, runner, resolveThread(ctx).thread),
-    }),
-    project: path.basename(main.path),
-    main: { path: main.path, branch: main.branch || "-", shortSha: (main.head || "").slice(0, 7) },
-    all: lost || (params && params.all === true),
+    entries,
+    mainRoot,
+    project: path.basename(mainRoot),
+    all: params && params.all === true,
   });
-  const text = lost ? `${view.text}\nmetadata unreadable; showing what Git knows` : view.text;
-  return textResult(text, view.details, false);
+  return textResult(view.text, view.details, false);
 }
 
 
@@ -1618,12 +1549,18 @@ async function executeWorktreeClose(params, ctx, opts) {
   } catch (err) {
     return errorResult(`not a git repository: ${cwd}`, { force });
   }
-  const read = registry.readRegistry(repo.root);
-  if (!read.ok) {
-    return errorResult(`cannot read worktree registry: ${read.error}`, { force });
+  // S3: the rows this resolver matches are Git's own listing. There is no document to
+  // read, so a checkout that exists and is listed can be closed by path or branch — and
+  // one that Git no longer lists resolves to nothing, the same refusal as before.
+  let closeLive;
+  try {
+    closeLive = await git.listWorktreesAsync(repo.root, { runAsync });
+  } catch (err) {
+    return errorResult(`cannot list worktrees: ${(err && err.message) || err}`, { force });
   }
-  const byPath = hasPath && !hasName ? registry.findByPath(repo.root, rawPath) : null;
-  const byBranch = hasBranch && !hasName ? registry.findByBranch(repo.root, rawBranch) : null;
+  const read = { ok: true, worktrees: registry.checkoutRows(closeLive) };
+  const byPath = hasPath && !hasName ? registry.findCheckoutByPath(read.worktrees, rawPath) : null;
+  const byBranch = hasBranch && !hasName ? registry.findCheckoutByBranch(read.worktrees, rawBranch) : null;
   if (hasPath && hasBranch && byPath && byBranch && byPath.branch !== byBranch.branch) {
     return errorResult(
       `closing a worktree: path and branch disagree: path resolves to branch '${byPath.branch}' but branch '${rawBranch}' is registered elsewhere; pass only one`,
@@ -1994,26 +1931,15 @@ async function executeWorktreeClose(params, ctx, opts) {
       { branch, path: target, force, removedBy },
     );
   }
-  let dropped;
-  try {
-    dropped = registry.removeWorktreeByPath(repo.root, resolvedTarget);
-  } catch (err) {
-    dropped = { ok: false, error: (err && err.message) || String(err) };
-  }
-  if (!dropped.ok) {
-    return errorResult(
-      `worktree removed at ${target} but the registry entry could not be dropped: ${dropped.error}`,
-      { branch, path: target, force, removed: true, branchKept: true },
-    );
-  }
-  // The removed/branch-kept contract is byte-identical on every path that was
-  // not refused.
+  // S3/S4: nothing to drop. The checkout's directory was the only record, and `git
+  // worktree remove` above is the whole removal; the branch is kept.
+  //
+  // The removed/branch-kept contract is byte-identical on every path that was not
+  // refused.
   const successLines = [closeSuccessText(branch, true)];
-  // S1: a worktree carries no issue and no ODD document, so the close output
-  // names no association — no association line, no association warning and no
-  // dropped-document list. Nothing is lost either way: the registry writes
-  // every row the close does not address back byte for byte, so there is no
-  // collapse left to report.
+  // S1: a worktree carries no issue and no ODD document, so the close output names no
+  // association — no association line and no warning. There is no stored row either,
+  // so nothing can be lost by removing the checkout.
   const successDetails = {
     path: target, branch, removed: true, branchKept: true, thread: owner,
     sessionCheck: sessionRecheck.guard,
@@ -2035,9 +1961,9 @@ async function executeWorktreeClose(params, ctx, opts) {
 const worktreeListTool = defineTool({
   name: "worktree_list",
   label: "Worktree List",
-  description: "List this clone's Git worktrees: the main worktree first, then the worktrees created for this clone with their ODD, branch and setup state. Read-only; it never writes the worktree metadata. Pass all:true to also show the worktrees Git knows outside the list and the records whose worktree no longer exists.",
+  description: "List this clone's Git worktrees: the main worktree first, then the checkouts this package created under <repo-name>-worktrees (each row is its directory's name, which is the ODD, and its branch). Read-only; it writes nothing. Pass all:true to also show the worktrees Git knows outside that directory.",
   parameters: Type.Object({
-    all: opt(Type.Boolean({ description: "Omitted lists only the registered worktrees. true also shows the worktrees Git knows outside the list and the records whose worktree no longer exists." })),
+    all: opt(Type.Boolean({ description: "Omitted lists only the checkouts this package created. true also shows the worktrees Git knows outside <repo-name>-worktrees." })),
   }),
   ...worktreeToolRenderers("worktree_list"),
   async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -2676,12 +2602,17 @@ function observeOddWriteForNaming(event, ctx, pi, allowPhaseTrigger) {
   const principalRoot = path.basename(repo.commonDir) === ".git"
     ? path.dirname(repo.commonDir)
     : repo.root;
-  // The registry row supplies the branch suffix of the session name and
-  // nothing else: this hook never writes it (S1 — a worktree carries no
-  // issue and no ODD document, so nothing is associated here).
-  const read = registry.readRegistry(repo.root);
-  if (!read || read.ok !== true || !Array.isArray(read.worktrees)) return;
-  const entry = oddEntryForCwd(read.worktrees, cwd);
+  // Git's listing supplies the checkout this write happened in and its branch. There
+  // is no stored row to read (S3): the checkout's own path is the record.
+  let live;
+  try {
+    live = git.listWorktrees(repo.root);
+  } catch {
+    return;
+  }
+  const rows = registry.checkoutRows(live);
+  if (rows.length === 0) return;
+  const entry = oddEntryForCwd(rows, cwd);
   if (!entry) return; // The principal checkout names nothing (D6).
   const touched = [];
   // The absolute path behind each touched rel, so the naming step can read
@@ -3493,16 +3424,15 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
   } catch (err) {
     return warpFail(`worktree warp: not a git repository: ${fromCwd}`, { name, alreadyThere: false, cancelled: false });
   }
-  const read = registry.readRegistry(repo.root);
-  if (!read.ok) {
-    return warpFail(`worktree warp: cannot read worktree registry: ${read.error}`, { name, alreadyThere: false, cancelled: false });
-  }
   let live;
   try {
     live = await git.listWorktreesAsync(repo.root, { runAsync });
   } catch (err) {
     return warpFail(`worktree warp: cannot list worktrees: ${(err && err.message) || err}`, { name, alreadyThere: false, cancelled: false });
   }
+  // S3: the name resolves against Git's listing. There is no stored row, so a live
+  // checkout is warpable the moment it exists and one Git no longer lists is not.
+  const read = { ok: true, worktrees: registry.checkoutRows(live) };
   // S14: this fresh scan is the warp-time discovery refresh.
   noteWarpDiscovery(repo.root, live);
   // The SAME resolver as close-by-name (S14: the warp allows a lone
@@ -4627,39 +4557,17 @@ async function awaitPendingStartupTasks() {
   }
 }
 
-// The discovery body the deferred startup task runs: scan, refresh the warp
-// cache, register the live checkouts the registry does not own. Read-only
-// outside the registry's own append, never throws, and a task whose session
-// ended before git answered drops instead of writing into the session that
-// replaced it. Returns the scan for tests and in-process callers.
+// The discovery body the deferred startup task runs: scan and refresh the warp cache.
+// S3/S4: there is nothing to register — a checkout this package created is already
+// identified by its directory — so startup writes nothing at all. Never throws, and a
+// task whose session ended before git answered drops instead of writing into the
+// session that replaced it. Returns the scan for tests and in-process callers.
 async function runStartupDiscovery(cwd, epoch) {
   try {
     const scanned = await scanLiveCheckouts(cwd);
     if (scanned === null) return null;
     if (!startupTaskLive(epoch)) return null;
     noteWarpDiscovery(scanned.repo.root, scanned.live);
-    try {
-      const registry = libRequire("worktree-registry.js");
-      let principalId = null;
-      try {
-        if (typeof scanned.repo.commonDir === "string" && path.basename(scanned.repo.commonDir) === ".git") {
-          const rawPrincipal = path.resolve(path.dirname(scanned.repo.commonDir));
-          const pst = checkoutState(rawPrincipal, scanned.repo.root);
-          principalId = pst.real !== null ? pst.real : pst.absolute;
-        }
-      } catch {
-        principalId = null;
-      }
-      if (typeof registry.registerMissingWorktrees === "function") {
-        // S1: discovery only appends rows for live checkouts. It
-        // addresses no stored row, so it drops nothing and has no
-        // association to report.
-        registry.registerMissingWorktrees(scanned.repo.root, scanned.live, principalId);
-      }
-    } catch {
-      // Discovery registration is best-effort: the warp cache above
-      // already recorded the scan.
-    }
     return scanned;
   } catch {
     return null;
@@ -4931,22 +4839,6 @@ async function warpOccupiedCheckoutPaths(git, cwd) {
   for (const entry of Array.isArray(live) ? live : []) {
     if (entry && typeof entry === "object") add(entry.path);
   }
-  try {
-    const registry = libRequire("worktree-registry.js");
-    const repo = await git.repoIdentityAsync(cwd, { runAsync: libRunner(git) });
-    const read = registry.readRegistry(repo.root);
-    for (const row of read && Array.isArray(read.worktrees) ? read.worktrees : []) {
-      if (!row || typeof row.path !== "string" || !path.isAbsolute(row.path)) continue;
-      try {
-        if (!fs.statSync(row.path).isDirectory()) continue;
-      } catch {
-        continue;
-      }
-      add(row.path);
-    }
-  } catch {
-    // A stored side this process cannot read adds nothing.
-  }
   return [...paths];
 }
 
@@ -5192,18 +5084,15 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
     return;
   }
 
-  // 4. Only a REGISTERED worktree can be closed: the shared close resolves its
-  // target through the registry, so a live checkout nobody registered would be
-  // asked about and then refused. That is a question a human cannot act on, so
-  // it is refused here instead — before the dialog.
-  let registered = null;
-  try {
-    registered = registry.findByPath(repo.root, target.path);
-  } catch {
-    registered = null;
-  }
-  if (!registered) {
-    notify?.(`warp: refusing to delete ${target.path}: it is a live checkout this repository's worktree registry does not own; nothing was removed.`, "error");
+  // 4. Only a checkout THIS PACKAGE created can be closed. S3 makes the directory the
+  // record, so a live checkout outside `<repo-name>-worktrees` was never ours to
+  // remove; asking about one would be a question a human cannot act on, so it is
+  // refused here — before the dialog.
+  const mainRootForDelete = principal && typeof principal.path === "string" && principal.path.length > 0
+    ? principal.path
+    : repo.root;
+  if (!registry.isOwnedCheckout(target.path, mainRootForDelete)) {
+    notify?.(`warp: refusing to delete ${target.path}: it is a live checkout this package did not create (it is not under ${registry.worktreeDirectoryPath(mainRootForDelete)}); nothing was removed.`, "error");
     return;
   }
 
@@ -5214,7 +5103,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
   // against the registry row, which legitimately disagree (the listing offers a
   // sole claimant's CURRENT branch, while the row stores the branch it was
   // registered with; B1: comparing the two refused every such deletion).
-  const before = await warpDeleteSnapshot({ git, registry, repo, targetPath: target.path, confirmLib });
+  const before = await warpDeleteSnapshot({ git, repo, targetPath: target.path, confirmLib });
   if (before.ok !== true) {
     notify?.(before.text, "error");
     return;
@@ -5298,7 +5187,7 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
   // 7. Revalidate the EXACT target and its evidence after the answer, so a
   // checkout that changed while the dialog was open is never removed on the
   // strength of what the human read a moment ago.
-  const after = await warpDeleteSnapshot({ git, registry, repo, targetPath: target.path, confirmLib });
+  const after = await warpDeleteSnapshot({ git, repo, targetPath: target.path, confirmLib });
   if (after.ok !== true) {
     notify?.(after.text, "error");
     return;
@@ -5428,8 +5317,6 @@ function warpIdentityWords(identity) {
 // the answer. Every component is compared with its own twin:
 //   - `identity`: the checkout the path resolves to, and whether that path is a
 //     symbolic link (see `warpSameIdentity`),
-//   - `registered`: the registry row's branch (the row is what the close
-//     resolves),
 //   - `live`: whether the checkout is still live AND the branch git reports for
 //     it (whichever branch it is on — the listing offers a sole claimant's
 //     CURRENT branch, so a checkout that was moved to another branch before the
@@ -5439,22 +5326,7 @@ function warpIdentityWords(identity) {
 // A component that cannot be read makes the whole snapshot `ok:false`, because
 // a comparison against an unreadable value would either pass on nothing or
 // refuse on nothing.
-async function warpDeleteSnapshot({ git, registry, repo, targetPath, confirmLib }) {
-  let freshRead;
-  try {
-    freshRead = registry.readRegistry(repo.root);
-  } catch (err) {
-    return { ok: false, text: `refusing to delete ${targetPath}: the worktree registry could not be read (${(err && err.message) || err}); nothing was removed.` };
-  }
-  if (!freshRead || freshRead.ok !== true) {
-    return { ok: false, text: `refusing to delete ${targetPath}: the worktree registry could not be read (${(freshRead && freshRead.error) || "unknown error"}); nothing was removed.` };
-  }
-  let row = null;
-  try {
-    row = registry.findByPath(repo.root, targetPath);
-  } catch {
-    row = null;
-  }
+async function warpDeleteSnapshot({ git, repo, targetPath, confirmLib }) {
   let live;
   try {
     live = await git.listWorktreesAsync(repo.root, { runAsync: libRunner(git) });
@@ -5482,7 +5354,6 @@ async function warpDeleteSnapshot({ git, registry, repo, targetPath, confirmLib 
   return {
     ok: true,
     identity: identityRead,
-    registered: { present: row !== null, branch: row && typeof row.branch === "string" ? row.branch : null },
     live: { present: isLive, branch: liveBranch },
     evidence,
     evidenceKey: confirmLib.warpDeleteEvidenceKey(evidence),
@@ -5523,14 +5394,6 @@ function warpDeleteSnapshotDelta(before, after) {
   }
   if (before.live.branch !== after.live.branch) {
     moved.push(`its live branch changed from '${before.live.branch === null ? "unknown" : before.live.branch}' to '${after.live.branch === null ? "unknown" : after.live.branch}'`);
-  }
-  if (before.registered.present !== after.registered.present) {
-    moved.push(after.registered.present
-      ? "its registry entry came back"
-      : "its registry entry disappeared");
-  }
-  if (before.registered.branch !== after.registered.branch) {
-    moved.push(`its registered branch changed from '${before.registered.branch === null ? "unknown" : before.registered.branch}' to '${after.registered.branch === null ? "unknown" : after.registered.branch}'`);
   }
   if (before.evidenceKey !== after.evidenceKey) {
     const beforeContent = before.evidence && before.evidence.content ? before.evidence.content.fingerprint : null;
@@ -5618,17 +5481,6 @@ async function runWarpSelectorLoop(ctx, git, registry, repo, fromCwd, notify) {
   // the ordinary gate.
   let createDirtyName = null;
   for (;;) {
-    let freshRead;
-    try {
-      freshRead = registry.readRegistry(repo.root);
-    } catch (err) {
-      notify?.(`warp: cannot read worktree registry: ${(err && err.message) || err}`, "error");
-      return undefined;
-    }
-    if (!freshRead.ok) {
-      notify?.(`warp: cannot read worktree registry: ${freshRead.error}`, "error");
-      return undefined;
-    }
     let freshLive;
     try {
       // S21: the selector re-reads the live listing on every iteration, so it
@@ -5638,6 +5490,9 @@ async function runWarpSelectorLoop(ctx, git, registry, repo, fromCwd, notify) {
       notify?.(`warp: cannot list worktrees: ${(err && err.message) || err}`, "error");
       return undefined;
     }
+    // S3: the rows the selector offers ARE Git's listing; there is no document to
+    // read, so nothing can fail here and nothing has to be kept in step with it.
+    const freshRead = { ok: true, worktrees: registry.checkoutRows(freshLive) };
     noteWarpDiscovery(repo.root, freshLive);
     const freshPrincipal = principalForName(git, repo.root, repo, freshLive);
     const freshOffered = warpOfferedCheckouts(git, freshRead, freshPrincipal, freshLive, repo.root);
@@ -5649,9 +5504,8 @@ async function runWarpSelectorLoop(ctx, git, registry, repo, fromCwd, notify) {
     }));
     const reload = async () => {
       try {
-        const read = registry.readRegistry(repo.root);
         const live = await git.listWorktreesAsync(repo.root, { runAsync });
-        if (!read || read.ok !== true) return null;
+        const read = { ok: true, worktrees: registry.checkoutRows(live) };
         noteWarpDiscovery(repo.root, live);
         const principal = principalForName(git, repo.root, repo, live);
         const offered = warpOfferedCheckouts(git, read, principal, live, repo.root);
@@ -5852,11 +5706,6 @@ function registerWarpCommand(pi) {
         notify?.(notGitRepositoryLine(fromCwd), "info");
         return;
       }
-      const read = registry.readRegistry(repo.root);
-      if (!read.ok) {
-        notify?.(`warp: cannot read worktree registry: ${read.error}`, "error");
-        return;
-      }
       let live;
       try {
         live = await git.listWorktreesAsync(repo.root, { runAsync });
@@ -5864,6 +5713,9 @@ function registerWarpCommand(pi) {
         notify?.(`warp: cannot list worktrees: ${(err && err.message) || err}`, "error");
         return;
       }
+      // S3: a checkout is offered because Git lists it, not because a document
+      // remembers it.
+      const read = { ok: true, worktrees: registry.checkoutRows(live) };
       // S14: this fresh scan is the warp-time discovery refresh.
       noteWarpDiscovery(repo.root, live);
       // The popup: `runWarpSelectorLoop` mounts the redesigned overlay
@@ -6793,6 +6645,11 @@ export default function (pi) {
   // session start and drop it on shutdown, so no render path ever reaches a
   // context the runtime has invalidated.
   pi.on("session_start", rememberWorktreeCardUi);
+  // S5: the cards follow the style chosen in Gentle Shell with no hook of their
+  // own. The shell publishes the live value on a process-wide slot and the card
+  // substrate reads it on every render; when no host is present the substrate reads
+  // `<home>/card-style.json` on every render too. So there is nothing to re-read at
+  // `session_start` and nothing cached to invalidate.
   // The session-start `gh` check only gates whether `/issues` may open; the
   // command itself is registered eagerly above.
   pi.on("session_start", async (event, ctx) => {

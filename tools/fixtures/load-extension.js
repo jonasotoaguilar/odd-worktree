@@ -48,16 +48,20 @@ async function loadExtension(pi) {
     const commands = new Map();
     const tools = new Map();
     const messageRenderers = new Map();
+    const entryRenderers = new Map();
+    const entries = [];
     const hooks = [];
     const host = {
       registerCommand: (name, handler) => { commands.set(name, handler); },
       registerTool: (tool) => { tools.set(tool.name, tool); },
       registerMessageRenderer: (type, renderer) => { messageRenderers.set(type, renderer); },
+      registerEntryRenderer: (type, renderer) => { entryRenderers.set(type, renderer); },
+      appendEntry: (customType, data) => { entries.push({ customType, data }); },
       on: (event, handler) => { hooks.push([event, handler]); },
       ...pi,
     };
     factory(host);
-    return { commands, tools, messageRenderers, hooks, host };
+    return { commands, tools, messageRenderers, entryRenderers, entries, hooks, host };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

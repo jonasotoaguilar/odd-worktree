@@ -443,10 +443,28 @@ One limit, stated plainly: a string has no "must be last" flag, so the block's
 position follows extension load order. It can sit before a later extension's
 short hint; it can never land inside or in place of another extension's text.
 
+### The `## CodeGraph` block in the system prompt
+
+A session that already holds a CodeGraph tool (the native `codegraph` tool or
+`mcp__codegraph__codegraph_explore`) gets a short section on how to use it: call
+the graph before searching or reading code, treat its answer as a map and not as
+proof, and keep the other tools for what it does not index. Each role gets its
+own text, read from `lib/codegraph-prompt/<role>.md`: the primary session the
+orchestrator's, a gentle-shell child (explore, verify, worker, fix, judges) its
+own, chosen from the agent name in the child's own command line, and any other
+child a generic one. A `review-*` agent and a session without a CodeGraph tool get
+nothing.
+
+It is appended the same way as the worktrees block, after whatever the host put
+there, and skipped when its heading is already present. The package never runs,
+syncs or checks CodeGraph; it only advises. `ODD_WORKTREE_PROMPT=0` suppresses
+both blocks.
+
 ### Deliberately absent
 
 This package is the worktree / ODD / issues surface only: two agent tools, three
-panels, no customize panel, no plugin-tools toggles, no CodeGraph work, no
+panels, no customize panel, no plugin-tools toggles, no CodeGraph work (only the
+prompt advice above), no
 companion-app integration, and no worktree↔issue association. There is nothing to
 configure, and `/warp`, `/odd-list` and `/issues` are always on. Paths, branches
 and arguments reach `git` and `gh` as fixed argv arrays, never as a shell string.

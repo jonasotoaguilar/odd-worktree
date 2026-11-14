@@ -45,6 +45,8 @@ its presence records.
 | `lib/odd-*.js` | `odd-docs.js` (document discovery and ordering), `odd-view.js` (two-pane reader), `odd-markdown.js` (the shared markdown renderer). |
 | `lib/odd-prompt/odd-worktrees.md` | The `## ODD worktrees` prompt prose: one text, no variants. |
 | `lib/odd-worktrees-prompt.js` | The append-only injection helper that reads that file. |
+| `lib/codegraph-prompt/*.md` | The `## CodeGraph` prose: one approved text per role (orchestrator, explore, verify, worker, fix, judge, generic). |
+| `lib/codegraph-rules.js` | Selects a role's text from the session's own facts and appends it. Runs and probes nothing. |
 | `lib/gh-issues.js` | The `gh` client: checkout repository scope, identity pinning, issue pages, details, labels, assignees, comments, close, and the `viewerPermission` → capability mapping. |
 | `lib/issues-view.js`, `lib/issue-preview.js` | The pure `/issues` view and its preview formatter. |
 | `lib/tui-paint.js`, `lib/view-layout.js`, `lib/preview-scroll-keys.js`, `lib/clipboard.js`, `lib/open-external.js` | Shared presentation helpers: the one palette, window/layout maths, the one preview scroll decision, clipboard, external opener. |
@@ -71,11 +73,15 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
 1. **One extension entry point.** `package.json` `pi.extensions` is exactly
    `["./extensions/odd-worktree-tools.ts"]`, and `extensions/` holds no other
    file. A second entry point changes what the host loads.
-2. **No customize / plugin-tools / Herdr-panel surface.** No customize command,
-   no plugin-tools toggles, no Herdr plugin management, no `worktree-mode` file,
-   no perf tracing, and no `herdr-gentle:` command name — and no CodeGraph probe,
-   command or sync either. `tools/package-surface.test.js` asserts both the loaded
-   surface and the source text.
+2. **No customize / plugin-tools / Herdr-panel surface, and no CodeGraph work.** No
+   customize command, no plugin-tools toggles, no Herdr plugin management, no
+   `worktree-mode` file, no perf tracing, and no `herdr-gentle:` command name. The
+   package also probes, runs, syncs and writes no CodeGraph: no `/codegraph-*`
+   command, no gate, no edit/write sync, no index check. Its one CodeGraph touch is
+   the append-only `## CodeGraph` prompt section (invariant 16), which only advises a
+   session that already holds a CodeGraph tool. `tools/package-surface.test.js`
+   asserts the loaded surface, the source text and that `lib/codegraph-rules.js`
+   never spawns, execs or writes.
 3. **The shipped surface is exactly three commands and two tools.** `/warp`,
    `/odd-list`, `/issues`; `worktree_create`, `worktree_list`. No agent surface
    moves the session or removes a checkout: `/warp` moves the session (its
@@ -268,6 +274,21 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     measured AND repainted here. Write no assertion that no helper ever receives a
     painted string, and none that a painted string is never painted twice: both
     would be false.
+
+16. **The `## CodeGraph` section is advice, selected by the session's own facts.**
+    It rides `systemPromptOptions.appendSystemPrompt` like invariant 14: appended,
+    idempotent by heading, never a returned `systemPrompt`, suppressed by
+    `ODD_WORKTREE_PROMPT=0`. It is added only when the session already holds the
+    native `codegraph` tool or `mcp__codegraph__codegraph_explore` (in a child, the
+    requested-tools list counts). The text is chosen by role: a primary session gets
+    `orchestrator.md`; a child's agent name, read from its own argv
+    (`gentle-pi-subagent-<agent>-<random>/`), picks `explore`, `verify`, `worker`,
+    `fix` or `judge` (both judges share one); any other child, or a name that cannot
+    be read, gets `generic.md`; a `review-*` agent gets nothing. A missing or
+    heading-less file falls back to `generic.md`, and a missing generic means no
+    section. Only the orchestrator and explore texts name the native operations; the
+    other roles name the MCP tool in full; no text mentions `init`, `sync` or an
+    index fallback, because this package never prepares an index.
 
 ## Commits and pull requests
 

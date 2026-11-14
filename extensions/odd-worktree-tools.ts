@@ -3166,23 +3166,32 @@ function forgetPendingWarp(ctx) {
   }
 }
 
-// The COMMAND front's bounded wait: a warp lands after this turn settles, so it
-// gives the published counters a chance to drain before it refuses. Null when
-// the module or the session identity is unavailable (best effort, blocks
-// nothing).
-async function warpWaitForIdleSession(ctx) {
+// The COMMAND front's counters, read ONCE as they are (S2, warp-queue-order):
+// a session with a tool executing, agent tasks or background jobs QUEUES the
+// warp at once and is never waited on until it drains — a wait made the request
+// land on the idle path afterwards, so it never queued (and never painted its
+// steering row) and asked the pending-changes question again on every attempt.
+//
+// An absent, empty or throwing session id is NOT a reason to skip the counters:
+// the tool counter and the host's `job_list` belong to THIS session whatever its
+// id is, and the queue is keyed for the id-less case too (`pendingKeyFor` falls
+// back to the checkout the session stands in). Only the agent-task presence hash
+// needs the id, and `sessionActivity` answers that source `unknown` — which
+// blocks nothing — when it is missing. Null only when the module is unavailable
+// (best effort, blocks nothing).
+async function warpRequestActivity(ctx) {
   let lib = null;
   try {
     lib = libRequire("worktree-warp-busy.js");
   } catch {
     return null;
   }
-  if (!lib || typeof lib.waitForSessionActivity !== "function") return null;
-  const sessionId = closeSessionString(ctx, "getSessionId");
+  if (!lib || typeof lib.sessionActivity !== "function") return null;
   try {
-    // The budget travels through the environment so a session can bound its own
-    // wait (ODD_WORKTREE_WARP_BUSY_WAIT_MS); the default keeps a warp short.
-    return await lib.waitForSessionActivity({ sessionId, env: process.env, host: warpJobHost(ctx) });
+    return await lib.sessionActivity({
+      sessionId: closeSessionString(ctx, "getSessionId"),
+      host: warpJobHost(ctx),
+    });
   } catch {
     return null;
   }
@@ -3468,30 +3477,29 @@ async function askWarpDirtyChoice(ctx, summaryLine, opts) {
   // No custom UI (scripted/headless path): ordinary warp, no copy.
   return 'no';
 }
-// S61 source-dirty gate shared by the warp command. Returns
-// {ok:true, copied} to continue, {cancelled:true} to stop with no
-// switch, or {error} to refuse with no switch. Never throws.
-async function warpMaybeCopyDirty({ ctx, git, fromCheckout, targetCwd, options }) {
+// S61 source-dirty gate shared by the warp command: the answer the human gave at
+// REQUEST time is applied here (S1, warp-queue-order), so this path never asks
+// the question a second time. A `none` selection copies nothing. Returns
+// {ok:true, copied} or {error} to refuse with no switch. Never throws.
+async function warpCopyRequestedChanges({ git, fromCheckout, targetCwd, changes }) {
+  if (!changes || changes.mode === 'none') return { ok: true, copied: null };
   let changesLib = null;
   try {
     changesLib = libRequire('worktree-changes.js');
   } catch (err) {
     return { ok: true, copied: null };
   }
-  let summary;
-  try {
-    summary = await changesLib.summarizeChanges(fromCheckout, { git });
-  } catch {
-    return { ok: true, copied: null };
-  }
-  if (!summary || summary.ok !== true || summary.files === 0) return { ok: true, copied: null };
-  const summaryLine = `${summary.files} file${summary.files === 1 ? '' : 's'}, +${summary.added}/-${summary.deleted}`;
-  const choice = await askWarpDirtyChoice(ctx, summaryLine, options);
-  if (choice === null) return { cancelled: true };
-  if (choice === 'no') return { ok: true, copied: null };
   let copied;
   try {
-    copied = await changesLib.copyChanges({ from: fromCheckout, to: targetCwd, selectMode: 'all' }, { git });
+    copied = await changesLib.copyChanges(
+      {
+        from: fromCheckout,
+        to: targetCwd,
+        selectMode: changes.mode,
+        ...(changes.mode === 'paths' ? { selection: changes.paths } : {}),
+      },
+      { git },
+    );
   } catch (err) {
     return { error: `cannot copy changes: ${(err && err.message) || err} (nothing was warped)` };
   }
@@ -3500,12 +3508,13 @@ async function warpMaybeCopyDirty({ ctx, git, fromCheckout, targetCwd, options }
   }
   return { ok: true, copied };
 }
-// S5: the change selection a QUEUED human warp carries. A queued handoff cannot
-// prompt (the command's handoff path never asks), so the same YES COPY / NO COPY
-// question the idle warp asks is answered NOW and travels in the token; the copy
-// itself still runs at move time inside the command. Cancelling queues nothing.
-// Never throws.
-async function warpQueuedChangesSelection({ ctx, git, fromCheckout, skipPrompt, options }) {
+// S5: the change selection a warp carries, asked ONCE at REQUEST time (S1,
+// warp-queue-order) — before the busy decision, so a queued request asks now
+// instead of after the session drains, and the immediate move applies the same
+// answer instead of asking again. The answer travels in the queued token and
+// the copy itself still runs at move time. Cancelling queues nothing. Never
+// throws.
+async function warpRequestChangesSelection({ ctx, git, fromCheckout, skipPrompt, options }) {
   const none = { ok: true, changes: { mode: 'none', paths: [] } };
   if (skipPrompt === true) return none;
   let changesLib = null;
@@ -3585,14 +3594,6 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
     );
   }
   await ctx.waitForIdle();
-  // S4/S5: a session with running agent tasks is IDLE for the host, so the wait
-  // above does not wait for that work. This front gives the published counters a
-  // bounded chance to drain (ODD_WORKTREE_WARP_BUSY_WAIT_MS) and QUEUES the
-  // request when they have not: nothing switches under work that is still
-  // running, and the queued handoff is performed once the counters drain. A
-  // store that is absent or unreadable blocks nothing.
-  const busyWait = await warpWaitForIdleSession(ctx);
-  const sessionLoad = busyWait && busyWait.activity ? busyWait.activity : null;
   const fromCwd = typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
   // S21: the same awaited preflight reads as the tool, so a slow repository
   // never freezes the session that is being moved.
@@ -3709,30 +3710,45 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
   // through `failAfterCopy` (below) and why a retry must prove the copied state
   // byte for byte before it skips anything.
   const dirtyFrom = warpDeepestContaining(sessionId, warpLiveIdentities(live, repo.root)) || fromCwd;
-  // S5: the QUEUED warp. This session still reports running or queued agent
-  // tasks, so nothing switches: the request is validated and kept as this
-  // session's one pending warp, and lib/worktree-warp-busy.js re-dispatches the
-  // SAME handoff once the counters drain. What this returns says queued, never
-  // moved, and says plainly that only this session's agent-task counters drain
-  // the queue.
-  if (sessionLoad && sessionLoad.busy === true) {
-    const queuedSelection = handoff
-      ? { ok: true, changes: handoff.changes }
-      : await warpQueuedChangesSelection({
-        ctx, git, fromCheckout: dirtyFrom, skipPrompt: skipDirtyPrompt, options: opts,
-      });
-    if (queuedSelection.cancelled === true) {
+  // S1 (warp-queue-order): the pending-changes question is answered HERE, at
+  // REQUEST time and before the busy decision, so a request that will be queued
+  // asks ONCE now instead of after the session drains — and the immediate move
+  // below applies the very same answer instead of asking it again. A handoff (a
+  // queued request's own re-dispatch) never asks: it already carries the answer
+  // it was queued with.
+  let requestChanges = { mode: 'none', paths: [] };
+  if (!handoff) {
+    const requestSelection = await warpRequestChangesSelection({
+      ctx, git, fromCheckout: dirtyFrom, skipPrompt: skipDirtyPrompt, options: opts,
+    });
+    if (requestSelection.cancelled === true) {
       return warpFail(
         `worktree warp: ${name} cancelled (the session stays in ${fromCwd})`,
         { name, alreadyThere: false, cancelled: true },
       );
     }
+    requestChanges = requestSelection.changes;
+  }
+  // S2: the counters decide queue-vs-move AS THEY ARE, read once. Nothing here
+  // waits for this session's tools, agent tasks or jobs to drain: a request that
+  // waited found the session idle afterwards and took the move path, so it never
+  // queued, never painted the steering row and asked the copy question again on
+  // every attempt. A store that is absent or unreadable blocks nothing.
+  const sessionLoad = await warpRequestActivity(ctx);
+  // S5: the QUEUED warp. This session still reports a tool executing, running or
+  // queued agent tasks, or an active job, so nothing switches: the request is
+  // validated and kept as this session's one pending warp, and
+  // lib/worktree-warp-busy.js re-dispatches the SAME handoff once the counters
+  // drain. What this returns says queued, never moved, and says plainly what it
+  // is waiting for.
+  if (sessionLoad && sessionLoad.busy === true) {
+    const queuedChanges = handoff ? handoff.changes : requestChanges;
     const queuedHandoff = prepareWarpHandoff({
       name: displayName,
       target: targetCwd,
       from: fromCwd,
       branch: displayBranch,
-      changes: queuedSelection.changes,
+      changes: queuedChanges,
     });
     if (!queuedHandoff.ok) {
       return warpFail(`worktree warp: ${queuedHandoff.error}`, { name, alreadyThere: false, cancelled: false });
@@ -3778,10 +3794,10 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
         // A dead UI never fails the queue.
       }
     }
-    const queuedChangesNote = queuedSelection.changes && queuedSelection.changes.mode === "all"
+    const queuedChangesNote = queuedChanges && queuedChanges.mode === "all"
       ? "\nchanges: all (copied when the move lands)"
-      : queuedSelection.changes && queuedSelection.changes.mode === "paths"
-        ? `\nchanges: ${queuedSelection.changes.paths.length} file${queuedSelection.changes.paths.length === 1 ? "" : "s"} (copied when the move lands)`
+      : queuedChanges && queuedChanges.mode === "paths"
+        ? `\nchanges: ${queuedChanges.paths.length} file${queuedChanges.paths.length === 1 ? "" : "s"} (copied when the move lands)`
         : "";
     return {
       text: `worktree warp: ${warpQueuedText(sessionLoad)}\n`
@@ -3828,19 +3844,13 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
     return warpFail(`${text}\n\n${handoffCopyLanding()}\n${tail}`, { ...details, ...handoffCopyDetails() });
   };
   if (!handoff) {
-    if (skipDirtyPrompt !== true) {
-      const dirtyGate = await warpMaybeCopyDirty({
-        ctx, git, fromCheckout: dirtyFrom, targetCwd, options: opts,
-      });
-      if (dirtyGate && dirtyGate.cancelled === true) {
-        return warpFail(
-          `worktree warp: ${name} cancelled (the session stays in ${fromCwd})`,
-          { name, alreadyThere: false, cancelled: true },
-        );
-      }
-      if (dirtyGate && typeof dirtyGate.error === 'string') {
-        return warpFail(dirtyGate.error, { name, alreadyThere: false, cancelled: false });
-      }
+    // S1: apply the answer the human already gave at request time. No question
+    // is asked here — asking it once per request is the point.
+    const dirtyGate = await warpCopyRequestedChanges({
+      git, fromCheckout: dirtyFrom, targetCwd, changes: requestChanges,
+    });
+    if (dirtyGate && typeof dirtyGate.error === 'string') {
+      return warpFail(dirtyGate.error, { name, alreadyThere: false, cancelled: false });
     }
   } else if (handoff.changes && handoff.changes.mode !== 'none') {
     const copyGate = await warpHandoffCopyChanges({

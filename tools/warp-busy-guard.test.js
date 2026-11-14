@@ -78,6 +78,9 @@ afterEach(() => {
   // must not leak an execution into the test after it.
   busyLib.forgetInFlightTools();
   widgetPaints.length = 0;
+  // The pending-changes question is a module seam shared by the whole file: a
+  // failed test must not leave its asker behind for the tests after it.
+  if (mod && typeof mod.setWarpDirtyAsker === 'function') mod.setWarpDirtyAsker(null);
 });
 
 function git(cwd, args) {
@@ -135,6 +138,25 @@ async function until(predicate, { timeoutMs = 2000, stepMs = 5 } = {}) {
 }
 
 const notifications = [];
+
+// The pending-changes question, driven through the module's own seam (the same
+// helper every front uses) instead of a rendered picker: `calls` is what the
+// human was asked, so a question asked twice is observable. `answer` is 'yes',
+// 'no', null (cancel) or a function of the summary line.
+function dirtyAsker(answer) {
+  const calls = [];
+  mod.setWarpDirtyAsker(async (_ctx, summaryLine) => {
+    calls.push(summaryLine);
+    return typeof answer === 'function' ? answer(_ctx, summaryLine) : answer;
+  });
+  return calls;
+}
+
+// The destination the create really writes, from the create's own rule
+// (<repo-parent>/<repo-name>-worktrees/<odd>) instead of a remembered spelling.
+function portedDestination(repo, odd) {
+  return require('../lib/worktree-create.js').worktreeDestinationPath(fs.realpathSync(repo), odd);
+}
 
 // S8/S9: the queued warp's persistent line reaches the human through
 // `ctx.ui.setWidget(key, content, { placement: "aboveEditor" })` — the zone
@@ -259,8 +281,6 @@ before(async () => {
   process.env.PATH = `${HOOK_BIN}${path.delimiter}${savedEnv.PATH || ''}`;
   delete process.env.GENTLE_PI_AGENT_HOME;
   process.env.PI_CODING_AGENT_DIR = AGENT_HOME;
-  // The command front's bounded drain attempt: tests never wait for it.
-  process.env.ODD_WORKTREE_WARP_BUSY_WAIT_MS = '0';
   // The queue's lifetime and poll interval are injected per test; these defaults
   // keep the poller quiet while a test drives `pendingWarpTick` itself.
   process.env.ODD_WORKTREE_WARP_PENDING_MS = '600000';
@@ -354,34 +374,6 @@ describe('lib/worktree-warp-busy.js', () => {
     const activity = await busyLib.sessionActivity({ sessionId: 'session-a', env: { PI_CODING_AGENT_DIR: home }, now: 600000 });
     assert.equal(activity.status, 'ok');
     assert.equal(activity.busy, false);
-  });
-
-  test('the bounded wait drains, and reports when the budget runs out', async () => {
-    const answers = [
-      { busy: true, running: 2, queued: 0, label: 'L', status: 'ok' },
-      { busy: true, running: 1, queued: 0, label: 'L', status: 'ok' },
-      { busy: false, running: 0, queued: 0, label: 'L', status: 'ok' },
-    ];
-    let index = 0;
-    const slept = [];
-    const drained = await busyLib.waitForSessionActivity({
-      read: async () => answers[Math.min(index++, answers.length - 1)],
-      sleep: async (ms) => { slept.push(ms); },
-      waitMs: 6000,
-      pollMs: 2000,
-    });
-    assert.equal(drained.activity.busy, false);
-    assert.equal(drained.waitedOut, false);
-    assert.deepEqual(slept, [2000, 2000]);
-
-    const never = await busyLib.waitForSessionActivity({
-      read: async () => ({ busy: true, running: 1, queued: 0, label: 'L', status: 'ok' }),
-      sleep: async () => {},
-      waitMs: 3000,
-      pollMs: 2000,
-    });
-    assert.equal(never.waitedOut, true);
-    assert.equal(never.waited, 3000);
   });
 
   test('the queue texts name both workloads and no longer disclaim jobs', () => {
@@ -666,16 +658,7 @@ describe('lib/worktree-warp-busy.js', () => {
     }
   });
 
-  test('the wait, pending and poll budgets are parsed, defaulted and clamped', () => {
-    assert.equal(busyLib.DEFAULT_WAIT_MS, 60000);
-    assert.equal(busyLib.MAX_WAIT_MS, 600000);
-    assert.equal(busyLib.waitBudgetMs({}), 60000);
-    assert.equal(busyLib.waitBudgetMs({ ODD_WORKTREE_WARP_BUSY_WAIT_MS: '' }), 60000);
-    assert.equal(busyLib.waitBudgetMs({ ODD_WORKTREE_WARP_BUSY_WAIT_MS: '5000' }), 5000);
-    assert.equal(busyLib.waitBudgetMs({ ODD_WORKTREE_WARP_BUSY_WAIT_MS: '-1' }), 60000);
-    assert.equal(busyLib.waitBudgetMs({ ODD_WORKTREE_WARP_BUSY_WAIT_MS: 'abc' }), 60000);
-    assert.equal(busyLib.waitBudgetMs({ ODD_WORKTREE_WARP_BUSY_WAIT_MS: '999999999' }), 600000);
-
+  test('the pending and poll budgets are parsed, defaulted and clamped', () => {
     assert.equal(busyLib.DEFAULT_PENDING_MS, 30 * 60 * 1000);
     assert.equal(busyLib.pendingBudgetMs({}), 30 * 60 * 1000);
     assert.equal(busyLib.pendingBudgetMs({ ODD_WORKTREE_WARP_PENDING_MS: '1500' }), 1500);
@@ -1587,5 +1570,333 @@ describe('boundaries: negative cases, every front, unaffected surfaces', () => {
     const closed = await mod.executeWorktreeClose({ name: 'feat-surface', force: true }, ctx);
     assert.notEqual(closed.isError, true, resultText(closed));
     settlePending();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// warp-queue-order T1 (S1-S3, S5): the pending-changes question is asked at
+// REQUEST time and a busy session is queued AT ONCE. The counters are read as
+// they are, never waited on: a request that waited found the session idle
+// afterwards, skipped the queue (so no steering row was ever painted) and asked
+// the same question again on every attempt.
+// ---------------------------------------------------------------------------
+describe('warp-queue-order: ask the copy question at request time, then queue', () => {
+  test('a busy session asks once, at request time, and queues at once', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    const created = await tools.get('worktree_create').execute('qo-1', { branch: 'feat/now', odd: 'now' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    // Pending work in the checkout the session stands in, so the question has
+    // something to ask about.
+    fs.writeFileSync(path.join(repo, 'pending.txt'), 'pending\n');
+    clearPresence();
+    // The session's own job is running when the request arrives, and it is over
+    // by a SECOND read of the counters: a front that waits for them to drain
+    // reads twice and then takes the idle path.
+    const jobState = { reads: 0 };
+    ctx.tools = [{ name: 'job_list' }];
+    ctx.executeTool = async (name) => {
+      if (name !== 'job_list') return { isError: true, content: [{ type: 'text', text: `unknown tool ${name}` }] };
+      jobState.reads += 1;
+      const status = jobState.reads === 1 ? 'running' : 'exited 0';
+      return { content: [{ type: 'text', text: `job-1 \u00b7 ${status} \u00b7 Probe \u00b7 3s \u00b7 /tmp/gentle-jobs-1/job-1.log` }] };
+    };
+    const asked = dirtyAsker('yes');
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      await commands.get('warp').handler('feat-now', ctx);
+
+      assert.deepEqual(asked, ['1 file, +1/-0'], 'the pending-changes question is asked once, at request time');
+      assert.equal(jobState.reads, 1, 'the counters are read once, as they are, instead of polled until they drain');
+      assert.equal(switches.length, 0, 'the session must not move under its own running job');
+      assert.equal(host.sent.length, 0, 'nothing is re-dispatched now');
+      const record = busyLib.pendingWarpFor(pendingKey());
+      assert.notEqual(record, null, 'the request is queued immediately');
+      assert.deepEqual(record.handoff.changes, { mode: 'all', paths: [] }, 'the answer given at request time travels in the handoff');
+      // S3: the row is up from the moment the request is queued, and it never
+      // claims a move.
+      assert.deepEqual(widgetState(ctx).lines, [WIDGET_DIM('Queued: warp feat-now — waiting for 1 running background job')]);
+      assert.deepEqual(notifications, [
+        ['info', 'worktree warp: handoff queued — waiting for 1 running background job before the move'],
+      ]);
+
+      // S2: attempts two and three are the existing pending-warp refusal, ask no
+      // question and change nothing.
+      const queuedAt = record.queuedAt;
+      for (const attempt of [2, 3]) {
+        notifications.length = 0;
+        await commands.get('warp').handler('feat-now', ctx);
+        assert.deepEqual(notifications, [['error',
+          "worktree warp: a warp to feat-now is already pending for this session \u2014 it runs when this session's tools, agent tasks and background jobs finish; wait for it or let it expire",
+        ]], `attempt ${attempt}`);
+        assert.equal(switches.length, 0, `attempt ${attempt} switches nothing`);
+        assert.equal(host.sent.length, 0, `attempt ${attempt} queues nothing`);
+        const after = busyLib.pendingWarpFor(pendingKey());
+        assert.equal(after.queuedAt, queuedAt, `attempt ${attempt} never replaced the pending request`);
+        assert.deepEqual(after.handoff, record.handoff, `attempt ${attempt} left the pending handoff untouched`);
+      }
+      assert.deepEqual(asked, ['1 file, +1/-0'], 'one question per request, never one per attempt');
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('an idle session applies the answer it was given, and never asks again', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    const created = await tools.get('worktree_create').execute('qo-2', { branch: 'feat/quiet', odd: 'quiet' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    fs.writeFileSync(path.join(repo, 'pending.txt'), 'pending\n');
+    clearPresence();
+    addJobs(ctx, []);
+    const asked = dirtyAsker('yes');
+    notifications.length = 0;
+    await commands.get('warp').handler('feat-quiet', ctx);
+    assert.deepEqual(asked, ['1 file, +1/-0'], 'the question is asked exactly once');
+    assert.equal(switches.length, 1, 'a session with no work moves straight away');
+    assert.equal(
+      fs.readFileSync(path.join(created.details.path, 'pending.txt'), 'utf8'),
+      'pending\n',
+      'the answer given at request time is what gets copied',
+    );
+    assert.deepEqual(notifications, [], 'a real move notifies nothing');
+    assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'nothing was queued');
+  });
+
+  test('NO COPY travels in the queued handoff as no changes', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    const created = await tools.get('worktree_create').execute('qo-3', { branch: 'feat/nocopy', odd: 'nocopy' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    fs.writeFileSync(path.join(repo, 'pending.txt'), 'pending\n');
+    clearPresence();
+    addJobs(ctx, [{ id: 'job-nc', status: 'running' }]);
+    const asked = dirtyAsker('no');
+    notifications.length = 0;
+    try {
+      await commands.get('warp').handler('feat-nocopy', ctx);
+      assert.deepEqual(asked, ['1 file, +1/-0']);
+      const record = busyLib.pendingWarpFor(pendingKey());
+      assert.notEqual(record, null, 'the request is queued');
+      assert.deepEqual(record.handoff.changes, { mode: 'none', paths: [] }, 'NO COPY queues a handoff that carries no changes');
+      assert.deepEqual(notifications, [
+        ['info', 'worktree warp: handoff queued — waiting for 1 running background job before the move'],
+      ]);
+      assert.equal(switches.length, 0);
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('cancelling the question queues nothing and moves nothing', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    const created = await tools.get('worktree_create').execute('qo-4', { branch: 'feat/cancel', odd: 'cancel' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    fs.writeFileSync(path.join(repo, 'pending.txt'), 'pending\n');
+    clearPresence();
+    addJobs(ctx, [{ id: 'job-c', status: 'running' }]);
+    const asked = dirtyAsker(null);
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    await commands.get('warp').handler('feat-cancel', ctx);
+    assert.deepEqual(asked, ['1 file, +1/-0']);
+    assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'a cancelled question queues nothing');
+    assert.equal(switches.length, 0, 'and switches nothing');
+    assert.equal(widgetState(ctx).lines, null, 'and paints no steering row');
+    assert.deepEqual(notifications, [['error', `worktree warp: feat-cancel cancelled (the session stays in ${repo})`]]);
+  });
+
+  test('a create that already asked suppresses the second question and the copy', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    const created = await tools.get('worktree_create').execute('qo-5', { branch: 'feat/skip', odd: 'skip' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    fs.writeFileSync(path.join(repo, 'pending.txt'), 'pending\n');
+    clearPresence();
+    addJobs(ctx, []);
+    const asked = dirtyAsker('yes');
+    notifications.length = 0;
+    const out = await mod.executeWorktreeWarp('feat-skip', ctx, { skipDirtyPrompt: true });
+    assert.notEqual(out.isError, true, JSON.stringify(out));
+    assert.deepEqual(asked, [], 'the question is not asked twice');
+    assert.equal(switches.length, 1, 'the move still lands');
+    assert.equal(
+      fs.existsSync(path.join(created.details.path, 'pending.txt')),
+      false,
+      'and nothing is copied a second time',
+    );
+  });
+});
+
+describe('warp-queue-order: the counters are sampled even without a session id', () => {
+  // A host whose session identity is missing (absent, empty or a throwing
+  // `getSessionId`) still has a tool counter and a `job_list` tool. The counters
+  // belong to THIS session, not to its id: an id-less warp must queue for exactly
+  // the same work an id-ful one waits for, keyed by the checkout it stands in.
+  function ctxWithoutSessionId(repo) {
+    const { ctx, switches } = movableCtx(repo);
+    ctx.sessionManager.getSessionId = () => null;
+    return { ctx, switches };
+  }
+
+  test('the library samples tools and jobs with no session id at all', async () => {
+    const ctx = makeCtx(makeRepo());
+    clearPresence();
+    // The contract the front relies on: only the agent-task source needs an id
+    // (it answers `unknown`, which blocks nothing), while the tool counter and
+    // the host's `job_list` are sampled regardless — this is what the baseline
+    // front's `waitForSessionActivity` -> `sessionActivity` also did with a null
+    // id, so dropping the counters was a regression, not a baseline rule.
+    addJobs(ctx, [{ id: 'job-lib-noid', status: 'running' }]);
+    const withJob = await busyLib.sessionActivity({ sessionId: null, host: ctx });
+    assert.equal(withJob.jobs.active, 1, 'a running job is sampled without any id');
+    assert.equal(withJob.busy, true);
+    assert.equal(withJob.status, 'unknown', 'only the agent-task source answers unknown without an id');
+
+    addJobs(ctx, []);
+    busyLib.noteToolStart({ toolCallId: 'call-lib-noid', toolName: 'bash' });
+    try {
+      const withTool = await busyLib.sessionActivity({ sessionId: null, host: ctx });
+      assert.equal(withTool.tools.inFlight, 1, 'an executing tool is sampled without any id');
+      assert.equal(withTool.busy, true);
+    } finally {
+      busyLib.forgetInFlightTools();
+    }
+  });
+
+  test('a warp with no session id still queues while a tool is executing', async () => {
+    const repo = makeRepo();
+    const maker = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('qo-9', { branch: 'feat/noid', odd: 'noid' }, undefined, undefined, maker);
+    assert.notEqual(created.isError, true, resultText(created));
+
+    const { ctx, switches } = ctxWithoutSessionId(repo);
+    clearPresence();
+    addJobs(ctx, []);
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    const rootKey = busyLib.pendingKeyFor({ root: repo });
+    const starts = hooks.filter(([name]) => name === 'tool_execution_start');
+    assert.ok(starts.length > 0, 'the extension registers the host’s execution pair');
+    for (const [, handler] of starts) await handler({ toolCallId: 'call-noid-1', toolName: 'bash', args: {} }, ctx);
+    try {
+      await commands.get('warp').handler('feat-noid', ctx);
+      assert.equal(switches.length, 0, 'the session must not move while a tool executes');
+      assert.equal(host.sent.length, 0, 'nothing is re-dispatched now');
+      const record = busyLib.pendingWarpFor(rootKey);
+      assert.notEqual(record, null, 'the request is queued under the checkout it stands in');
+      assert.equal(record.name, 'feat-noid');
+      assert.deepEqual(widgetState(ctx).lines, [WIDGET_DIM('Queued: warp feat-noid — waiting for 1 tool still executing')]);
+      assert.deepEqual(notifications, [
+        ['info', 'worktree warp: handoff queued — waiting for 1 tool still executing before the move'],
+      ]);
+    } finally {
+      busyLib.settlePendingWarp(rootKey);
+    }
+  });
+
+  test('a warp with no session id still queues while a background job is running', async () => {
+    const repo = makeRepo();
+    const maker = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('qo-10', { branch: 'feat/noidjob', odd: 'noidjob' }, undefined, undefined, maker);
+    assert.notEqual(created.isError, true, resultText(created));
+
+    const { ctx, switches } = ctxWithoutSessionId(repo);
+    clearPresence();
+    addJobs(ctx, [{ id: 'job-noid', status: 'running' }]);
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    const rootKey = busyLib.pendingKeyFor({ root: repo });
+    try {
+      await commands.get('warp').handler('feat-noidjob', ctx);
+      assert.equal(switches.length, 0, 'the session must not move while a job runs');
+      assert.equal(host.sent.length, 0, 'nothing is re-dispatched now');
+      const record = busyLib.pendingWarpFor(rootKey);
+      assert.notEqual(record, null, 'the request is queued under the checkout it stands in');
+      assert.equal(record.name, 'feat-noidjob');
+      assert.deepEqual(widgetState(ctx).lines, [WIDGET_DIM('Queued: warp feat-noidjob — waiting for 1 running background job')]);
+      assert.deepEqual(notifications, [
+        ['info', 'worktree warp: handoff queued — waiting for 1 running background job before the move'],
+      ]);
+    } finally {
+      busyLib.settlePendingWarp(rootKey);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// warp-queue-order T2 (S4): the summary, the question and the copy use the
+// checkout the session STANDS IN, never the principal checkout.
+// ---------------------------------------------------------------------------
+describe('warp-queue-order: the copy source is the session’s own checkout', () => {
+  // Two pending files in the PRINCIPAL and one in the checkout the session
+  // stands in, so a summary that read the principal could never be mistaken for
+  // the right one (2 files, +2/-0 instead of 1 file, +1/-0).
+  function seedBothCheckouts(repo, sessionCheckout) {
+    fs.writeFileSync(path.join(repo, 'principal-one.txt'), 'one\n');
+    fs.writeFileSync(path.join(repo, 'principal-two.txt'), 'two\n');
+    fs.writeFileSync(path.join(sessionCheckout, 'here-only.txt'), 'here\n');
+  }
+
+  test('the warp summarizes, asks about and copies from the session’s checkout', async () => {
+    const repo = makeRepo();
+    const maker = makeCtx(repo);
+    const here = await tools.get('worktree_create').execute('qo-6', { branch: 'feat/here', odd: 'here' }, undefined, undefined, maker);
+    assert.notEqual(here.isError, true, resultText(here));
+    const there = await tools.get('worktree_create').execute('qo-7', { branch: 'feat/there', odd: 'there' }, undefined, undefined, maker);
+    assert.notEqual(there.isError, true, resultText(there));
+    seedBothCheckouts(repo, here.details.path);
+
+    const { ctx, switches } = movableCtx(here.details.path);
+    clearPresence();
+    addJobs(ctx, []);
+    const asked = dirtyAsker('yes');
+    notifications.length = 0;
+    await commands.get('warp').handler('feat-there', ctx);
+    assert.deepEqual(asked, ['1 file, +1/-0'], 'the summary counts the checkout the session stands in');
+    assert.equal(switches.length, 1);
+    assert.equal(
+      fs.readFileSync(path.join(there.details.path, 'here-only.txt'), 'utf8'),
+      'here\n',
+      'the copy travelled from the checkout the session stands in',
+    );
+    assert.equal(fs.existsSync(path.join(there.details.path, 'principal-one.txt')), false, 'nothing was copied out of the principal');
+    assert.equal(fs.existsSync(path.join(there.details.path, 'principal-two.txt')), false, 'nothing was copied out of the principal');
+  });
+
+  test('the panel create’s question and copy use the session’s checkout too', async () => {
+    const repo = makeRepo();
+    const maker = makeCtx(repo);
+    const here = await tools.get('worktree_create').execute('qo-8', { branch: 'feat/panel-here', odd: 'panel-here' }, undefined, undefined, maker);
+    assert.notEqual(here.isError, true, resultText(here));
+    seedBothCheckouts(repo, here.details.path);
+    const target = portedDestination(repo, 'panel-made');
+
+    const asked = dirtyAsker('yes');
+    const ui = {
+      mounts: 0,
+      custom: async () => {
+        ui.mounts += 1;
+        if (ui.mounts === 1) return { create: true };
+        if (ui.mounts === 2) return { ok: true, branch: 'feat/panel-made', odd: 'panel-made' };
+        return undefined;
+      },
+    };
+    notifications.length = 0;
+    await commands.get('warp').handler('', makeCtx(here.details.path, { custom: ui.custom }));
+    assert.deepEqual(asked, ['1 file, +1/-0'], 'the create question counts the checkout the session stands in');
+    assert.ok(fs.existsSync(target), `the create made no checkout (${JSON.stringify(notifications)})`);
+    assert.equal(
+      fs.readFileSync(path.join(target, 'here-only.txt'), 'utf8'),
+      'here\n',
+      'the copy travelled from the checkout the session stands in',
+    );
+    assert.equal(fs.existsSync(path.join(target, 'principal-one.txt')), false, 'nothing was copied out of the principal');
+    assert.equal(fs.existsSync(path.join(target, 'principal-two.txt')), false, 'nothing was copied out of the principal');
   });
 });

@@ -286,9 +286,11 @@ describe('the extension loads its lib modules once per load', () => {
 //
 // pi-tui's alternate screen delivers a click only to the component that claimed
 // the press, and the component it reaches is the one the host put in the
-// transcript — the card the render hook returned. These cases drive the
-// registered surfaces, so the wiring between the host toggle and the three cards
-// is asserted where a reader would see it: a click expands, another collapses.
+// transcript — the card the render hook returned. A click moves the card it hit
+// and NOTHING else: expansion is resolved per row from the row's own state, so
+// these cases drive the registered surfaces with two cards at a time and assert
+// which one repainted and which one expanded. `ctrl+o`, the host's own
+// session-wide flag, still expands every card and is never written by a click.
 const probeMetrics = {
   visibleWidth: (value) => [...value.replace(/\x1b\[[0-9;]*m/g, '')].length,
   truncateToWidth: (value, width, ellipsis = '') => {
@@ -326,62 +328,75 @@ function mouse(component, rows, type, x = 3, y = 0) {
   });
 }
 
-describe('a click expands every worktree card', () => {
-  test('the two tool cards and the warp card flip the host flag on a click', async () => {
-    const { mod, tools, messageRenderers, hooks } = await loadFromLibDir(LIB_DIR);
-    const flag = { expanded: false, writes: [] };
-    const ui = {
-      getToolsExpanded: () => flag.expanded,
-      setToolsExpanded: (value) => {
-        flag.expanded = value;
-        flag.writes.push(value);
-      },
-    };
-    // The extension remembers the session's UI handle in its FIRST session_start
-    // hook, which is the only way a render hook can reach the host flag.
-    const startHook = hooks.find(([name]) => name === 'session_start');
-    assert.ok(startHook, 'the extension registers a session_start hook');
-    startHook[1]({}, { hasUI: true, ui });
+const probeText = (label) => [1, 2, 3, 4, 5, 6, 7, 8].map((line) => `${label} line ${line}`).join('\n');
+const probeResult = (label) => ({ content: [{ type: 'text', text: probeText(label) }], details: {} });
 
+/** One tool row as the host drives it: one state per execution, a fresh context per render. */
+function toolRow(tool, label, expanded = false) {
+  const state = {};
+  const counter = { invalidations: 0 };
+  const build = (hostExpanded) => tool.renderResult(probeResult(label), { expanded: hostExpanded, isPartial: false }, probeTheme, {
+    isPartial: false,
+    expanded: hostExpanded,
+    state,
+    invalidate: () => { counter.invalidations += 1; },
+  });
+  const component = build(expanded);
+  const rows = component.render(60);
+  return {
+    component,
+    rows,
+    counter,
+    click: (x = 2, y = 0) => mouse(component, rows, 'click', x, y),
+    press: (x = 2, y = 0) => mouse(component, rows, 'press', x, y),
+    repaint: () => build(expanded).render(60),
+  };
+}
+
+describe('a click expands only the card it hit', () => {
+  test('one tool card expands, its sibling is untouched, and the host flag is never written', async () => {
+    const { mod, tools } = await loadFromLibDir(LIB_DIR);
     try {
       mod.setWorktreeToolCardMetrics(probeMetrics);
-      const context = { isPartial: false, keyHint: (_name, text) => `ctrl+o ${text}` };
-      for (const name of ['worktree_create', 'worktree_list']) {
-        const component = tools.get(name).renderCall({}, probeTheme, context);
-        const rows = component.render(60);
-        assert.equal(typeof component.handleMouse, 'function', `${name}: the card carries the click seam`);
-        assert.deepEqual(mouse(component, rows, 'press'), { handled: true, render: false }, `${name}: the press claims the card`);
-        assert.deepEqual(mouse(component, rows, 'click'), { handled: true }, `${name}: the click is handled`);
-        assert.deepEqual(mouse(component, rows, 'click'), { handled: true });
-      }
-      assert.deepEqual(flag.writes, [true, false, true, false], 'four clicks on the two tool cards flipped the host flag four times');
+      const clicked = toolRow(tools.get('worktree_create'), 'clicked');
+      const sibling = toolRow(tools.get('worktree_list'), 'sibling');
+      assert.ok(clicked.rows.length > 2 && sibling.rows.length > 2, 'both cards draw a body');
 
-      const warp = messageRenderers.get('worktree-warp');
-      const message = { customType: 'worktree-warp', content: 'session warped to feat-two', details: { fromName: 'feat-one', name: 'feat-two', to: '/clone-worktrees/feat-two', branch: 'feat/two' } };
-      const card = warp(message, {}, probeTheme);
-      const cardRows = card.render(60);
-      assert.ok(cardRows.length > 1, 'the warp card draws');
-      assert.equal(typeof card.handleMouse, 'function', 'the warp card carries the click seam');
-      assert.deepEqual(mouse(card, cardRows, 'press'), { handled: true, render: false });
-      assert.deepEqual(mouse(card, cardRows, 'click'), { handled: true });
-      assert.equal(flag.expanded, true, 'the warp card flips the same host flag');
+      assert.deepEqual(clicked.press(2, 0), { handled: true, render: false }, 'the press claims the card so the host retargets the click');
+      assert.deepEqual(clicked.click(2, 0), { handled: true }, 'the click on the card is handled');
+      assert.equal(clicked.counter.invalidations, 1, 'the click repaints the card it hit');
+      assert.equal(sibling.counter.invalidations, 0, 'the sibling card is not repainted');
+
+      assert.ok(clicked.repaint().length > clicked.rows.length, 'the clicked card is expanded');
+      assert.deepEqual(sibling.repaint(), sibling.rows, 'the sibling card stays exactly as it was');
     } finally {
       mod.setWorktreeToolCardMetrics(undefined);
     }
   });
 
-  test('with no host UI the cards stay keyboard-only', async () => {
-    const { mod, tools, messageRenderers, hooks } = await loadFromLibDir(LIB_DIR);
-    const startHook = hooks.find(([name]) => name === 'session_start');
-    startHook[1]({}, { hasUI: false });
-    try {
-      mod.setWorktreeToolCardMetrics(probeMetrics);
-      const component = tools.get('worktree_list').renderCall({}, probeTheme, { isPartial: false });
-      assert.equal('handleMouse' in component, false, 'no UI, no click seam');
-      const warp = messageRenderers.get('worktree-warp')({ customType: 'worktree-warp', content: '', details: {} }, {}, probeTheme);
-      assert.equal('handleMouse' in warp, false, 'and no warp click either');
-    } finally {
-      mod.setWorktreeToolCardMetrics(undefined);
+  test('the warp confirmation card expands by itself and leaves another warp card collapsed', async () => {
+    const { messageRenderers } = await loadFromLibDir(LIB_DIR);
+    const warp = messageRenderers.get('worktree-warp');
+    const message = { customType: 'worktree-warp', content: 'session warped', details: { fromName: 'feat-one', name: 'feat-two', to: '/clone-worktrees/feat-two', branch: 'feat/two' } };
+    const other = { customType: 'worktree-warp', content: 'session warped', details: { fromName: 'feat-two', name: 'feat-three', to: '/clone-worktrees/feat-three', branch: 'feat/three' } };
+
+    const card = warp(message, {}, probeTheme);
+    const rows = card.render(60);
+    const sibling = warp(other, {}, probeTheme);
+    const siblingRows = sibling.render(60);
+
+    assert.deepEqual(mouse(card, rows, 'press', 3, 0), { handled: true, render: false }, 'the press claims the card');
+    assert.deepEqual(mouse(card, rows, 'click', 3, 0), { handled: true }, 'the click is handled');
+    const expanded = card.render(60);
+    assert.ok(expanded.length > rows.length, 'the clicked warp card is expanded');
+    assert.ok(expanded.some((row) => row.includes('/clone-worktrees/feat-two')), 'and shows its own path');
+    assert.deepEqual(sibling.render(60), siblingRows, 'the sibling warp card is untouched');
+  });
+
+  test('no click reaches for the session-wide expansion flag', () => {
+    const source = fs.readFileSync(path.join(ROOT, 'extensions', 'odd-worktree-tools.ts'), 'utf8');
+    for (const name of ['getToolsExpanded', 'setToolsExpanded']) {
+      assert.equal(source.includes(name), false, `${name} is not on a click path: one click moves one card, and ctrl+o stays the global one`);
     }
   });
 });

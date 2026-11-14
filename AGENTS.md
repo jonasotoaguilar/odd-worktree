@@ -236,6 +236,38 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     that says `running` or `queued` is active — `exited 0`, `failed 1` and
     `stopped` are finished — and a missing tool, a failed call or an unknown
     answer is UNKNOWN, which blocks nothing and is never reported as "no jobs".
+16. **The card substrate's role tables are the reference's, not a local
+    invention.** `TITLE_ROLE`, `FRAME_ROLE` and `BODY_ROLE` in
+    `lib/shell-card.js` mirror `gentle-shell/lib/shell-card.ts`: the label carries
+    its tone's role (the accent for INFO, whose plain border cannot carry it), the
+    frame carries the same role in both styles (the plain `border` for INFO), and
+    a card body is the theme's plain `text`. A change to those tables must be
+    diffed against that file before it lands here, and this repo's tests state the
+    REFERENCE's roles (`tools/shell-card.test.js` for all four tones,
+    `tools/worktree-card.test.js` and `tools/worktree-cards.test.js` for the card
+    each draws), never a role this package would prefer.
+17. **This repo paints last; the host's key hint is the one painted input it
+    measures.** Rows are wrapped, clipped to the inner width with the `…` mark and
+    padded as PLAIN text and painted in their role afterwards (`cardBodyRows`,
+    `cardLine`), so no painted string this repo composes is ever measured or
+    clipped — which is why the `/warp` card's ANSI-unaware fallback clip draws the
+    same text as the host's ANSI-aware helpers and copies the host's truncation
+    rule (a width of zero or less is nothing; an ellipsis too wide for the budget
+    is clipped and emitted itself). The ONE painted input it measures is the host's
+    `keyHint`, which the host paints before handing it over (`keyHint` returns
+    `fg("dim", …) + fg("muted", …)`): `lib/worktree-cards.js:185` forwards it, it
+    is measured only by `metrics.visibleWidth` at `lib/shell-card.js:218`, `:378`
+    and `:424`, and the `/warp` path strips that paint at
+    `lib/worktree-card.js:158`. `tools/warp-fallback-regression.test.js` states
+    both halves: the two seams draw the same text at the same width, and no body
+    row ever hands a helper a string THIS REPO painted. The host's key hint is the
+    named exception above: it arrives already painted, it is measured here with the
+    host's ANSI-aware width functions, and this repo then wraps it ONCE MORE in
+    `dim` when it draws the tail (`lib/shell-card.js:225`) — a redundant outer
+    layer over the host's own paint, harmless, but it means the hint is both
+    measured AND repainted here. Write no assertion that no helper ever receives a
+    painted string, and none that a painted string is never painted twice: both
+    would be false.
 
 ## Commits and pull requests
 

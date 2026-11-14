@@ -186,15 +186,69 @@ test('the warp card is the same text in float and in neon, and only the chrome d
 	assert.match(compact, /moved: feat-one \| to: feat-two/, 'the two name-only rows keep their order');
 });
 
-test('the accent is the theme warning role in both styles, never a tone of its own', () => {
+test('the frame and the label carry the warning tone, the body the text role', () => {
 	for (const style of ['neon', 'float']) {
 		const theme = paintTheme();
 		renderWarp(style, { theme });
-		assert.deepEqual([...new Set(theme.roles.fg)].sort(), ['dim', 'muted', 'warning'], `${style}: the frame and the label take the accent, the detail is muted and the hint dim`);
-		for (const tone of ['border', 'success', 'error', 'accent']) {
-			assert.equal(theme.roles.fg.includes(tone), false, `${style}: no role outside the accent, the detail and the hint`);
+		assert.deepEqual([...new Set(theme.roles.fg)].sort(), ['dim', 'muted', 'text', 'warning'], `${style}: the frame and the label take the tone, the body text, the detail muted and the hint dim`);
+		for (const role of ['border', 'success', 'error', 'accent']) {
+			assert.equal(theme.roles.fg.includes(role), false, `${style}: no role outside the tone, the body, the detail and the hint`);
 		}
 	}
+});
+
+test('a warp body row is painted in the theme text role, like the two tool cards', () => {
+	// The fake here only re-wraps a line that does not fit, so the short rows below
+	// read back whole with their role intact (the real wrapTextWithAnsi is ANSI aware).
+	const ansi = {
+		...metrics,
+		wrapTextWithAnsi: (value, width) => (metrics.visibleWidth(value) <= width ? [value] : wrapTextToWidth(value, width, metrics)),
+	};
+	const tagged = {
+		fg: (role, value) => `<${role}>${value}</${role}>`,
+		bg: (role, value) => `\x1b[48;5;240m${value}\x1b[49m`,
+	};
+	for (const style of ['neon', 'float']) {
+		const rows = withStyle(style, () => createWarpMessageRenderer(ansi)(MESSAGE, {}, tagged).render(60));
+		const body = rows.filter((row) => stripAnsi(row).includes('moved: feat-one'));
+		assert.equal(body.length, 1, `${style}: the compact body row is drawn once`);
+		assert.match(body[0], /^.*<text>moved: feat-one<\/text>/, `${style}: the body row carries the text role`);
+		assert.equal(body[0].includes('<warning>moved'), false, `${style}: the body never borrows the chrome's tone`);
+	}
+});
+
+test('a real measured span rides the closing rule bottom-right, in both styles', () => {
+	const timed = (durationMs) => ({ ...MESSAGE, details: { ...MESSAGE.details, durationMs } });
+	const neon = withStyle('neon', () => renderer()(timed(1200), {}, plainTheme).render(60));
+	assert.equal(neon[neon.length - 1], `╰${'─'.repeat(52)} 1.2s ╯`, 'the elapsed time is the last thing before the right corner');
+	assert.equal(metrics.visibleWidth(neon[neon.length - 1]), 60);
+
+	const millis = withStyle('neon', () => renderer()(timed(42), {}, plainTheme).render(60));
+	assert.equal(millis[millis.length - 1], `╰${'─'.repeat(52)} 42ms ╯`, 'a sub-second span reads in milliseconds');
+
+	const float = withStyle('float', () => renderer()(timed(1200), {}, paintTheme()).render(60));
+	assert.match(stripAnsiAll(float[float.length - 1]), /^ ▎ +1\.2s +$/, 'the float closing row carries the same time, bottom-right');
+	for (const row of float) assert.equal(metrics.visibleWidth(stripAnsiAll(row)), 60, 'the timed float card keeps its width');
+
+	// An expanded card keeps the same closing rule, and the time is not repeated.
+	const expanded = withStyle('neon', () => renderer()(timed(1200), { expanded: true }, plainTheme).render(60));
+	assert.equal(expanded[expanded.length - 1], `╰${'─'.repeat(52)} 1.2s ╯`);
+	assert.equal(expanded.filter((row) => stripAnsiAll(row).includes('1.2s')).length, 1, 'exactly one row carries the time');
+});
+
+test('a warp card with no measured span shows no elapsed time at all', () => {
+	const closing = (message, style = 'neon') => {
+		const rows = withStyle(style, () => renderer()(message, {}, plainTheme).render(60));
+		return rows[rows.length - 1];
+	};
+	const plain = `╰${'─'.repeat(58)}╯`;
+	assert.equal(closing(MESSAGE), plain, 'no durationMs: the plain rule, no 0ms and no placeholder');
+	for (const value of ['1200', 'soon', null, -5, Number.NaN, Number.POSITIVE_INFINITY, {}, []]) {
+		const message = { ...MESSAGE, details: { ...MESSAGE.details, durationMs: value } };
+		assert.equal(closing(message), plain, `${JSON.stringify(value)} is not a measured span`);
+	}
+	const float = withStyle('float', () => renderer()(MESSAGE, {}, paintTheme()).render(60));
+	assert.match(stripAnsiAll(float[float.length - 1]), /^ ▎ +$/, 'the float closing row carries nothing either');
 });
 
 test('the style is read live: the global slot wins over a float document, once per render', () => {
@@ -338,52 +392,86 @@ test('the card composes through the substrate and keeps no tone table of its own
 	assert.doesNotMatch(source, /\b(?:neon|float)\b\s*[:=]/, 'the card never names a style itself');
 });
 
-// ---- the click area: the whole card, not only the hint ----
+// ---- the click area: this message card, and only this one ----
 //
 // The message card reaches the same click protocol as a tool card: pi-tui's
 // `Container` forwards a normalized `TuiMouseEvent` to the renderer component
 // with coordinates local to it, and a click only exists for the component that
-// claimed the press. So the card claims every cell it drew and flips the host's
-// expansion flag — the flag `ctrl+o` flips; the card keeps no state of its own.
+// claimed the press.
+//
+// A message renderer gets no render context to keep state in — only
+// `{expanded, outputPad, keyText, keyHint}` — so the choice is kept beside the
+// message it belongs to, and the card re-reads it on every render: the host
+// repaints a claimed click without rebuilding the renderer. `ctrl+o`, the host's
+// own flag in `options.expanded`, still wins over an earlier click.
 
-function clickSpy() {
-	const spy = { calls: 0, toggleExpanded: () => { spy.calls += 1; } };
-	return spy;
-}
-
-function mountCard(component, width) {
+function mountCard(component, width = 60) {
 	const rows = component.render(width);
 	const screen = { width, height: rows.length, screenX: 0, screenY: 0, shift: false, alt: false, ctrl: false };
 	const send = (type, x, y, patch = {}) => component.handleMouse({ type, button: 'left', x, y, ...screen, ...patch });
 	return { rows, send };
 }
 
-test('a left click anywhere on the warp card toggles expansion, not only the hint', () => {
-	const spy = clickSpy();
-	const component = createWarpMessageRenderer({ ...metrics, toggleExpanded: spy.toggleExpanded })(MESSAGE, {}, plainTheme);
-	const { rows, send } = mountCard(component, 60);
+/** A second warp message: a distinct object, so its card keeps its own choice. */
+/**
+ * A fresh warp message: the expansion choice is kept per message object, so every
+ * case gets its own and nothing leaks from one case into the next.
+ */
+function messageFor(name, details = {}) {
+	return {
+		customType: 'worktree-warp',
+		content: `session warped to ${name} (this prose never enters the card)`,
+		details: { fromName: 'feat-one', name, to: `/clone-worktrees/${name}`, branch: `feat/${name}`, ...details },
+	};
+}
 
-	// The heading's left end is the cell furthest from the right-aligned hint.
+test('a left click expands the warp card it hit and leaves a sibling card collapsed', () => {
+	const message = messageFor('feat-two');
+	const component = renderer()(message, {}, plainTheme);
+	const { rows, send } = mountCard(component);
+	const sibling = renderer()(messageFor('feat-three'), {}, plainTheme);
+	const siblingRows = sibling.render(60);
+
 	assert.deepEqual(send('press', 3, 0), { handled: true, render: false }, 'the press claims the card so the host retargets the click');
-	assert.equal(spy.calls, 0, 'a press alone never toggles');
 	assert.deepEqual(send('click', 3, 0), { handled: true }, 'the click on the heading is handled');
-	assert.equal(spy.calls, 1, 'one click toggled once');
 
-	for (const y of [1, rows.length - 1]) {
-		assert.deepEqual(send('press', 5, y), { handled: true, render: false }, `row ${y} is on the card`);
-		assert.deepEqual(send('click', 5, y), { handled: true }, `row ${y} is clickable`);
-	}
-	assert.equal(spy.calls, 3, 'every click toggled exactly once');
+	const expanded = component.render(60);
+	assert.ok(expanded.length > rows.length, 'the same component, re-rendered, is now expanded');
+	assert.equal(contentOf(expanded).includes('path: now in'), true, 'and shows the path an expanded warp adds');
+	assert.deepEqual(sibling.render(60), siblingRows, 'the sibling card is untouched');
+	assert.equal(contentOf(sibling.render(60)).includes('path: now in'), false, 'and stays collapsed');
+});
+
+test('a second click collapses the same warp card again', () => {
+	const component = renderer()(messageFor('feat-two'), {}, plainTheme);
+	const { rows, send } = mountCard(component);
+	assert.deepEqual(send('click', 3, 0), { handled: true });
+	assert.ok(component.render(60).length > rows.length, 'the first click expands');
+	assert.deepEqual(send('click', 3, 0), { handled: true });
+	assert.deepEqual(component.render(60), rows, 'the second click collapses it back');
+});
+
+test('ctrl+o still expands the warp card, and wins over an earlier click', () => {
+	const message = messageFor('feat-two');
+	const compact = renderer()(message, {}, plainTheme).render(60);
+
+	// A click expands this card...
+	const clicked = renderer()(message, {}, plainTheme);
+	const card = mountCard(clicked);
+	assert.deepEqual(card.send('click', 3, 0), { handled: true });
+	assert.ok(clicked.render(60).length > compact.length, 'the click expanded the card');
+
+	// ...and the host's own flag still decides, in both directions.
+	const byKey = renderer()(message, { expanded: true }, plainTheme).render(60);
+	assert.ok(byKey.length > compact.length, 'ctrl+o expands a card a click had already expanded');
+	assert.deepEqual(renderer()(message, { expanded: false }, plainTheme).render(60), compact, 'a collapse from ctrl+o wins over the earlier click too');
 });
 
 test('the hint cells stay clickable and nothing outside the card is claimed', () => {
-	const spy = clickSpy();
-	const component = createWarpMessageRenderer({ ...metrics, toggleExpanded: spy.toggleExpanded })(MESSAGE, {}, plainTheme);
-	const { rows, send } = mountCard(component, 60);
+	const component = renderer()(messageFor('feat-two'), {}, plainTheme);
+	const { rows, send } = mountCard(component);
 	const start = stripAnsiAll(rows[0]).indexOf('ctrl+o to expand');
 	assert.ok(start > 0, 'the heading carries the hint');
-	assert.deepEqual(send('click', start + 1, 0), { handled: true }, 'the hint cells were already clickable and still are');
-	assert.equal(spy.calls, 1);
 
 	assert.equal(send('click', 0, rows.length), undefined, 'a row below the card is the host\'s');
 	assert.equal(send('click', 0, -1), undefined, 'a row above the card is the host\'s');
@@ -391,11 +479,13 @@ test('the hint cells stay clickable and nothing outside the card is claimed', ()
 	assert.equal(send('click', 0, 0, { button: 'right' }), undefined, 'the right button is the host\'s');
 	assert.equal(send('drag', 0, 0), undefined, 'a drag is not a click');
 	assert.equal(send('move', 0, 0), undefined, 'a move is not a click');
-	assert.equal(spy.calls, 1, 'nothing outside the card toggled anything');
+
+	assert.deepEqual(send('click', start + 1, 0), { handled: true }, 'the hint cells were already clickable and still are');
+	assert.ok(component.render(60).length > rows.length, 'and the hint is on the card, so it moved this one card');
 });
 
-test('with no click seam the warp card has no mouse handler at all', () => {
-	const component = renderer()(MESSAGE, {}, plainTheme);
-	assert.equal('handleMouse' in component, false, 'ctrl+o stays the only way in');
+test('the warp card claims its own cells with no injected seam', () => {
+	const component = renderer()(messageFor('feat-two'), {}, plainTheme);
+	assert.equal(typeof component.handleMouse, 'function', 'no host toggle is needed: the card moves itself');
 	assert.ok(component.render(60).length > 0, 'the card still draws');
 });

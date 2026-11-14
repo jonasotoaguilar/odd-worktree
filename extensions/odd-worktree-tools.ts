@@ -398,67 +398,6 @@ function resolveWorktreeCardHelpers() {
   return worktreeCardAutoHelpers;
 }
 
-// Click-to-expand host wiring (docs/worktree-tools.md, "Expanding a card").
-// The card's toggle seam is INJECTED, never baked in, because a render hook
-// receives theme plus ToolRenderContext and never an ExtensionContext. So the
-// extension remembers the CURRENT session's UI handle here, and the injected
-// callback reads it when the click arrives. That is also what keeps a card
-// from outliving its session: `session_start` replaces the handle and
-// `session_shutdown` drops it, so a card re-rendered after a switch toggles
-// the live session and never a context the runtime already invalidated.
-let worktreeCardUi = null;
-
-// Only a UI that publishes BOTH expansion methods is a toggle target. A
-// no-UI mode (`hasUI: false`, json/print) or a host double without the pair
-// resolves to null, which is what keeps those cards keyboard-only.
-function usableWorktreeCardUi(ctx) {
-  try {
-    const c = ctx && typeof ctx === "object" ? ctx : null;
-    if (!c || c.hasUI === false) return null;
-    const ui = c.ui;
-    if (!ui || typeof ui.getToolsExpanded !== "function" || typeof ui.setToolsExpanded !== "function") return null;
-    return ui;
-  } catch {
-    return null;
-  }
-}
-
-// Session lifecycle hooks. Named and idempotent, so a reload, a session
-// replacement and an early shutdown all converge on the same state.
-function rememberWorktreeCardUi(event, ctx) {
-  worktreeCardUi = usableWorktreeCardUi(ctx);
-}
-
-function forgetWorktreeCardUi() {
-  worktreeCardUi = null;
-}
-
-// The toggle the card calls on a hint click: the host's OWN flag, read fresh
-// and flipped, so `ctrl+o` and a click can never disagree. A UI that throws is
-// contained by the card's seam, so this never breaks the transcript.
-function toggleWorktreeCardExpanded() {
-  const ui = worktreeCardUi;
-  if (!ui) return;
-  ui.setToolsExpanded(!ui.getToolsExpanded());
-}
-
-// The card dependency object: the resolved helpers plus the host toggle when a
-// session UI can take it. Memoized by helpers identity AND seam availability,
-// so the per-identity card cache below still hits on every frame instead of
-// rebuilding a card per render.
-let worktreeCardDepsCache = null;
-
-function worktreeCardDeps() {
-  const base = resolveWorktreeCardHelpers() || undefined;
-  const seamed = worktreeCardUi !== null;
-  const cached = worktreeCardDepsCache;
-  if (!cached || cached.base !== base || cached.seamed !== seamed) {
-    const deps = seamed ? { ...(base || {}), toggleExpanded: toggleWorktreeCardExpanded } : base;
-    worktreeCardDepsCache = { base, seamed, deps };
-  }
-  return worktreeCardDepsCache.deps;
-}
-
 // The one sentence every `changes` refusal uses for the accepted forms, so the
 // create cannot drift into describing three different contracts.
 const CHANGES_FORMS = 'pass \"all\" to copy every pending change, \"none\" to create the worktree from the '
@@ -903,19 +842,15 @@ function resolveWorktreeToolCardMetrics() {
   return worktreeToolCardMetricsAuto || null;
 }
 
-// One factory per metrics identity AND seam availability, so a render never
-// rebuilds the cards, an injected seam still takes effect on the next render, and
-// `session_start` (which is what makes a UI handle known) is picked up by the
-// very next card.
+// One factory per metrics identity, so a render never rebuilds the cards. The
+// cards need no host handle: expansion is each card's own choice, kept in the
+// render context's row state, and the host's `ctrl+o` flag arrives on that same
+// context.
 function worktreeCardRenderer(toolName, metrics) {
-  const seamed = worktreeCardUi !== null;
   const cached = worktreeToolCardsCache;
-  if (cached === undefined || cached.metrics !== metrics || cached.seamed !== seamed) {
-    const deps = seamed
-      ? { metrics, toggleExpanded: toggleWorktreeCardExpanded }
-      : { metrics };
-    const cards = libRequire("worktree-cards.js").createWorktreeCards(deps);
-    worktreeToolCardsCache = { metrics, seamed, cards };
+  if (cached === undefined || cached.metrics !== metrics) {
+    const cards = libRequire("worktree-cards.js").createWorktreeCards({ metrics });
+    worktreeToolCardsCache = { metrics, cards };
   }
   return worktreeToolCardsCache.cards.renderer(toolName);
 }
@@ -2409,6 +2344,15 @@ function encodeWarpHandoff(request) {
       from: String(request && request.from !== undefined ? request.from : ''),
       branch: String(request && request.branch !== undefined ? request.branch : ''),
     };
+    // The moment this request was ACCEPTED travels with it, so the move it is
+    // re-dispatched into reports ONE real span — request accepted to the
+    // hand-off of the confirmation card, the last instant this code can observe
+    // it: the host applies the new session, awaits that callback and only then
+    // returns from `switchSession`, so the return is NOT in the number (the
+    // reading that measures it says the same). Absent when the caller has no such
+    // stamp; nothing is invented here.
+    const stamped = handoffRequestedAt(request && request.requestedAt);
+    if (stamped !== undefined) payload.requestedAt = stamped;
     const changes = warpHandoffChangesPayload(request && request.changes);
     if (changes === null) {
       return { ok: false, error: 'the warp handoff could not be encoded: the change selection is not "all" or a list of files' };
@@ -2484,7 +2428,17 @@ function decodeWarpHandoff(raw) {
     if (changes === null) {
       return { ok: false, error: 'invalid warp handoff' };
     }
-    return { ok: true, request: { name, target, from, branch, changes } };
+    // The request stamp is optional and cosmetic to correctness: a token without
+    // one (an older token, or a caller with no clock) simply reports no elapsed
+    // time, and an unusable value is dropped rather than refusing the move.
+    const requestedAt = handoffRequestedAt(payload.requestedAt);
+    return {
+      ok: true,
+      request: {
+        name, target, from, branch, changes,
+        ...(requestedAt === undefined ? {} : { requestedAt }),
+      },
+    };
   } catch {
     return { ok: false, error: 'invalid warp handoff' };
   }
@@ -2526,16 +2480,67 @@ function normalizeWarpHandoff(value) {
     if (!path.isAbsolute(target) || !path.isAbsolute(from)) return null;
     const changes = normalizeHandoffChanges(value.changes);
     if (changes === null) return null;
+    const requestedAt = handoffRequestedAt(value.requestedAt);
     return {
       name,
       target,
       from,
       branch: typeof value.branch === 'string' ? value.branch : '',
       changes,
+      ...(requestedAt === undefined ? {} : { requestedAt }),
     };
   } catch {
     return null;
   }
+}
+
+// One acceptance stamp, as the handoff carries it: a finite, non-negative
+// millisecond value, or undefined for "this request carries none". Never throws.
+function handoffRequestedAt(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
+  return value;
+}
+
+// The wall clock this flow reads, as a seam: production reads `Date.now()`, and a
+// test may pin the span it measures with `options.now` (the same shape
+// `oscStream` uses). This is the ONLY clock in the warp path, and it is never
+// read while a card renders: the number it produces travels in the message
+// details. Never throws: a hostile clock falls back to the real one.
+function warpNow(options) {
+  try {
+    if (options && typeof options.now === 'function') {
+      const value = options.now();
+      if (Number.isFinite(value)) return value;
+    }
+  } catch {
+    // Fall through to the real clock.
+  }
+  return Date.now();
+}
+
+// When this warp's request was accepted: the moment the queue accepted it (which
+// its handoff token carries, so a request that waited keeps ONE start and its
+// wait belongs to the same span), else the moment this invocation began. Never a
+// value read at render time.
+function warpRequestStart(options, handoff) {
+  try {
+    if (handoff && Number.isFinite(handoff.requestedAt) && handoff.requestedAt >= 0) return handoff.requestedAt;
+  } catch {
+    // No usable stamp: measure from now.
+  }
+  return warpNow(options);
+}
+
+// The real span between that start and the last instant this code observes before
+// the host returns from the switch: the request's acceptance to the hand-off of the
+// confirmation card. The host's own return comes after that hand-off, so it is not
+// in the number. Null when the two do not form one (an absent, non-finite or
+// backdated pair). Null is never rendered: the card then has no elapsed time at
+// all — never a 0 as a stand-in.
+function warpMeasuredSpan(startedAt, endedAt) {
+  if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt)) return null;
+  const span = endedAt - startedAt;
+  return Number.isFinite(span) && span >= 0 ? span : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -3210,6 +3215,10 @@ function warpQueuePending({ ctx, fromCwd, name, prepared, activity }) {
       isIdle,
       read: () => warpSessionActivityById(sessionId, host),
       dispatch: (queuedHandoff) => {
+        // The queue's own shape carries the acceptance stamp natively
+        // (`handoffShape`), so the re-dispatched token reports the SAME one span
+        // (request accepted -> the confirmation handed over, exactly as the
+        // first dispatch would), never one restarted at dispatch.
         const reprepared = prepareWarpHandoff(queuedHandoff);
         if (!reprepared.ok) return { ok: false, error: reprepared.error };
         return dispatchWarpHandoff(reprepared);
@@ -3712,6 +3721,11 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
   // and refuses otherwise. An ordinary invocation (a human typing
   // `/warp <name>`) carries none.
   const handoff = normalizeWarpHandoff(options.handoff);
+  // The span this warp's confirmation reports starts HERE: when its request was
+  // accepted. A queued handoff carries that moment in its token, so the wait it
+  // spent queued belongs to the same one real span instead of restarting at
+  // dispatch. Measured once, reported in the message details — never at render.
+  const requestedAt = warpRequestStart(options, handoff);
   // A create from the SAME flow already asked the pending-changes question and
   // applied the answer, so this move reuses that answer instead of asking the
   // same question twice: nothing is copied here (a second copy would be refused
@@ -3888,6 +3902,9 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
       from: fromCwd,
       branch: displayBranch,
       changes: queuedChanges,
+      // The request was accepted a moment ago (or, on a re-queue, when it was
+      // FIRST accepted): the token keeps that one start across the wait.
+      requestedAt,
     });
     if (!queuedHandoff.ok) {
       return warpFail(`worktree warp: ${queuedHandoff.error}`, { name, alreadyThere: false, cancelled: false });
@@ -4108,6 +4125,19 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
     } catch {
       // Status is cosmetic; the notice below is not.
     }
+    // The real span this confirmation reports, and exactly where it ENDS.
+    //
+    // The installed host applies the new session, awaits this callback, and only
+    // then returns from `switchSession`
+    // (`core/agent-session-runtime.js`: `apply(...)`,
+    // `finishSessionReplacement(options?.withSession)`, `return { cancelled:
+    // false }`). The number must travel in the message this callback sends, so
+    // the last instant THIS code can observe it is here: immediately before the
+    // card is handed over. Both the callback's own final await and the host's
+    // return happen AFTER this read, so they are NOT in the number — the label
+    // ends at the hand-off, not at the switch's return. Never re-measured, never
+    // clamped: a pair that does not form a span sends none at all.
+    const elapsedMs = warpMeasuredSpan(requestedAt, warpNow(options));
     await r.sendMessage({
       customType: "worktree-warp",
       content,
@@ -4115,8 +4145,13 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
       // S20: the card renderer reads the compact rows from here — never
       // by parsing text — so the styled confirmation, the agent text and
       // the listing identifier cannot drift apart. S42: fromName is the
-      // source worktree's name alone for the card's `moved:` row.
-      details: { from: fromCwd, to: targetCwd, fromDesc, fromName, name: displayName, branch: displayBranch },
+      // source worktree's name alone for the card's `moved:` row. The
+      // measured span rides beside them and is the card's bottom-right
+      // elapsed time, omitted when there is no real measurement.
+      details: {
+        from: fromCwd, to: targetCwd, fromDesc, fromName, name: displayName, branch: displayBranch,
+        ...(elapsedMs === null ? {} : { durationMs: elapsedMs }),
+      },
     }, triggerTurn ? { triggerTurn: true, deliverAs: "followUp" } : { triggerTurn: false });
   };
   const warpWithSession = async (r) => {
@@ -4932,12 +4967,11 @@ function registerWarpMessageRenderer(pi) {
   try {
     const factory = libRequire("worktree-card.js");
     if (typeof factory.createWarpMessageRenderer !== "function") return;
-    // Resolved per render (memoized by dependency identity) because the
-    // session UI — hence the click seam — is only known after `session_start`,
-    // long after this registration runs.
+    // Resolved per render (memoized by dependency identity) so an injected test
+    // seam takes effect on the next card; the renderer needs no session UI.
     let cache = null;
     pi.registerMessageRenderer("worktree-warp", (message, options, theme) => {
-      const deps = worktreeCardDeps();
+      const deps = resolveWorktreeCardHelpers() || undefined;
       if (!cache || cache.deps !== deps) {
         cache = { deps, render: factory.createWarpMessageRenderer(deps) };
       }
@@ -7008,10 +7042,6 @@ export default function (pi) {
   pi.registerTool(worktreeCreateTool);
   pi.registerTool(worktreeListTool);
   if (typeof pi?.on !== "function") return;
-  // The card click seam's session lifecycle: remember the live UI on every
-  // session start and drop it on shutdown, so no render path ever reaches a
-  // context the runtime has invalidated.
-  pi.on("session_start", rememberWorktreeCardUi);
   // S5: the cards follow the style chosen in Gentle Shell with no hook of their
   // own. The shell publishes the live value on a process-wide slot and the card
   // substrate reads it on every render; when no host is present the substrate reads
@@ -7022,7 +7052,6 @@ export default function (pi) {
   pi.on("session_start", async (event, ctx) => {
     await checkIssuesGate(pi, ctx);
   });
-  pi.on("session_shutdown", forgetWorktreeCardUi);
   // A queued warp is session state: shutdown clears its record and its timer so
   // nothing outlives the session that asked for the move.
   pi.on("session_shutdown", (event, ctx) => {

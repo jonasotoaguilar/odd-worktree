@@ -213,10 +213,24 @@ the request is **queued**.
   drain. The session stays where it is, and a bounded background poller
   re-dispatches the SAME validated handoff once this session reports no tool
   still executing, no running or queued agent task and no running job. Nothing
-  switches mid-work. A queued handoff never claims a move. A queued warp is also
-  dispatched at the host's `agent_settled` boundary — so a request made while the
-  session is not idle (Pi still processing a run) queues like any other, and the
-  move starts when the session settles, not on the next poll.
+  switches mid-work, and a dispatch is only ever attempted into an **idle** host:
+  a poll that finds Pi still processing a run leaves the request pending and
+  waits instead of starting a dispatch the host would refuse. A queued handoff
+  never claims a move.
+- **Queued means the end of the current turn.** A warp requested mid-run takes
+  effect at the same boundary Pi uses for a queued input message: after the
+  current assistant turn finishes executing its tool calls, before the next model
+  call. When the run itself is the only thing still standing in the way (no tool
+  executing, no running or queued agent task, no running job), the extension ends
+  the run at that boundary (`ctx.abort()`, once), so the move starts by itself,
+  without you stopping the agent. That abort lands the moment the turn ends,
+  decided from the activity the queue already sampled, so it never cuts a
+  provider request that is already streaming — and nothing is ever sent to the
+  agent: no instruction, no hidden message. A turn that ends with no tool results
+  is the agent's own last answer, so that boundary does nothing at all, and a
+  request still waiting on real work waits for that work instead. A queued warp is
+  also dispatched at the host's `agent_settled` boundary, so it starts when the
+  session settles, not on the next poll.
 - **Ask first, then queue.** The pending-changes question (`YES COPY` / `NO COPY`
   over the checkout you are standing in, Esc cancels the warp) is asked when the
   warp is **requested** — before the busy decision and before any work drains —
@@ -225,17 +239,32 @@ the request is **queued**.
   warp (refused while one is pending, below) asks nothing at all. The summary,
   the question and the copy all use the checkout the session stands in, never
   the principal/main checkout, in the warp and in the `/warp` create panel's own
-  question.
-- **A queued warp is visible.** The row is painted the moment the request is
-  queued, not after a first poll: one dim row in the
-  zone immediately above the input, in the same shape as Pi's own `Steering:`
-  row: `Queued: warp <worktree> — waiting for <the work>`, naming the tools,
-  agent tasks and jobs it is actually waiting for. On a narrow terminal the row
-  is cut with an ellipsis instead of wrapping, it is repainted only when the
-  reason changes, and it never says the session moved. It is removed when the
-  queue dispatches, is refused, is cancelled, expires or the session shuts down.
-  The one-shot notice that announced the queue stays: the row is transient state
-  and the notice is the record of what happened.
+  question. The prompt opens on `NO COPY`, and it ignores the first few hundred
+  milliseconds of keystrokes after it mounts, so a buffered or double-tapped
+  Enter — the one that sent the command, or one meant for a message you were
+  queueing while the agent was still running — can never answer it: only a
+  keypress you make after the panel has had time to appear counts, Enter then
+  confirms the highlighted answer, and Esc still cancels.
+- **A copy the destination refuses never blocks the move.** If the carried
+  changes cannot be copied — the destination has its own version of a file, a
+  path cannot be proven identical, nothing was written — the warp still happens:
+  it moves WITHOUT the copy, overwrites nothing in the destination, and says so
+  in one line naming the copies it could not carry. Only a copy that actually
+  landed something stops the move, because that is real state.
+- **A queued warp is visible, in one brief line.** It is one dim row in the zone
+  immediately above the input, in the same shape as Pi's own `Steering:` row:
+  `Queued: warp <worktree> — waiting for <the work>`, naming the tools, agent
+  tasks and jobs it is actually waiting for. That is the whole message, shown
+  once: the row above the editor (or its one fixed fallback entry) IS the queued
+  line, so nothing repeats it in the chat — no transcript copy, no caveat row and
+  no editing hint — and only one warp can be queued at a time. On a
+  narrow terminal the row is cut with an ellipsis instead of wrapping, it is
+  repainted only when the reason changes, and it never says the session moved. It
+  is removed when the queue dispatches, is refused, is cancelled, expires or the
+  session shuts down. A host that cannot paint that zone gets the same one line
+  as ONE fixed transcript entry instead, appended once per request — never a
+  second line per poll — and only a host with no surface at all (no row and no
+  entry) falls back to the one notice, so a queued request is never invisible.
 - **One pending warp per session.** A second warp is refused while one is
   pending, with `a warp to <name> is already pending for this session — it runs
   when this session's tools, agent tasks and background jobs finish; wait for it
@@ -272,8 +301,9 @@ All three sources are read **best effort**, and none is ever guessed:
   exited" is never read as activity.
 - A host that does not offer `job_list`, a call that fails, and an answer this
   parser does not know all count as **unknown**, never as "no jobs": the warp
-  still runs, and a `queue:` line says the job state is unknown instead of
-  pretending it was read.
+  still runs, and the queued line never carries a caveat. The one place the
+  unreadable job state is still disclosed is the expiry notice, which says
+  nothing moved and names the state it could not read.
 
 ### `/issues` pins the repository
 

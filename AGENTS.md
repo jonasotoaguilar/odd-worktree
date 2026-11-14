@@ -172,7 +172,61 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     in the zone above the editor (`ctx.ui.setWidget`'s `aboveEditor` placement,
     dim and truncated like Pi's `Steering:` row); that line is cleared on the
     dispatch and on every terminal outcome, so it never outlives the queue and
-    never claims a move. An executing tool comes from the host's
+    never claims a move. When the host cannot paint that zone
+    (`ctx.ui.setWidget` absent or throwing), the same one line falls back to ONE
+    fixed transcript entry through `pi.appendEntry` and the entry renderer
+    registered for it — appended once per record, never once per poll.
+
+    **One surface per request.** The record keeps the answer its painter gave it,
+    so the queued answer reports that line and prints NOTHING of its own when a
+    surface took it: the row above the editor (or its one fallback entry) is the
+    whole message, and the chat never holds a second copy of the same sentence.
+    Only a host with no surface at all — no row AND no `appendEntry` seam — gets
+    the one `ui.notify` with that same line, because otherwise the request would
+    be invisible.
+
+    **A refused carry-copy never blocks the move.** A queued handoff's copy
+    (`lib/worktree-changes.js`) refuses whole: its own error says
+    `(nothing was copied)` and the destination is untouched. That refusal is
+    disclosed, never fatal — the warp proceeds WITHOUT the copy, overwrites
+    nothing, and appends ONE line naming the copies it could not carry (`details`:
+    `copyRefused`, `copiedFiles: []`). A copy that landed anything — even
+    partially — stays a hard failure through `failAfterCopy`, because that is
+    real state.
+
+    **The dispatch boundary.** A dispatch is only ever attempted into an IDLE
+    host: the pending record holds the bound `ctx.isIdle` seam (absent or
+    unknown blocks nothing), so a tick that finds the run still live releases
+    its slot and re-arms. The host does not reject a slash command sent while it
+    streams: the handler would run at once and park in `ctx.waitForIdle()` until
+    the whole run settles, so claiming that dispatch would leave the record
+    `dispatching` behind a parked handler.
+
+    **The turn boundary.** A queued warp takes effect at the SAME boundary Pi uses
+    for a queued input message — after the current assistant turn's tool calls,
+    before the next model call. On the host's `turn_end` event, when the run
+    itself is the only thing still blocking a pending record (no tool executing,
+    no running or queued agent task, no active job) AND the turn that just ended
+    executed tools (`event.toolResults.length > 0`), the extension aborts the run
+    through `ctx.abort()`, ONCE, and the settle tick then moves the session.
+    NOTHING is ever sent to the agent — no steering message, no custom message, no
+    instruction text: an instruction can be ignored (the model answers with a
+    text turn, and that turn produces no later tool-using boundary for a net to
+    fire on) while the abort is deterministic. A turn that ends with no tool
+    results is the agent's final answer, so that boundary aborts nothing and the
+    run settles by itself. A record with real workload pending, and an idle host,
+    abort nothing either. The abort is per record and bounded — one per record,
+    never twice — and the `turn_end` handler returns no boundary proposal. It also
+    lands BETWEEN provider requests: the boundary decides synchronously, before
+    any awaited read, from the activity the record already sampled and the event's
+    own tool evidence (an absent or stale sample is the only case that falls back
+    to an awaited re-read, and there the abort follows the read only when it
+    proves nothing is running), so ending the run never cuts an assistant message
+    whose tool cards the host would repaint as failed `Operation aborted` results.
+    The queued line is one brief
+    sentence and the same text everywhere it appears (`Queued: warp <name> —
+    waiting for <the work>`); the unknown-job clause belongs to the expiry notice
+    alone. An executing tool comes from the host's
     `tool_execution_start` / `tool_execution_end` pair — an execution with no end
     yet is executing, only top-level calls are counted (so this package's own
     `job_list` probe and any nested call never count), and `session_shutdown`

@@ -68,6 +68,19 @@ function resultText(result) {
   return (result.content || []).map((part) => (part && part.text) || '').join('\n');
 }
 
+function stripAnsi(text) {
+  return String(text)
+    .replace(/\x1b\[[0-9;]*m/g, '')
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b_[^\x07\x1b]*\x07/g, '');
+}
+
+// The trimmed plain rows a mounted panel renders, so a test reads exactly what
+// the human sees (a frame is padded to the width it was given).
+function renderedRows(component, width = 100) {
+  return component.render(width).map((line) => stripAnsi(line).trimEnd());
+}
+
 let host;
 let commands;
 let tools;
@@ -211,9 +224,10 @@ describe('the /warp panel create front', () => {
       const repo = makeRepo();
       if (existing) git(repo, ['branch', branch]);
       const target = portedDestination(repo, name);
-      // S1: the panel answers with the type and the ODD, and the branch is
-      // derived from them — there is no second name in the completion.
-      const ui = warpCreateUi({ ok: true, type: 'feat', odd: name });
+      // S1 (warp-branch-field): the panel answers the branch it composed and the
+      // ODD that names the directory, and the branch travels through UNCHANGED —
+      // nothing derives it from the ODD any more.
+      const ui = warpCreateUi({ ok: true, branch, odd: name });
       notifications.length = 0;
       await commands.get('warp').handler('', makeCtx(repo, { custom: ui.custom }));
       assert.ok(fs.existsSync(target), `the /warp create made no checkout (notifications: ${JSON.stringify(notifications)})`);
@@ -229,6 +243,93 @@ describe('the /warp panel create front', () => {
       assert.ok(document.records[fs.realpathSync(target)], 'the metadata record is keyed by the checkout path');
     });
   }
+
+  test('the panel’s branch is passed through, never derived from the ODD', async () => {
+    const repo = makeRepo();
+    const target = portedDestination(repo, 'login-ui');
+    const ui = warpCreateUi({ ok: true, branch: 'fix/other-name', odd: 'login-ui' });
+    notifications.length = 0;
+    await commands.get('warp').handler('', makeCtx(repo, { custom: ui.custom }));
+    assert.ok(fs.existsSync(target), `the create made no checkout (notifications: ${JSON.stringify(notifications)})`);
+    assert.equal(git(target, ['rev-parse', '--abbrev-ref', 'HEAD']), 'fix/other-name', 'the answered branch is the git branch');
+    assert.equal(path.basename(target), 'login-ui', 'the ODD is the directory, so the branch names no directory');
+    assert.deepEqual(notifications, [], 'a clean create fires no notification');
+  });
+
+  // S11 (warp-branch-field): one ODD is one worktree, so a create for an ODD
+  // that already owns one refuses by saying THAT — the exact two lines an agent
+  // reads — and refuses before writing anything.
+  test('a second create for an ODD that already has a worktree refuses with its own sentence', async () => {
+    const repo = makeRepo();
+    const first = await tools.get('worktree_create').execute(
+      'call-1', { branch: 'feat/taken', odd: 'taken' }, undefined, undefined, makeCtx(repo),
+    );
+    assert.notEqual(first.isError, true, resultText(first));
+    const target = first.details.path;
+    const documentBefore = fs.readFileSync(path.join(fs.realpathSync(repo), '.git', 'pi-worktrees.json'), 'utf8');
+
+    const second = await tools.get('worktree_create').execute(
+      'call-2', { branch: 'feat/taken-again', odd: 'taken' }, undefined, undefined, makeCtx(repo),
+    );
+    assert.equal(second.isError, true, 'the second create is refused');
+    assert.equal(
+      resultText(second),
+      `odd taken already has a worktree: ${target}\nUse that worktree instead of creating another.`,
+    );
+    // Nothing was written: no second checkout, no branch, and the clone's one
+    // document is byte-identical to what the first create left.
+    assert.equal(fs.existsSync(`${target}-again`), false, 'no directory is made');
+    assert.equal(git(repo, ['branch', '--list', 'feat/taken-again']), '', 'no branch is created');
+    assert.equal(fs.readFileSync(path.join(fs.realpathSync(repo), '.git', 'pi-worktrees.json'), 'utf8'), documentBefore, 'no record is written');
+  });
+
+  test('a plain directory at the ODD destination keeps the core’s own refusal', async () => {
+    const repo = makeRepo();
+    const target = portedDestination(repo, 'occupied');
+    fs.mkdirSync(target, { recursive: true });
+    const out = await tools.get('worktree_create').execute(
+      'call-1', { branch: 'feat/occupied', odd: 'occupied' }, undefined, undefined, makeCtx(repo),
+    );
+    assert.equal(out.isError, true);
+    assert.equal(
+      resultText(out),
+      `worktree path already exists: ${fs.realpathSync(target)}\nRemove it or pass a different odd.`,
+    );
+  });
+
+  test('the create panel does not offer an ODD that already has a worktree', async () => {
+    const repo = makeRepo();
+    fs.mkdirSync(path.join(repo, 'odd', 'tasks'), { recursive: true });
+    for (const name of ['taken', 'free']) {
+      fs.writeFileSync(path.join(repo, 'odd', 'tasks', `${name}.md`), `# ${name}\n`);
+    }
+    git(repo, ['add', '-f', 'odd']);
+    git(repo, ['commit', '-m', 'odds']);
+    const created = await tools.get('worktree_create').execute(
+      'call-1', { branch: 'feat/taken', odd: 'taken' }, undefined, undefined, makeCtx(repo),
+    );
+    assert.notEqual(created.isError, true, resultText(created));
+
+    let panelRows = null;
+    let mounts = 0;
+    const custom = async (factory) => {
+      mounts += 1;
+      if (mounts === 1) return { create: true };
+      if (mounts === 2) {
+        const component = factory({ requestRender: () => {} }, null, null, () => {});
+        component.handleInput('\t'); // the Odd field
+        panelRows = renderedRows(component);
+      }
+      return undefined;
+    };
+    notifications.length = 0;
+    await commands.get('warp').handler('', makeCtx(repo, { custom }));
+    assert.ok(Array.isArray(panelRows), `the create panel never mounted (${JSON.stringify(notifications)})`);
+    const text = panelRows.join('\n');
+    assert.ok(!/^\s+taken$/m.test(text), `the taken ODD is not offered\n${text}`);
+    assert.match(text, /^\s+free$/m, 'the free ODD is still offered');
+    assert.match(text, /new odd/, 'new odd is still offered');
+  });
 
   test('a refused panel create is the ported sentence, verbatim, and writes nothing', async () => {
     const repo = makeRepo();
@@ -296,6 +397,55 @@ describe('the /warp panel create front', () => {
     assert.equal(out.isError, true);
     assert.match(resultText(out), /unknown changed file: "missing.txt" \(nothing was copied\) \(nothing was created\)$/);
     assert.equal(fs.existsSync(portedDestination(repo, 'unknown')), false);
+  });
+});
+
+// S5 (warp-branch-field): the selector offers DESTINATIONS that exist. Each mount
+// re-reads the registry AND git's live listing and offers only checkouts both
+// agree on, so a checkout removed before the panel opens leaves no row and a
+// stale registry row can never become a selectable checkout.
+describe('/warp selector after a removal', () => {
+  function mountSelector() {
+    const state = { rows: null };
+    const custom = async (factory) => {
+      const component = factory({ requestRender: () => {} }, null, null, () => {});
+      state.rows = renderedRows(component);
+      return undefined;
+    };
+    return { custom, rows: () => state.rows };
+  }
+
+  test('a removed checkout is not a row, and a live one still is', async () => {
+    const repo = makeRepo();
+    for (const [odd, branch] of [['removed', 'feat/removed'], ['live', 'feat/live']]) {
+      const out = await tools.get('worktree_create').execute(
+        'call', { branch, odd }, undefined, undefined, makeCtx(repo),
+      );
+      assert.notEqual(out.isError, true, resultText(out));
+    }
+    // Opened while both checkouts exist: both are offered.
+    const before = mountSelector();
+    notifications.length = 0;
+    await commands.get('warp').handler('', makeCtx(repo, { custom: before.custom }));
+    const beforeText = before.rows().join('\n');
+    assert.match(beforeText, /feat-live/);
+    assert.match(beforeText, /feat-removed/);
+
+    // `feat-removed` goes away exactly as the human's did: git removes the
+    // checkout and the registry row stays behind.
+    const target = portedDestination(repo, 'removed');
+    git(repo, ['worktree', 'remove', target]);
+    assert.equal(fs.existsSync(target), false, 'the checkout really is gone');
+
+    // Opened FRESH afterwards, the removed one is not a row and never a
+    // destination; the live one still is.
+    const after = mountSelector();
+    notifications.length = 0;
+    await commands.get('warp').handler('', makeCtx(repo, { custom: after.custom }));
+    const afterText = after.rows().join('\n');
+    assert.ok(!afterText.includes('feat-removed'), `a removed checkout is never offered\n${afterText}`);
+    assert.match(afterText, /feat-live/);
+    assert.deepEqual(notifications, [], 'nothing is reported as an error');
   });
 });
 

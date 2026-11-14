@@ -2871,12 +2871,12 @@ async function sessionManagerClassFor(ctx) {
   return null;
 }
 
-// S4/S9: THIS session's own workloads — its agent-task counters, read from the
-// presence store the close guard already consumes, and its background jobs, read
-// through the host's `job_list` tool (lib/worktree-warp-busy.js). Both are one
-// answer: `busy` is true while an agent task runs or queues OR a job runs.
+// S4/S9: THIS session's own work — the tools it is executing, its agent-task
+// counters, and its background jobs — as one answer from
+// `lib/worktree-warp-busy.js`: `busy` is true while a tool still executes, an
+// agent task runs or queues, OR a job runs.
 //
-// The host seam is the one `session-worktree-register.js` already uses:
+// The job seam is the one `session-worktree-register.js` already uses:
 // `ctx.tools` names `job_list` and `ctx.executeTool` calls it. Only those two
 // members are kept for a queued warp's lifetime, so a 30-minute record pins one
 // host method (and a projected tool list) instead of the whole command context.
@@ -2922,7 +2922,101 @@ function warpQueuedText(activity) {
   } catch {
     // fall through to the fixed sentence
   }
-  return "handoff queued — waiting for this session's agent tasks and background jobs before the move";
+  return "handoff queued — waiting for this session's tools, agent tasks and background jobs before the move";
+}
+
+// S9 (warp-idle-gate): the ONE persistent row of a queued warp. It reaches the
+// human through `ctx.ui.setWidget`, whose default `aboveEditor` placement the
+// host mounts between the status area and the editor — the same zone, and the
+// same shape (dim, one truncated line) as Pi's own `Steering:` row. That zone
+// already means "standing in line for the work that is running", which is
+// exactly what a queued warp is: the request waits for the tool, agent task or
+// job, and the row never claims the move happened.
+const WARP_STEERING_KEY = "odd-worktree-warp";
+const WARP_STEERING_PLACEMENT = "aboveEditor";
+
+// One line, cut to the terminal width: the row is one row by contract, so a
+// narrow terminal loses the tail (with an ellipsis) instead of wrapping into
+// several. The trailing space before the ellipsis is dropped, so a cut always
+// reads as one word.
+function warpTruncateLine(text, width) {
+  const room = Number.isSafeInteger(width) && width > 0 ? width : 0;
+  if (room === 0) return "";
+  const chars = [...String(text ?? "")];
+  if (chars.length <= room) return chars.join("");
+  return `${chars.slice(0, room - 1).join("").replace(/\s+$/, "")}…`;
+}
+
+// The widget content: a component factory, so the row is painted dim and cut to
+// the exact width the host offers instead of being wrapped by a `Text`. A theme
+// that is absent or throws renders the same line unpainted rather than failing
+// the render.
+function warpSteeringWidget(line) {
+  const text = String(line ?? "");
+  return (tui, theme) => ({
+    render(width) {
+      const cut = warpTruncateLine(text, width);
+      if (cut.length === 0) return [];
+      try {
+        if (theme && typeof theme.fg === "function") {
+          const painted = theme.fg("dim", cut);
+          if (typeof painted === "string") return [painted];
+        }
+      } catch {
+        // Fall through to the plain row.
+      }
+      return [cut];
+    },
+    invalidate() {},
+  });
+}
+
+// The paint seam the queue holds. Only the bound `setWidget` is captured — not
+// the command context around it — because a pending record can live for half an
+// hour and must not pin a context it no longer runs in. An empty line clears the
+// widget, which the host removes without leaving a blank row behind.
+function warpSteeringPainter(ctx) {
+  try {
+    const ui = ctx && ctx.ui && typeof ctx.ui.setWidget === "function" ? ctx.ui : null;
+    if (ui === null) return null;
+    const setWidget = ui.setWidget;
+    return (line) => {
+      const content = typeof line === "string" && line.length > 0 ? warpSteeringWidget(line) : undefined;
+      setWidget.call(ui, WARP_STEERING_KEY, content, { placement: WARP_STEERING_PLACEMENT });
+    };
+  } catch {
+    return null;
+  }
+}
+
+// S10: the in-flight tool counter. The host emits `tool_execution_start` /
+// `tool_execution_end` for EVERY tool execution of the session — its own `bash`,
+// `read` and the rest, not only this package's tools — so that pair is the
+// "something is executing" fact a warp waits for. `tool_call`/`tool_result` is
+// not that signal: a blocked or aborted call skips `tool_result`, while every
+// finalized call still gets its `tool_execution_end`. The module counts
+// top-level executions only, which is also why the queue's own `job_list` probe
+// (a nested call inside a parent execution) never counts as busy.
+function warpNoteToolExecution(event, ended) {
+  try {
+    const lib = libRequire("worktree-warp-busy.js");
+    const note = lib && (ended ? lib.noteToolEnd : lib.noteToolStart);
+    if (typeof note === "function") note(event);
+  } catch {
+    // A host that cannot feed the counter blocks nothing.
+  }
+}
+
+// The queue's in-flight counter dies with the session that saw its starts: a
+// tool whose end the host could not deliver (a crash or a reload mid-call) must
+// not hold a replacement session's warp.
+function forgetInFlightWarpTools() {
+  try {
+    const lib = libRequire("worktree-warp-busy.js");
+    if (lib && typeof lib.forgetInFlightTools === "function") lib.forgetInFlightTools();
+  } catch {
+    // A shutdown never fails on bookkeeping.
+  }
 }
 
 // The one line a queued answer adds when, and only when, the job state was
@@ -2945,7 +3039,7 @@ function warpPendingRefusalText(pending, requestedName) {
     // fall through to the fixed sentence
   }
   const name = pending && typeof pending.name === "string" && pending.name.length > 0 ? pending.name : "that checkout";
-  return `a warp to ${name} is already pending for this session — it runs when the pending agent tasks finish; wait for it or let it expire`;
+  return `a warp to ${name} is already pending for this session — it runs when this session's tools, agent tasks and background jobs finish; wait for it or let it expire`;
 }
 
 // S5: the ONE pending-warp gate. Both fronts ask it, keyed by the session id
@@ -2988,7 +3082,7 @@ function warpPendingGate(ctx, fromCwd, handoff) {
 // 30-minute queue must not pin a command context). Never throws; `ok:false`
 // with `pending` means another request got there first, and `ok:false` alone
 // means this process cannot hold a queue at all.
-function warpQueuePending({ ctx, fromCwd, name, prepared }) {
+function warpQueuePending({ ctx, fromCwd, name, prepared, activity }) {
   let lib = null;
   try {
     lib = libRequire("worktree-warp-busy.js");
@@ -3009,12 +3103,17 @@ function warpQueuePending({ ctx, fromCwd, name, prepared }) {
   // a 30-minute record must not pin the whole command context (nor anything it
   // reaches through) just to report an expiry.
   const ui = ctx && ctx.ui && typeof ctx.ui.notify === "function" ? ctx.ui : null;
+  // The persistent row (S9) is the same context's `setWidget`, bound once: the
+  // queue paints it on every state change and clears it on every terminal
+  // outcome. A host without the seam queues exactly as before.
+  const paint = warpSteeringPainter(ctx);
   try {
     return lib.queuePendingWarp({
       key,
       name,
       token: prepared.token,
       handoff: prepared.request,
+      activity: activity || null,
       env: process.env,
       host,
       read: () => warpSessionActivityById(sessionId, host),
@@ -3026,6 +3125,7 @@ function warpQueuePending({ ctx, fromCwd, name, prepared }) {
       notify: ui
         ? (text, level) => { try { ui.notify(text, level); } catch { /* a dead UI never fails the queue */ } }
         : null,
+      paint,
     });
   } catch {
     return { ok: false };
@@ -3637,7 +3737,7 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
     if (!queuedHandoff.ok) {
       return warpFail(`worktree warp: ${queuedHandoff.error}`, { name, alreadyThere: false, cancelled: false });
     }
-    const queued = warpQueuePending({ ctx, fromCwd, name: displayName, prepared: queuedHandoff });
+    const queued = warpQueuePending({ ctx, fromCwd, name: displayName, prepared: queuedHandoff, activity: sessionLoad });
     // Both workloads are named in the queue text; the extra line appears only
     // when the job state could not be read at all.
     const queuedJobsNote = warpJobsUnknownText(sessionLoad);
@@ -3664,7 +3764,7 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
     }
     if (!queued.ok) {
       return warpFail(
-        "worktree warp: this session still has running agent tasks or background jobs and this host cannot hold a queued warp; nothing moved — warp again when they finish",
+        "worktree warp: this session still has a tool executing, agent tasks or background jobs and this host cannot hold a queued warp; nothing moved — warp again when they finish",
         { name, alreadyThere: false, cancelled: false, busy: true },
       );
     }
@@ -6739,6 +6839,7 @@ export default function (pi) {
   // nothing outlives the session that asked for the move.
   pi.on("session_shutdown", (event, ctx) => {
     forgetPendingWarp(ctx);
+    forgetInFlightWarpTools();
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,
   // so startup work still in flight drops instead of writing into the session
@@ -6748,6 +6849,10 @@ export default function (pi) {
   });
   pi.on("tool_call", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi));
   pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
+  // S10: the host's execution pair feeds the queue's in-flight tool counter for
+  // EVERY tool of the session, not only this package's.
+  pi.on("tool_execution_start", (event) => warpNoteToolExecution(event, false));
+  pi.on("tool_execution_end", (event) => warpNoteToolExecution(event, true));
   // S7: the ODD worktree rules ride the prompt options, appended after the
   // harness's own text. Sync mutation, so the host reads the final string.
   pi.on("before_agent_start", (event) => {

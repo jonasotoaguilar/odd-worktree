@@ -68,7 +68,12 @@ as commands, and the two `worktree_*` tools are offered to the agent.
    - `odd` IS the checkout's directory: one path segment (letters, digits, dash,
      underscore, dot), nothing that could escape the directory it names. The
      branch never names a directory, so `branch: feat/login` with
-     `odd: login-ui` lands in `…-worktrees/login-ui`.
+     `odd: login-ui` lands in `…-worktrees/login-ui`. The panel's two typed
+     fields normalize one thing before they compose: one or more consecutive
+     spaces become a single `-`, so a typed `change    cost` is `change-cost`
+     (a name that leaves nothing behind after the trim still refuses with the
+     field's own sentence). The tool takes its arguments as given — the panel is
+     where a typed name is normalized.
    - The base is the local `main` when it resolves, else the branch `origin/HEAD`
      names, else `init.defaultBranch`. When none of them resolves, the create is
      refused with `could not resolve a base branch: tried main, origin/HEAD,
@@ -124,7 +129,7 @@ as commands, and the two `worktree_*` tools are offered to the agent.
 | --- | --- |
 | `↑`/`↓`, `j`/`k` | Move the selection |
 | `enter` | Warp to the focused checkout (`enter` on the `view all worktrees` row opens the extended list) |
-| `c` | Open the create flow: answer `Branch` (the change type from the eleven-type list, then the name — composed as `<type>/<name>`, `feat` by default) and `Odd` (the checkout's directory) — `tab`/`←`/`→` switch between the two fields, `↑`/`↓` pick from the active list, typing fills the active name, the ODD list's first entry is `new odd` (the only one that takes a typed name) and its other entries are the ODDs that exist in `main` minus the ones whose checkout already exists, `enter` on the ODD creates, `esc` cancels |
+| `c` | Open the create flow: answer `Branch` (the change type from the eleven-type list, then the name — composed as `<type>/<name>`, `feat` by default) and `Odd` (the checkout's directory) — `tab`/`←`/`→` switch between the two fields, `↑`/`↓` pick from the active list, typing fills the active name, the ODD list's first entry is `new odd` (the only one that takes a typed name) and its other entries are the ODDs that exist in `main` minus the ones whose checkout already exists, `enter` on the ODD creates, `esc` cancels. In BOTH typed names one or more consecutive spaces become a single `-` (`change    cost` is `change-cost`), and the typed row, the preview and the create always show and use the same name |
 | `ctrl+d` | Ask to delete the focused checkout; the extension owns the confirmation, the evidence and the removal |
 | `v` | Open the extended list of every other checkout (`↑`/`↓`, `pgUp`/`pgDn`, `enter`, `T` or `/` to filter, `esc` back) |
 | `r` | Reload the listing |

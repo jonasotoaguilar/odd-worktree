@@ -885,6 +885,43 @@ describe('/warp queues while this session has tools, agent tasks or jobs', () =>
     settlePending();
   });
 
+  test('a warp typed while the host is still streaming queues before anything waits for idle', async () => {
+    const repo = makeRepo();
+    const ctx = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('busy-live', { branch: 'feat/live', odd: 'live' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+
+    addJobs(ctx, [{ id: 'job-1', status: 'running' }]);
+    const switches = [];
+    ctx.switchSession = async (file) => { switches.push(file); return { cancelled: false }; };
+    // The turn never settles: a front that waits for idle would park the whole
+    // request here, so the question and the queue would only happen at idle.
+    let idleWaits = 0;
+    ctx.waitForIdle = () => { idleWaits += 1; return new Promise(() => {}); };
+    notifications.length = 0;
+    host.sent.length = 0;
+    const key = pendingKey();
+    try {
+      const answered = await Promise.race([
+        commands.get('warp').handler('feat-live', ctx).then(() => 'returned'),
+        new Promise((resolve) => setTimeout(() => resolve('still-waiting'), 400)),
+      ]);
+      assert.equal(answered, 'returned', 'the request must not wait for the turn to settle');
+      assert.notEqual(busyLib.pendingWarpFor(key), null, 'the request is queued while the turn still runs');
+      assert.equal(switches.length, 0, 'nothing moves under a running job');
+      assert.equal(host.sent.length, 0, 'the re-dispatch happens later, not now');
+      assert.equal(
+        widgetState(ctx).lines.length > 0,
+        true,
+        'the steering row is painted while the turn still runs',
+      );
+      assert.match(String(widgetState(ctx).lines[0]), /Queued: warp feat-live/);
+      assert.equal(idleWaits, 0, 'the request asked and queued before ever waiting for idle');
+    } finally {
+      busyLib.settlePendingWarp(key);
+    }
+  });
+
   test('a running agent task and a running job are both named', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);

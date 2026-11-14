@@ -222,7 +222,7 @@ test("a body row is padded to the full inner width and a wide row ends in a lite
 	assert.equal(cardLine("hi", CARD_TONE.INFO, plainTheme, 3, metrics), "│ │");
 
 	const tagged = cardLine("hi", CARD_TONE.ERROR, taggedTheme, 12, metrics);
-	assert.equal(tagged, `<error>│</error> hi${' '.repeat(6)} <error>│</error>`, "the sides carry the tone role and the content stays inside them");
+	assert.equal(tagged, `<error>│</error> <text>hi</text>${' '.repeat(6)} <error>│</error>`, "the sides carry the tone role, the content the body role and nothing is padded twice");
 });
 
 test("cardBodyRows wraps, splits paragraphs and applies the preview budget", () => {
@@ -246,7 +246,7 @@ test("cardBodyRows wraps, splits paragraphs and applies the preview budget", () 
 	const empty = cardBodyRows(["", "one"], CARD_TONE.INFO, plainTheme, 12, { expanded: true }, metrics);
 	assert.equal(empty[0], `│${" ".repeat(10)}│`, "a blank line keeps the frame");
 
-	assert.deepEqual(cardBodyRows(["hi"], CARD_TONE.WARNING, taggedTheme, 12, { expanded: true }, metrics), [`<warning>│</warning> hi${' '.repeat(6)} <warning>│</warning>`]);
+	assert.deepEqual(cardBodyRows(["hi"], CARD_TONE.WARNING, taggedTheme, 12, { expanded: true }, metrics), [`<warning>│</warning> <text>hi</text>${' '.repeat(6)} <warning>│</warning>`]);
 });
 
 // ---- the top rule ----
@@ -279,12 +279,15 @@ test("cardTop right-aligns a hint in the rule and drops it before truncating the
 	assert.equal(metrics.visibleWidth(narrowed), 20);
 });
 
-test("cardTop and cardLine paint the frame in the tone's role and the label in the accent", () => {
+test("cardTop, cardLine and cardBottom paint the frame and the label in the tone's role", () => {
+	// The reference tables (lib/shell-card.ts TITLE_ROLE / FRAME_ROLE): every tone
+	// paints its own label, and INFO alone opens the accent its plain border cannot
+	// carry. The frame and the label therefore agree for every tone but INFO.
 	const roles = {
-		[CARD_TONE.INFO]: { frame: "border", title: "warning" },
-		[CARD_TONE.SUCCESS]: { frame: "success", title: "warning" },
+		[CARD_TONE.INFO]: { frame: "border", title: "accent" },
+		[CARD_TONE.SUCCESS]: { frame: "success", title: "success" },
 		[CARD_TONE.WARNING]: { frame: "warning", title: "warning" },
-		[CARD_TONE.ERROR]: { frame: "error", title: "warning" },
+		[CARD_TONE.ERROR]: { frame: "error", title: "error" },
 	};
 	for (const [tone, expected] of Object.entries(roles)) {
 		const row = cardTop({ title: "t", subtitle: undefined, body: [], tone }, taggedTheme, 30, undefined, metrics);
@@ -293,12 +296,16 @@ test("cardTop and cardLine paint the frame in the tone's role and the label in t
 		assert.match(cardBottom(tone, taggedTheme, 30, undefined, metrics), new RegExp(`^<${expected.frame}>╰</${expected.frame}>`), tone);
 	}
 
-	// S5: the label is the theme's own orange in both styles. The frame keeps the
-	// tone, so a settled success and a failure still read apart in neon.
+	// INFO is the one card whose frame and label differ: the plain border with the
+	// accent label every informational card uses.
 	const info = cardTop(card(), taggedTheme, 80, undefined, metrics);
-	assert.equal(info, "<border>╭</border><border>─ </border><warning>✿ Gentle AI</warning> <muted>·</muted> <muted>review preflight</muted><border> ─────────────────────────────────────────────</border><border>╮</border>");
+	assert.equal(info, "<border>╭</border><border>─ </border><accent>✿ Gentle AI</accent> <muted>·</muted> <muted>review preflight</muted><border> ─────────────────────────────────────────────</border><border>╮</border>");
+	// A success card labels itself in its own role, not in the accent.
+	const success = cardTop(card({ tone: CARD_TONE.SUCCESS }), taggedTheme, 80, undefined, metrics);
+	assert.match(success, /^<success>╭<\/success><success>─ <\/success><success>✿ Gentle AI<\/success> <muted>·<\/muted> <muted>review preflight<\/muted><success> ─+<\/success><success>╮<\/success>$/);
+	assert.equal(success.includes("<warning>"), false, "a settled success is never labelled in the accent");
 	const error = cardTop(card({ tone: CARD_TONE.ERROR }), taggedTheme, 80, "ctrl+o to expand", metrics);
-	assert.equal(error, "<error>╭</error><error>─ </error><warning>✿ Gentle AI</warning> <muted>·</muted> <muted>review preflight</muted><error> ───────────────────────────</error> <dim>ctrl+o to expand</dim> <error>╮</error>");
+	assert.equal(error, "<error>╭</error><error>─ </error><error>✿ Gentle AI</error> <muted>·</muted> <muted>review preflight</muted><error> ───────────────────────────</error> <dim>ctrl+o to expand</dim> <error>╮</error>");
 
 	// A card that names its own title role paints the label there and keeps the
 	// tone on the frame.
@@ -319,7 +326,48 @@ test("the card functions never paint a role the source branch does not use", () 
 			cardRunningLine(tone, recorder, width, metrics);
 		}
 	}
-	assert.deepEqual([...new Set(recorder.roles)].sort(), ["border", "dim", "error", "muted", "success", "warning"]);
+	assert.deepEqual([...new Set(recorder.roles)].sort(), ["accent", "border", "dim", "error", "muted", "success", "text", "warning"]);
+});
+
+test("a body row is clipped and padded on plain text and painted only afterwards", () => {
+	// The order the substrate guarantees: the text is measured and clipped first, and
+	// the role wraps the RESULT. So a clipped row is a complete paint of a plain clip,
+	// never a clip of a painted string.
+	assert.equal(cardLine("alpha bravo", CARD_TONE.INFO, taggedTheme, 16, metrics), `<border>│</border> <text>alpha bravo</text>  <border>│</border>`, "a row that fits is painted whole, inside its padding");
+	assert.equal(cardLine("x".repeat(30), CARD_TONE.SUCCESS, taggedTheme, 12, metrics), `<success>│</success> <text>xxxxxxx…</text> <success>│</success>`, "the clip happens before the paint, so the mark closes the text and the role closes the mark");
+	const recorder = recordingTheme();
+	cardBodyRows(["alpha", "", "bravo"], CARD_TONE.INFO, recorder, 20, { expanded: true }, metrics);
+	assert.deepEqual(recorder.roles, ["border", "text", "border", "border", "border", "border", "text", "border"], "the body borrows neither the frame's tone nor the label's role, and a blank row is painted in no role at all");
+});
+
+test("no painted string is ever measured, clipped or padded", () => {
+	// The seam records every string the substrate asks it to measure. A theme that
+	// tags its roles makes a painted input unmistakable: none may ever arrive.
+	const seen = [];
+	const seam = {
+		visibleWidth(value) {
+			seen.push(String(value));
+			return metrics.visibleWidth(value);
+		},
+		truncateToWidth(value, width, ellipsis) {
+			seen.push(String(value));
+			return metrics.truncateToWidth(value, width, ellipsis);
+		},
+		wrapTextWithAnsi(value, width) {
+			seen.push(String(value));
+			return metrics.wrapTextWithAnsi(value, width);
+		},
+	};
+	for (const width of [60, 30, 22, 14]) {
+		cardTop(card({ title: "Gentle AI review", subtitle: "a detail far too wide for this rule", tone: CARD_TONE.WARNING }), taggedTheme, width, "ctrl+o to expand", seam);
+		cardTopLine(card({ title: "bash", subtitle: "printf alpha bravo charlie delta echo", tone: CARD_TONE.WARNING }), taggedTheme, width, "to expand", undefined, seam);
+		cardTopRows(card({ title: "bash $ printf alpha bravo charlie delta", subtitle: "and a detail", tone: CARD_TONE.WARNING }), taggedTheme, width, "ctrl+o", seam);
+		cardBodyRows(["alpha bravo charlie delta echo", ""], CARD_TONE.WARNING, taggedTheme, width, { expanded: true }, seam);
+		cardRunningLine(CARD_TONE.WARNING, taggedTheme, width, seam);
+		cardBottom(CARD_TONE.WARNING, taggedTheme, width, "1.2s", seam);
+	}
+	assert.ok(seen.length > 0, "the seam was exercised");
+	for (const value of seen) assert.equal(/<\/?[a-z]+>/.test(value), false, `a painted string reached the seam: ${value}`);
 });
 
 // ---- heading rows ----
@@ -512,19 +560,25 @@ test('the float style draws the accent rail, the tone background and the two pad
 	assert.deepEqual(theme.roles.bg, ['toolPendingBg'], 'the warning tone paints its own background role');
 });
 
-test('the float accent is the theme warning role, never the tone or a colour of its own', () => {
-	const theme = floatTheme();
-	withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.SUCCESS, theme, 40, partsAt(theme, { ...SHORT_CARD, tone: CARD_TONE.SUCCESS })));
-	assert.deepEqual([...new Set(theme.roles.fg)].sort(), ['dim', 'muted', 'warning'], 'the rail and the label take the accent, the elapsed takes dim');
-	assert.equal(theme.roles.fg.includes('success'), false, 'the rail never takes the tone role');
-	assert.equal(theme.roles.fg.includes('border'), false);
-	assert.equal(theme.roles.fg.includes('accent'), false);
-	assert.deepEqual(theme.roles.bg, ['toolSuccessBg'], 'a success still paints its own tone background');
-
-	const error = floatTheme();
-	withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.ERROR, error, 40, partsAt(error, { ...SHORT_CARD, tone: CARD_TONE.ERROR })));
-	assert.deepEqual(error.roles.bg, ['toolErrorBg']);
-	assert.equal(error.roles.fg.includes('warning'), true, 'the accent stays the theme orange on a failure too');
+test('the float rail and the label take the tone role, and INFO its accent, never a colour of their own', () => {
+	// The reference contract (lib/shell-card.ts frame() and TITLE_ROLE): the float
+	// chrome paints the same FRAME_ROLE[tone] the neon frame does, and the label
+	// carries TITLE_ROLE[tone] — the tone, or the accent for INFO.
+	const expected = {
+		[CARD_TONE.INFO]: { frame: 'border', title: 'accent', bg: 'toolSuccessBg' },
+		[CARD_TONE.SUCCESS]: { frame: 'success', title: 'success', bg: 'toolSuccessBg' },
+		[CARD_TONE.WARNING]: { frame: 'warning', title: 'warning', bg: 'toolPendingBg' },
+		[CARD_TONE.ERROR]: { frame: 'error', title: 'error', bg: 'toolErrorBg' },
+	};
+	for (const [tone, roles] of Object.entries(expected)) {
+		const theme = floatTheme();
+		const rows = withStyle(CARD_STYLE.FLOAT, () => floatRows(tone, theme, 40, partsAt(theme, { ...SHORT_CARD, tone })));
+		const painted = rows.join('\n');
+		assert.ok(painted.includes(`<${roles.frame}>▎</${roles.frame}>`), `${tone}: the rail carries the tone role`);
+		assert.ok(painted.includes(`<${roles.title}>✿ Gentle AI</${roles.title}>`), `${tone}: the label carries its title role`);
+		assert.deepEqual([...new Set(theme.roles.fg)].sort(), [...new Set(['dim', 'muted', 'text', roles.frame, roles.title])].sort(), `${tone}: no role outside the tone, the label, the body text, the detail and the hint`);
+		assert.deepEqual(theme.roles.bg, [roles.bg], `${tone}: the float band paints its own tone background`);
+	}
 });
 
 test('the same card is the same text in both styles, and only the chrome differs', () => {
@@ -606,7 +660,8 @@ test('too narrow for float, the neon outline answers instead of a broken rail', 
 // press (pi-tui tui-alt-screen.js records `mousePressTarget` from the press
 // dispatch and retargets the synthesized `click` to it), so a card claims the
 // cells it wants and nothing else. The whole drawn card is that area, and the
-// click flips the host's own expansion flag — the same one `ctrl+o` flips.
+// click calls the card's own callback — the substrate decides no expansion of its
+// own, so a card that flips only itself passes a callback that moves only itself.
 const ROWS = ['abcdef', 'ghijkl'];
 
 function mouseEvent(patch) {

@@ -326,14 +326,16 @@ the elapsed time are identical in both; only the chrome differs.
   refreshes it at startup, on every `session_start` and right after its
   Customize save. The cards read it at each render, so a change reaches the next
   card with no restart and no file watcher.
-- **Clicking expands.** A left click anywhere on a worktree card — `/warp`'s
-  confirmation card and both tool cards alike — expands it, and the next click
-  collapses it. The click flips the same expansion flag `ctrl+o` flips, so the
-  mouse and the keyboard can never disagree. The card claims only its own drawn
-  cells: the right button, the wheel, OSC 8 links and every cell outside the card
-  stay the host's. A press inside the card belongs to that click (it is what
-  makes the click reach the card at all), so start a drag-selection on a row
-  outside the card.
+- **Clicking expands that card.** A left click anywhere on a worktree card —
+  `/warp`'s confirmation card and both tool cards alike — expands **that card
+  only**, and the next click on it collapses it again. A click on one card never
+  moves another one, and no click ever touches the session's expansion flag.
+  `ctrl+o` remains the global toggle: it sets the flag on every card, so it still
+  expands or collapses them all at once, and it wins over an earlier click. The
+  card claims only its own drawn cells: the right button, the wheel, OSC 8 links
+  and every cell outside the card stay the host's. A press inside the card belongs
+  to that click (it is what makes the click reach the card at all), so start a
+  drag-selection on a row outside the card.
 - **Fallback.** With no shell running, the style comes from
   `<home>/card-style.json` — `{ "schema": "gentle-pi.card-style/v1", "style":
   "neon" | "float" }` — and `<home>` resolves `GENTLE_PI_CONFIG_HOME` →
@@ -342,11 +344,40 @@ the elapsed time are identical in both; only the chrome differs.
   throws and nothing is guessed. While no host runs the document is read on every
   render, so an edit is visible on the next card — no watcher, and no cached copy
   between renders.
-- **The accent is a theme role, never a colour.** The heading label and the
-  float rail paint the theme's `warning` role — the orange of the Gentle theme —
-  and the float band paints the tone's own background role (`toolSuccessBg`,
-  `toolPendingBg` for a running call, `toolErrorBg` for a failure). No hex value
-  and no escape sequence is written by this package.
+- **The tone is a theme role, never a colour.** A card paints the state's own
+  theme role everywhere: the frame — the neon `╭ ╮ ╰ ╯` rule and the `float` `▎`
+  rail alike — carries `success` when a call settles, `warning` while it runs or
+  for `/warp`'s confirmation, `error` when it fails, and the plain `border` for an
+  informational card. The heading label carries the same role, except on the
+  informational card, whose label is the theme's `accent` on its plain border. A
+  tool result's body is the theme's own `text` — and so is every row of `/warp`'s
+  confirmation card — so a card's content never borrows the chrome's tone. The
+  float band paints the tone's background role
+  (`toolSuccessBg`, `toolPendingBg` for a running call, `toolErrorBg` for a
+  failure). No hex value and no escape sequence is written by this package.
+- **A row is clipped while it is still plain, and painted after.** Text is
+  wrapped, clipped to the card's inner width (with the `…` mark) and padded first;
+  the role wraps that result and nothing this package painted is measured again.
+  The one painted string the cards do measure is the host's own dim key hint, and
+  only with the host's ANSI-aware width. So the row is the same whatever measures
+  it: the `/warp` card's own fallback, which counts escape characters as columns,
+  clips the same text as the host's ANSI-aware helpers instead of cutting into a
+  sequence and losing characters — and follows the host's own truncation rule, so
+  a row one column wide shows `…` rather than its first character.
+- **The elapsed time is measured, never a clock read at paint time.** Both tool
+  cards and `/warp`'s confirmation carry their real duration on the closing rule,
+  bottom-right, in the same form (`61ms`, `1.2s`). For `/warp` that span runs from
+  the moment the request was accepted — the moment it was queued, for a handoff
+  that waited — to the last instant this session's code runs before the host
+  returns from `switchSession`: the host applies the new session, awaits the
+  callback that hands over the card, and only then returns, so the final hand-off
+  and the return itself are not in the number (the label ends at the hand-off, not
+  at the switch's return). A queued warp still counts its wait, and nothing is
+  re-measured when the card is drawn. A card with no measured
+  span shows no time at all: the queued announcement, a warp that sent no card
+  (already there, refused, cancelled, an empty session) and a card replayed from
+  a session written before this measurement. Never a stand-in `0ms`, never a
+  placeholder clock.
 - **Never a broken card.** A terminal narrower than ten columns, or a theme that
   cannot paint the background role, draws the `neon` outline instead of a
   half-drawn float card.

@@ -277,10 +277,13 @@ test('a running call draws one muted running row and closes its own frame in war
 	// Settling moves the very same heading to success and drops the running row.
 	const settledRows = call('worktree_create', CREATE_ARGS, taggedTheme, { isPartial: false }, 40);
 	assert.match(settledRows[0], /^<success>╭<\/success>/);
+	assert.match(settledRows[0], /<success>⎇ worktree create<\/success>/, 'a settled heading labels itself in its own tone, never in the accent');
 	assert.equal(settledRows.some((row) => row.includes('running')), false);
 
 	const failed = call('worktree_create', CREATE_ARGS, taggedTheme, { isPartial: false, isError: true }, 40);
 	assert.match(failed[0], /^<error>╭<\/error>/, 'a failed call is the error tone');
+	assert.match(failed[0], /<error>⎇ worktree create<\/error>/);
+	assert.match(tagged[0], /<warning>⎇ worktree create<\/warning>/, 'a pending call labels itself in the warning tone');
 });
 
 test('a call shows the host key hint only while it is settled and the row has room', () => {
@@ -400,7 +403,26 @@ test('the tone follows the state: success when finished, warning pending, error 
 
 	const recorder = recordingTheme();
 	resultRows('worktree_list', textResult('project: x'), { expanded: false, isPartial: false }, recorder, {}, 40);
-	assert.deepEqual([...new Set(recorder.roles)].sort(), ['success'], 'a settled success paints only its own role');
+	assert.deepEqual([...new Set(recorder.roles)].sort(), ['success', 'text'], 'a settled success paints its own role and the body text role');
+});
+
+test('a result body is painted in the theme text role, and the heading keeps the tone', () => {
+	// The body is the tool's own text. The rows reach the substrate PLAIN, which wraps,
+	// clips and pads them and paints each one in the body role as its last step, so a
+	// short row reads back whole and inside its role. The fake here only re-wraps a
+	// line that does not fit.
+	const ansiMetrics = {
+		...metrics,
+		wrapTextWithAnsi: (value, width) => (metrics.visibleWidth(value) <= width ? [value] : metrics.wrapTextWithAnsi(value, width)),
+	};
+	const made = createWorktreeCards({ metrics: ansiMetrics });
+	const settled = made.renderer('worktree_list').renderResult(textResult('project: x'), { isPartial: false }, taggedTheme, {}).render(30);
+	assert.match(settled[0], /^<success>│<\/success> <text>project: x<\/text>/, 'the body row carries the text role inside the tone frame');
+	assert.match(settled[0], /<success>│<\/success>$/, 'and the tone role closes it');
+	assert.equal(settled[0].includes('<warning>'), false, 'the body never borrows the accent');
+
+	const failed = made.renderer('worktree_list').renderResult(textResult('boom', true), { isPartial: false }, taggedTheme, {}).render(30);
+	assert.match(failed[0], /^<error>│<\/error> <text>boom<\/text>/, 'a refusal body is text too, inside the error frame');
 });
 
 test('the elapsed time rides the closing rule and yields when the rule has no room', () => {
@@ -512,12 +534,14 @@ test('a float card paints the accent rail and the tone background, and draws no 
 	const settled = paintTheme();
 	withStyle(CARD_STYLE.FLOAT, () => resultRows('worktree_list', textResult(SHORT_LIST), { expanded: true, isPartial: false }, settled, {}, 40));
 	assert.deepEqual(settled.roles.bg, ['toolSuccessBg']);
-	assert.equal(settled.roles.fg.includes('warning'), true);
+	assert.equal(settled.roles.fg.includes('success'), true, 'a settled card paints the tone role on its rail and its label');
+	assert.equal(settled.roles.fg.includes('warning'), false, 'the accent is not a second, fixed colour');
 
 	const failed = paintTheme();
 	withStyle(CARD_STYLE.FLOAT, () => resultRows('worktree_list', textResult(REFUSAL_TEXT, true), { expanded: true, isPartial: false }, failed, {}, 40));
 	assert.deepEqual(failed.roles.bg, ['toolErrorBg']);
-	assert.equal(failed.roles.fg.includes('warning'), true, 'a refusal keeps its accent and its error background');
+	assert.equal(failed.roles.fg.includes('error'), true, 'a refusal keeps its tone role and its error background');
+	assert.equal(failed.roles.fg.includes('warning'), false);
 });
 
 test('a call and its result share one float card, set off by the separator row', () => {
@@ -558,82 +582,170 @@ test('the style is read on every render, so a live change reaches the very next 
 	}
 });
 
-// ---- the click area: the whole card, not only the hint ----
+// ---- the click area: one card, and only that card ----
 //
 // The installed Pi build delivers a click only to the component that CLAIMED the
 // press (`@earendil-works/pi-tui` tui-alt-screen.js: `mousePressTarget` is
 // recorded from the press dispatch and the synthesized `click` is retargeted to
 // it), and the host's own `MouseRegion` around a tool card reacts to `click`
-// alone — so a card that claims nothing is never clicked at all. Both halves of a
-// tool card therefore claim their own drawn cells and flip the host's expansion
-// flag, which is the flag `ctrl+o` flips; the card keeps no state of its own.
+// alone — so a card that claims nothing is never clicked at all.
+//
+// A click moves THIS card only. The choice lives in the row's own `state` — the
+// host hands one `rendererState` to every render of one execution and to no
+// other (`tool-execution.js`) — and `ctrl+o`, the host's own session-wide flag,
+// still wins over it.
 
-/** A toggle seam that counts, so a click that forgot to toggle is visible. */
-function clickSpy() {
-	const spy = { calls: 0, toggleExpanded: () => { spy.calls += 1; } };
-	return spy;
+/** The host's own expansion flag: `ctrl+o` flips it for every row at once. */
+function hostFlag() {
+	return { expanded: false };
 }
 
-/** The component a render hook returns, rendered once so it knows its own geometry. */
-function mount(component, width) {
-	const rows = component.render(width);
-	const screen = { width, height: rows.length, screenX: 0, screenY: 0, shift: false, alt: false, ctrl: false };
-	const send = (type, x, y, patch = {}) => component.handleMouse({ type, button: 'left', x, y, ...screen, ...patch });
-	return { rows, send };
+/**
+ * One tool row as the installed host drives it (`tool-execution.js`): ONE
+ * `rendererState` for the execution, a fresh render context per render — so the
+ * host flag arrives as a snapshot — and an `invalidate` that repaints only this
+ * row, by running the same render hook again against the same state.
+ */
+function hostRow({ flag, tool = 'worktree_create', result = textResult(CREATE_TEXT), withInvalidate = true } = {}) {
+	const state = {};
+	const counter = { invalidations: 0, renders: 0 };
+	const build = () => {
+		const context = { isPartial: false, expanded: flag.expanded, state };
+		if (withInvalidate) context.invalidate = () => { counter.invalidations += 1; };
+		counter.renders += 1;
+		return cards.renderer(tool).renderResult(result, { expanded: flag.expanded, isPartial: false }, plainTheme, context);
+	};
+	const component = build();
+	const shown = component.render(60);
+	const send = (type, x = 2, y = 0, patch = {}) => component.handleMouse({
+		type,
+		button: 'left',
+		x,
+		y,
+		width: 60,
+		height: shown.length,
+		screenX: 0,
+		screenY: 0,
+		shift: false,
+		alt: false,
+		ctrl: false,
+		...patch,
+	});
+	return {
+		component,
+		rows: shown,
+		counter,
+		press: (x, y) => send('press', x, y),
+		click: (x, y, patch) => send('click', x, y, patch),
+		repaint: () => build().render(60),
+	};
 }
 
-test('a left click anywhere on a tool card toggles expansion, not only the hint', () => {
-	const spy = clickSpy();
-	const seamed = createWorktreeCards({ metrics, toggleExpanded: spy.toggleExpanded });
-	const context = { isPartial: false, expanded: false, keyHint: (name, text) => `ctrl+o ${text}` };
+test('a click expands the card it hit and leaves its sibling collapsed', () => {
+	const flag = hostFlag();
+	const clicked = hostRow({ flag });
+	const sibling = hostRow({ flag });
+	const collapsedRows = clicked.rows.length;
+	assert.ok(collapsedRows > 1 && sibling.rows.length > 1, 'both cards draw before the click');
 
-	for (const tool of ['worktree_create', 'worktree_list']) {
-		spy.calls = 0;
-		const callMount = mount(seamed.renderer(tool).renderCall({}, plainTheme, context), 60);
-		// The heading's left end is the cell furthest from the right-aligned hint.
-		assert.deepEqual(callMount.send('press', 3, 0), { handled: true, render: false }, `${tool}: the press claims the heading so the host retargets the click`);
-		assert.equal(spy.calls, 0, `${tool}: a press alone never toggles`);
-		assert.deepEqual(callMount.send('click', 3, 0), { handled: true }, `${tool}: the click on the heading is handled`);
-		assert.equal(spy.calls, 1, `${tool}: one click on the heading toggles once`);
+	assert.deepEqual(clicked.press(2, 0), { handled: true, render: false }, 'the press claims the clicked card so the host retargets the click');
+	assert.equal(clicked.counter.invalidations, 0, 'a press alone never repaints');
+	assert.deepEqual(clicked.click(2, 0), { handled: true }, 'the click on the card is handled');
+	assert.equal(clicked.counter.invalidations, 1, 'the click repaints the card it hit');
+	assert.equal(sibling.counter.invalidations, 0, 'and never the card beside it');
 
-		const resultMount = mount(seamed.renderer(tool).renderResult(textResult(CREATE_TEXT), {}, plainTheme, {}), 60);
-		assert.ok(resultMount.rows.length > 2, 'the result card has a body to click on');
-		for (const y of [0, 1, resultMount.rows.length - 1]) {
-			assert.deepEqual(resultMount.send('press', 2, y), { handled: true, render: false }, `${tool}: row ${y} of the result is on the card`);
-			assert.deepEqual(resultMount.send('click', 2, y), { handled: true }, `${tool}: row ${y} of the result is clickable`);
-		}
-		assert.equal(spy.calls, 4, `${tool}: one click on the heading and three on the result toggled four times`);
+	assert.ok(clicked.repaint().length > collapsedRows, 'the clicked card is expanded');
+	assert.deepEqual(sibling.repaint(), sibling.rows, 'the sibling beside it is still exactly collapsed');
+	assert.equal(flag.expanded, false, 'the session-wide flag is left to ctrl+o');
+});
+
+test('a second click collapses the same card again', () => {
+	const flag = hostFlag();
+	const row = hostRow({ flag });
+	const collapsedRows = row.rows.length;
+
+	assert.deepEqual(row.click(2, 0), { handled: true });
+	assert.ok(row.repaint().length > collapsedRows, 'the first click expands');
+	assert.deepEqual(row.click(2, 0), { handled: true });
+	assert.deepEqual(row.repaint(), row.rows, 'the second click collapses it back');
+	assert.equal(row.counter.invalidations, 2, 'each click repainted this one card once');
+});
+
+test('ctrl+o still expands every card, and wins over an earlier click', () => {
+	const flag = hostFlag();
+	const clicked = hostRow({ flag });
+	const untouched = hostRow({ flag });
+	const collapsedRows = clicked.rows.length;
+
+	assert.deepEqual(clicked.click(2, 0), { handled: true });
+	assert.ok(clicked.repaint().length > collapsedRows, 'the click expanded its own card');
+
+	// ctrl+o: the host sets its flag on every expandable child.
+	flag.expanded = true;
+	const clickedByKey = clicked.repaint();
+	const untouchedByKey = untouched.repaint();
+	assert.deepEqual(clickedByKey, untouchedByKey, 'after ctrl+o both cards draw the same expanded body');
+	assert.ok(clickedByKey.length > collapsedRows, 'ctrl+o expanded the card a click had already expanded');
+
+	flag.expanded = false;
+	assert.deepEqual(clicked.repaint(), clicked.rows, 'a collapse from ctrl+o wins over the earlier click too');
+	assert.deepEqual(untouched.repaint(), untouched.rows, 'and the card no one clicked follows the host in both directions');
+	assert.equal(flag.expanded, false);
+});
+
+test('a click on a card ctrl+o expanded collapses only that card', () => {
+	const flag = hostFlag();
+	flag.expanded = true;
+	const clicked = hostRow({ flag });
+	const untouched = hostRow({ flag });
+	const expandedRows = clicked.rows.length;
+
+	assert.deepEqual(clicked.click(2, 0), { handled: true });
+	assert.ok(clicked.repaint().length < expandedRows, 'the click collapsed the card it hit');
+	assert.deepEqual(untouched.repaint(), untouched.rows, 'the card beside it stays expanded, exactly as ctrl+o left it');
+});
+
+test('a render context with no invalidate still expands on click and never throws', () => {
+	const flag = hostFlag();
+	const row = hostRow({ flag, withInvalidate: false });
+
+	assert.deepEqual(row.click(2, 0), { handled: true }, 'a host without the seam still gets the click');
+	assert.equal(row.counter.renders, 1, 'and the card never repainted itself behind a host that has no seam');
+	assert.ok(row.repaint().length > row.rows.length, 'the choice is applied by the next render the host does');
+});
+
+test('the whole drawn card is clickable, and nothing outside it is claimed', () => {
+	const flag = hostFlag();
+	const row = hostRow({ flag });
+	for (const y of [0, 1, row.rows.length - 1]) {
+		assert.deepEqual(row.press(2, y), { handled: true, render: false }, `row ${y} is on the card`);
+		assert.deepEqual(row.click(2, y), { handled: true }, `row ${y} is clickable`);
 	}
-});
+	assert.equal(row.counter.invalidations, 3, 'each click repainted this one card once');
 
-test('a click on the hint still toggles, and no cell outside the card is claimed', () => {
-	const spy = clickSpy();
-	const seamed = createWorktreeCards({ metrics, toggleExpanded: spy.toggleExpanded });
+	assert.equal(row.click(0, row.rows.length), undefined, 'a row below the card is the host\'s');
+	assert.equal(row.click(60, 0), undefined, 'a column right of the card is the host\'s');
+	assert.equal(row.click(0, 0, { button: 'right' }), undefined, 'the right button is the host\'s');
+	assert.equal(row.click(0, 0, { button: 'middle' }), undefined);
+	for (const type of ['move', 'drag', 'release', 'wheel']) {
+		assert.equal(row.click(0, 0, { type }), undefined, `a ${type} is not a click`);
+	}
+	assert.equal(row.counter.invalidations, 3, 'nothing outside the card moved it');
+
+	// The heading's hint cells are inside the card, so they are clicked like any other.
 	const hint = 'ctrl+o to expand';
-	const component = seamed.renderer('worktree_create').renderCall({}, plainTheme, { isPartial: false, keyHint: () => hint });
-	const { rows, send } = mount(component, 60);
-	const heading = stripAnsi(rows[0]);
-	const hintStart = heading.indexOf(hint);
+	const hinted = cards.renderer('worktree_create').renderCall({}, plainTheme, { isPartial: false, keyHint: () => hint, state: {}, expanded: false });
+	const hintRows = hinted.render(60);
+	const hintStart = stripAnsi(hintRows[0]).indexOf(hint);
 	assert.ok(hintStart > 0, 'the heading carries the hint');
-	assert.deepEqual(send('click', hintStart + 2, 0), { handled: true }, 'the hint cells stay clickable');
-	assert.equal(spy.calls, 1);
-
-	assert.equal(send('click', 0, rows.length), undefined, 'a row below the card is the host\'s');
-	assert.equal(send('click', 60, 0), undefined, 'a column right of the card is the host\'s');
-	assert.equal(send('click', 0, 0, { button: 'right' }), undefined, 'the right button is the host\'s');
-	assert.equal(send('drag', 0, 0), undefined, 'a drag is not a click');
-	assert.equal(send('move', 0, 0), undefined, 'a move is not a click');
-	assert.equal(spy.calls, 1, 'nothing outside the card toggled anything');
+	assert.deepEqual(hinted.handleMouse({ type: 'click', button: 'left', x: hintStart + 2, y: 0, width: 60, height: hintRows.length, screenX: 0, screenY: 0, shift: false, alt: false, ctrl: false }), { handled: true }, 'the hint cells are on the card');
 });
 
-test('a card with no click seam has no mouse handler at all', () => {
-	const keyboardOnly = createWorktreeCards({ metrics });
-	const context = { isPartial: false };
+test('both halves of a card claim their own cells with no injected seam', () => {
 	for (const tool of WORKTREE_CARD_TOOLS) {
-		const callComponent = keyboardOnly.renderer(tool).renderCall({}, plainTheme, context);
-		const resultComponent = keyboardOnly.renderer(tool).renderResult(textResult(CREATE_TEXT), {}, plainTheme, {});
-		assert.equal('handleMouse' in callComponent, false, `${tool} call: ctrl+o stays the only way in`);
-		assert.equal('handleMouse' in resultComponent, false, `${tool} result: no host toggle, no claim`);
-		assert.ok(callComponent.render(60).length > 0, 'the card still draws');
+		const callComponent = cards.renderer(tool).renderCall({}, plainTheme, { isPartial: false, state: {} });
+		const resultComponent = cards.renderer(tool).renderResult(textResult(CREATE_TEXT), {}, plainTheme, { state: {} });
+		assert.equal(typeof callComponent.handleMouse, 'function', `${tool} call: the card claims its own cells`);
+		assert.equal(typeof resultComponent.handleMouse, 'function', `${tool} result: the card claims its own cells`);
 	}
 });

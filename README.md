@@ -269,8 +269,9 @@ the elapsed time are identical in both; only the chrome differs.
   "neon" | "float" }` — and `<home>` resolves `GENTLE_PI_CONFIG_HOME` →
   `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`. A missing, unreadable,
   malformed, wrong-schema or unknown-style document reads as `float`; nothing
-  throws and nothing is guessed. The document is re-read at `session_start`, so
-  every session sees the style that is current when it starts.
+  throws and nothing is guessed. While no host runs the document is read on every
+  render, so an edit is visible on the next card — no watcher, and no cached copy
+  between renders.
 - **The accent is a theme role, never a colour.** The heading label and the
   float rail paint the theme's `warning` role — the orange of the Gentle theme —
   and the float band paints the tone's own background role (`toolSuccessBg`,

@@ -7,6 +7,9 @@
 // The document lives in a scratch directory (`GENTLE_PI_CONFIG_HOME`), so no case
 // reads or writes the real user's preference, and the slot is restored after every
 // case so one test can never decide another's style.
+//
+// There is no cache to reset between cases: the slot is a property read on every
+// call, and the document is read from disk on every call the slot cannot answer.
 const { test, before, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs');
@@ -21,10 +24,8 @@ const {
 	cardStyleFile,
 	cardStyleHome,
 	parseCardStyleFile,
-	refreshCardStyle,
 	resolveCardStyle,
 } = require('../lib/card-style.js');
-const { loadExtension } = require('./fixtures/load-extension.js');
 
 const VALID = (style) => JSON.stringify({ schema: CARD_STYLE_SCHEMA, style });
 
@@ -67,13 +68,11 @@ beforeEach(() => {
 	useSlot(undefined);
 	delete process.env.GENTLE_PI_CONFIG_HOME;
 	delete process.env.GENTLE_SHELL_CONFIG_HOME;
-	refreshCardStyle();
 });
 
 afterEach(() => {
 	useSlot(undefined);
 	restoreEnv();
-	refreshCardStyle();
 });
 
 after(() => {
@@ -87,7 +86,7 @@ test('the reader names the two styles, the schema and the document', () => {
 	assert.equal(CARD_STYLE_SCHEMA, 'gentle-pi.card-style/v1');
 	assert.equal(CARD_STYLE_FILE, 'card-style.json');
 	assert.equal(CARD_STYLE_SLOT, Symbol.for('gentle-pi.card-style'), 'the slot is the symbol Gentle Shell resolves into');
-	for (const fn of [cardStyle, cardStyleFile, cardStyleHome, parseCardStyleFile, refreshCardStyle, resolveCardStyle]) {
+	for (const fn of [cardStyle, cardStyleFile, cardStyleHome, parseCardStyleFile, resolveCardStyle]) {
 		assert.equal(typeof fn, 'function');
 	}
 });
@@ -135,7 +134,6 @@ test('a document that states a style is the answer when the slot is empty', () =
 	for (const style of [CARD_STYLE.NEON, CARD_STYLE.FLOAT]) {
 		const home = newHome(`document-${style}`);
 		writeDocument(home, VALID(style));
-		refreshCardStyle();
 		assert.deepEqual(resolveCardStyle({ gentlePiConfigHome: home }), {
 			style,
 			source: 'file',
@@ -164,12 +162,28 @@ test('a malformed or unreadable document falls back to float and names the reaso
 	assert.equal(failure.style, CARD_STYLE.FLOAT);
 	assert.equal(failure.reason, 'unreadable_file');
 	assert.equal(cardStyle({ gentlePiConfigHome: unreadable }), CARD_STYLE.FLOAT);
+
+	// A document that goes bad between two calls is seen bad on the second one,
+	// with the reason, and still never throws.
+	const fading = newHome('malformed-live');
+	writeDocument(fading, VALID(CARD_STYLE.NEON));
+	assert.equal(cardStyle({ gentlePiConfigHome: fading }), CARD_STYLE.NEON);
+	writeDocument(fading, JSON.stringify({ schema: CARD_STYLE_SCHEMA }));
+	const broken = resolveCardStyle({ gentlePiConfigHome: fading });
+	assert.equal(broken.style, CARD_STYLE.FLOAT, 'the edited document is read by the next call');
+	assert.equal(broken.source, 'default');
+	assert.equal(broken.reason, 'malformed_file');
+	assert.equal(cardStyle({ gentlePiConfigHome: fading }), CARD_STYLE.FLOAT);
+	assert.deepEqual(
+		resolveCardStyle({ gentlePiConfigHome: unreadable + '-absent' }),
+		{ style: CARD_STYLE.FLOAT, source: 'default', reason: 'missing_file', slot: undefined, globalFile: documentIn(unreadable + '-absent') },
+		'a missing document is still float, and still says so',
+	);
 });
 
 test('the live slot wins over the document, because that is what the shell says', () => {
 	const home = newHome('slot-wins');
 	writeDocument(home, VALID(CARD_STYLE.FLOAT));
-	refreshCardStyle();
 
 	useSlot(CARD_STYLE.NEON);
 	const neon = resolveCardStyle({ gentlePiConfigHome: home });
@@ -184,7 +198,6 @@ test('the live slot wins over the document, because that is what the shell says'
 
 	// And a slot that says float overrules a document that says neon.
 	writeDocument(home, VALID(CARD_STYLE.NEON));
-	refreshCardStyle();
 	useSlot(CARD_STYLE.FLOAT);
 	assert.equal(cardStyle({ gentlePiConfigHome: home }), CARD_STYLE.FLOAT);
 	assert.equal(resolveCardStyle({ gentlePiConfigHome: home }).source, 'slot');
@@ -204,7 +217,6 @@ test('a slot holding anything but a known style is not a decision', () => {
 test('the slot is live: a change is seen on the next call, with no refresh', () => {
 	const home = newHome('live');
 	writeDocument(home, VALID(CARD_STYLE.FLOAT));
-	refreshCardStyle();
 	assert.equal(cardStyle({ gentlePiConfigHome: home }), CARD_STYLE.FLOAT);
 	useSlot(CARD_STYLE.NEON);
 	assert.equal(cardStyle({ gentlePiConfigHome: home }), CARD_STYLE.NEON, 'the slot is read on every call');
@@ -212,20 +224,30 @@ test('the slot is live: a change is seen on the next call, with no refresh', () 
 	assert.equal(cardStyle({ gentlePiConfigHome: home }), CARD_STYLE.FLOAT);
 });
 
-test('the document is read once per session and re-read by refresh, never cached across sessions', () => {
-	const home = newHome('refresh');
+test('the document is live: an edit between two calls is seen by the second one, with no refresh', () => {
+	const home = newHome('document-live');
 	writeDocument(home, VALID(CARD_STYLE.FLOAT));
-	refreshCardStyle();
-	assert.equal(cardStyle({ gentlePiConfigHome: home }), CARD_STYLE.FLOAT);
+	assert.equal(cardStyle({ gentlePiConfigHome: home }), CARD_STYLE.FLOAT, 'the first call reads the float document');
 
-	// A render path never hits the disk: the document stays as the session read it.
 	writeDocument(home, VALID(CARD_STYLE.NEON));
-	assert.equal(cardStyle({ gentlePiConfigHome: home }), CARD_STYLE.FLOAT, 'the cached document branch answers');
-	assert.equal(resolveCardStyle({ gentlePiConfigHome: home }).style, CARD_STYLE.NEON, 'the diagnostic reader always reads it');
+	assert.equal(cardStyle({ gentlePiConfigHome: home }), CARD_STYLE.NEON, 'the second call reads the edited document');
+	assert.equal(resolveCardStyle({ gentlePiConfigHome: home }).source, 'file');
 
-	// `session_start` re-reads, which is the only thing that sees the new document.
-	assert.equal(refreshCardStyle({ gentlePiConfigHome: home }).style, CARD_STYLE.NEON);
+	writeDocument(home, VALID(CARD_STYLE.FLOAT));
+	assert.equal(cardStyle({ gentlePiConfigHome: home }), CARD_STYLE.FLOAT, 'and the next edit is seen on the next call');
+});
+
+test('the slot still wins when it is present, whatever the document says', () => {
+	const home = newHome('slot-still-wins');
+	writeDocument(home, VALID(CARD_STYLE.FLOAT));
+	useSlot(CARD_STYLE.NEON);
 	assert.equal(cardStyle({ gentlePiConfigHome: home }), CARD_STYLE.NEON);
+
+	// A document edit between calls cannot overrule the live slot.
+	writeDocument(home, VALID(CARD_STYLE.FLOAT));
+	assert.equal(cardStyle({ gentlePiConfigHome: home }), CARD_STYLE.NEON, 'the slot answers, not the document');
+	assert.equal(resolveCardStyle({ gentlePiConfigHome: home }).source, 'slot');
+	assert.equal(resolveCardStyle({ gentlePiConfigHome: home }).style, CARD_STYLE.NEON);
 });
 
 test('one home never answers for another', () => {
@@ -233,31 +255,9 @@ test('one home never answers for another', () => {
 	const floatHome = newHome('home-float');
 	writeDocument(neonHome, VALID(CARD_STYLE.NEON));
 	writeDocument(floatHome, VALID(CARD_STYLE.FLOAT));
-	refreshCardStyle();
 	assert.equal(cardStyle({ gentlePiConfigHome: neonHome }), CARD_STYLE.NEON);
-	assert.equal(cardStyle({ gentlePiConfigHome: floatHome }), CARD_STYLE.FLOAT, 'the cache is keyed by the document path');
+	assert.equal(cardStyle({ gentlePiConfigHome: floatHome }), CARD_STYLE.FLOAT, 'each call reads its own document');
 	assert.equal(cardStyle({ gentlePiConfigHome: neonHome }), CARD_STYLE.NEON);
-});
-
-// ---- the extension: the session-start re-read ----
-
-test('the extension re-reads the style at session_start', async () => {
-	const { hooks } = await loadExtension({});
-	const refreshers = hooks.filter(([event, handler]) => event === 'session_start' && String(handler).includes('refreshCardStyle'));
-	assert.equal(refreshers.length, 1, 'exactly one session-start handler owns the style re-read');
-
-	const home = newHome('session-start');
-	writeDocument(home, VALID(CARD_STYLE.FLOAT));
-	process.env.GENTLE_PI_CONFIG_HOME = home;
-	refreshCardStyle();
-	assert.equal(cardStyle(), CARD_STYLE.FLOAT, 'the session starts on the document it read');
-
-	// Gentle Shell saves the other style while the session runs; the render path keeps
-	// the session's answer until the next start, which is what the hook refreshes.
-	writeDocument(home, VALID(CARD_STYLE.NEON));
-	assert.equal(cardStyle(), CARD_STYLE.FLOAT);
-	assert.doesNotThrow(() => refreshers[0][1]());
-	assert.equal(cardStyle(), CARD_STYLE.NEON, 'the re-read sees the document the new session starts on');
 });
 
 // ---- `<home>` resolution: GENTLE_PI_CONFIG_HOME → GENTLE_SHELL_CONFIG_HOME → ~/.pi/gentle-ai ----
@@ -290,7 +290,6 @@ test('the reader falls back to float instead of throwing on unusable input', () 
 	for (const options of [undefined, null, 42, 'x', {}, { gentlePiConfigHome: 7 }, { gentlePiConfigHome: '' }]) {
 		assert.doesNotThrow(() => resolveCardStyle(options));
 		assert.doesNotThrow(() => cardStyle(options));
-		assert.doesNotThrow(() => refreshCardStyle(options));
 		assert.ok([CARD_STYLE.NEON, CARD_STYLE.FLOAT].includes(resolveCardStyle(options).style));
 	}
 	// A home that is a file, not a directory, has no document to read.

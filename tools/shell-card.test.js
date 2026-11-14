@@ -34,7 +34,7 @@ const {
 	headingFits,
 	markCardResult,
 } = require('../lib/shell-card.js');
-const { CARD_STYLE_SCHEMA, cardStyle, refreshCardStyle } = require('../lib/card-style.js');
+const { CARD_STYLE_SCHEMA, cardStyle } = require('../lib/card-style.js');
 
 // ---- the style seam: the process-wide slot, and a scratch preference home ----
 
@@ -45,14 +45,13 @@ function useStyle(style) {
 	else globalThis[CARD_STYLE_SLOT] = style;
 }
 
-/** Runs `run` with the slot saying `style`, then clears the slot and the document cache. */
+/** Runs `run` with the slot saying `style`, then clears the slot. */
 function withStyle(style, run) {
 	useStyle(style);
 	try {
 		return run();
 	} finally {
 		useStyle(undefined);
-		refreshCardStyle();
 	}
 }
 
@@ -62,7 +61,6 @@ const styleDocument = () => join(configHome, 'card-style.json');
 
 function writeStyleDocument(contents) {
 	writeFileSync(styleDocument(), typeof contents === 'string' ? contents : JSON.stringify(contents));
-	refreshCardStyle();
 }
 
 function removeStyleDocument() {
@@ -71,21 +69,18 @@ function removeStyleDocument() {
 	} catch {
 		// Already absent: the missing document is the case under test.
 	}
-	refreshCardStyle();
 }
 
 before(() => {
 	configHome = mkdtempSync(join(tmpdir(), 'odd-shell-card-style-'));
 	process.env.GENTLE_PI_CONFIG_HOME = configHome;
 	useStyle(undefined);
-	refreshCardStyle();
 });
 
 after(() => {
 	useStyle(undefined);
 	if (savedHome === undefined) delete process.env.GENTLE_PI_CONFIG_HOME;
 	else process.env.GENTLE_PI_CONFIG_HOME = savedHome;
-	refreshCardStyle();
 	rmSync(configHome, { recursive: true, force: true });
 });
 
@@ -559,7 +554,6 @@ test('the style decision is read once per render: the slot wins over the documen
 		assert.equal(neon.some((row) => row.includes('▎')), false);
 	} finally {
 		useStyle(undefined);
-		refreshCardStyle();
 	}
 });
 

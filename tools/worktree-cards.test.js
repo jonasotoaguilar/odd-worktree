@@ -15,7 +15,7 @@ const { before, after, test } = require('node:test');
 
 const { ELLIPSIS, WORKTREE_CARD_TOOLS, createWorktreeCards } = require('../lib/worktree-cards.js');
 const { worktreeListView } = require('../lib/worktree-list.js');
-const { CARD_STYLE, refreshCardStyle } = require('../lib/card-style.js');
+const { CARD_STYLE } = require('../lib/card-style.js');
 
 // ---- the injected text seam (fakes: plain ASCII, each character one column) ----
 
@@ -103,7 +103,6 @@ function withStyle(style, run) {
 		return run();
 	} finally {
 		useStyle(undefined);
-		refreshCardStyle();
 	}
 }
 
@@ -130,14 +129,12 @@ before(() => {
 	configHome = mkdtempSync(join(tmpdir(), 'odd-worktree-card-style-'));
 	process.env.GENTLE_PI_CONFIG_HOME = configHome;
 	useStyle(undefined);
-	refreshCardStyle();
 });
 
 after(() => {
 	useStyle(undefined);
 	if (savedHome === undefined) delete process.env.GENTLE_PI_CONFIG_HOME;
 	else process.env.GENTLE_PI_CONFIG_HOME = savedHome;
-	refreshCardStyle();
 	rmSync(configHome, { recursive: true, force: true });
 });
 
@@ -558,6 +555,5 @@ test('the style is read on every render, so a live change reaches the very next 
 		assert.match(stripAnsi(call('worktree_list', {}, theme, { isPartial: false }, 40)[0]), /^╭─ /, 'and back again, with no rebuild');
 	} finally {
 		useStyle(undefined);
-		refreshCardStyle();
 	}
 });

@@ -6645,19 +6645,11 @@ export default function (pi) {
   // session start and drop it on shutdown, so no render path ever reaches a
   // context the runtime has invalidated.
   pi.on("session_start", rememberWorktreeCardUi);
-  // S5: the cards follow the style chosen in Gentle Shell. The shell publishes the
-  // live value on a process-wide slot, which the card substrate reads on every
-  // render — that is how a change made mid-session reaches the next card without a
-  // watcher. This re-reads the user's document as well, so a style saved while no
-  // host was running is picked up at the start of the session instead of carrying
-  // the previous session's answer. Presentation only: never waits, never throws.
-  pi.on("session_start", () => {
-    try {
-      libRequire("card-style.js").refreshCardStyle();
-    } catch {
-      // A missing reader keeps the substrate's own default: float.
-    }
-  });
+  // S5: the cards follow the style chosen in Gentle Shell with no hook of their
+  // own. The shell publishes the live value on a process-wide slot and the card
+  // substrate reads it on every render; when no host is present the substrate reads
+  // `<home>/card-style.json` on every render too. So there is nothing to re-read at
+  // `session_start` and nothing cached to invalidate.
   // The session-start `gh` check only gates whether `/issues` may open; the
   // command itself is registered eagerly above.
   pi.on("session_start", async (event, ctx) => {

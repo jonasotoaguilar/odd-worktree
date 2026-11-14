@@ -61,8 +61,9 @@ and its log stay; only the persisted state record goes.
   branch are untouched; a create followed by a list writes nothing (S3, S4).
 - T9: `lib/card-style.js` is the one reader of the style: the shell's process-wide
   slot, then the strict document, then `float`; it reports its source and the reason
-  it fell back, never throws, caches only the document branch on its own path, and is
-  re-read on `session_start` (S5).
+  it fell back, never throws, and keeps no cache and no watcher — with a host the
+  slot is live, without one the document is read again on every render, so an edit is
+  visible on the next card rather than at the next `session_start` (S5).
 - T10: `lib/shell-card.js` renders both styles from that one decision — the neon
   frame or the float rail, the accent in the theme's `warning` role, the tone
   background under float — so no card is half of each, and both keep the same text
@@ -70,9 +71,9 @@ and its log stay; only the persisted state record goes.
 - T11: the two tool cards keep their content, order, truncation, preview budget and
   right-aligned elapsed in both styles; a location narrower than float, or a theme
   without the background role, draws the neon outline (S5).
-- T12: the extension re-reads the style on `session_start`, and the README documents
-  the live slot, the document fallback, the accent role and the fallback to neon
-  (S5).
+- T12: the extension keeps no style hook of its own — there is nothing to re-read at
+  `session_start` and no cache to drop — and the README documents the live slot, the
+  per-render document fallback, the accent role and the fallback to neon (S5).
 - T13: the `/warp` message card is composed on `lib/shell-card.js` — its parts handed
   to the substrate's `floatRows` — so one decision per render picks its style, its
   private float recipe and tone table are deleted, and its text is identical in both

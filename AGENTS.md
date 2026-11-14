@@ -159,7 +159,11 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     `lib/worktree-warp-busy.js` reports a tool still executing, a running or
     queued agent task, or an active job, `/warp` keeps the validated handoff
     PENDING instead of switching, and re-dispatches the same `/warp @<token>`
-    from a bounded, unref'd poller once all three workloads are idle. The request
+    from a bounded, unref'd poller once all three workloads are idle, and an
+    `agent_settled` handler ticks the pending record once, so a queued warp (also
+    one asked while `ctx.isIdle()` is false) starts when the session settles, not
+    on the next poll, while the record's `dispatching` guard keeps that boundary
+    and the poller from dispatching it twice. The request
     is recorded as pending at QUEUE time, so a second warp in the same turn is
     refused and the pending one is never replaced. Expiry
     (`ODD_WORKTREE_WARP_PENDING_MS`, 30 min default) notifies that nothing moved,

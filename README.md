@@ -213,7 +213,10 @@ the request is **queued**.
   drain. The session stays where it is, and a bounded background poller
   re-dispatches the SAME validated handoff once this session reports no tool
   still executing, no running or queued agent task and no running job. Nothing
-  switches mid-work. A queued handoff never claims a move.
+  switches mid-work. A queued handoff never claims a move. A queued warp is also
+  dispatched at the host's `agent_settled` boundary — so a request made while the
+  session is not idle (Pi still processing a run) queues like any other, and the
+  move starts when the session settles, not on the next poll.
 - **Ask first, then queue.** The pending-changes question (`YES COPY` / `NO COPY`
   over the checkout you are standing in, Esc cancels the warp) is asked when the
   warp is **requested** — before the busy decision and before any work drains —

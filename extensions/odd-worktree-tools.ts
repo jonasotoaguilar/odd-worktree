@@ -3166,11 +3166,33 @@ function forgetPendingWarp(ctx) {
   }
 }
 
+// S1 (warp-settle-dispatch): the host's own idle state, the busy source the
+// counters cannot see. `ctx.isIdle()` is false while Pi processes an agent run,
+// an automatic retry, an auto-compaction retry or a queued continuation, so a
+// warp typed while the assistant is still thinking is queued like any other
+// request even though no tool, task or job reports the work. Null when the
+// context offers no such seam, or it throws: the decision then degrades to the
+// counters alone, exactly as before.
+function warpHostIdle(ctx) {
+  try {
+    if (ctx && typeof ctx.isIdle === "function") return ctx.isIdle() === true;
+  } catch {
+    // An unreadable host state blocks nothing.
+  }
+  return null;
+}
+
 // The COMMAND front's counters, read ONCE as they are (S2, warp-queue-order):
 // a session with a tool executing, agent tasks or background jobs QUEUES the
 // warp at once and is never waited on until it drains — a wait made the request
 // land on the idle path afterwards, so it never queued (and never painted its
 // steering row) and asked the pending-changes question again on every attempt.
+//
+// S1 (warp-settle-dispatch): the host's own idle state is part of that one
+// answer, so a request made while `ctx.isIdle()` is false is queued too. The
+// queued request's OWN re-dispatch (`hostIdle: false`) is exempt: the queue
+// dispatches it into a settled host by construction, and re-reading the gate
+// there could only re-queue the same move.
 //
 // An absent, empty or throwing session id is NOT a reason to skip the counters:
 // the tool counter and the host's `job_list` belong to THIS session whatever its
@@ -3179,7 +3201,8 @@ function forgetPendingWarp(ctx) {
 // needs the id, and `sessionActivity` answers that source `unknown` — which
 // blocks nothing — when it is missing. Null only when the module is unavailable
 // (best effort, blocks nothing).
-async function warpRequestActivity(ctx) {
+async function warpRequestActivity(ctx, options) {
+  const opts = options && typeof options === "object" ? options : {};
   let lib = null;
   try {
     lib = libRequire("worktree-warp-busy.js");
@@ -3191,6 +3214,7 @@ async function warpRequestActivity(ctx) {
     return await lib.sessionActivity({
       sessionId: closeSessionString(ctx, "getSessionId"),
       host: warpJobHost(ctx),
+      hostIdle: opts.hostIdle === false ? null : warpHostIdle(ctx),
     });
   } catch {
     return null;
@@ -3732,8 +3756,10 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
   // waits for this session's tools, agent tasks or jobs to drain: a request that
   // waited found the session idle afterwards and took the move path, so it never
   // queued, never painted the steering row and asked the copy question again on
-  // every attempt. A store that is absent or unreadable blocks nothing.
-  const sessionLoad = await warpRequestActivity(ctx);
+  // every attempt. A store that is absent or unreadable blocks nothing. S1: the
+  // host's own idle state is part of that answer, so a request made mid-run is
+  // queued and the host wait below is never reached.
+  const sessionLoad = await warpRequestActivity(ctx, { hostIdle: retry !== true });
   // S5: the QUEUED warp. This session still reports a tool executing, running or
   // queued agent tasks, or an active job, so nothing switches: the request is
   // validated and kept as this session's one pending warp, and
@@ -6869,6 +6895,30 @@ export default function (pi) {
   // EVERY tool of the session, not only this package's.
   pi.on("tool_execution_start", (event) => warpNoteToolExecution(event, false));
   pi.on("tool_execution_end", (event) => warpNoteToolExecution(event, true));
+  // S3 (warp-settle-dispatch): the settle boundary. An `agent_settled` handler
+  // ticks every pending record once, so a queued warp starts as soon as Pi
+  // settles — the counters were already zero while the assistant was thinking,
+  // and this is the first moment the host accepts the dispatch — instead of on
+  // the next poll. The poller stays as the fallback for a workload that outlives
+  // settle (a background job, an agent task) and for a dispatch the host
+  // rejects. One tick per record: the record's own `dispatching` guard makes the
+  // boundary and a concurrent poll dispatch it at most once, and a throwing
+  // tick must never break the host.
+  pi.on("agent_settled", async () => {
+    try {
+      const lib = libRequire("worktree-warp-busy.js");
+      if (!lib || typeof lib.pendingWarpKeys !== "function" || typeof lib.pendingWarpTick !== "function") return;
+      for (const key of lib.pendingWarpKeys()) {
+        try {
+          await lib.pendingWarpTick(key);
+        } catch {
+          // One record's failure never stops the others from being ticked.
+        }
+      }
+    } catch {
+      // A settled handler must never break the host.
+    }
+  });
   // S7: the ODD worktree rules ride the prompt options, appended after the
   // harness's own text. Sync mutation, so the host reads the final string.
   pi.on("before_agent_start", (event) => {

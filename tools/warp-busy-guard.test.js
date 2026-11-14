@@ -768,6 +768,64 @@ describe('lib/worktree-warp-busy.js', () => {
     assert.equal(busyLib.pendingKeyFor(null), null);
   });
 
+  test('a queued handoff keeps its requestedAt through the record and the dispatch', async () => {
+    const key = 'session:lib-stamp';
+    const dispatched = [];
+    const handoff = { name: 'feat-s', target: '/t', from: '/f', branch: 'feat/s', changes: { mode: 'none', paths: [] }, requestedAt: 1234 };
+    let activity = { busy: true, running: 1, queued: 0 };
+    const queued = busyLib.queuePendingWarp({
+      key,
+      name: 'feat-s',
+      token: '@stamp',
+      handoff,
+      now: () => 9000,
+      env: { ODD_WORKTREE_WARP_PENDING_MS: '10000', ODD_WORKTREE_WARP_PENDING_POLL_MS: '1000' },
+      timers: { set: () => null, clear: () => {} },
+      read: async () => activity,
+      dispatch: (queuedHandoff, token) => { dispatched.push([queuedHandoff, token]); return { ok: true }; },
+    });
+    try {
+      assert.equal(queued.ok, true);
+      assert.equal(busyLib.pendingWarpFor(key).handoff.requestedAt, 1234, 'the record keeps the acceptance stamp');
+      assert.equal((await busyLib.pendingWarpTick(key)).status, 'waiting');
+      activity = { busy: false, running: 0, queued: 0 };
+      assert.equal((await busyLib.pendingWarpTick(key)).status, 'dispatched');
+      assert.equal(dispatched.length, 1);
+      assert.equal(dispatched[0][0].requestedAt, 1234, 'and the dispatch carries the same stamp, so the move reports ONE span');
+      assert.equal(dispatched[0][1], '@stamp');
+    } finally {
+      busyLib.settlePendingWarp(key);
+    }
+  });
+
+  test('a handoff without a usable acceptance stamp carries none', () => {
+    const key = 'session:lib-stamp-none';
+    const deps = {
+      now: () => 9000,
+      env: { ODD_WORKTREE_WARP_PENDING_MS: '10000' },
+      timers: { set: () => null, clear: () => {} },
+      read: async () => ({ busy: true }),
+      dispatch: () => ({ ok: true }),
+    };
+    const shape = (requestedAt) => ({
+      name: 'feat-n', target: '/t', from: '/f', branch: 'feat/n', changes: { mode: 'none', paths: [] }, requestedAt,
+    });
+    for (const unusable of [-1, Number.NaN, Infinity, '1234', null]) {
+      assert.equal(busyLib.queuePendingWarp({ key, name: 'feat-n', token: '@n', handoff: shape(unusable), ...deps }).ok, true);
+      try {
+        assert.equal('requestedAt' in busyLib.pendingWarpFor(key).handoff, false, `${String(unusable)} is not a stamp`);
+      } finally {
+        busyLib.settlePendingWarp(key);
+      }
+    }
+    assert.equal(busyLib.queuePendingWarp({ key, name: 'feat-n', token: '@n', handoff: shape(0), ...deps }).ok, true);
+    try {
+      assert.equal(busyLib.pendingWarpFor(key).handoff.requestedAt, 0, 'zero is a real millisecond stamp');
+    } finally {
+      busyLib.settlePendingWarp(key);
+    }
+  });
+
   test('sameWarpHandoff matches only the same move and change selection', () => {
     const base = { name: 'feat-x', target: '/t', from: '/f', branch: 'feat/x', changes: { mode: 'none', paths: [] } };
     assert.equal(busyLib.sameWarpHandoff(base, { ...base }), true);

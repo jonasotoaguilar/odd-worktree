@@ -208,13 +208,23 @@ queued agent tasks, or a running background job — and it is never thrown away:
 the request is **queued**.
 
 - `/warp` — a typed name, the selector and a create's follow-up warp all share
-  one path — gives all three sources a bounded chance to drain
-  (`ODD_WORKTREE_WARP_BUSY_WAIT_MS`, 60 s by default) and then keeps the request
-  **pending** instead of switching: the session stays where it is, and a bounded
-  background poller re-dispatches the SAME validated handoff once this session
-  reports no tool still executing, no running or queued agent task and no
-  running job. Nothing switches mid-work. A queued handoff never claims a move.
-- **A queued warp is visible.** While the request waits, one dim row sits in the
+  one path — reads all three sources **once, as they are**, and keeps the request
+  **pending** straight away instead of switching: it never waits for them to
+  drain. The session stays where it is, and a bounded background poller
+  re-dispatches the SAME validated handoff once this session reports no tool
+  still executing, no running or queued agent task and no running job. Nothing
+  switches mid-work. A queued handoff never claims a move.
+- **Ask first, then queue.** The pending-changes question (`YES COPY` / `NO COPY`
+  over the checkout you are standing in, Esc cancels the warp) is asked when the
+  warp is **requested** — before the busy decision and before any work drains —
+  and its answer travels in the queued handoff. So it is asked exactly once per
+  request, a queued warp never asks it again when it finally runs, and a second
+  warp (refused while one is pending, below) asks nothing at all. The summary,
+  the question and the copy all use the checkout the session stands in, never
+  the principal/main checkout, in the warp and in the `/warp` create panel's own
+  question.
+- **A queued warp is visible.** The row is painted the moment the request is
+  queued, not after a first poll: one dim row in the
   zone immediately above the input, in the same shape as Pi's own `Steering:`
   row: `Queued: warp <worktree> — waiting for <the work>`, naming the tools,
   agent tasks and jobs it is actually waiting for. On a narrow terminal the row

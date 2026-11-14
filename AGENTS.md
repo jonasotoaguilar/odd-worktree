@@ -358,7 +358,8 @@ lists every shipped surface.
 
 | Document | Use when | Path |
 | --- | --- | --- |
-| README | Install, requirements, panel keys, user-facing behaviour | [`README.md`](README.md) |
+| README | Install, requirements, the shipped surface at a glance | [`README.md`](README.md) |
+| Reference | Panel keys, how each surface behaves, its limits, tests and releases in detail | [`docs/reference.md`](docs/reference.md) |
 | CI matrix and test command | What CI runs and on which Node versions | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 | PR gates | Commit and PR-title conventions | [`.github/workflows/pr-check.yml`](.github/workflows/pr-check.yml) |
 | Release flow | Tag, environment, OIDC publish, verification | [`.github/workflows/release.yml`](.github/workflows/release.yml) |

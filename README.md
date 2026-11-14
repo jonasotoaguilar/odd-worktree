@@ -12,7 +12,7 @@ with `git` as the only external requirement.
 | Surface | Kind | What it does |
 | --- | --- | --- |
 | `worktree_create` | tool | Creates `<repo-parent>/<repo-name>-worktrees/<odd>` on `branch`, registers the checkout in this session and in the clone's document, runs the preparation hooks, and starts the install as a tracked background task. |
-| `worktree_list` | tool | Read-only listing: the main checkout first and unnumbered, then numbered rows with ODD, branch and setup state, plus footers counting what it hides. |
+| `worktree_list` | tool | Read-only listing: the main checkout first and unnumbered, then one numbered row per checkout this package created (its ODD and branch), plus a footer counting the outside worktrees `all` would show. |
 | `/warp` | panel | Moves this session to another checkout, and removes one. No argument opens the selector (list, create, delete, extended list); `/warp <name>` jumps straight there. A session with no conversation yet changes checkout **silently** — no fork, no `Warp · moved` card, nothing to carry — and warping back from it is the same empty case. |
 | `/odd-list` | panel | Two-pane reader of this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
 | `/issues` | panel | Full-screen reader of this checkout's repository issues — My issues / Assigned / Involved / All — with preview, comments, labels, assignees and close, gated on your repository role. |
@@ -92,24 +92,28 @@ as commands, and the two `worktree_*` tools are offered to the agent.
    - An existing branch is adopted as-is — the answer's second line says
      `branch: <branch> (existing)`, and `(created)` when the branch was made from
      the base.
-   - The answer and the list both print the ODD; a list row for a record written
-     before the field existed prints `odd: -`.
+   - The answer prints the ODD once (`odd: <name>`). The list does not: a row's
+     name IS the ODD, so printing the field again would repeat it.
    - `copy_changes: true` carries the uncommitted work of the checkout the call
      was made from — the one the session stands in, not necessarily the main
      checkout — into the new checkout: staged, unstaged and untracked
      non-ignored files. The source checkout keeps those changes.
-   - **A create is instant.** The checkout, its registry row, its record, the
-     session registration and the preparation hooks (submodules, local inputs,
-     `copy_changes`, build-cache and asset links) settle before the answer. The
-     slow half — the package manager the root's lockfile selects, or nothing when
-     no lockfile matches — continues in one tracked background task with its own
-     log under the system temp directory. The answer says where the setup stands
-     and a later `worktree_list` reports how it ended; a setup problem is never
-     reported as a failed create.
+   - **A create is instant.** The checkout, the session registration and the
+     preparation hooks (submodules, local inputs, `copy_changes`, build-cache and
+     asset links) settle before the answer. The slow half — the package manager
+     the root's lockfile selects, or nothing when no lockfile matches — continues
+     in one tracked background task with its own log under the system temp
+     directory. At call time the create knows neither which hooks were skipped nor
+     how setup went, so the answer says nothing about either: the one setup
+     notification follows the child process outcome and belongs to the caller that
+     asked for it. A setup problem is never reported as a failed create.
+   - **The create writes nothing.** The checkout's directory
+     (`<repo-name>-worktrees/<odd>`) is the whole record; there is no list file,
+     no lock file and no record to keep in step.
 2. **List** — `worktree_list`, or open `/warp`. Pass `all: true` to the tool (or
-   `v` in the panel) to also see live checkouts Git knows outside the registry and
-   the records whose checkout no longer exists. The listing is read-only: it
-   writes nothing and prunes nothing, and it shows the state of each row.
+   `v` in the panel) to also see the worktrees Git knows outside
+   `<repo-name>-worktrees`. The listing is read-only: it writes nothing and
+   prunes nothing.
 3. **Move** — `/warp <name>`, the selector's `enter`, or a typed name. The
    selector never offers the checkout you are already in; the exclusion is by
    resolved real path, so a differently-spelled path to the same checkout is
@@ -249,70 +253,73 @@ the checkout's remote moves while the reader is open, mutations refuse with
 …); reopen /issues`, and the reads keep the displayed repository. An issue
 number on screen can never be sent to another repository.
 
-### Worktree state, and the list that reports it
+### Card style follows your shell
+
+The worktree tool cards follow the card style chosen in Gentle Shell — the
+rounded `╭ ╮ ╰ ╯` frame (`neon`) or the `▎` rail over a painted band (`float`,
+the default). Content, order, truncation, the collapsed three-row preview and
+the elapsed time are identical in both; only the chrome differs.
+
+- **Live.** Gentle Shell keeps the resolved style in a process-wide slot and
+  refreshes it at startup, on every `session_start` and right after its
+  Customize save. The cards read it at each render, so a change reaches the next
+  card with no restart and no file watcher.
+- **Fallback.** With no shell running, the style comes from
+  `<home>/card-style.json` — `{ "schema": "gentle-pi.card-style/v1", "style":
+  "neon" | "float" }` — and `<home>` resolves `GENTLE_PI_CONFIG_HOME` →
+  `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`. A missing, unreadable,
+  malformed, wrong-schema or unknown-style document reads as `float`; nothing
+  throws and nothing is guessed. The document is re-read at `session_start`, so
+  every session sees the style that is current when it starts.
+- **The accent is a theme role, never a colour.** The heading label and the
+  float rail paint the theme's `warning` role — the orange of the Gentle theme —
+  and the float band paints the tone's own background role (`toolSuccessBg`,
+  `toolPendingBg` for a running call, `toolErrorBg` for a failure). No hex value
+  and no escape sequence is written by this package.
+- **Never a broken card.** A terminal narrower than ten columns, or a theme that
+  cannot paint the background role, draws the `neon` outline instead of a
+  half-drawn float card.
+
+### The list
 
 `worktree_list` prints the main checkout first and unnumbered, then one numbered
-row per checkout this clone created, each with its ODD, its branch and its setup
-state. Footers count the rows the list hides. The text is fixed-field and
+row per checkout this package created under `<repo-name>-worktrees`, by name.
+A row is its directory's basename — which IS the ODD — and the branch Git
+reports. With `all: true`, the worktrees Git knows outside that directory follow,
+and a footer counts them while they are hidden. The text is fixed-field and
 undecorated, so it reads the same on every run:
 
 ```text
 project: repo
 path: /code/repo
-main: main 1a2b3c4 active · manual
-1 worktree-tools feat/worktree-tools odd: bug-42 running (npm ci)
-  setup: npm ci · log: /tmp/odd-worktree-setup-abc123/step-1.log
-2 billing feat/billing odd: - ready
+main: main 1a2b3c4
+1 worktree-tools feat/worktree-tools
+2 billing feat/billing
 ```
 
-The state vocabulary is closed:
+There is no `odd:` field, no date, no setup line, no hooks line and no stored
+state: the name already says which ODD a checkout serves, and the path already
+says whether it is one of ours. A directory that exists and is a worktree is
+listed; one that does not exist, or that Git no longer knows, is simply not
+listed. Nothing is reported as `gone` or `missing`, because nothing was stored
+to go stale.
 
-| State | Meaning |
-| --- | --- |
-| `ready` | the checkout exists and its setup finished |
-| `running` | setup is running now; the parenthesis names the step |
-| `failed` | setup ended in failure; the row names the log to inspect |
-| `skipped` | setup did not run, and the parenthesis says why (no lockfile at the root, or its package manager is not installed) |
-| `pending` | the chain is queued and has not started; the parenthesis says why |
-| `interrupted` | a `running` or `pending` chain this session wrote whose job its runner no longer holds; another session's record stays `running` because this process cannot tell |
-| `active · manual` | the checkout exists and carries no record: Git knows it, this package did not create it |
-| `missing` | the path a record names is gone while Git still lists it |
-| `gone` | a record whose checkout Git no longer lists; `all: true` shows it |
-| `foreign` | the path now belongs to another repository |
-
-The listing is **read-only**: it writes nothing, prunes nothing and never
-touches the clone document, so a dead record stays visible as `gone` or `missing`
-with its reason and date until a human acts. When the document cannot be read at
-all, the list says so and shows what Git knows instead of an empty view that
-looks authoritative.
+The listing is **read-only**: it reads Git's own worktree set, writes nothing and
+prunes nothing.
 
 ### Where state lives
 
-One document per clone: `<git-common-dir>/pi-worktrees.json`, shared by two
-owners that each preserve the other's key verbatim for documents either module
-wrote, and by value and key order for a hand-edited one.
-
-- `worktrees` — the registry: one row per checkout with its branch, path and
-the session that owns it. The panel and the live-session guard read it.
-- `records` — the metadata: per-worktree `odd`, creator, base ref, hook
-outcomes and setup state, keyed by canonical path and reconciled against
-`git worktree list` on every read.
-
-A version boundary runs through that document. An older release of this package
-reads it safely — it requires `worktrees` to be an array and ignores `records` —
-but its writers build an explicit `{ version, worktrees }` payload, so the next
-registry write from an older process drops `records` and `kind`. Mixing this
-version with an older one, or rolling back to an older one after creating
-worktrees here, therefore keeps the checkouts and their branches and loses what
-`records` held: each worktree's ODD, creator and setup history. Nothing here can
-prevent that, because the deletion happens in the older code, and no migration
-or recovery exists. Finish or park work before switching versions, and treat a
-rollback as losing the metadata, not just the feature.
+Nowhere for worktrees. A create always lands at
+`<repo-parent>/<repo-name>-worktrees/<odd>`, so the directory is the record: the
+list, `/warp` and the deletion guard all derive what exists from Git's listing
+and that one path rule. There is no `<git-common-dir>/pi-worktrees.json`, no
+lock file and no second document in its place, so two versions of this package
+can never disagree about a stored row.
 
 Session names derived from an ODD write, and the warp's fork/resume bookkeeping,
 travel in the Pi session files the host already owns. The setup logs live under
 the system temp directory (`odd-worktree-setup-*`), one directory per create.
-Nothing is written to user configuration, and there is no second worktree file.
+Nothing is written to user configuration.
 
 ### The `## ODD worktrees` block in the system prompt
 

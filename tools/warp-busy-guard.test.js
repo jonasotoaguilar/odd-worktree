@@ -699,15 +699,17 @@ describe('/warp queues while this session has agent tasks or jobs', () => {
     assert.deepEqual(notifications, [], 'nothing claims a queue it did not create');
   });
 
-  test('a queued (busy) warp mutates no checkout and no registry row', async () => {
+  test('a queued (busy) warp mutates no checkout and writes no document', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
     const created = await tools.get('worktree_create').execute('busy-8', { branch: 'feat/intact', odd: 'intact' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
 
-    const registryPath = path.resolve(repo, git(repo, ['rev-parse', '--git-common-dir']), 'pi-worktrees.json');
+    // S3/S4: the list document is gone. "Nothing was written" is now asserted against
+    // the absence of any file, before and after the queued request.
+    const documentPath = path.resolve(repo, git(repo, ['rev-parse', '--git-common-dir']), 'pi-worktrees.json');
     const listBefore = git(repo, ['worktree', 'list', '--porcelain']);
-    const registryBefore = crypto.createHash('sha256').update(fs.readFileSync(registryPath)).digest('hex');
+    assert.equal(fs.existsSync(documentPath), false, 'the create writes no list document');
 
     publishSession({ running: 1 });
     host.sent.length = 0;
@@ -719,11 +721,7 @@ describe('/warp queues while this session has agent tasks or jobs', () => {
     assert.ok(notifications.some(([, text]) => /handoff queued/.test(String(text))), JSON.stringify(notifications));
 
     assert.equal(git(repo, ['worktree', 'list', '--porcelain']), listBefore, 'the listing changed');
-    assert.equal(
-      crypto.createHash('sha256').update(fs.readFileSync(registryPath)).digest('hex'),
-      registryBefore,
-      'the registry changed',
-    );
+    assert.equal(fs.existsSync(documentPath), false, 'the queued warp writes no list document either');
     settlePending();
   });
 });
@@ -937,16 +935,17 @@ describe('the /warp front queues the move and performs it after the counters dra
     assert.equal((await busyLib.pendingWarpTick(pendingKey())).status, 'dispatched');
     assert.equal(host.sent.length, 1, 'the queued warp re-dispatches itself');
     const token = host.sent[0][0];
-    // The registry is unreadable when that warp runs: a terminal refusal, so the
-    // record must be cleared.
-    const registryPath = path.resolve(repo, git(repo, ['rev-parse', '--git-common-dir']), 'pi-worktrees.json');
-    fs.writeFileSync(registryPath, 'not json');
+    // The created checkout is gone when that warp runs, so the name no longer
+    // resolves: a terminal refusal, and the record must be cleared.
+    const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'refused');
+    git(repo, ['worktree', 'remove', target]);
     notifications.length = 0;
     await commands.get('warp').handler(token.slice('/warp '.length), ctx);
     assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'a refused queued warp is cleared');
 
-    // A later warp is accepted again, not blocked by a dead record.
-    fs.writeFileSync(registryPath, JSON.stringify({ version: 1, worktrees: [] }));
+    // A later warp is accepted again, not blocked by a dead record. The branch still
+    // exists, and a checkout for it is made again so the name resolves.
+    git(repo, ['worktree', 'add', target, 'feat/refused']);
     publishSession({ running: 1 });
     host.sent.length = 0;
     notifications.length = 0;

@@ -12,11 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { EventEmitter } = require('node:events');
 const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
-// The SAME module instance the extension's libRequire reaches: liveness of a setup
-// task is process-wide state, so the test must observe the runner the front uses.
-const setupRunner = require(path.join(LIB_DIR, 'worktree-setup-runner.js'));
 
 const scratch = [];
 function track(dir) {
@@ -86,6 +82,12 @@ function listWorktreePaths(root) {
 
 function branches(root) {
   return git(root, ['branch', '--format=%(refname:short)']).split('\n').filter(Boolean).sort();
+}
+
+// S3/S4: the document this package used to keep, named so a test can assert it was
+// never written.
+function cloneDocument(root) {
+  return path.join(git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']), 'pi-worktrees.json');
 }
 
 // The abbreviation the ported listing and the create both print for the base commit.
@@ -221,13 +223,12 @@ describe('worktree_list', () => {
     assert.deepEqual(resultText(result).split('\n'), [
       `project: ${path.basename(repo)}`,
       `path: ${fs.realpathSync(repo)}`,
-      `main: main ${shortHead(repo)} active · manual`,
+      `main: main ${shortHead(repo)}`,
     ]);
     assert.equal(result.details.worktrees.length, 1);
-    assert.deepEqual(result.details.worktrees.map((row) => row.provenance), ['manual']);
     assert.equal(result.details.worktrees[0].path, fs.realpathSync(repo));
     assert.equal(result.details.hiddenOutside, 0);
-    assert.equal(result.details.hiddenGone, 0);
+    assert.equal('hiddenGone' in result.details, false, 'no stored row can be gone any more');
   });
 
   test('a directory outside a repository is refused by the help text', async () => {
@@ -252,7 +253,7 @@ describe('worktree_create', () => {
       assert.ok(branches(repo).includes(branch), 'the branch exists');
     });
   }
-  test('creates the checkout, its record and its registry row in the clone\u2019s one document', async () => {
+  test('creates the checkout and writes nothing: the directory is the whole record', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
     const result = await tools.get('worktree_create').execute(
@@ -271,30 +272,26 @@ describe('worktree_create', () => {
       'odd: odd-x',
       `base: main@${shortHead(repo)}`,
       'worktree register failed',
-      'setup: skipped (no lockfile at root) · worktree is not ready yet',
     ]);
     assert.equal(result.details.name, 'odd-x', 'the printed name is the directory basename');
     assert.ok(fs.existsSync(target), 'the checkout exists on disk');
     assert.ok(listWorktreePaths(repo).includes(target), 'git knows the checkout');
     assert.ok(branches(repo).includes('feat/x'), 'the branch exists');
 
-    // S4: ONE clone document. The metadata record this create wrote and the registry
-    // row the panel and the live-session guard resolve names against both live in
-    // <git-common-dir>/pi-worktrees.json, so the two sides can never drift apart.
-    const commonDir = git(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-    const document = JSON.parse(fs.readFileSync(path.join(commonDir, 'pi-worktrees.json'), 'utf8'));
-    assert.equal(document.kind, 'pi-odd-worktree.worktree-metadata');
-    assert.deepEqual(document.worktrees.map((row) => row.path), [target], 'the registry row is in the same document');
-    assert.equal(document.records[target].odd, 'odd-x', 'the metadata record is in the same document');
-    assert.equal(document.records[target].createdBy, 'thread-1');
+    // S3/S4: no document, no row, no record. A create followed by a list leaves the
+    // clone exactly as Git left it.
+    assert.equal(fs.existsSync(cloneDocument(repo)), false, 'no list document is written');
+    assert.equal(fs.existsSync(path.join(git(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir']), 'pi-worktrees.lock')), false, 'no lock file is written');
 
     const listed = await tools.get('worktree_list').execute('call-4', {}, undefined, undefined, ctx);
     assert.deepEqual(resultText(listed).split('\n'), [
       `project: ${path.basename(repo)}`,
       `path: ${fs.realpathSync(repo)}`,
-      `main: main ${shortHead(repo)} active · manual`,
-      '1 odd-x feat/x odd: odd-x skipped',
+      `main: main ${shortHead(repo)}`,
+      '1 odd-x feat/x',
     ]);
+    assert.equal(listed.details.worktrees[1].name, 'odd-x', 'the ODD is the directory basename');
+    assert.equal('odd' in listed.details.worktrees[1], false, 'the output carries no odd field');
   });
 
   test('an omitted odd is refused with the odd segment sentence and writes nothing', async () => {
@@ -450,13 +447,12 @@ describe('the shared close the panel deletion drives', () => {
     assert.ok(branches(repo).includes('feat/close-me'), 'the branch is kept');
 
     const listed = await tools.get('worktree_list').execute('call-9', {}, undefined, undefined, ctx);
-    // S4: the listing writes nothing, so the record of the removed checkout survives
-    // and is reported as a hidden gone row instead of being pruned behind the caller.
+    // S3: the listing writes nothing and there is no record to go stale — a directory
+    // that does not exist is simply not listed.
     assert.deepEqual(resultText(listed).split('\n'), [
       `project: ${path.basename(repo)}`,
       `path: ${fs.realpathSync(repo)}`,
-      `main: main ${shortHead(repo)} active · manual`,
-      '1 registered worktree no longer exists (--all to list it)',
+      `main: main ${shortHead(repo)}`,
     ]);
   });
 
@@ -465,7 +461,10 @@ describe('the shared close the panel deletion drives', () => {
     const { ctx } = makeCtx(repo);
     const result = await extensionMod.executeWorktreeClose({ name: 'nope' }, ctx);
     assert.equal(result.isError, true);
-    assert.equal(resultText(result), 'no registered worktree for "nope": no worktrees are registered');
+    assert.equal(
+      resultText(result),
+      `no registered worktree for "nope": closest worktrees: 'main' (branch 'main') at ${fs.realpathSync(repo)}`,
+    );
     assert.equal(listWorktreePaths(repo).length, 1);
   });
 
@@ -617,7 +616,7 @@ describe('the shared close the panel deletion drives', () => {
 // ported table's command finishes afterwards. The tool front never notifies a UI
 // its call did not ask for.
 // ---------------------------------------------------------------------------
-describe('the create reports the setup state it can back', { concurrency: false }, () => {
+describe('the create starts its setup behind the answer and persists no state', { concurrency: false }, () => {
   function binWith(name, script) {
     const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-bin-')));
     fs.writeFileSync(path.join(dir, name), script, { mode: 0o755 });
@@ -644,72 +643,54 @@ describe('the create reports the setup state it can back', { concurrency: false 
       '',
     ].join('\n'));
     const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'setup');
-    const storePath = path.join(
-      git(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
-      'pi-worktrees.json',
-    );
     const savedPath = process.env.PATH;
     process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
-    let logDirectory;
     try {
       const { ctx, notifications } = makeCtx(repo);
-      const returnedAt = Date.now();
       const created = await tools.get('worktree_create').execute('setup-1', { branch: 'feat/setup', odd: 'setup' }, undefined, undefined, ctx);
       assert.notEqual(created.isError, true, resultText(created));
 
-      // 1. The create prints the state the record holds at that moment.
-      assert.match(resultText(created), /^setup: running \(npm ci\) · worktree is not ready yet$/m);
-      assert.equal(created.details.setup.status, 'running');
-      assert.equal(created.details.setup.command, 'npm ci');
+      // S1: the create prints no setup line at all; at call time it cannot know.
+      assert.doesNotMatch(resultText(created), /setup:/, 'the create reports no setup state');
+      assert.equal('setup' in created.details, false);
 
-      // 2. Observed ordering: the command has NOT finished when the call returns.
+      // Observed ordering: the command has NOT finished when the call returns.
       assert.equal(fs.existsSync(doneLog), false, 'the install was still running when the create returned');
 
-      // 4. Exactly one log for the step, under the system temp directory, and
-      //    never inside either checkout.
-      const logPath = created.details.setup.logPath;
-      logDirectory = path.dirname(logPath);
-      assert.deepEqual(fs.readdirSync(logDirectory), ['step-1.log'], 'one log file for the one step');
-      assert.ok(logPath.startsWith(`${os.tmpdir()}${path.sep}`), `the log is under the system temp directory (${logPath})`);
-      assert.equal(logPath.startsWith(`${repo}${path.sep}`), false, 'the log is never inside the main checkout');
-      assert.equal(logPath.startsWith(`${target}${path.sep}`), false, 'the log is never inside the created checkout');
-
-      // 5. The record settles afterwards, later than the create's return.
-      const readSetup = () => JSON.parse(fs.readFileSync(storePath, 'utf8')).records[target].setup;
-      let settled = readSetup();
+      // S8: the chain still runs, and its log lands under the system temp
+      // directory — never inside either checkout — while the clone keeps no record.
       const deadline = Date.now() + 10_000;
-      while (settled.status === 'running' && Date.now() < deadline) {
+      while (!fs.existsSync(doneLog) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 25));
-        settled = readSetup();
       }
-      assert.equal(settled.status, 'ready', `the install settled ready (${settled.detail || settled.status})`);
-      assert.ok(
-        Date.parse(settled.endedAt) > returnedAt,
-        `the install ended after the create returned (${settled.endedAt})`,
-      );
-      assert.equal(fs.readFileSync(logPath, 'utf8').includes('npm done'), true, 'the log carries the command output');
-
-      // 3. The ported table's command ran exactly once, with the argv it chose.
+      assert.equal(fs.existsSync(doneLog), true, 'the install finished in the background');
       assert.deepEqual(fs.readFileSync(argvLog, 'utf8').trim().split('\n'), ['ci'], 'one npm invocation, argv ci');
       assert.equal(fs.readFileSync(doneLog, 'utf8').trim(), 'ci', 'the command completed exactly once');
+      const setupLogs = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith('odd-worktree-setup-'));
+      assert.ok(setupLogs.length > 0, 'the task wrote its log under the system temp directory');
+      for (const name of setupLogs) {
+        const logPath = path.join(os.tmpdir(), name);
+        assert.equal(fs.readFileSync(path.join(logPath, 'step-1.log'), 'utf8').includes('npm done'), true, 'the log carries the command output');
+        assert.equal(logPath.startsWith(`${repo}${path.sep}`), false, 'the log is never inside the main checkout');
+        assert.equal(logPath.startsWith(`${target}${path.sep}`), false, 'the log is never inside the created checkout');
+        track(logPath);
+      }
 
-      // 6. No notification the call did not ask for.
+      // S3/S4: nothing about the chain is stored anywhere in the clone.
+      assert.equal(fs.existsSync(cloneDocument(repo)), false, 'no setup state is persisted');
       assert.deepEqual(notifications, [], 'the tool front never notifies a UI its call did not ask for');
     } finally {
       process.env.PATH = savedPath;
-      if (logDirectory !== undefined) {
-        try { fs.rmSync(logDirectory, { recursive: true, force: true }); } catch { /* best effort */ }
-      }
     }
   });
 
-  test('a root with no lockfile is skipped for its own reason', async () => {
+  test('a root with no lockfile starts nothing and prints no setup line', async () => {
     const repo = makeRepo();
     const { ctx } = makeCtx(repo);
     const created = await tools.get('worktree_create').execute('setup-2', { branch: 'feat/plain', odd: 'plain' }, undefined, undefined, ctx);
     assert.notEqual(created.isError, true, resultText(created));
-    assert.match(resultText(created), /^setup: skipped \(no lockfile at root\) · worktree is not ready yet$/m);
-    assert.deepEqual(created.details.setup, { status: 'skipped', steps: [], detail: 'no lockfile at root' });
+    assert.doesNotMatch(resultText(created), /setup/, 'a skipped chain is not reported by the create either');
+    assert.equal(fs.existsSync(cloneDocument(repo)), false, 'and nothing is stored to remember the skip');
   });
 });
 
@@ -855,130 +836,3 @@ describe('the two tools draw their own card (S5)', { concurrency: false }, () =>
   });
 });
 
-// ---- S12: the list can derive `interrupted` ----
-//
-// `pending` and `interrupted` are part of the closed vocabulary, so they must be
-// reachable. The reconciliation asks a `setupJobLiveness(jobId)` seam, and the
-// front answers from this process's own setup runner: a record's job is live
-// exactly while the runner still runs a task for that record's checkout. A job a
-// dead session left behind therefore reads `interrupted`, while a live one keeps
-// reading `running`, and neither read rewrites the stored record.
-function fakeSetupSpawn() {
-  const calls = [];
-  const spawn = (bin, args, options) => {
-    const child = new EventEmitter();
-    child.kill = () => {};
-    calls.push({ bin, args, options, child });
-    return child;
-  };
-  return { spawn, calls };
-}
-
-const SETUP_SEAMS = {
-  entries: async () => ['package-lock.json'],
-  hasBinary: async (binary) => binary === 'npm',
-};
-
-// The runner's timeout and kill-grace timers are unref'd on purpose: a background
-// setup task must never keep the host process alive. A test that awaits a
-// settlement carried by those timers would leave the event loop empty while its
-// own promise is still pending, and the test runner on Node 18/20/22 refuses that
-// with "Promise resolution is still pending but the event loop has already
-// resolved" (Node 24 tolerates it). One ref'd keep-alive, held only for the
-// duration of the await and cleared in `finally`, keeps those runners honest
-// while production keeps its unref'd timers.
-async function holdLoop(promise) {
-  const keepAlive = setInterval(() => {}, 1_000);
-  try {
-    return await promise;
-  } finally {
-    clearInterval(keepAlive);
-  }
-}
-
-function cloneDocument(repo) {
-  const commonDir = git(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-  return path.join(commonDir, 'pi-worktrees.json');
-}
-
-describe('worktree_list derives the setup liveness of a record (S12)', { concurrency: false }, () => {
-  test('a live setup job keeps its record `running`', async () => {
-    const repo = makeRepo();
-    const { ctx } = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('live-setup', { branch: 'feat/live', odd: 'live' }, undefined, undefined, ctx);
-    assert.notEqual(created.isError, true, resultText(created));
-    const target = created.details.path;
-    const storePath = cloneDocument(repo);
-    fs.writeFileSync(path.join(target, 'package-lock.json'), '{}\n');
-    const logRoot = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-live-log-')));
-    const { spawn, calls } = fakeSetupSpawn();
-    const started = await setupRunner.startWorktreeSetup({
-      path: target,
-      name: 'live',
-      storePath,
-      sessionId: 'thread-1',
-      copiedChanges: 0,
-      seams: SETUP_SEAMS,
-      spawn,
-      logRoot,
-      now: () => new Date(),
-    });
-    try {
-      assert.equal(started.started, true);
-      assert.equal(setupRunner.isWorktreeSetupRunning(target), true);
-      const listed = await tools.get('worktree_list').execute('live-setup-list', {}, undefined, undefined, ctx);
-      assert.notEqual(listed.isError, true, resultText(listed));
-      assert.match(resultText(listed), /^1 live feat\/live odd: live running \(npm ci\)$/m);
-    } finally {
-      // Settle the fake child, so the task never outlives this test.
-      calls[0].child.emit('close', 0, null);
-      await holdLoop(started.settled);
-    }
-    assert.equal(setupRunner.isWorktreeSetupRunning(target), false);
-  });
-
-  test('a `running` record whose job is gone derives `interrupted` without a write', async () => {
-    const repo = makeRepo();
-    const { ctx } = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('dead-setup', { branch: 'feat/dead', odd: 'dead' }, undefined, undefined, ctx);
-    assert.notEqual(created.isError, true, resultText(created));
-    const target = created.details.path;
-    const storePath = cloneDocument(repo);
-
-    const document = JSON.parse(fs.readFileSync(storePath, 'utf8'));
-    const deadSetup = { status: 'running', steps: [{ command: 'npm ci', status: 'running' }], command: 'npm ci', jobId: '0-0-1' };
-    document.records[target].setup = deadSetup;
-    fs.writeFileSync(storePath, JSON.stringify(document));
-
-    const listed = await tools.get('worktree_list').execute('dead-setup-list', {}, undefined, undefined, ctx);
-    assert.notEqual(listed.isError, true, resultText(listed));
-    assert.match(resultText(listed), /^1 dead feat\/dead odd: dead interrupted$/m);
-    assert.doesNotMatch(resultText(listed), /running/, 'a dead job never reads busy');
-
-    // The observation is derived, never persisted: the read leaves the record alone.
-    const after = JSON.parse(fs.readFileSync(storePath, 'utf8'));
-    assert.deepEqual(after.records[target].setup, deadSetup, 'the list never rewrites the stored record');
-  });
-
-  test('a record another session created is never guessed `interrupted`', async () => {
-    const repo = makeRepo();
-    const { ctx } = makeCtx(repo);
-    const created = await tools.get('worktree_create').execute('foreign-setup', { branch: 'feat/foreign', odd: 'foreign' }, undefined, undefined, ctx);
-    assert.notEqual(created.isError, true, resultText(created));
-    const target = created.details.path;
-    const storePath = cloneDocument(repo);
-
-    // This process's runner holds no job for the checkout, but the record is not
-    // ours: another Pi process may be installing it right now, so the truthful
-    // answer is `running`, never `interrupted` derived from ignorance.
-    const document = JSON.parse(fs.readFileSync(storePath, 'utf8'));
-    document.records[target].createdBy = 'another-live-session';
-    document.records[target].setup = { status: 'running', steps: [{ command: 'npm ci', status: 'running' }], command: 'npm ci', jobId: '9-9-9' };
-    fs.writeFileSync(storePath, JSON.stringify(document));
-
-    const listed = await tools.get('worktree_list').execute('foreign-setup-list', {}, undefined, undefined, ctx);
-    assert.notEqual(listed.isError, true, resultText(listed));
-    assert.match(resultText(listed), /^1 foreign feat\/foreign odd: foreign running \(npm ci\)$/m);
-    assert.doesNotMatch(resultText(listed), /interrupted/, 'this process cannot tell, so it never claims death');
-  });
-});

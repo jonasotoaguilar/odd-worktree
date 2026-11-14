@@ -1,12 +1,21 @@
 'use strict';
-// S5 / T5a: the card drawing substrate, outline style only. Every case reads the
+// S5 / T5a: the card drawing substrate in its TWO styles. Every case reads the
 // public surface of lib/shell-card.js and pins what the source branch
-// (cards-bash-v2, lib/shell-card.ts and tests/shell-card.test.ts) draws with the
-// rounded frame. Width measurement, truncation and wrapping are the injected
+// (lib/shell-card.ts and tests/shell-card.test.ts) draws — the rounded neon frame
+// and the float rail. Width measurement, truncation and wrapping are the injected
 // `metrics` seam, so this suite supplies deterministic fakes and never needs
 // the host TUI package (this package has no node_modules).
-const { test } = require('node:test');
+//
+// The style itself is the process-wide slot Gentle Shell publishes
+// (`globalThis[Symbol.for("gentle-pi.card-style")]`) with the user's document as
+// the fallback, so this suite points `GENTLE_PI_CONFIG_HOME` at a scratch
+// directory: no case ever reads or writes the real user's preference, and the
+// slot is cleared after each case that sets it.
+const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const { mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { join } = require('node:path');
 const {
 	CARD_GLYPH,
 	CARD_STYLE,
@@ -21,9 +30,64 @@ const {
 	cardTop,
 	cardTopLine,
 	cardTopRows,
+	floatRows,
 	headingFits,
 	markCardResult,
 } = require('../lib/shell-card.js');
+const { CARD_STYLE_SCHEMA, cardStyle, refreshCardStyle } = require('../lib/card-style.js');
+
+// ---- the style seam: the process-wide slot, and a scratch preference home ----
+
+const CARD_STYLE_SLOT = Symbol.for('gentle-pi.card-style');
+
+function useStyle(style) {
+	if (style === undefined) delete globalThis[CARD_STYLE_SLOT];
+	else globalThis[CARD_STYLE_SLOT] = style;
+}
+
+/** Runs `run` with the slot saying `style`, then clears the slot and the document cache. */
+function withStyle(style, run) {
+	useStyle(style);
+	try {
+		return run();
+	} finally {
+		useStyle(undefined);
+		refreshCardStyle();
+	}
+}
+
+let configHome;
+const savedHome = process.env.GENTLE_PI_CONFIG_HOME;
+const styleDocument = () => join(configHome, 'card-style.json');
+
+function writeStyleDocument(contents) {
+	writeFileSync(styleDocument(), typeof contents === 'string' ? contents : JSON.stringify(contents));
+	refreshCardStyle();
+}
+
+function removeStyleDocument() {
+	try {
+		unlinkSync(styleDocument());
+	} catch {
+		// Already absent: the missing document is the case under test.
+	}
+	refreshCardStyle();
+}
+
+before(() => {
+	configHome = mkdtempSync(join(tmpdir(), 'odd-shell-card-style-'));
+	process.env.GENTLE_PI_CONFIG_HOME = configHome;
+	useStyle(undefined);
+	refreshCardStyle();
+});
+
+after(() => {
+	useStyle(undefined);
+	if (savedHome === undefined) delete process.env.GENTLE_PI_CONFIG_HOME;
+	else process.env.GENTLE_PI_CONFIG_HOME = savedHome;
+	refreshCardStyle();
+	rmSync(configHome, { recursive: true, force: true });
+});
 
 // ---- the injected text seam (fakes: plain ASCII, each character one column) ----
 
@@ -84,6 +148,26 @@ const taggedTheme = {
 	},
 };
 
+// The background reset a Pi theme hands back at the end of `bg(role, "")`. It is
+// spelled here, in the test, so the module under test can stay free of raw escapes.
+const BG_RESET = '\x1b[49m';
+
+/** A theme that records every role it paints and can paint the float background. */
+function floatTheme() {
+	const roles = { fg: [], bg: [] };
+	return {
+		roles,
+		fg(role, value) {
+			roles.fg.push(role);
+			return `<${role}>${value}</${role}>`;
+		},
+		bg(role, value) {
+			roles.bg.push(role);
+			return `\x1b[48;5;240m${value}${BG_RESET}`;
+		},
+	};
+}
+
 /** A theme that records every role it is asked to paint, so no role is invented. */
 function recordingTheme() {
 	const roles = [];
@@ -106,13 +190,13 @@ function card(overrides = {}) {
 	};
 }
 
-// ---- exports and the one style ----
+// ---- exports and the two styles ----
 
-test("the module exports the card surface and only the outline style", () => {
+test("the module exports the card surface and both styles", () => {
 	assert.equal(CARD_GLYPH, "✿");
 	assert.deepEqual(CARD_TONE, { INFO: "info", SUCCESS: "success", WARNING: "warning", ERROR: "error" });
-	assert.deepEqual(CARD_STYLE, { OUTLINE: "outline" }, "the float style is not ported: one style, no customize surface");
-	for (const [name, value] of Object.entries({ CARD_GLYPH, CARD_STYLE, CARD_TONE, cardAwaitingResult, cardBodyRows, cardBottom, cardElapsed, cardInnerWidth, cardLine, cardRunningLine, cardTop, cardTopLine, cardTopRows, headingFits, markCardResult })) {
+	assert.deepEqual(CARD_STYLE, { NEON: "neon", FLOAT: "float" }, "the two styles the shell offers, nothing else");
+	for (const [name, value] of Object.entries({ CARD_GLYPH, CARD_STYLE, CARD_TONE, cardAwaitingResult, cardBodyRows, cardBottom, cardElapsed, cardInnerWidth, cardLine, cardRunningLine, cardTop, cardTopLine, cardTopRows, floatRows, headingFits, markCardResult })) {
 		assert.ok(value !== undefined, `${name} is exported`);
 	}
 });
@@ -199,12 +283,12 @@ test("cardTop right-aligns a hint in the rule and drops it before truncating the
 	assert.equal(metrics.visibleWidth(narrowed), 20);
 });
 
-test("cardTop and cardLine paint every frame cell in the tone's own role", () => {
+test("cardTop and cardLine paint the frame in the tone's role and the label in the accent", () => {
 	const roles = {
-		[CARD_TONE.INFO]: { frame: "border", title: "accent" },
-		[CARD_TONE.SUCCESS]: { frame: "success", title: "success" },
+		[CARD_TONE.INFO]: { frame: "border", title: "warning" },
+		[CARD_TONE.SUCCESS]: { frame: "success", title: "warning" },
 		[CARD_TONE.WARNING]: { frame: "warning", title: "warning" },
-		[CARD_TONE.ERROR]: { frame: "error", title: "error" },
+		[CARD_TONE.ERROR]: { frame: "error", title: "warning" },
 	};
 	for (const [tone, expected] of Object.entries(roles)) {
 		const row = cardTop({ title: "t", subtitle: undefined, body: [], tone }, taggedTheme, 30, undefined, metrics);
@@ -213,10 +297,12 @@ test("cardTop and cardLine paint every frame cell in the tone's own role", () =>
 		assert.match(cardBottom(tone, taggedTheme, 30, undefined, metrics), new RegExp(`^<${expected.frame}>╰</${expected.frame}>`), tone);
 	}
 
+	// S5: the label is the theme's own orange in both styles. The frame keeps the
+	// tone, so a settled success and a failure still read apart in neon.
 	const info = cardTop(card(), taggedTheme, 80, undefined, metrics);
-	assert.equal(info, "<border>╭</border><border>─ </border><accent>✿ Gentle AI</accent> <muted>·</muted> <muted>review preflight</muted><border> ─────────────────────────────────────────────</border><border>╮</border>");
+	assert.equal(info, "<border>╭</border><border>─ </border><warning>✿ Gentle AI</warning> <muted>·</muted> <muted>review preflight</muted><border> ─────────────────────────────────────────────</border><border>╮</border>");
 	const error = cardTop(card({ tone: CARD_TONE.ERROR }), taggedTheme, 80, "ctrl+o to expand", metrics);
-	assert.equal(error, "<error>╭</error><error>─ </error><error>✿ Gentle AI</error> <muted>·</muted> <muted>review preflight</muted><error> ───────────────────────────</error> <dim>ctrl+o to expand</dim> <error>╮</error>");
+	assert.equal(error, "<error>╭</error><error>─ </error><warning>✿ Gentle AI</warning> <muted>·</muted> <muted>review preflight</muted><error> ───────────────────────────</error> <dim>ctrl+o to expand</dim> <error>╮</error>");
 
 	// A card that names its own title role paints the label there and keeps the
 	// tone on the frame.
@@ -237,7 +323,7 @@ test("the card functions never paint a role the source branch does not use", () 
 			cardRunningLine(tone, recorder, width, metrics);
 		}
 	}
-	assert.deepEqual([...new Set(recorder.roles)].sort(), ["accent", "border", "dim", "error", "muted", "success", "warning"]);
+	assert.deepEqual([...new Set(recorder.roles)].sort(), ["border", "dim", "error", "muted", "success", "warning"]);
 });
 
 // ---- heading rows ----
@@ -367,4 +453,174 @@ test("a call card awaits its result until the host finishes the row or a result 
 		assert.doesNotThrow(() => markCardResult(value));
 		assert.equal(cardAwaitingResult({ isPartial: true, state: value }), true);
 	}
+});
+
+// ---- the float style, and the one style decision ----
+
+// A card whose content is short enough that neither style's column difference can
+// move a wrap boundary: this is the "same text, different chrome" card.
+const SHORT_CARD = card({
+	subtitle: 'review preflight',
+	body: ['alpha bravo', 'charlie delta'],
+});
+
+/** A plain theme that can also paint the float background, so the text stays readable. */
+function paintTheme() {
+	const roles = { fg: [], bg: [] };
+	return {
+		roles,
+		fg(role, value) {
+			roles.fg.push(role);
+			return value;
+		},
+		bg(role, value) {
+			roles.bg.push(role);
+			return `\x1b[48;5;240m${value}${BG_RESET}`;
+		},
+	};
+}
+
+/** One card component's parts, at the width the substrate hands the renderer. */
+function partsAt(theme, value = SHORT_CARD, elapsed = '1.2s') {
+	return (width) => ({
+		head: [cardTop(value, theme, width, undefined, metrics)],
+		body: cardBodyRows(value.body, value.tone, theme, width, { expanded: true }, metrics),
+		bottom: cardBottom(value.tone, theme, width, elapsed, metrics),
+	});
+}
+
+/** The card's text with every chrome cell removed: what the reader actually reads. */
+function contentOf(rows) {
+	return rows
+		.map((row) => stripAnsi(row).replace(/[╭╮╰╯─│▎]/g, ' ').replace(/\s+/g, ' ').trim())
+		.filter((text) => text.length > 0)
+		.join(' | ');
+}
+
+test('the float style draws the accent rail, the tone background and the two padding rows, and no box', () => {
+	const theme = floatTheme();
+	const rows = withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.WARNING, theme, 40, partsAt(theme)));
+	assert.equal(rows.length, 6, 'padding row, heading, padding row, two body rows and the closing row');
+	const visible = rows.map((row) => stripAnsi(row).replace(/<\/?[a-z:]+>/g, ''));
+	for (const row of rows) {
+		assert.equal(metrics.visibleWidth(stripAnsi(row).replace(/<\/?[a-z:]+>/g, '')), 40, 'every row is exactly the width the host asked for');
+		assert.ok(row.startsWith(' \x1b[48;5;240m'), 'every row is painted behind the tone background, inside the margin');
+		assert.ok(row.endsWith('\x1b[49m '), 'the background is closed before the right margin');
+	}
+	assert.equal(visible[0].trim(), '▎', 'the padding row above the heading keeps the rail');
+	assert.equal(visible[2].trim(), '▎', 'the separator between the heading and the body keeps it too');
+	assert.match(visible[1], /^ ▎ ✿ Gentle AI · review preflight +$/, 'the heading rides the rail with no corners');
+	assert.match(visible[3], /^ ▎ alpha bravo +$/, 'the body rides the rail with no sides');
+	assert.match(visible[5], /^ ▎ +1\.2s +$/, 'the closing row right-aligns the elapsed time');
+	for (const row of visible) assert.doesNotMatch(row, /[╭╮╰╯─│]/, 'the float style draws no box');
+	assert.deepEqual(theme.roles.bg, ['toolPendingBg'], 'the warning tone paints its own background role');
+});
+
+test('the float accent is the theme warning role, never the tone or a colour of its own', () => {
+	const theme = floatTheme();
+	withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.SUCCESS, theme, 40, partsAt(theme, { ...SHORT_CARD, tone: CARD_TONE.SUCCESS })));
+	assert.deepEqual([...new Set(theme.roles.fg)].sort(), ['dim', 'muted', 'warning'], 'the rail and the label take the accent, the elapsed takes dim');
+	assert.equal(theme.roles.fg.includes('success'), false, 'the rail never takes the tone role');
+	assert.equal(theme.roles.fg.includes('border'), false);
+	assert.equal(theme.roles.fg.includes('accent'), false);
+	assert.deepEqual(theme.roles.bg, ['toolSuccessBg'], 'a success still paints its own tone background');
+
+	const error = floatTheme();
+	withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.ERROR, error, 40, partsAt(error, { ...SHORT_CARD, tone: CARD_TONE.ERROR })));
+	assert.deepEqual(error.roles.bg, ['toolErrorBg']);
+	assert.equal(error.roles.fg.includes('warning'), true, 'the accent stays the theme orange on a failure too');
+});
+
+test('the same card is the same text in both styles, and only the chrome differs', () => {
+	const theme = paintTheme();
+	const neon = withStyle(CARD_STYLE.NEON, () => floatRows(CARD_TONE.INFO, theme, 60, partsAt(theme)));
+	const float = withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.INFO, theme, 60, partsAt(theme)));
+	assert.equal(contentOf(float), contentOf(neon), 'same heading, same body, same elapsed time');
+	assert.match(stripAnsi(neon[0]), /^╭─ ✿ Gentle AI/);
+	assert.match(stripAnsi(float[1]), /^ ▎ ✿ Gentle AI/);
+	assert.equal(neon.some((row) => row.includes('▎')), false, 'the neon style draws no rail');
+	assert.equal(float.some((row) => /[╭╮╰╯─│]/.test(row)), false, 'the float style draws no box');
+	assert.equal(float.length, neon.length + 2, 'float adds its two padding rows, and nothing else');
+});
+
+test('the style decision is read once per render: the slot wins over the document, live', () => {
+	const theme = paintTheme();
+	const render = () => floatRows(CARD_TONE.INFO, theme, 40, partsAt(theme, { ...SHORT_CARD, tone: CARD_TONE.INFO }));
+
+	writeStyleDocument({ schema: CARD_STYLE_SCHEMA, style: CARD_STYLE.FLOAT });
+	assert.equal(cardStyle(), CARD_STYLE.FLOAT, 'the document answers when no host published a slot');
+	assert.match(stripAnsi(render()[0]), /▎/, 'the document says float: the rail');
+
+	useStyle(CARD_STYLE.NEON);
+	try {
+		assert.equal(cardStyle(), CARD_STYLE.NEON);
+		const neon = render();
+		assert.match(stripAnsi(neon[0]), /^╭─ /, 'the live slot wins over the float document');
+		assert.equal(neon.some((row) => row.includes('▎')), false);
+	} finally {
+		useStyle(undefined);
+		refreshCardStyle();
+	}
+});
+
+test('a malformed or missing document renders float, and a theme without the role renders neon', () => {
+	const theme = paintTheme();
+	const render = () => floatRows(CARD_TONE.INFO, theme, 40, partsAt(theme, { ...SHORT_CARD, tone: CARD_TONE.INFO }));
+
+	writeStyleDocument('{"schema":"gentle-pi.card-style/v1","style":"neon","extra":true}');
+	assert.equal(cardStyle(), CARD_STYLE.FLOAT, 'an extra key is not the document: float');
+	assert.match(stripAnsi(render()[0]), /▎/);
+
+	writeStyleDocument('not json at all');
+	assert.equal(cardStyle(), CARD_STYLE.FLOAT);
+	assert.match(stripAnsi(render()[0]), /▎/);
+
+	removeStyleDocument();
+	assert.equal(cardStyle(), CARD_STYLE.FLOAT, 'no document at all is float, the default');
+	assert.match(stripAnsi(render()[0]), /▎/);
+
+	// A theme that cannot paint the background (no `bg` at all) keeps the neon
+	// outline instead of a broken float card.
+	const plain = withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.INFO, plainTheme, 40, partsAt(plainTheme, { ...SHORT_CARD, tone: CARD_TONE.INFO })));
+	assert.match(stripAnsi(plain[0]), /^╭─ /, 'no background role: the neon frame');
+
+	// So does a `bg` that answers without the reset the float card needs to close
+	// its paint.
+	const hostile = { fg: (_role, value) => value, bg: () => 'not a background' };
+	const fallback = withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.INFO, hostile, 40, partsAt(hostile, { ...SHORT_CARD, tone: CARD_TONE.INFO })));
+	assert.match(stripAnsi(fallback[0]), /^╭─ /);
+
+	const throwing = { fg: (_role, value) => value, bg: () => { throw new Error('no such role'); } };
+	const caught = withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.INFO, throwing, 40, partsAt(throwing, { ...SHORT_CARD, tone: CARD_TONE.INFO })));
+	assert.match(stripAnsi(caught[0]), /^╭─ /, 'a hostile theme never breaks the card');
+});
+
+test('too narrow for float, the neon outline answers instead of a broken rail', () => {
+	const theme = paintTheme();
+	const render = (width) => withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.INFO, theme, width, partsAt(theme, { ...SHORT_CARD, tone: CARD_TONE.INFO })));
+	assert.match(stripAnsi(render(10)[0]), /▎/, 'ten columns is the narrowest float card');
+	const narrow = render(9);
+	assert.match(stripAnsi(narrow[0]), /^╭/, 'nine columns is the neon frame');
+	assert.equal(narrow.some((row) => row.includes('\x1b')), false, 'and no background is painted there');
+	assert.deepEqual(render(0).filter((row) => row !== ''), [], 'no width draws no content');
+});
+
+test('the card source writes no colour and no raw escape literal', () => {
+	for (const file of ['shell-card.js', 'worktree-cards.js', 'card-style.js']) {
+		const source = readFileSync(join(__dirname, '..', 'lib', file), 'utf8');
+		assert.doesNotMatch(source, /#[0-9a-fA-F]{3,8}\b/, `${file} names no hex colour`);
+		assert.doesNotMatch(source, /\b(?:rgb|rgba|hsl|hsla)\(/, `${file} composes no colour function`);
+		assert.equal(source.includes('\x1b'), false, `${file} holds no raw escape character`);
+		assert.doesNotMatch(source, /\\x1b|\\u001b/, `${file} holds no escape sequence literal`);
+	}
+});
+
+test('the tone to background table has exactly one owner in lib/', () => {
+	// S5/S6: the visible cards (/warp included) name a tone and nothing else. The
+	// role a tone paints behind a float card is decided here, once, so no card can
+	// drift into its own palette.
+	const owners = readdirSync(join(__dirname, '..', 'lib'))
+		.filter((file) => file.endsWith('.js'))
+		.filter((file) => /tool(?:Success|Pending|Error)Bg/.test(readFileSync(join(__dirname, '..', 'lib', file), 'utf8')));
+	assert.deepEqual(owners, ['shell-card.js']);
 });

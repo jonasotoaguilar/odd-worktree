@@ -207,7 +207,9 @@ describe('a real close removes with git alone', () => {
   // the extension hands the removal module. A blocking spawn would bypass this
   // seam entirely, which is what makes the argv assertions below meaningful.
   function recordChildren() {
-    const gitLib = require('../lib/worktree-git.js');
+    // The git seam the extension itself loaded: one load compiles its own lib
+    // modules, so the fake goes on THAT instance (the extension's libModule seam).
+    const gitLib = mod.libModule('worktree-git.js');
     const original = gitLib.runArgvAsync;
     const calls = [];
     gitLib.runArgvAsync = async (bin, argv, options) => {
@@ -249,7 +251,7 @@ describe('a real close removes with git alone', () => {
     const repo = makeRepo();
     const target = await createCheckout(tools, repo, 'feat/slow');
 
-    const gitLib = require('../lib/worktree-git.js');
+    const gitLib = mod.libModule('worktree-git.js');
     const original = gitLib.runArgvAsync;
     const order = [];
     gitLib.runArgvAsync = async (bin, argv, options) => {

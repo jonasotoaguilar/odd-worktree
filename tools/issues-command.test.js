@@ -38,8 +38,12 @@ const { execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
 
-const ghIssues = require('../lib/gh-issues.js');
-const worktreeGit = require('../lib/worktree-git.js');
+// The client and git seam the extension itself loaded. One extension load compiles
+// its own lib modules, so a fake must reach THAT instance — the extension's
+// `libModule` seam — instead of a separate `require` of the same path. Each load
+// below rebinds these, so a case always patches the instance its handler uses.
+let ghIssues = require('../lib/gh-issues.js');
+let worktreeGit = require('../lib/worktree-git.js');
 
 const roots = [];
 after(() => {
@@ -103,6 +107,8 @@ async function loadExtension() {
   const mod = await import(pathToFileURL(copy).href);
   const factory = mod.default;
   factory(api);
+  ghIssues = mod.libModule('gh-issues.js');
+  worktreeGit = mod.libModule('worktree-git.js');
   return { commands, hooks, api, mod, factory };
 }
 
@@ -187,16 +193,26 @@ async function waitFor(predicate, timeoutMs = 2000) {
 const clean = (value) => String(value).replace(/\x1b\[[0-9;]*m/g, '');
 
 // Captures the options the extension mounts the real view with, leaving every
-// client call real and injectable.
+// client call real and injectable. The patched module is the extension's OWN view
+// instance (`attach`), taken from the load that will mount it.
 function captureIssuesView() {
-  const lib = require('../lib/issues-view.js');
-  const original = lib.createIssuesView;
   const holder = { options: null };
-  lib.createIssuesView = (options) => {
-    holder.options = options;
-    return { render: () => [], handleInput: () => {}, invalidate: () => {} };
+  let lib;
+  let original;
+  return {
+    holder,
+    attach(mod) {
+      lib = mod.libModule('issues-view.js');
+      original = lib.createIssuesView;
+      lib.createIssuesView = (options) => {
+        holder.options = options;
+        return { render: () => [], handleInput: () => {}, invalidate: () => {} };
+      };
+    },
+    restore() {
+      if (lib) lib.createIssuesView = original;
+    },
   };
-  return { holder, restore: () => { lib.createIssuesView = original; } };
 }
 
 // One issue node in the shape both GraphQL page queries ask for.
@@ -351,8 +367,11 @@ function registryFile(root) {
 // Gate the extension through session_start with a scratch cwd (so the
 // unrelated worktree discovery never touches the fixture repo), then run the
 // command handler against the fixture checkout.
-async function openIssues(root, { runner, rows = 24 } = {}) {
+async function openIssues(root, { runner, rows = 24, prepare } = {}) {
   const loaded = await loadExtension();
+  // `prepare` receives the load that is about to run the command, so a test's fake
+  // lands on the instance the command actually mounts.
+  if (typeof prepare === 'function') prepare(loaded.mod);
   ghIssues.setGhRunner(runner || makeIssuesRunner().runner);
   const scratch = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-gate-')));
   await fireSessionStart(loaded.hooks, gateCtx(scratch, []));
@@ -381,6 +400,7 @@ async function capturedIssuesOptions(root, options = {}) {
   const capture = captureIssuesView();
   try {
     const loaded = await loadExtension();
+    capture.attach(loaded.mod);
     ghIssues.setGhRunner(injected.runner);
     const scratch = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-gate-')));
     await fireSessionStart(loaded.hooks, gateCtx(scratch, []));
@@ -534,7 +554,7 @@ describe('/issues is read-only about the worktree association', () => {
     const { runner } = makeIssuesRunner();
     const capture = captureIssuesView();
     try {
-      await openIssues(root, { runner });
+      await openIssues(root, { runner, prepare: (mod) => capture.attach(mod) });
       const options = capture.holder.options;
       for (const key of ['assigned', 'assignedOdd', 'saveAssignment', 'assignmentEnabled']) {
         assert.equal(key in options, false, `the view is handed no ${key}: ${JSON.stringify(Object.keys(options))}`);
@@ -720,23 +740,16 @@ describe('/issues actions (S3,S4)', () => {
 describe('/issues page seam (S5,D1)', () => {
   async function mountCapturing(root, rows = 24) {
     const base = makeIssuesRunner();
-    const lib = require('../lib/issues-view.js');
-    const realCreate = lib.createIssuesView;
-    const realPage = ghIssues.getIssuePage;
+    // The extension's OWN view and client, taken after the load: one load compiles
+    // its own lib modules, so the fakes go on the instance the command mounts.
+    let lib;
+    let realCreate;
+    let realPage;
     const order = [];
     const pages = [];
     const holder = { options: null };
-    ghIssues.getIssuePage = (params, opts) => {
-      order.push('page');
-      pages.push({ params, opts });
-      return realPage(params, opts);
-    };
-    lib.createIssuesView = (options) => {
-      holder.options = options;
-      order.push('view');
-      return realCreate(options);
-    };
     const restore = () => {
+      if (!lib) return;
       lib.createIssuesView = realCreate;
       ghIssues.getIssuePage = realPage;
     };
@@ -744,6 +757,19 @@ describe('/issues page seam (S5,D1)', () => {
     let loaded = null;
     try {
       loaded = await loadExtension();
+      lib = loaded.mod.libModule('issues-view.js');
+      realCreate = lib.createIssuesView;
+      realPage = ghIssues.getIssuePage;
+      ghIssues.getIssuePage = (params, opts) => {
+        order.push('page');
+        pages.push({ params, opts });
+        return realPage(params, opts);
+      };
+      lib.createIssuesView = (options) => {
+        holder.options = options;
+        order.push('view');
+        return realCreate(options);
+      };
       ghIssues.setGhRunner(base.runner);
       const scratch = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-gate-')));
       await fireSessionStart(loaded.hooks, gateCtx(scratch, []));

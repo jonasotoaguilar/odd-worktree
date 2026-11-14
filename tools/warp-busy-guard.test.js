@@ -27,8 +27,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { LIB_DIR, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
-const busyLib = require('../lib/worktree-warp-busy.js');
+const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
+// The queue the extension itself loaded: one extension load compiles its own lib
+// modules, so every fake and every assertion below addresses THAT instance by the
+// extension's `libModule` seam instead of a separate `require` of the same path.
+let busyLib = require('../lib/worktree-warp-busy.js');
 
 const scratch = [];
 function track(dir) {
@@ -226,25 +229,39 @@ before(async () => {
   process.env.ODD_WORKTREE_WARP_PENDING_MS = '600000';
   process.env.ODD_WORKTREE_WARP_PENDING_POLL_MS = '60000';
   const sent = [];
-  const loaded = await loadExtension({ sendUserMessage: (text, options) => { sent.push([text, options]); } });
+  const loaded = await loadStubbedModule({ sendUserMessage: (text, options) => { sent.push([text, options]); } });
   host = loaded.host;
   host.sent = sent;
   commands = loaded.commands;
   tools = loaded.tools;
   hooks = loaded.hooks;
-  mod = await loadStubbedModule();
+  mod = loaded.mod;
+  busyLib = mod.libModule('worktree-warp-busy.js');
 });
 
-// The extension module's own exported seams (the removal path the panel drives)
-// are not part of the registration surface, so this file loads the same stubbed
-// module the shared fixture copies and keeps the namespace beside the tools.
-async function loadStubbedModule() {
+// The registration surface AND the extension's own exported seams, from ONE load:
+// a load compiles its own lib modules, so the queue a test asserts and the front
+// that fills it must belong to the same instance (tools/package-surface.test.js
+// pins the freshness; this file pins that one load serves both).
+async function loadStubbedModule(pi) {
   process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-busy-mod-'));
   try {
     const copy = path.join(dir, 'odd-worktree-tools.mjs');
     fs.writeFileSync(copy, stubbedSource());
-    return await import(pathToFileURL(copy).href);
+    const mod = await import(pathToFileURL(copy).href);
+    const localCommands = new Map();
+    const localTools = new Map();
+    const localHooks = [];
+    const host = {
+      registerCommand: (name, handler) => { localCommands.set(name, handler); },
+      registerTool: (tool) => { localTools.set(tool.name, tool); },
+      registerMessageRenderer: () => {},
+      on: (event, handler) => { localHooks.push([event, handler]); },
+      ...pi,
+    };
+    mod.default(host);
+    return { mod, commands: localCommands, tools: localTools, hooks: localHooks, host };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -1,8 +1,12 @@
 'use strict';
-// S4/S5/S9: a warp waits for THIS session's own background work — its agent
-// tasks AND its background jobs — and the request is QUEUED while that work runs.
+// S4/S5/S9: a warp waits for THIS session's own work — the tools it is
+// executing, its agent tasks AND its background jobs — and the request is
+// QUEUED while that work runs.
 //
-// Two sources are driven here:
+// Three sources are driven here:
+//   - the host's `tool_execution_start` / `tool_execution_end` pair, which the
+//     extension registers and which fires for EVERY tool of the session (a
+//     running bash or read, not only this package's tools);
 //   - the agent-task counters, published in Gentle Shell's presence store (one
 //     header per live session, validated and bounded by
 //     lib/worktree-session-guard.js), which the tests write for their own id;
@@ -68,7 +72,13 @@ function settlePending() {
 // The queue is ONE record per session, held in this process and shared by every
 // test in this file: each test clears its own, and this backstop keeps an
 // unrelated assertion failure from leaking a record into the tests after it.
-afterEach(() => { settlePending(); });
+afterEach(() => {
+  settlePending();
+  // The tool counter is process memory shared by the whole file: a failed test
+  // must not leak an execution into the test after it.
+  busyLib.forgetInFlightTools();
+  widgetPaints.length = 0;
+});
 
 function git(cwd, args) {
   const out = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -125,19 +135,46 @@ async function until(predicate, { timeoutMs = 2000, stepMs = 5 } = {}) {
 }
 
 const notifications = [];
+
+// S8/S9: the queued warp's persistent line reaches the human through
+// `ctx.ui.setWidget(key, content, { placement: "aboveEditor" })` — the zone
+// immediately above the input. The test records every call and renders the
+// component factory the queue handed over, so the line, its dim styling and its
+// one-row truncation are observed exactly as the host would draw them.
+const widgetPaints = [];
+const WIDGET_KEY = 'odd-worktree-warp';
+const WIDGET_DIM = (text) => `\u001b[2m${text}\u001b[0m`;
+
+function widgetPaintsFor(ctx) {
+  return widgetPaints.filter((entry) => entry.ctx === ctx);
+}
+
+// The widget as it stands: how many paints happened, and the rows the last one
+// renders at `width`. `lines: null` means the line was CLEARED (or never shown).
+function widgetState(ctx, width = 200) {
+  const paints = widgetPaintsFor(ctx);
+  const last = paints.length > 0 ? paints[paints.length - 1] : null;
+  if (last === null || last.content === undefined) return { paints: paints.length, lines: null, last };
+  const theme = { fg: (role, text) => (role === 'dim' ? WIDGET_DIM(text) : text) };
+  const component = last.content({}, theme);
+  return { paints: paints.length, lines: component.render(width), last };
+}
+
 function makeCtx(cwd, extra = {}) {
-  return {
+  const ctx = {
     cwd,
     hasUI: true,
     mode: 'tui',
     sessionManager: { getSessionId: () => SESSION_ID },
     ui: {
       notify: (text, level) => { notifications.push([level, text]); },
+      setWidget: (key, content, options) => { widgetPaints.push({ ctx, key, content, options }); },
       ...extra,
     },
     waitForIdle: async () => {},
     switchSession: async () => ({ cancelled: false }),
   };
+  return ctx;
 }
 
 // This session's background jobs, as the host's `job_list` tool reports them:
@@ -374,8 +411,132 @@ describe('lib/worktree-warp-busy.js', () => {
     assert.match(busyLib.expiredText('feat-x', 30, { jobs: { status: 'error' } }), /\(the background-job state is unknown \(job_list failed\)/);
     assert.match(
       busyLib.pendingWarpRefusalText({ name: 'feat-x' }, 'feat-y'),
-      /^a warp to feat-x is already pending for this session — it runs when the pending agent tasks and background jobs finish; wait for it or let it expire$/,
+      /^a warp to feat-x is already pending for this session — it runs when this session's tools, agent tasks and background jobs finish; wait for it or let it expire$/,
     );
+  });
+
+  test('the steering line names the wait, on one line, and never a move', () => {
+    // The same phrase the queued notice uses, so the row and the notice cannot
+    // describe different work.
+    assert.equal(
+      busyLib.pendingSteeringLine('feat-x', {
+        running: 1, queued: 0, jobs: { active: 2, status: 'ok' }, tools: { inFlight: 1 },
+      }),
+      'Queued: warp feat-x — waiting for 1 running agent task(s) and 2 running background jobs and 1 tool still executing',
+    );
+    assert.equal(
+      busyLib.pendingSteeringLine('feat-x', { running: 0, queued: 0, jobs: { active: 0, status: 'ok' }, tools: { inFlight: 1 } }),
+      'Queued: warp feat-x — waiting for 1 tool still executing',
+    );
+    // Nothing readable: the workloads are named in words, never promised.
+    assert.equal(
+      busyLib.pendingSteeringLine('feat-x', null),
+      "Queued: warp feat-x — waiting for this session's tools, agent tasks and background jobs",
+    );
+    assert.equal(
+      busyLib.pendingSteeringLine('', {}),
+      "Queued: warp that checkout — waiting for this session's tools, agent tasks and background jobs",
+    );
+    // A name can never break the one-row contract, and it never claims a move.
+    assert.equal(
+      busyLib.pendingSteeringLine('feat\nline two', { running: 1 }),
+      'Queued: warp feat line two — waiting for 1 running agent task(s)',
+    );
+    for (const claim of ['moved', 'switched', 'now in', 'done']) {
+      assert.equal(busyLib.pendingSteeringLine('feat-x', { running: 1 }).includes(claim), false, claim);
+    }
+  });
+
+  test('the queue paints its line while it waits, and clears it on dispatch, expiry and settle', async () => {
+    const key = 'session:lib-steering';
+    const clock = { now: 1000 };
+    const paints = [];
+    const activity = { busy: true, running: 1, queued: 0, jobs: { status: 'ok', active: 0 }, tools: { inFlight: 0 } };
+    const handoff = { name: 'feat-s', target: '/t', from: '/f', branch: 'feat/s', changes: { mode: 'none', paths: [] } };
+    const queued = busyLib.queuePendingWarp({
+      key,
+      name: 'feat-s',
+      token: '@s',
+      handoff,
+      activity,
+      now: () => clock.now,
+      env: { ODD_WORKTREE_WARP_PENDING_MS: '10000', ODD_WORKTREE_WARP_PENDING_POLL_MS: '1000' },
+      timers: { set: () => null, clear: () => {} },
+      read: async () => activity,
+      dispatch: () => ({ ok: true }),
+      paint: (line) => { paints.push(line); },
+    });
+    try {
+      assert.equal(queued.ok, true);
+      // The line is shown at QUEUE time, naming the work already known.
+      assert.deepEqual(paints, ['Queued: warp feat-s — waiting for 1 running agent task(s)']);
+
+      // The same reason is not repainted: a 30-minute queue is one row, not a
+      // repaint every poll.
+      assert.equal((await busyLib.pendingWarpTick(key)).status, 'waiting');
+      assert.equal(paints.length, 1);
+
+      // The reason changes, so the line does.
+      activity.running = 0;
+      activity.jobs = { status: 'ok', active: 2 };
+      assert.equal((await busyLib.pendingWarpTick(key)).status, 'waiting');
+      assert.equal(paints.length, 2);
+      assert.equal(paints[1], 'Queued: warp feat-s — waiting for 2 running background jobs');
+
+      // The work drains: the dispatch clears the line, and never a claim of a
+      // move that has not happened.
+      activity.busy = false;
+      activity.jobs = { status: 'ok', active: 0 };
+      assert.equal((await busyLib.pendingWarpTick(key)).status, 'dispatched');
+      assert.equal(paints[paints.length - 1], null, 'a dispatch clears the line');
+
+      // Every terminal outcome clears it: settling here is the move/refusal/
+      // cancellation/shutdown path, and it never paints again.
+      const before = paints.length;
+      busyLib.settlePendingWarp(key);
+      assert.equal(paints.length, before, 'an already cleared line is not repainted');
+    } finally {
+      busyLib.settlePendingWarp(key);
+    }
+  });
+
+  test('an expired queue clears the line together with the record', async () => {
+    const key = 'session:lib-steering-expiry';
+    const clock = { now: 1000 };
+    const paints = [];
+    const handoff = { name: 'feat-se', target: '/t', from: '/f', branch: 'feat/se', changes: { mode: 'none', paths: [] } };
+    const deps = {
+      now: () => clock.now,
+      env: { ODD_WORKTREE_WARP_PENDING_MS: '1000' },
+      timers: { set: () => null, clear: () => {} },
+      read: async () => ({ busy: true, running: 1 }),
+      dispatch: () => { throw new Error('an expired warp must not dispatch'); },
+      paint: (line) => { paints.push(line); },
+    };
+    assert.equal(busyLib.queuePendingWarp({ key, name: 'feat-se', token: '@se', handoff, activity: { busy: true, running: 1 }, ...deps }).ok, true);
+    assert.deepEqual(paints, ['Queued: warp feat-se — waiting for 1 running agent task(s)']);
+    clock.now += 1000;
+    assert.equal((await busyLib.pendingWarpTick(key)).status, 'expired');
+    assert.equal(paints[paints.length - 1], null, 'the expired request leaves no line behind');
+    assert.equal(paints.length, 2, 'and it does not repaint a line it already cleared');
+  });
+
+  test('a queue with no widget seam still runs: the line is a convenience, never state', async () => {
+    const key = 'session:lib-steering-absent';
+    const deps = {
+      now: () => 1000,
+      env: { ODD_WORKTREE_WARP_PENDING_MS: '5000' },
+      timers: { set: () => null, clear: () => {} },
+      read: async () => ({ busy: false }),
+      dispatch: () => ({ ok: true }),
+    };
+    const handoff = { name: 'feat-na', target: '/t', from: '/f', branch: 'feat/na', changes: { mode: 'none', paths: [] } };
+    try {
+      assert.equal(busyLib.queuePendingWarp({ key, name: 'feat-na', token: '@na', handoff, ...deps }).ok, true);
+      assert.equal((await busyLib.pendingWarpTick(key)).status, 'dispatched');
+    } finally {
+      busyLib.settlePendingWarp(key);
+    }
   });
 
   test('a job is active only while its status field says running or queued', () => {
@@ -414,6 +575,95 @@ describe('lib/worktree-warp-busy.js', () => {
     assert.equal(noTool.jobs.status, 'unavailable', 'no host seam is unknown, never "no jobs"');
     assert.equal(noTool.jobsUnknown, true);
     assert.equal(noTool.busy, false, 'an unknown job state blocks nothing');
+  });
+
+  test('an executing tool is the third workload, counted from the host’s execution pair', async () => {
+    const home = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-busy-tools-')));
+    const env = { PI_CODING_AGENT_DIR: home };
+    clearPresence();
+    assert.equal((await busyLib.sessionActivity({ sessionId: SESSION_ID, env })).busy, false, 'nothing executes at the start');
+
+    busyLib.noteToolStart({ toolCallId: 'call-bash-1', toolName: 'bash' });
+    const running = await busyLib.sessionActivity({ sessionId: SESSION_ID, env });
+    assert.equal(running.tools.inFlight, 1);
+    assert.equal(running.busy, true, 'a tool still executing makes the session busy');
+    assert.equal(
+      busyLib.queuedText(running),
+      'handoff queued — waiting for 1 tool still executing before the move',
+    );
+
+    // A second tool is counted too, and only its own end releases it.
+    busyLib.noteToolStart({ toolCallId: 'call-read-2', toolName: 'read' });
+    assert.equal((await busyLib.sessionActivity({ sessionId: SESSION_ID, env })).tools.inFlight, 2);
+    busyLib.noteToolEnd({ toolCallId: 'call-bash-1' });
+    const one = await busyLib.sessionActivity({ sessionId: SESSION_ID, env });
+    assert.equal(one.tools.inFlight, 1);
+    assert.equal(one.busy, true, 'one tool still executing still holds the move');
+    busyLib.noteToolEnd({ toolCallId: 'call-read-2' });
+    const idleAgain = await busyLib.sessionActivity({ sessionId: SESSION_ID, env });
+    assert.equal(idleAgain.tools.inFlight, 0);
+    assert.equal(idleAgain.busy, false, 'no tool left executing is not work');
+    busyLib.forgetInFlightTools();
+  });
+
+  test('a nested call is never counted, and an unmatched end cannot go negative', async () => {
+    const home = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-busy-nested-')));
+    const env = { PI_CODING_AGENT_DIR: home };
+    clearPresence();
+    // The queue's own `job_list` probe (and any codemode child) runs INSIDE a
+    // parent execution that is already counted: a warp must never wait on its
+    // own probe.
+    busyLib.noteToolStart({ toolCallId: 'parent-1/0', parentToolCallId: 'parent-1', toolName: 'job_list' });
+    assert.equal(busyLib.inFlightToolCount(), 0);
+    assert.equal((await busyLib.sessionActivity({ sessionId: SESSION_ID, env })).busy, false, 'a nested call alone is not a busy session');
+
+    // A blocked call still gets its `tool_execution_end` without a start: that is
+    // a no-op, never a negative count.
+    busyLib.noteToolEnd({ toolCallId: 'never-started' });
+    assert.equal(busyLib.inFlightToolCount(), 0);
+    busyLib.forgetInFlightTools();
+  });
+
+  test('a tool that never ends is bounded by the pending lifetime, and shutdown clears it', async () => {
+    const home = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-busy-stuck-')));
+    const env = { PI_CODING_AGENT_DIR: home };
+    const key = 'session:lib-toolstuck';
+    const clock = { now: 1000 };
+    const notified = [];
+    const handoff = { name: 'feat-stuck', target: '/t', from: '/f', branch: 'feat/stuck', changes: { mode: 'none', paths: [] } };
+    clearPresence();
+    try {
+      busyLib.noteToolStart({ toolCallId: 'call-stuck', toolName: 'bash' });
+      const queued = busyLib.queuePendingWarp({
+        key,
+        name: 'feat-stuck',
+        token: '@stuck',
+        handoff,
+        now: () => clock.now,
+        env: { ODD_WORKTREE_WARP_PENDING_MS: '1000', ODD_WORKTREE_WARP_PENDING_POLL_MS: '1000' },
+        timers: { set: () => null, clear: () => {} },
+        read: () => busyLib.sessionActivity({ sessionId: SESSION_ID, env }),
+        dispatch: () => { throw new Error('a tool still executing must hold the move'); },
+        notify: (text, level) => { notified.push([level, text]); },
+      });
+      assert.equal(queued.ok, true);
+      assert.equal((await busyLib.pendingWarpTick(key)).status, 'waiting', 'a tool that never ends keeps the request queued');
+
+      // The record’s OWN lifetime bounds the wait: nothing is wedged forever.
+      clock.now += 1000;
+      assert.equal((await busyLib.pendingWarpTick(key)).status, 'expired');
+      assert.equal(notified.length, 1);
+      assert.equal(notified[0][0], 'error');
+      assert.match(notified[0][1], /^worktree warp: the pending warp to feat-stuck expired after 1 min with nothing moved/);
+      assert.equal(busyLib.pendingWarpFor(key), null, 'the expired record is cleared');
+
+      // A session replacement starts from no in-flight tool.
+      busyLib.forgetInFlightTools();
+      assert.equal((await busyLib.sessionActivity({ sessionId: SESSION_ID, env })).busy, false, 'a shutdown starts with no tool executing');
+    } finally {
+      busyLib.settlePendingWarp(key);
+      busyLib.forgetInFlightTools();
+    }
   });
 
   test('the wait, pending and poll budgets are parsed, defaulted and clamped', () => {
@@ -561,7 +811,7 @@ describe('lib/worktree-warp-busy.js', () => {
 // front — `worktree_warp` is not registered any more, so every case here drives
 // the command handler).
 // ---------------------------------------------------------------------------
-describe('/warp queues while this session has agent tasks or jobs', () => {
+describe('/warp queues while this session has tools, agent tasks or jobs', () => {
   test('a busy session gets the queued wording naming the work and the jobs caveat', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
@@ -647,7 +897,7 @@ describe('/warp queues while this session has agent tasks or jobs', () => {
     assert.equal(notifications[0][0], 'error');
     assert.match(
       notifications[0][1],
-      /^worktree warp: a warp to feat-jobs is already pending for this session — it runs when the pending agent tasks and background jobs finish; wait for it or let it expire$/,
+      /^worktree warp: a warp to feat-jobs is already pending for this session — it runs when this session's tools, agent tasks and background jobs finish; wait for it or let it expire$/,
     );
     settlePending();
   });
@@ -714,6 +964,142 @@ describe('/warp queues while this session has agent tasks or jobs', () => {
     await commands.get('warp').handler('feat-unknown', moveCtx);
     assert.equal(switches.length, 1, `an unknown job list blocks nothing (${JSON.stringify(notifications)})`);
     assert.deepEqual(notifications, [], 'nothing claims a queue it did not create');
+  });
+
+  test('a tool executing in this session queues the warp, and the move lands once it ends', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    addJobs(ctx, []);
+    const created = await tools.get('worktree_create').execute('busy-t1', { branch: 'feat/toolbusy', odd: 'toolbusy' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    clearPresence();
+    host.sent.length = 0;
+    notifications.length = 0;
+
+    // The host announces a bash tool of THIS session: it is executing now.
+    const starts = hooks.filter(([name]) => name === 'tool_execution_start');
+    assert.ok(starts.length > 0, 'the extension registers the host’s execution pair');
+    for (const [, handler] of starts) await handler({ toolCallId: 'call-bash-9', toolName: 'bash', args: { command: 'sleep 5' } }, ctx);
+
+    await commands.get('warp').handler('feat-toolbusy', ctx);
+    assert.equal(switches.length, 0, 'the session must not move while a tool executes');
+    assert.equal(host.sent.length, 0, 'the command front re-dispatches later, not now');
+    const queued = notifications.find(([, text]) => /handoff queued/.test(String(text)));
+    assert.ok(queued, JSON.stringify(notifications));
+    assert.match(queued[1], /^worktree warp: handoff queued — waiting for 1 tool still executing before the move/);
+    assert.equal(/queue:/.test(queued[1]), false, 'a readable empty job list adds no caveat row');
+    assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, 'the request is kept pending');
+
+    // Still executing: the same poller waits, and nothing is re-dispatched.
+    assert.equal((await busyLib.pendingWarpTick(pendingKey())).status, 'waiting');
+    assert.equal(host.sent.length, 0);
+    assert.equal(switches.length, 0);
+
+    // The tool’s result arrives: the poller re-dispatches the SAME handoff. That
+    // run executes no tool of its own, so it performs the move instead of
+    // blocking on itself.
+    for (const [, handler] of hooks.filter(([name]) => name === 'tool_execution_end')) {
+      await handler({ toolCallId: 'call-bash-9', toolName: 'bash', result: {}, isError: false }, ctx);
+    }
+    assert.equal((await busyLib.pendingWarpTick(pendingKey())).status, 'dispatched');
+    assert.equal(host.sent.length, 1, 'the queued warp re-dispatches itself once the tool ends');
+    const [message, options] = host.sent[0];
+    assert.deepEqual(options, { expandPromptTemplates: true });
+    assert.ok(message.startsWith('/warp @'), `the queued command is /warp (${message})`);
+    notifications.length = 0;
+    await commands.get('warp').handler(message.slice('/warp '.length), ctx);
+    assert.equal(switches.length, 1, 'the queued move landed once the tool ended');
+    assert.deepEqual(notifications, [], 'a real move notifies nothing and does not block on itself');
+    assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'a move clears the pending record');
+  });
+
+  test('a second warp while a tool executes is refused, and the pending one is never replaced', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    const first = await tools.get('worktree_create').execute('busy-t2', { branch: 'feat/toolone', odd: 'toolone' }, undefined, undefined, ctx);
+    assert.notEqual(first.isError, true, resultText(first));
+    const second = await tools.get('worktree_create').execute('busy-t3', { branch: 'feat/tooltwo', odd: 'tooltwo' }, undefined, undefined, ctx);
+    assert.notEqual(second.isError, true, resultText(second));
+    clearPresence();
+    for (const [, handler] of hooks.filter(([name]) => name === 'tool_execution_start')) {
+      await handler({ toolCallId: 'call-grep-1', toolName: 'grep', args: {} }, ctx);
+    }
+    try {
+      notifications.length = 0;
+      await commands.get('warp').handler('feat-toolone', ctx);
+      const queued = busyLib.pendingWarpFor(pendingKey());
+      assert.notEqual(queued, null, 'the tool keeps the request pending');
+      assert.equal(queued.name, 'feat-toolone');
+      const shown = widgetState(ctx);
+      assert.deepEqual(shown.lines, [WIDGET_DIM('Queued: warp feat-toolone — waiting for 1 tool still executing')]);
+
+      notifications.length = 0;
+      await commands.get('warp').handler('feat-tooltwo', ctx);
+      assert.equal(switches.length, 0);
+      assert.equal(notifications.length, 1, JSON.stringify(notifications));
+      assert.equal(notifications[0][0], 'error');
+      assert.match(notifications[0][1], /^worktree warp: a warp to feat-toolone is already pending for this session/);
+      assert.equal(busyLib.pendingWarpFor(pendingKey()).name, 'feat-toolone', 'the pending request is never replaced');
+      // A refused SECOND warp settles nothing: the pending request is still
+      // waiting, so its line is still on screen, unchanged and unpainted.
+      assert.equal(widgetState(ctx).paints, shown.paints, 'the refusal repaints nothing');
+      assert.deepEqual(widgetState(ctx).lines, shown.lines, 'the pending line survives the refusal');
+    } finally {
+      settlePending();
+      busyLib.forgetInFlightTools();
+    }
+  });
+
+  test('the queued warp is visible above the editor: one dim line, and the line follows the queue', async (t) => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    addJobs(ctx, []);
+    const created = await tools.get('worktree_create').execute('busy-line', { branch: 'feat/line', odd: 'line' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    clearPresence();
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+
+    assert.equal(widgetState(ctx).lines, null, 'no queue, no line');
+    for (const [, handler] of hooks.filter(([name]) => name === 'tool_execution_start')) {
+      await handler({ toolCallId: 'call-line-1', toolName: 'bash', args: { command: 'sleep 5' } }, ctx);
+    }
+    t.diagnostic('step 1 — one bash tool of this session starts executing; no warp asked yet → nothing painted');
+    assert.equal(widgetState(ctx).lines, null, 'a tool executing alone paints nothing');
+
+    await commands.get('warp').handler('feat-line', ctx);
+    const shown = widgetState(ctx);
+    t.diagnostic(`step 2 — /warp feat-line while the tool runs → setWidget(${JSON.stringify(shown.last.key)}, …, ${JSON.stringify(shown.last.options)}) → ${JSON.stringify(shown.lines)}`);
+    assert.deepEqual(shown.lines, [WIDGET_DIM('Queued: warp feat-line — waiting for 1 tool still executing')]);
+    assert.equal(shown.last.key, WIDGET_KEY);
+    assert.deepEqual(shown.last.options, { placement: 'aboveEditor' });
+    assert.equal(switches.length, 0, 'the session has not moved');
+
+    // A narrow terminal truncates the row instead of wrapping it into several.
+    const narrow = widgetState(ctx, 24);
+    assert.deepEqual(narrow.lines, [WIDGET_DIM('Queued: warp feat-line…')]);
+    assert.equal(widgetState(ctx, 1).lines.length, 1, 'one row even at a single column');
+    assert.deepEqual(widgetState(ctx, 1).lines, [WIDGET_DIM('…')]);
+
+    // The reason has not changed, so the poller does not repaint the row.
+    assert.equal((await busyLib.pendingWarpTick(pendingKey())).status, 'waiting');
+    assert.equal(widgetState(ctx).paints, shown.paints, 'an unchanged reason is not repainted');
+
+    // The tool ends: the queue dispatches, and the line goes with it.
+    for (const [, handler] of hooks.filter(([name]) => name === 'tool_execution_end')) {
+      await handler({ toolCallId: 'call-line-1', toolName: 'bash', result: {}, isError: false }, ctx);
+    }
+    assert.equal((await busyLib.pendingWarpTick(pendingKey())).status, 'dispatched');
+    t.diagnostic('step 3 — the tool ends → the queue re-dispatches the same handoff → the line is cleared');
+    assert.equal(widgetState(ctx).lines, null, 'a dispatch clears the line');
+
+    const [message] = host.sent[0];
+    notifications.length = 0;
+    await commands.get('warp').handler(message.slice('/warp '.length), ctx);
+    t.diagnostic('step 4 — the queued handoff runs → the session moved, no line left behind');
+    assert.equal(switches.length, 1, 'the queued move landed once the tool ended');
+    assert.equal(widgetState(ctx).lines, null);
   });
 
   test('a queued (busy) warp mutates no checkout and writes no document', async () => {
@@ -847,7 +1233,7 @@ describe('the /warp front queues the move and performs it after the counters dra
     assert.equal(notifications[0][0], 'error');
     assert.match(
       notifications[0][1],
-      /^worktree warp: a warp to feat-one is already pending for this session — it runs when the pending agent tasks and background jobs finish; wait for it or let it expire$/,
+      /^worktree warp: a warp to feat-one is already pending for this session — it runs when this session's tools, agent tasks and background jobs finish; wait for it or let it expire$/,
     );
     assert.equal(host.sent.length, 0, 'a refused second warp queues nothing');
 
@@ -874,6 +1260,7 @@ describe('the /warp front queues the move and performs it after the counters dra
       process.env.ODD_WORKTREE_WARP_PENDING_MS = previousBudget;
     }
     assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null);
+    assert.deepEqual(widgetState(ctx).lines, [WIDGET_DIM('Queued: warp feat-expire — waiting for 1 running agent task(s)')], 'the queued warp is visible');
 
     const expired = await until(() => notifications.some(([, text]) => /expired .* with nothing moved/.test(String(text))));
     assert.equal(expired, true, `the queue noticed nothing: ${JSON.stringify(notifications)}`);
@@ -881,6 +1268,7 @@ describe('the /warp front queues the move and performs it after the counters dra
     assert.match(text, /^worktree warp: the pending warp to feat-expire expired after 1 min with nothing moved/);
     assert.match(text, /agent tasks and background jobs finish/);
     assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'an expired queue is cleared');
+    assert.equal(widgetState(ctx).lines, null, 'an expired warp clears its line');
 
     host.sent.length = 0;
     notifications.length = 0;
@@ -949,6 +1337,7 @@ describe('the /warp front queues the move and performs it after the counters dra
 
     // The job finishes: the queue re-dispatches the SAME validated handoff.
     jobs.jobs[0].status = 'exited 0';
+    assert.ok(widgetState(ctx).lines, 'the row is up while the handoff waits');
     assert.equal((await busyLib.pendingWarpTick(pendingKey())).status, 'dispatched');
     assert.equal(host.sent.length, 1, 'the queued warp re-dispatches itself');
     const token = host.sent[0][0];
@@ -959,6 +1348,7 @@ describe('the /warp front queues the move and performs it after the counters dra
     notifications.length = 0;
     await commands.get('warp').handler(token.slice('/warp '.length), ctx);
     assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'a refused queued warp is cleared');
+    assert.equal(widgetState(ctx).lines, null, 'a refused queued warp clears its line');
 
     // A later warp is accepted again, not blocked by a dead record. The branch still
     // exists, and a checkout for it is made again so the name resolves.
@@ -970,6 +1360,33 @@ describe('the /warp front queues the move and performs it after the counters dra
     assert.deepEqual(notifications.filter(([, entry]) => /already pending/.test(String(entry))), [], `a new warp is accepted, not refused as pending: ${JSON.stringify(notifications)}`);
     assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null);
     settlePending();
+  });
+
+  test('a refused handoff clears the line it was showing', async () => {
+    const repo = makeRepo();
+    const ctx = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('busy-r2', { branch: 'feat/live-refused', odd: 'live-refused' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+
+    // The queue holds the request while a job runs, so its row is on screen.
+    clearPresence();
+    const jobs = addJobs(ctx, [{ id: 'job-lr', status: 'running' }]);
+    notifications.length = 0;
+    await commands.get('warp').handler('feat-live-refused', ctx);
+    const record = busyLib.pendingWarpFor(pendingKey());
+    assert.notEqual(record, null);
+    assert.deepEqual(widgetState(ctx).lines, [WIDGET_DIM('Queued: warp feat-live-refused — waiting for 1 running background job')]);
+
+    // The job finishes and the checkout disappears between the queue and the
+    // move, which runs straight away: a terminal REFUSAL while the row is still
+    // on screen, so this is the refusal itself clearing it (no dispatch first).
+    jobs.jobs[0].status = 'exited 0';
+    git(repo, ['worktree', 'remove', path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'live-refused')]);
+    notifications.length = 0;
+    const refused = await mod.executeWorktreeWarp('feat-live-refused', ctx, { handoff: record.handoff });
+    assert.equal(refused.isError, true, JSON.stringify(refused));
+    assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'the refusal settles the record');
+    assert.equal(widgetState(ctx).lines, null, 'and clears the line it was showing');
   });
 
   test('a handoff token for another checkout is refused while one is pending', async () => {
@@ -1036,6 +1453,9 @@ describe('boundaries: negative cases, every front, unaffected surfaces', () => {
     assert.equal(switches.length, 1, `an absent store blocks nothing and waits for nothing (${JSON.stringify(notifications)})`);
     assert.deepEqual(notifications, [], 'nothing was queued, so nothing is announced');
     assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'nothing is left pending');
+    // A warp that moves immediately was never queued, so it never paints the
+    // "waiting" row: the line belongs to the queue, not to the warp.
+    assert.equal(widgetPaintsFor(ctx).length, 0, 'an immediate move paints nothing above the editor');
   });
 
   test('a stale heartbeat and an unreadable record are no evidence of work', async () => {
@@ -1129,6 +1549,19 @@ describe('boundaries: negative cases, every front, unaffected surfaces', () => {
       await handler({}, ctx);
     }
     assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'nothing deferred survives its session');
+  });
+
+  test('a session shutdown clears the in-flight tools, so a lost end cannot wedge the next session', async () => {
+    const repo = makeRepo();
+    const ctx = makeCtx(repo);
+    for (const [, handler] of hooks.filter(([name]) => name === 'tool_execution_start')) {
+      await handler({ toolCallId: 'call-lost-end', toolName: 'bash', args: {} }, ctx);
+    }
+    assert.equal(busyLib.inFlightToolCount(), 1, 'the tool is executing before shutdown');
+    for (const [, handler] of hooks.filter(([name]) => name === 'session_shutdown')) {
+      await handler({}, ctx);
+    }
+    assert.equal(busyLib.inFlightToolCount(), 0, 'a replacement session starts with no tool executing');
   });
 
   test('list, create and delete still work while this session reports running work', async () => {

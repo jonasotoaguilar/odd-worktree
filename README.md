@@ -201,34 +201,53 @@ Removal is `git worktree remove <absolute path>`, with `--force` only when the
 caller asked for it. The branch is kept. Nothing else is touched: no other
 application is closed, opened or removed on any path.
 
-### A warp waits for this session's own agent tasks and background jobs
+### A warp waits for this session's own tools, agent tasks and background jobs
 
-A warp never lands while this session still has running or queued agent tasks or
-a running background job — and it is never thrown away: the request is
-**queued**.
+A warp never lands while this session still has a tool executing, running or
+queued agent tasks, or a running background job — and it is never thrown away:
+the request is **queued**.
 
 - `/warp` — a typed name, the selector and a create's follow-up warp all share
-  one path — gives both sources a bounded chance to drain
+  one path — gives all three sources a bounded chance to drain
   (`ODD_WORKTREE_WARP_BUSY_WAIT_MS`, 60 s by default) and then keeps the request
   **pending** instead of switching: the session stays where it is, and a bounded
   background poller re-dispatches the SAME validated handoff once this session
-  reports no running or queued agent task and no running job. Nothing switches
-  mid-work. A queued handoff never claims a move.
+  reports no tool still executing, no running or queued agent task and no
+  running job. Nothing switches mid-work. A queued handoff never claims a move.
+- **A queued warp is visible.** While the request waits, one dim row sits in the
+  zone immediately above the input, in the same shape as Pi's own `Steering:`
+  row: `Queued: warp <worktree> — waiting for <the work>`, naming the tools,
+  agent tasks and jobs it is actually waiting for. On a narrow terminal the row
+  is cut with an ellipsis instead of wrapping, it is repainted only when the
+  reason changes, and it never says the session moved. It is removed when the
+  queue dispatches, is refused, is cancelled, expires or the session shuts down.
+  The one-shot notice that announced the queue stays: the row is transient state
+  and the notice is the record of what happened.
 - **One pending warp per session.** A second warp is refused while one is
   pending, with `a warp to <name> is already pending for this session — it runs
-  when the pending agent tasks and background jobs finish; wait for it or let it
-  expire` — and the pending request is never replaced.
+  when this session's tools, agent tasks and background jobs finish; wait for it
+  or let it expire` — and the pending request is never replaced.
 - The pending warp expires after `ODD_WORKTREE_WARP_PENDING_MS` (30 minutes by
   default, clamped to a day) and notifies that it expired with nothing moved. It
-  re-reads both sources every `ODD_WORKTREE_WARP_PENDING_POLL_MS` (2 s by
+  re-reads all three sources every `ODD_WORKTREE_WARP_PENDING_POLL_MS` (2 s by
   default) and its timer never keeps the session alive. A warp that runs, is
   refused or expires clears the queue, so the next request is accepted again.
 - The re-dispatched handoff re-checks that the destination checkout and the
   session are still where the request left them: drift refuses the move instead
   of guessing.
 
-Both sources are read **best effort**, and neither is ever guessed:
+All three sources are read **best effort**, and none is ever guessed:
 
+- **Tools executing in this session** come from the host's
+  `tool_execution_start` / `tool_execution_end` pair, which fires for every tool
+  of the session — its own `bash`, `read` and the rest, not only this package's
+  tools. An execution with no end yet keeps the warp waiting; an end whose start
+  was never seen is a no-op. Only top-level calls count: a nested call (a tool a
+  tool ran) always runs inside a parent execution that is already counted, and
+  so does this package's own `job_list` probe, which is why a warp never waits on
+  itself. The counter is process memory with no unknown state: a host restart
+  starts empty, a session shutdown clears it, and a tool that never really ends
+  is bounded by the pending warp's own expiry.
 - **Agent tasks** come from Gentle Shell's presence header for this session,
   through the same bounded reader the deletion guard uses. A heartbeat older than
   15 s is not evidence, and an absent or unreadable store blocks nothing.

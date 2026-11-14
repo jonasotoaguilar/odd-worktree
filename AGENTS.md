@@ -35,7 +35,7 @@ its presence records.
 | `lib/worktree-symlinks.js` | Symlink policy for a checkout. |
 | `lib/worktree-changes.js` | Pending-change snapshot and transfer (the panel's `changes` selection, and a typed warp's copy). |
 | `lib/worktree-session-guard.js` | The active-session guard the panel's `ctrl+d` runs, with the caveats it discloses. |
-| `lib/worktree-warp-busy.js` | This session's busy evidence for a warp: agent-task counters, its `job_list` jobs, and the one pending handoff. |
+| `lib/worktree-warp-busy.js` | This session's busy evidence for a warp: the in-flight tool counter, agent-task counters, its `job_list` jobs, the one pending handoff, and the persistent row that handoff shows. |
 | `lib/worktree-warp-sessions.js` | Warp/fork bookkeeping in the session files the host owns. |
 | `lib/checkout-facts.js` | The facts one checkout row shows in the selector. |
 | `lib/worktree-card.js` | The `worktree-warp` message renderer (the moved/queued card), composed on the card substrate like the tool cards. |
@@ -154,21 +154,30 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     text is removed. It is one text (`lib/odd-prompt/odd-worktrees.md`) with no
     variant selection, idempotent by content, primary sessions only, and
     `ODD_WORKTREE_PROMPT=0` suppresses it.
-15. **A warp waits for this session's own agent tasks AND background jobs, and it
-    is queued, never thrown away.** While `lib/worktree-warp-busy.js` reports a
-    running or queued agent task, or an active job, `/warp` keeps the validated
-    handoff PENDING instead of switching, and re-dispatches the same
-    `/warp @<token>` from a bounded, unref'd poller once both workloads are idle.
-    The request is recorded as pending at QUEUE time, so a second warp in the
-    same turn is refused and the pending one is never replaced. Expiry
+15. **A warp waits for this session's own tools, agent tasks AND background
+    jobs, and it is queued, never thrown away.** While
+    `lib/worktree-warp-busy.js` reports a tool still executing, a running or
+    queued agent task, or an active job, `/warp` keeps the validated handoff
+    PENDING instead of switching, and re-dispatches the same `/warp @<token>`
+    from a bounded, unref'd poller once all three workloads are idle. The request
+    is recorded as pending at QUEUE time, so a second warp in the same turn is
+    refused and the pending one is never replaced. Expiry
     (`ODD_WORKTREE_WARP_PENDING_MS`, 30 min default) notifies that nothing moved,
     and every terminal outcome (moved, refused, cancelled, expired, shutdown)
-    clears the record. Agent tasks come from the presence counters; jobs come
+    clears the record. While the record waits it also shows ONE persistent line
+    in the zone above the editor (`ctx.ui.setWidget`'s `aboveEditor` placement,
+    dim and truncated like Pi's `Steering:` row); that line is cleared on the
+    dispatch and on every terminal outcome, so it never outlives the queue and
+    never claims a move. An executing tool comes from the host's
+    `tool_execution_start` / `tool_execution_end` pair — an execution with no end
+    yet is executing, only top-level calls are counted (so this package's own
+    `job_list` probe and any nested call never count), and `session_shutdown`
+    clears the counter. Agent tasks come from the presence counters; jobs come
     from the host's `job_list` tool through the same `ctx.tools` +
-    `ctx.executeTool` seam `worktree_create` uses. Only a status field that says
-    `running` or `queued` is active — `exited 0`, `failed 1` and `stopped` are
-    finished — and a missing tool, a failed call or an unknown answer is
-    UNKNOWN, which blocks nothing and is never reported as "no jobs".
+    `ctx.executeTool` seam `worktree_create` uses. Only a status field of a job
+    that says `running` or `queued` is active — `exited 0`, `failed 1` and
+    `stopped` are finished — and a missing tool, a failed call or an unknown
+    answer is UNKNOWN, which blocks nothing and is never reported as "no jobs".
 
 ## Commits and pull requests
 

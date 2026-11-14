@@ -3593,7 +3593,6 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
       { name, alreadyThere: false, cancelled: false },
     );
   }
-  await ctx.waitForIdle();
   const fromCwd = typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
   // S21: the same awaited preflight reads as the tool, so a slow repository
   // never freezes the session that is being moved.
@@ -3811,6 +3810,13 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
       stillQueued: true,
     };
   }
+  // The host's own idle wait belongs to the MOVE, never to the request: Pi runs
+  // an extension command the moment it is typed, even while the agent is
+  // streaming, so a warp requested mid-turn must ask its question, read the
+  // counters and QUEUE before anything waits — otherwise the wait parks the
+  // whole request until the turn ends and the human sees the question only at
+  // idle, with no steering row in between.
+  await ctx.waitForIdle();
   // A handoff copy that has landed in the destination is REAL state. It is never
   // rolled back automatically — deleting or reverting files nobody authorized us
   // to touch is exactly the destructive guess this path refuses — so every

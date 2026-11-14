@@ -2160,6 +2160,46 @@ async function warpHandoffCopyChanges({ git, fromCheckout, targetCwd, changes })
   return { ok: true, copied };
 }
 
+// S9 (warp-queue-boundary): a refusal that PROVES nothing landed. The copy helper
+// ends every one of those with `(nothing was copied)` — a plan-time refusal, a
+// path it cannot prove identical, an overlap it will not overwrite, an
+// apply-time failure before anything was written — and the destination is
+// therefore untouched, which is what makes moving on safe. A copy that landed
+// ANY file says so instead (`N of M files already copied`), and a thrown copy
+// says nothing about the state at all: neither is read as this case.
+const WARP_COPY_NOTHING_LANDED = /nothing was copied/;
+const WARP_COPY_PARTIAL = /already copied/;
+function warpCopyRefusedWithoutWriting(gate) {
+  if (!gate || typeof gate.error !== 'string') return false;
+  if (WARP_COPY_PARTIAL.test(gate.error)) return false;
+  return WARP_COPY_NOTHING_LANDED.test(gate.error);
+}
+
+// The ONE disclosure line of a refused carry-copy (S9): which copies could not
+// be carried, and the two facts that follow — nothing was overwritten, and the
+// move happened without them. One line, never a second paragraph.
+function warpCopyRefusedText(files) {
+  const summary = warpCopyFilesSummary(files);
+  const what = summary.count > 0
+    ? `${summary.line} could not be carried`
+    : 'the requested changes could not be carried';
+  return `changes not copied: ${what} (the destination refused them); nothing was overwritten`;
+}
+
+// The moved result carries that line, and a command front — which never prints a
+// result — says it once, so the human learns what the move left behind. Never
+// throws, and never prints anything for a move that carries it in its details.
+function notifyWarpCopyRefused(notify, out) {
+  if (typeof notify !== 'function' || !out || out.isError === true) return;
+  const line = out.details && typeof out.details.copyRefused === 'string' ? out.details.copyRefused : null;
+  if (line === null || line.length === 0) return;
+  try {
+    notify(line, 'info');
+  } catch {
+    // A dead UI never fails a move that already happened.
+  }
+}
+
 // One side of the proof: what this process can actually observe at a path.
 // 'missing' is ENOENT and NOTHING else — a permission error, an I/O error, a
 // symlink or any non-regular file reads as 'failed', because a failed read is not
@@ -2398,8 +2438,8 @@ function encodeWarpHandoff(request) {
 function prepareWarpHandoff(request) {
   const encoded = encodeWarpHandoff(request);
   if (!encoded.ok) return encoded;
-  // Round-trip through the command's own decoder: the tool may only claim
-  // "handoff queued" for a token the command will actually accept.
+  // Round-trip through the command's own decoder: the front may only claim the
+  // warp is queued for a token the command will actually accept.
   const decoded = decodeWarpHandoff(encoded.token);
   if (!decoded.ok) {
     return { ok: false, error: 'the warp handoff could not be verified; nothing was queued' };
@@ -2912,17 +2952,20 @@ async function warpSessionActivityById(sessionId, host) {
   }
 }
 
-// S5: the queue texts come from the module that produced the counters, so the
-// command notice and the expiry notice cannot drift apart. A missing module
-// falls back to the same sentences.
-function warpQueuedText(activity) {
+// S3/S4 (warp-queue-boundary): the ONE line a queued warp says, anywhere a human
+// reads it — the row above the editor, the transcript line, the notice — is one
+// brief sentence, exactly like Pi's `Steering:` row. It comes from the module
+// that produced the counters, so the row and the notice cannot drift apart, and
+// a missing module falls back to the same sentence.
+function warpQueuedText(name, activity) {
   try {
     const lib = libRequire("worktree-warp-busy.js");
-    if (lib && typeof lib.queuedText === "function") return lib.queuedText(activity);
+    if (lib && typeof lib.queuedText === "function") return lib.queuedText(name, activity);
+    if (lib && typeof lib.pendingSteeringLine === "function") return lib.pendingSteeringLine(name, activity);
   } catch {
     // fall through to the fixed sentence
   }
-  return "handoff queued — waiting for this session's tools, agent tasks and background jobs before the move";
+  return `Queued: warp ${typeof name === "string" && name.length > 0 ? name : "that checkout"} — waiting for this session's tools, agent tasks and background jobs`;
 }
 
 // S9 (warp-idle-gate): the ONE persistent row of a queued warp. It reaches the
@@ -2934,6 +2977,12 @@ function warpQueuedText(activity) {
 // job, and the row never claims the move happened.
 const WARP_STEERING_KEY = "odd-worktree-warp";
 const WARP_STEERING_PLACEMENT = "aboveEditor";
+// S5 (warp-queue-boundary): the durable fallback. A host that cannot paint the
+// zone above the editor (`ctx.ui.setWidget` absent or throwing) gets ONE fixed
+// transcript entry — the same shape Pi uses for its own `restored N messages`
+// line — carrying the same one-line text, painted once per record and never a
+// second line per poll.
+const WARP_QUEUE_ENTRY_TYPE = "odd-worktree-warp-queue";
 
 // One line, cut to the terminal width: the row is one row by contract, so a
 // narrow terminal loses the tail (with an ellipsis) instead of wrapping into
@@ -2975,18 +3024,67 @@ function warpSteeringWidget(line) {
 // the command context around it — because a pending record can live for half an
 // hour and must not pin a context it no longer runs in. An empty line clears the
 // widget, which the host removes without leaving a blank row behind.
+//
+// S5 (warp-queue-boundary): when this host offers no such seam, or the seam
+// throws, the record falls back to ONE durable transcript entry instead of the
+// row. The latch is per call — one painter per pending record — so the entry is
+// appended once for the record, never once per poll, and the durable line can
+// never be withdrawn (a record's terminal outcome clears the ROW only).
 function warpSteeringPainter(ctx) {
+  let ui = null;
   try {
-    const ui = ctx && ctx.ui && typeof ctx.ui.setWidget === "function" ? ctx.ui : null;
-    if (ui === null) return null;
-    const setWidget = ui.setWidget;
-    return (line) => {
-      const content = typeof line === "string" && line.length > 0 ? warpSteeringWidget(line) : undefined;
-      setWidget.call(ui, WARP_STEERING_KEY, content, { placement: WARP_STEERING_PLACEMENT });
-    };
+    ui = ctx && ctx.ui && typeof ctx.ui.setWidget === "function" ? ctx.ui : null;
   } catch {
-    return null;
+    ui = null;
   }
+  const setWidget = ui !== null ? ui.setWidget : null;
+  let fellBack = false;
+  // S8 (warp-queue-boundary): the painter answers whether a surface ACTUALLY took
+  // the line, so the queued answer never repeats a sentence the human can already
+  // see. `true` means the row above the editor (or the one durable fallback
+  // entry) is showing it; `false` means this request has no surface at all.
+  return (line) => {
+    const text = typeof line === "string" && line.length > 0 ? line : null;
+    if (ui === null) {
+      if (text === null) return false;
+      if (!fellBack) fellBack = warpAppendQueueEntry(text);
+      return fellBack === true;
+    }
+    try {
+      const content = text !== null ? warpSteeringWidget(text) : undefined;
+      setWidget.call(ui, WARP_STEERING_KEY, content, { placement: WARP_STEERING_PLACEMENT });
+      return text !== null;
+    } catch {
+      // A host that cannot paint here gets the durable entry below instead.
+    }
+    if (text === null) return false;
+    if (!fellBack) fellBack = warpAppendQueueEntry(text);
+    return fellBack === true;
+  };
+}
+
+// The one durable line: `pi.appendEntry` plus the entry renderer registered at
+// load. A host without the seam, or one that throws, simply shows nothing — the
+// queue itself never depends on presentation.
+function warpAppendQueueEntry(line) {
+  const pi = warpHandoffPi;
+  if (!pi || typeof pi.appendEntry !== "function") return false;
+  try {
+    pi.appendEntry(WARP_QUEUE_ENTRY_TYPE, { line: String(line) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The entry renderer that makes the fallback one plain, dim, width-cut line —
+// the same component the row uses, so the two surfaces cannot look different.
+function registerWarpQueueEntryRenderer(pi) {
+  if (typeof pi?.registerEntryRenderer !== "function") return;
+  pi.registerEntryRenderer(WARP_QUEUE_ENTRY_TYPE, (entry, _options, theme) => {
+    const line = entry && entry.data && typeof entry.data.line === "string" ? entry.data.line : "";
+    return warpSteeringWidget(line)(null, theme);
+  });
 }
 
 // S10: the in-flight tool counter. The host emits `tool_execution_start` /
@@ -3017,18 +3115,6 @@ function forgetInFlightWarpTools() {
   } catch {
     // A shutdown never fails on bookkeeping.
   }
-}
-
-// The one line a queued answer adds when, and only when, the job state was
-// unreadable. An empty string means both workloads were seen.
-function warpJobsUnknownText(activity) {
-  try {
-    const lib = libRequire("worktree-warp-busy.js");
-    if (lib && typeof lib.jobsUnknownText === "function") return lib.jobsUnknownText(activity);
-  } catch {
-    // fall through to the fixed sentence
-  }
-  return "";
 }
 
 function warpPendingRefusalText(pending, requestedName) {
@@ -3105,8 +3191,13 @@ function warpQueuePending({ ctx, fromCwd, name, prepared, activity }) {
   const ui = ctx && ctx.ui && typeof ctx.ui.notify === "function" ? ctx.ui : null;
   // The persistent row (S9) is the same context's `setWidget`, bound once: the
   // queue paints it on every state change and clears it on every terminal
-  // outcome. A host without the seam queues exactly as before.
+  // outcome. A host without the seam queues exactly as before, and falls back to
+  // one durable transcript entry (S5, warp-queue-boundary).
   const paint = warpSteeringPainter(ctx);
+  // S2 (warp-queue-boundary): the host's own idle state travels WITH the record,
+  // so a dispatch is only ever attempted into an idle host. Only the bound seam
+  // is captured; an absent, throwing or unknown answer blocks nothing.
+  const isIdle = warpIdleSeam(ctx);
   try {
     return lib.queuePendingWarp({
       key,
@@ -3116,6 +3207,7 @@ function warpQueuePending({ ctx, fromCwd, name, prepared, activity }) {
       activity: activity || null,
       env: process.env,
       host,
+      isIdle,
       read: () => warpSessionActivityById(sessionId, host),
       dispatch: (queuedHandoff) => {
         const reprepared = prepareWarpHandoff(queuedHandoff);
@@ -3180,6 +3272,19 @@ function warpHostIdle(ctx) {
     // An unreadable host state blocks nothing.
   }
   return null;
+}
+
+// S2 (warp-queue-boundary): that read as a SEAM the pending record holds, so the
+// poller can ask the host whether it is idle before every dispatch instead of
+// only at request time. `null` when this host offers no such seam: the queue then
+// behaves exactly as it does with any other unknown source and blocks nothing.
+function warpIdleSeam(ctx) {
+  try {
+    if (!ctx || typeof ctx.isIdle !== "function") return null;
+  } catch {
+    return null;
+  }
+  return () => warpHostIdle(ctx);
 }
 
 // The COMMAND front's counters, read ONCE as they are (S2, warp-queue-order):
@@ -3468,7 +3573,16 @@ async function askWarpDirtyChoice(ctx, summaryLine, opts) {
         out = await ctx.ui.custom(
           (hostTui, theme, _keybindings, done) => pickerLib.createSingleSelect({
             title: `Uncommitted changes: ${summaryLine}. Copy to the destination checkout?`,
-            items: ['YES COPY', 'NO COPY'],
+            // S11 (T8, warp-queue-boundary): the ONE question that writes files
+            // into another checkout opens on the NON-destructive answer (`NO
+            // COPY`) and drops every input event inside a short grace window, so
+            // a buffered or double-tapped Enter — the one that submitted the
+            // command, or one meant for a queued message — cannot answer a
+            // question the human never saw. Both fronts that ask it (the /warp
+            // front and the create flow) reach THIS ONE mount, so the wiring
+            // lives in the picker lib and is read, never restated here. The
+            // visible item order is unchanged.
+            ...pickerLib.copyQuestionOptions(),
             helpers,
             hostTui,
             theme,
@@ -3779,19 +3893,16 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
       return warpFail(`worktree warp: ${queuedHandoff.error}`, { name, alreadyThere: false, cancelled: false });
     }
     const queued = warpQueuePending({ ctx, fromCwd, name: displayName, prepared: queuedHandoff, activity: sessionLoad });
-    // Both workloads are named in the queue text; the extra line appears only
-    // when the job state could not be read at all.
-    const queuedJobsNote = warpJobsUnknownText(sessionLoad);
-    const queuedLines = [
-      `worktree warp: ${warpQueuedText(sessionLoad)}`,
-      ...(queuedJobsNote.length > 0 ? [`queue: ${queuedJobsNote}`] : []),
-    ];
+    // S3/S4 (warp-queue-boundary): ONE brief sentence, exactly the row above the
+    // editor — no `queue:` caveat row, no `;`-joined notice, no path dump. The
+    // unknown-job disclosure lives in the expiry notice alone.
+    const queuedLine = warpQueuedText(displayName, sessionLoad);
     if (!queued.ok && queued.pending) {
       // This IS the pending retry and the workloads filled up again: keep the
       // queue (the wrapper resumes its poller) instead of refusing our own move.
       if (retry === true) {
         return {
-          text: queuedLines.join("\n"),
+          text: queuedLine,
           details: {
             name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind,
             alreadyThere: false, cancelled: false, busy: true, queued: true, pending: true,
@@ -3809,25 +3920,21 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
         { name, alreadyThere: false, cancelled: false, busy: true },
       );
     }
-    // A human front is told ONCE that the request is queued (a handoff already
-    // reported itself in the tool result); the queue's own notice covers expiry
-    // later. The retry says nothing, so one queued warp makes one notice.
-    if (!handoff && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
+    // S8 (warp-queue-boundary): ONE surface per request. The row above the editor
+    // — or its one durable fallback entry — already carries this sentence, so a
+    // request whose line was shown prints nothing here: no second copy in the
+    // chat. Only a host with no surface at all (no row, no entry) gets the one
+    // notice, because otherwise the human would never learn the request is
+    // queued. The result object still carries the line either way.
+    if (!handoff && queued.painted !== true && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
       try {
-        ctx.ui.notify(queuedLines.join("; "), "info");
+        ctx.ui.notify(queuedLine, "info");
       } catch {
         // A dead UI never fails the queue.
       }
     }
-    const queuedChangesNote = queuedChanges && queuedChanges.mode === "all"
-      ? "\nchanges: all (copied when the move lands)"
-      : queuedChanges && queuedChanges.mode === "paths"
-        ? `\nchanges: ${queuedChanges.paths.length} file${queuedChanges.paths.length === 1 ? "" : "s"} (copied when the move lands)`
-        : "";
     return {
-      text: `worktree warp: ${warpQueuedText(sessionLoad)}\n`
-        + `to: ${warpClean(displayName, "worktree")}${queuedChangesNote}`
-        + (queuedJobsNote.length > 0 ? `\nqueue: ${queuedJobsNote}` : ""),
+      text: queuedLine,
       details: {
         name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind,
         alreadyThere: false, cancelled: false, busy: true, queued: true, pending: true,
@@ -3850,13 +3957,23 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
   // `skipped` marks the retry that PROVED the destination already holds exactly
   // those bytes, so the wording says "already holds" instead of "copied now".
   let handoffCopy = null;
+  // S9 (warp-queue-boundary): a handoff copy the destination REFUSED without
+  // writing anything. The move goes ahead without it, so this holds the one line
+  // that says what could not be carried — never an error, never a second
+  // paragraph.
+  let copyRefused = null;
   const handoffCopyDetails = () => (handoffCopy
     ? {
       copyDestination: targetCwd,
       copiedFiles: (handoffCopy.copied || []).slice(),
       ...(handoffCopy.skipped === true ? { copyAlreadyPresent: true } : {}),
     }
-    : {});
+    : copyRefused
+      ? { copyDestination: targetCwd, copiedFiles: [], copyRefused: copyRefused.line }
+      : {});
+  // What the moved result says: the move's own compact, plus the one disclosure
+  // line when the carry-copy never happened. One line, no log.
+  const movedText = (text) => (copyRefused ? `${text}\n${copyRefused.line}` : text);
   const handoffCopyLanding = () => {
     const summary = warpCopyFilesSummary(handoffCopy && handoffCopy.copied);
     return handoffCopy && handoffCopy.skipped === true
@@ -3896,13 +4013,29 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
       // The copy refused. One benign cause: an EARLIER attempt already copied
       // exactly this content and the move failed afterwards (the host cancelled
       // or threw the switch). Prove that state byte for byte and skip the copy
-      // only then; otherwise fail closed with the concrete recovery, never
-      // guessing and never overwriting what the destination holds.
+      // only then. One refusal is not a failure at all (S9, warp-queue-boundary):
+      // the one that proves nothing landed, because the destination is then
+      // untouched and the human asked to move. Everything else fails closed with
+      // the concrete recovery, never guessing and never overwriting what the
+      // destination holds.
       const proof = await warpHandoffCopyAlreadyApplied({
         git, fromCheckout: dirtyFrom, targetCwd, changes: handoff.changes,
       });
       if (proof.ok === true && proof.applied === true) {
         handoffCopy = { copied: proof.identical.slice(), skipped: true };
+      } else if (warpCopyRefusedWithoutWriting(copyGate)) {
+        // S9 (warp-queue-boundary): the copy refused and PROVED nothing landed —
+        // the destination is untouched, so moving on is always safe. The human
+        // asked to move, so the move happens WITHOUT the copy, overwriting
+        // nothing, and says so in one line naming the copies it could not carry.
+        // A refusal is disclosed, never silently dropped and never turned into a
+        // failed warp. A copy that DID land anything is the next branches' hard
+        // failure, because that is real state.
+        copyRefused = {
+          line: warpCopyRefusedText(proof.ok === true
+            ? [...proof.identical, ...proof.differing, ...proof.unreadable]
+            : []),
+        };
       } else if (proof.ok === true) {
         // Nothing was proven byte for byte, so the copy is NOT skipped. The
         // message says what the destination actually holds — and, separately,
@@ -4281,7 +4414,7 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
     );
     emitOsc7(options.oscStream || process.stdout, targetCwd);
     return {
-      text: sessionEmpty ? warpEmptyText(name, targetCwd) : moveText,
+      text: movedText(sessionEmpty ? warpEmptyText(name, targetCwd) : moveText),
       details: {
         name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind,
         alreadyThere: false, cancelled: false,
@@ -4385,7 +4518,7 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
     }
     emitOsc7(options.oscStream || process.stdout, targetCwd);
     return {
-      text: warpEmptyText(name, targetCwd),
+      text: movedText(warpEmptyText(name, targetCwd)),
       details: {
         name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind,
         alreadyThere: false, cancelled: false, emptySession: true, ...handoffCopyDetails(),
@@ -4571,7 +4704,7 @@ async function performWorktreeWarp(rawName, ctx, opts, retry) {
   // helper writes nothing unless the stream is a TTY.
   emitOsc7(options.oscStream || process.stdout, targetCwd);
   return {
-    text: moveText,
+    text: movedText(moveText),
     details: { name: displayName, path: targetCwd, branch: displayBranch, kind: resolved.kind, alreadyThere: false, cancelled: false, ...handoffCopyDetails() },
   };
 }
@@ -5806,6 +5939,7 @@ async function runWarpSelectorLoop(ctx, git, registry, repo, fromCwd, notify) {
       createDirtyName = null;
       const warpOut = await executeWorktreeWarp(chosen.name, ctx, warpOptions);
       if (warpOut.isError) notify?.(warpOut.text, "error");
+      else notifyWarpCopyRefused(notify, warpOut);
       return undefined;
     }
     if (out && typeof out === "object" && out.create === true) {
@@ -5888,6 +6022,7 @@ function registerWarpCommand(pi) {
         }
         const moved = await executeWorktreeWarp(decoded.request.name, ctx, { handoff: decoded.request });
         if (moved && moved.isError) notify?.(moved.text, "error");
+        else notifyWarpCopyRefused(notify, moved);
         return;
       }
       // An explicit name skips the selector: the scripted path, reusing
@@ -5905,8 +6040,12 @@ function registerWarpCommand(pi) {
         // command stays silent on success. Already-there warps emit NOTHING
         // (R1: the session is already where it was asked to go); refusals
         // and cancellations send no card, so only failures still notify here.
+        // S9 (warp-queue-boundary): a move that left the requested copy behind
+        // says so once — the result text is the card's compact, not a notice.
         if (out.isError) {
           notify?.(out.text, "error");
+        } else {
+          notifyWarpCopyRefused(notify, out);
         }
         return;
       }
@@ -5997,9 +6136,12 @@ function registerWarpCommand(pi) {
       const out = await executeWorktreeWarp(chosen.name, ctx);
       // S20 + R1: same single-confirmation rule as the explicit path above:
       // success stays silent (the card is the confirmation), already-there
-      // stays silent, only failures notify.
+      // stays silent, only failures notify. S9: a refused carry-copy is
+      // disclosed in one line, because the move did happen without it.
       if (out.isError) {
         notify?.(out.text, "error");
+      } else {
+        notifyWarpCopyRefused(notify, out);
       }
     },
   });
@@ -6856,6 +6998,10 @@ export default function (pi) {
   // moves the session, so the command is where a handoff waits and lands.
   warpHandoffPi = pi;
   registerWarpMessageRenderer(pi);
+  // S5 (warp-queue-boundary): the durable fallback of the queued line needs a
+  // renderer for its own entry type, exactly like Pi's `restored N messages`
+  // line. A host without the seam simply never shows the fallback.
+  registerWarpQueueEntryRenderer(pi);
   registerWarpCommand(pi);
   registerOddCommand(pi);
   registerIssuesCommand(pi);
@@ -6895,6 +7041,39 @@ export default function (pi) {
   // EVERY tool of the session, not only this package's.
   pi.on("tool_execution_start", (event) => warpNoteToolExecution(event, false));
   pi.on("tool_execution_end", (event) => warpNoteToolExecution(event, true));
+  // S1/S13/S17 (warp-queue-boundary): the turn boundary. Pi delivers a queued
+  // input at the end of the current assistant turn, after its tool calls and
+  // before the next model call; a pending warp takes effect at that SAME
+  // boundary. When the run itself is the only thing still blocking a pending
+  // record AND the turn that just ended executed tools, the module ends the run
+  // through `ctx.abort()`, ONCE, so the move lands where a queued input would.
+  // Nothing is ever sent to the agent: an instruction to a model can be ignored —
+  // a text-only answer follows it and no later boundary exists for a safety net —
+  // while the abort is deterministic. A turn that executed no tool result is the
+  // agent's final answer: the run settles on its own, and the boundary aborts
+  // nothing. A record with real workload pending aborts nothing either, and the
+  // handler never returns a boundary proposal (the `entries` and `continue`
+  // fields stay exactly as the host proposed them).
+  //
+  // S13 (warp-queue-boundary): the abort must land BETWEEN provider requests, so
+  // the module decides SYNCHRONOUSLY here — before it awaits anything — from the
+  // record's last sampled activity and the event's own tool evidence, and only an
+  // absent or stale sample falls back to an awaited re-read. Ending the run after
+  // a read is what cut an assistant message that carried tool calls and repainted
+  // every one of them as a failed `Operation aborted` result. Nothing in this
+  // handler may await before that decision: `ctx.abort()` fires inside the call
+  // below, in the same synchronous stretch as the host's `turn_end`.
+  pi.on("turn_end", async (event, ctx) => {
+    try {
+      const lib = libRequire("worktree-warp-busy.js");
+      if (!lib || typeof lib.pendingWarpTurnBoundary !== "function") return;
+      const abort = ctx && typeof ctx.abort === "function" ? () => { ctx.abort(); } : null;
+      const sawTools = Array.isArray(event?.toolResults) && event.toolResults.length > 0;
+      await lib.pendingWarpTurnBoundary({ abort, sawTools });
+    } catch {
+      // A turn boundary must never break the host.
+    }
+  });
   // S3 (warp-settle-dispatch): the settle boundary. An `agent_settled` handler
   // ticks every pending record once, so a queued warp starts as soon as Pi
   // settles — the counters were already zero while the assistant was thinking,

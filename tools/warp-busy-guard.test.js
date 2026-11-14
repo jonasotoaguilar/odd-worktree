@@ -78,6 +78,10 @@ afterEach(() => {
   // must not leak an execution into the test after it.
   busyLib.forgetInFlightTools();
   widgetPaints.length = 0;
+  appendedEntries.length = 0;
+  // S17: the boundary sends the agent nothing, so the message recorder is shared
+  // by the whole file and every boundary test asserts it stays empty.
+  if (host && Array.isArray(host.steered)) host.steered.length = 0;
   // The pending-changes question is a module seam shared by the whole file: a
   // failed test must not leave its asker behind for the tests after it.
   if (mod && typeof mod.setWarpDirtyAsker === 'function') mod.setWarpDirtyAsker(null);
@@ -166,6 +170,30 @@ function portedDestination(repo, odd) {
 const widgetPaints = [];
 const WIDGET_KEY = 'odd-worktree-warp';
 const WIDGET_DIM = (text) => `\u001b[2m${text}\u001b[0m`;
+// S5 (warp-queue-boundary): the durable fallback of the queued line reaches the
+// transcript through `pi.appendEntry`, rendered by the entry renderer the
+// extension registered for its own customType. Both are recorded from the same
+// load, so a test can read the appended entries and draw them exactly as the
+// host would.
+let appendedEntries = [];
+let entryRenderers = null;
+
+// The rows the fallback entry renders at `width`, or null when nothing was
+// appended. This is the one fixed transcript line, read through the renderer the
+// extension registered — never through module internals.
+function fallbackLines(width = 200) {
+  const entry = appendedEntries.length > 0 ? appendedEntries[appendedEntries.length - 1] : null;
+  if (entry === null || entryRenderers === null) return null;
+  const renderer = entryRenderers.get(entry.customType);
+  if (typeof renderer !== 'function') return null;
+  const theme = { fg: (role, text) => (role === 'dim' ? WIDGET_DIM(text) : text) };
+  const component = renderer(
+    { type: 'custom', id: 'entry-1', customType: entry.customType, data: entry.data },
+    { expanded: false },
+    theme,
+  );
+  return component.render(width);
+}
 
 function widgetPaintsFor(ctx) {
   return widgetPaints.filter((entry) => entry.ctx === ctx);
@@ -180,6 +208,27 @@ function widgetState(ctx, width = 200) {
   const theme = { fg: (role, text) => (role === 'dim' ? WIDGET_DIM(text) : text) };
   const component = last.content({}, theme);
   return { paints: paints.length, lines: component.render(width), last };
+}
+
+// S8 (warp-queue-boundary): the queue speaks through ONE surface per request.
+// `queuedNotices()` is every notice that repeats the queued sentence — a second
+// copy in the chat — and `queuedSurface(ctx)` is the line the human was actually
+// shown: the fixed row above the editor, or the durable fallback entry when the
+// host offers no paintable row. A request whose line was shown adds no notice.
+function queuedNotices() {
+  return notifications.filter(([, text]) => /^Queued: warp /.test(String(text)));
+}
+
+function plainLine(line) {
+  return String(line).replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+function queuedSurface(ctx, width = 200) {
+  const row = widgetState(ctx, width).lines;
+  if (row !== null) return row.map(plainLine);
+  const entry = fallbackLines(width);
+  if (entry === null) return null;
+  return entry.map(plainLine);
 }
 
 function makeCtx(cwd, extra = {}) {
@@ -286,14 +335,24 @@ before(async () => {
   process.env.ODD_WORKTREE_WARP_PENDING_MS = '600000';
   process.env.ODD_WORKTREE_WARP_PENDING_POLL_MS = '60000';
   const sent = [];
-  const loaded = await loadStubbedModule({ sendUserMessage: (text, options) => { sent.push([text, options]); } });
+  // S17 (warp-queue-boundary): the turn boundary must never message the agent, so
+  // `pi.sendMessage` is recorded exactly as the host would receive it and every
+  // boundary test asserts the recorder stays empty.
+  const steered = [];
+  const loaded = await loadStubbedModule({
+    sendUserMessage: (text, options) => { sent.push([text, options]); },
+    sendMessage: (message, options) => { steered.push([message, options]); },
+  });
   host = loaded.host;
   host.sent = sent;
+  host.steered = steered;
   commands = loaded.commands;
   tools = loaded.tools;
   hooks = loaded.hooks;
   mod = loaded.mod;
   busyLib = mod.libModule('worktree-warp-busy.js');
+  appendedEntries = loaded.entries;
+  entryRenderers = loaded.entryRenderers;
 });
 
 // The registration surface AND the extension's own exported seams, from ONE load:
@@ -309,16 +368,28 @@ async function loadStubbedModule(pi) {
     const mod = await import(pathToFileURL(copy).href);
     const localCommands = new Map();
     const localTools = new Map();
+    const localEntryRenderers = new Map();
+    const localEntries = [];
     const localHooks = [];
     const host = {
       registerCommand: (name, handler) => { localCommands.set(name, handler); },
       registerTool: (tool) => { localTools.set(tool.name, tool); },
       registerMessageRenderer: () => {},
+      registerEntryRenderer: (type, renderer) => { localEntryRenderers.set(type, renderer); },
+      appendEntry: (customType, data) => { localEntries.push({ customType, data }); },
       on: (event, handler) => { localHooks.push([event, handler]); },
       ...pi,
     };
     mod.default(host);
-    return { mod, commands: localCommands, tools: localTools, hooks: localHooks, host };
+    return {
+      mod,
+      commands: localCommands,
+      tools: localTools,
+      hooks: localHooks,
+      entries: localEntries,
+      entryRenderers: localEntryRenderers,
+      host,
+    };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -376,19 +447,41 @@ describe('lib/worktree-warp-busy.js', () => {
     assert.equal(activity.busy, false);
   });
 
-  test('the queue texts name both workloads and no longer disclaim jobs', () => {
+  test('the queued sentence is one brief line, and the caveat lives in the expiry', () => {
     assert.equal(
-      busyLib.queuedText({ running: 2, queued: 1, jobs: { active: 1, status: 'ok' } }),
-      'handoff queued — waiting for 2 running agent task(s) and 1 queued agent task(s) and 1 running background job before the move',
+      busyLib.queuedText('feat-x', { running: 2, queued: 1, jobs: { active: 1, status: 'ok' } }),
+      'Queued: warp feat-x — waiting for 2 running agent task(s) and 1 queued agent task(s) and 1 running background job',
     );
     assert.equal(
-      busyLib.queuedText({ running: 0, queued: 0, jobs: { active: 2, status: 'ok' } }),
-      'handoff queued — waiting for 2 running background jobs before the move',
+      busyLib.queuedText('feat-x', { running: 0, queued: 0, jobs: { active: 2, status: 'ok' } }),
+      'Queued: warp feat-x — waiting for 2 running background jobs',
     );
-    assert.equal(busyLib.queuedText({ running: 1, jobs: { active: 0, status: 'ok' } }), 'handoff queued — waiting for 1 running agent task(s) before the move');
-    // The old disclaimer is gone now that jobs are covered.
-    assert.equal(/not observable/.test(busyLib.queuedText({ running: 1, jobs: { active: 0, status: 'ok' } })), false);
+    assert.equal(
+      busyLib.queuedText('feat-x', { running: 1, jobs: { active: 0, status: 'ok' } }),
+      'Queued: warp feat-x — waiting for 1 running agent task(s)',
+    );
+    // S4 (warp-queue-boundary): the queued answer IS the row, so the two
+    // surfaces can never describe different work or different state.
+    for (const activity of [
+      { running: 1, jobs: { active: 1, status: 'ok' } },
+      { running: 0, jobs: { active: 0, status: 'ok' }, tools: { inFlight: 2 } },
+      { host: { idle: false } },
+      null,
+    ]) {
+      assert.equal(busyLib.queuedText('feat-x', activity), busyLib.pendingSteeringLine('feat-x', activity));
+    }
+    // The old disclaimer is gone, and so is every second sentence: the queued
+    // line never carries the unknown-job clause, a caveat row or a `;` join.
+    assert.equal(/not observable/.test(busyLib.queuedText('feat-x', { running: 1, jobs: { active: 0, status: 'ok' } })), false);
     assert.equal(/not observable/.test(busyLib.expiredText('feat-x', 30)), false);
+    assert.equal(/\n/.test(busyLib.queuedText('feat-x', { running: 1 })), false, 'one line, never a second');
+    for (const unknown of ['unknown', busyLib.JOB_LIST_TOOL, 'bash_background']) {
+      assert.equal(
+        busyLib.queuedText('feat-x', { running: 1, jobs: { status: 'unavailable' } }).includes(unknown),
+        false,
+        `${unknown} belongs to the expiry notice, never the queued line`,
+      );
+    }
 
     assert.equal(busyLib.jobsUnknownText({ jobs: { status: 'ok', active: 0 } }), '', 'a readable job list needs no caveat');
     assert.match(
@@ -580,8 +673,8 @@ describe('lib/worktree-warp-busy.js', () => {
     assert.equal(running.tools.inFlight, 1);
     assert.equal(running.busy, true, 'a tool still executing makes the session busy');
     assert.equal(
-      busyLib.queuedText(running),
-      'handoff queued — waiting for 1 tool still executing before the move',
+      busyLib.queuedText('feat-x', running),
+      'Queued: warp feat-x — waiting for 1 tool still executing',
     );
 
     // A second tool is counted too, and only its own end releases it.
@@ -795,7 +888,7 @@ describe('lib/worktree-warp-busy.js', () => {
 // the command handler).
 // ---------------------------------------------------------------------------
 describe('/warp queues while this session has tools, agent tasks or jobs', () => {
-  test('a busy session gets the queued wording naming the work and the jobs caveat', async () => {
+  test('a busy session gets ONE brief queued line and no jobs caveat', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
     const created = await tools.get('worktree_create').execute('busy-1', { branch: 'feat/busy', odd: 'busy' }, undefined, undefined, ctx);
@@ -811,14 +904,16 @@ describe('/warp queues while this session has tools, agent tasks or jobs', () =>
 
     assert.equal(switches.length, 0, 'the session must not move under running work');
     assert.equal(host.sent.length, 0, 'the command front re-dispatches later, not now');
-    const queued = notifications.find(([level]) => level === 'info');
-    assert.ok(queued, JSON.stringify(notifications));
-    assert.match(queued[1], /^worktree warp: handoff queued — waiting for 1 running agent task\(s\) before the move/);
-    assert.match(
-      queued[1],
-      /queue: the background-job state is unknown \(job_list is not available on this host\), so confirm any bash_background or monitor job finished$/,
-    );
-    assert.equal(/not observable/.test(queued[1]), false, 'nothing claims jobs are invisible');
+    // S8 (warp-queue-boundary): the row is the ONE surface, so the chat holds no
+    // second copy of the same sentence.
+    assert.deepEqual(queuedNotices(), [], JSON.stringify(notifications));
+    assert.deepEqual(queuedSurface(ctx), ['Queued: warp feat-busy — waiting for 1 running agent task(s)']);
+    const queued = queuedSurface(ctx)[0];
+    // S3/S4 (warp-queue-boundary): an unreadable job state adds no caveat row to
+    // the queued line — it is disclosed by the expiry notice alone — and nothing
+    // claims jobs are invisible.
+    assert.equal(/unknown|job_list|bash_background|monitor|queue:/.test(queued), false, 'the queued line carries no caveat');
+    assert.equal(/not observable/.test(queued), false, 'nothing claims jobs are invisible');
     assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, 'the request is kept pending');
     settlePending();
   });
@@ -833,11 +928,8 @@ describe('/warp queues while this session has tools, agent tasks or jobs', () =>
     notifications.length = 0;
     await commands.get('warp').handler('feat-queued', ctx);
     assert.equal(switches.length, 0, 'queued counters are work the move must wait for');
-    assert.equal(
-      notifications.filter(([level, text]) => level === 'info' && /waiting for 2 queued agent task\(s\) before the move/.test(String(text))).length,
-      1,
-      JSON.stringify(notifications),
-    );
+    assert.deepEqual(queuedNotices(), [], JSON.stringify(notifications));
+    assert.deepEqual(queuedSurface(ctx), ['Queued: warp feat-queued — waiting for 2 queued agent task(s)']);
     settlePending();
 
     publishSession({ running: 0, queued: 0, waiting: 4, finished: 9 });
@@ -863,11 +955,8 @@ describe('/warp queues while this session has tools, agent tasks or jobs', () =>
     await commands.get('warp').handler('feat-jobs', ctx);
 
     assert.equal(switches.length, 0, 'a running job holds the move');
-    assert.equal(
-      notifications.filter(([, text]) => /^worktree warp: handoff queued — waiting for 1 running background job before the move/.test(String(text))).length,
-      1,
-      JSON.stringify(notifications),
-    );
+    assert.deepEqual(queuedNotices(), [], JSON.stringify(notifications));
+    assert.deepEqual(queuedSurface(ctx), ['Queued: warp feat-jobs — waiting for 1 running background job']);
     assert.ok(jobs.calls > 0, 'the job list was actually read through the host tool');
     assert.equal(host.sent.length, 0, 'the command front re-dispatches later, not now');
     assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, 'the request is kept pending');
@@ -932,21 +1021,18 @@ describe('/warp queues while this session has tools, agent tasks or jobs', () =>
     addJobs(ctx, [{ id: 'job-7', status: 'queued' }]);
     notifications.length = 0;
     await commands.get('warp').handler('feat-both', ctx);
-    const queued = notifications.find(([, text]) => /handoff queued/.test(String(text)));
-    assert.ok(queued, JSON.stringify(notifications));
-    assert.match(
-      queued[1],
-      /^worktree warp: handoff queued — waiting for 2 running agent task\(s\) and 1 running background job before the move/,
-    );
+    const queued = queuedSurface(ctx);
+    assert.notEqual(queued, null, JSON.stringify(notifications));
+    assert.deepEqual(queued, ['Queued: warp feat-both — waiting for 2 running agent task(s) and 1 running background job']);
     // Both workloads were readable, so nothing disclaims jobs any more.
-    assert.equal(/not observable/.test(queued[1]), false, 'the job disclaimer is gone');
-    assert.equal(/agent-task counters only/.test(queued[1]), false);
-    assert.equal(/queue:/.test(queued[1]), false, 'a readable job list adds no caveat row');
+    assert.equal(/not observable/.test(queued[0]), false, 'the job disclaimer is gone');
+    assert.equal(/agent-task counters only/.test(queued[0]), false);
+    assert.equal(/queue:/.test(queued[0]), false, 'a readable job list adds no caveat row');
     assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null);
     settlePending();
   });
 
-  test('an unavailable, failing or unparsable job list blocks nothing and is disclosed only then', async () => {
+  test('an unavailable, failing or unparsable job list blocks nothing, and only the expiry discloses it', async () => {
     const repo = makeRepo();
     const ctx = makeCtx(repo);
     const created = await tools.get('worktree_create').execute('busy-j6', { branch: 'feat/unknown', odd: 'unknown' }, undefined, undefined, ctx);
@@ -957,10 +1043,11 @@ describe('/warp queues while this session has tools, agent tasks or jobs', () =>
     host.sent.length = 0;
     notifications.length = 0;
     await commands.get('warp').handler('feat-unknown', ctx);
-    const noSeam = notifications.find(([, text]) => /handoff queued/.test(String(text)));
-    assert.ok(noSeam, JSON.stringify(notifications));
-    assert.match(noSeam[1], /waiting for 1 running agent task\(s\) before the move/);
-    assert.match(noSeam[1], /queue: the background-job state is unknown \(job_list is not available on this host\)/);
+    const noSeam = queuedSurface(ctx);
+    assert.notEqual(noSeam, null, JSON.stringify(notifications));
+    // S4 (warp-queue-boundary): the queued line is the one brief sentence, so an
+    // unknown job state adds no caveat row and names no tool at all.
+    assert.deepEqual(noSeam, ['Queued: warp feat-unknown — waiting for 1 running agent task(s)']);
     assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, 'an unavailable job list never blocks the warp');
     settlePending();
 
@@ -968,9 +1055,10 @@ describe('/warp queues while this session has tools, agent tasks or jobs', () =>
       addJobs(ctx, [], mode);
       notifications.length = 0;
       await commands.get('warp').handler('feat-unknown', ctx);
-      const outcome = notifications.find(([, text]) => /handoff queued/.test(String(text)));
-      assert.ok(outcome, `${mode}: ${JSON.stringify(notifications)}`);
-      assert.match(outcome[1], new RegExp(`queue: the background-job state is unknown \\(${reason}\\)`));
+      const outcome = queuedSurface(ctx);
+      assert.notEqual(outcome, null, `${mode}: ${JSON.stringify(notifications)}`);
+      assert.deepEqual(outcome, ['Queued: warp feat-unknown — waiting for 1 running agent task(s)'], `${mode} adds no caveat`);
+      assert.equal(outcome[0].includes(reason), false, `${mode}: the reason belongs to the expiry notice`);
       assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, `a ${mode} job list never blocks the warp`);
       settlePending();
     }
@@ -984,6 +1072,39 @@ describe('/warp queues while this session has tools, agent tasks or jobs', () =>
     await commands.get('warp').handler('feat-unknown', moveCtx);
     assert.equal(switches.length, 1, `an unknown job list blocks nothing (${JSON.stringify(notifications)})`);
     assert.deepEqual(notifications, [], 'nothing claims a queue it did not create');
+  });
+
+  test('the unreadable job state is disclosed by the expiry notice, and nowhere else', async () => {
+    const repo = makeRepo();
+    const ctx = makeCtx(repo);
+    const created = await tools.get('worktree_create').execute('busy-j7', { branch: 'feat/expiry-caveat', odd: 'expiry-caveat' }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    clearPresence();
+    // A tool of this session keeps the warp waiting, and the job list cannot be
+    // read at all: the one state the expiry notice still has to name.
+    ctx.tools = [{ name: 'job_list' }];
+    ctx.executeTool = async () => ({ isError: true, content: [{ type: 'text', text: 'job_list failed' }] });
+    for (const [, handler] of hooks.filter(([name]) => name === 'tool_execution_start')) {
+      await handler({ toolCallId: 'call-caveat-1', toolName: 'bash', args: {} }, ctx);
+    }
+    const previousBudget = process.env.ODD_WORKTREE_WARP_PENDING_MS;
+    process.env.ODD_WORKTREE_WARP_PENDING_MS = '1';
+    notifications.length = 0;
+    try {
+      await commands.get('warp').handler('feat-expiry-caveat', ctx);
+    } finally {
+      process.env.ODD_WORKTREE_WARP_PENDING_MS = previousBudget;
+    }
+    const queued = queuedSurface(ctx);
+    assert.notEqual(queued, null, JSON.stringify(notifications));
+    assert.deepEqual(queued, ['Queued: warp feat-expiry-caveat — waiting for 1 tool still executing']);
+    assert.equal(queued[0].includes('unknown'), false, 'the queued line never carries the caveat');
+
+    const expired = await until(() => notifications.some(([, text]) => /expired .* with nothing moved/.test(String(text))));
+    assert.equal(expired, true, `the queue expired with a notice: ${JSON.stringify(notifications)}`);
+    const [, notice] = notifications.find(([, text]) => /expired .* with nothing moved/.test(String(text)));
+    assert.match(notice, /^worktree warp: the pending warp to feat-expiry-caveat expired after 1 min with nothing moved/);
+    assert.match(notice, /the background-job state is unknown \(job_list failed\)/, 'the expiry still discloses the unreadable job state');
   });
 
   test('a tool executing in this session queues the warp, and the move lands once it ends', async () => {
@@ -1004,10 +1125,10 @@ describe('/warp queues while this session has tools, agent tasks or jobs', () =>
     await commands.get('warp').handler('feat-toolbusy', ctx);
     assert.equal(switches.length, 0, 'the session must not move while a tool executes');
     assert.equal(host.sent.length, 0, 'the command front re-dispatches later, not now');
-    const queued = notifications.find(([, text]) => /handoff queued/.test(String(text)));
-    assert.ok(queued, JSON.stringify(notifications));
-    assert.match(queued[1], /^worktree warp: handoff queued — waiting for 1 tool still executing before the move/);
-    assert.equal(/queue:/.test(queued[1]), false, 'a readable empty job list adds no caveat row');
+    const queued = queuedSurface(ctx);
+    assert.notEqual(queued, null, JSON.stringify(notifications));
+    assert.deepEqual(queued, ['Queued: warp feat-toolbusy — waiting for 1 tool still executing']);
+    assert.equal(/queue:/.test(queued[0]), false, 'a readable empty job list adds no caveat row');
     assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, 'the request is kept pending');
 
     // Still executing: the same poller waits, and nothing is re-dispatched.
@@ -1141,7 +1262,8 @@ describe('/warp queues while this session has tools, agent tasks or jobs', () =>
     ctx.switchSession = async (file) => { switches.push(file); return { cancelled: false }; };
     await commands.get('warp').handler('feat-intact', ctx);
     assert.equal(switches.length, 0);
-    assert.ok(notifications.some(([, text]) => /handoff queued/.test(String(text))), JSON.stringify(notifications));
+    assert.deepEqual(queuedNotices(), [], JSON.stringify(notifications));
+    assert.deepEqual(queuedSurface(ctx), ['Queued: warp feat-intact — waiting for 1 running agent task(s)']);
 
     assert.equal(git(repo, ['worktree', 'list', '--porcelain']), listBefore, 'the listing changed');
     assert.equal(fs.existsSync(documentPath), false, 'the queued warp writes no list document either');
@@ -1172,12 +1294,8 @@ describe('the /warp front queues the move and performs it after the counters dra
 
     assert.equal(switches.length, 0, 'the session must not move under running tasks');
     assert.equal(host.sent.length, 0, 'the command front re-dispatches later, not now');
-    assert.equal(notifications.length, 1, JSON.stringify(notifications));
-    assert.equal(notifications[0][0], 'info');
-    assert.match(
-      notifications[0][1],
-      /^worktree warp: handoff queued — waiting for 2 running agent task\(s\) before the move/,
-    );
+    assert.deepEqual(notifications, [], 'the row is the only surface: no notice repeats it');
+    assert.deepEqual(queuedSurface(ctx), ['Queued: warp feat-cmd — waiting for 2 running agent task(s)']);
     const record = busyLib.pendingWarpFor(pendingKey());
     assert.notEqual(record, null, 'the request is kept pending');
     assert.equal(record.name, 'feat-cmd');
@@ -1318,9 +1436,8 @@ describe('the /warp front queues the move and performs it after the counters dra
 
     assert.equal(switches.length, 0, 'the session must not move while a job is running');
     assert.equal(host.sent.length, 0, 'the command front re-dispatches later, not now');
-    assert.equal(notifications.length, 1, JSON.stringify(notifications));
-    assert.equal(notifications[0][0], 'info');
-    assert.match(notifications[0][1], /^worktree warp: handoff queued — waiting for 1 running background job before the move/);
+    assert.deepEqual(notifications, [], 'the row is the only surface: no notice repeats it');
+    assert.deepEqual(queuedSurface(ctx), ['Queued: warp feat-jobwait — waiting for 1 running background job']);
     assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, 'a running job keeps the request pending');
 
     // Still running: the poller waits, and nothing is re-dispatched.
@@ -1352,7 +1469,8 @@ describe('the /warp front queues the move and performs it after the counters dra
     host.sent.length = 0;
     notifications.length = 0;
     await commands.get('warp').handler('feat-refused', ctx);
-    assert.ok(notifications.some(([, text]) => /handoff queued/.test(String(text))), JSON.stringify(notifications));
+    assert.deepEqual(queuedNotices(), [], JSON.stringify(notifications));
+    assert.deepEqual(queuedSurface(ctx), ['Queued: warp feat-refused — waiting for 1 running background job']);
     assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null);
 
     // The job finishes: the queue re-dispatches the SAME validated handoff.
@@ -1547,7 +1665,10 @@ describe('boundaries: negative cases, every front, unaffected surfaces', () => {
     picks.push('feat-pick');
     await commands.get('warp').handler('', ctx);
     assert.equal(switches.length, 0, 'the selector must not move the session under a running task');
-    assert.equal(notifications.filter(([, text]) => /handoff queued — waiting for 2 running/.test(String(text))).length, 1);
+    // S8: this host offers no zone above the editor, so the durable fallback
+    // entry is the one surface — and the chat still holds no second copy.
+    assert.deepEqual(queuedNotices(), [], JSON.stringify(notifications));
+    assert.deepEqual(queuedSurface(ctx), ['Queued: warp feat-pick — waiting for 2 running agent task(s)']);
     assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, 'the selector pick is kept pending');
     settlePending();
   });
@@ -1562,7 +1683,8 @@ describe('boundaries: negative cases, every front, unaffected surfaces', () => {
     host.sent.length = 0;
     notifications.length = 0;
     await commands.get('warp').handler('feat-shutdown', ctx);
-    assert.ok(notifications.some(([, text]) => /handoff queued/.test(String(text))), JSON.stringify(notifications));
+    assert.deepEqual(queuedNotices(), [], JSON.stringify(notifications));
+    assert.deepEqual(queuedSurface(ctx), ['Queued: warp feat-shutdown — waiting for 1 running agent task(s)']);
     assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, 'the request is pending before shutdown');
 
     for (const [, handler] of hooks.filter(([name]) => name === 'session_shutdown')) {
@@ -1655,9 +1777,8 @@ describe('warp-queue-order: ask the copy question at request time, then queue', 
       // S3: the row is up from the moment the request is queued, and it never
       // claims a move.
       assert.deepEqual(widgetState(ctx).lines, [WIDGET_DIM('Queued: warp feat-now — waiting for 1 running background job')]);
-      assert.deepEqual(notifications, [
-        ['info', 'worktree warp: handoff queued — waiting for 1 running background job before the move'],
-      ]);
+      // S8: the row is the whole message, so the chat holds no second copy.
+      assert.deepEqual(notifications, [], 'the painted row is the only surface');
 
       // S2: attempts two and three are the existing pending-warp refusal, ask no
       // question and change nothing.
@@ -1718,9 +1839,9 @@ describe('warp-queue-order: ask the copy question at request time, then queue', 
       const record = busyLib.pendingWarpFor(pendingKey());
       assert.notEqual(record, null, 'the request is queued');
       assert.deepEqual(record.handoff.changes, { mode: 'none', paths: [] }, 'NO COPY queues a handoff that carries no changes');
-      assert.deepEqual(notifications, [
-        ['info', 'worktree warp: handoff queued — waiting for 1 running background job before the move'],
-      ]);
+      // S8: the painted row is the only surface (no notice repeats it).
+      assert.deepEqual(notifications, [], JSON.stringify(notifications));
+      assert.deepEqual(queuedSurface(ctx), ['Queued: warp feat-nocopy — waiting for 1 running background job']);
       assert.equal(switches.length, 0);
     } finally {
       settlePending();
@@ -1828,9 +1949,7 @@ describe('warp-queue-order: the counters are sampled even without a session id',
       assert.notEqual(record, null, 'the request is queued under the checkout it stands in');
       assert.equal(record.name, 'feat-noid');
       assert.deepEqual(widgetState(ctx).lines, [WIDGET_DIM('Queued: warp feat-noid — waiting for 1 tool still executing')]);
-      assert.deepEqual(notifications, [
-        ['info', 'worktree warp: handoff queued — waiting for 1 tool still executing before the move'],
-      ]);
+      assert.deepEqual(notifications, [], 'the painted row is the only surface');
     } finally {
       busyLib.settlePendingWarp(rootKey);
     }
@@ -1857,9 +1976,7 @@ describe('warp-queue-order: the counters are sampled even without a session id',
       assert.notEqual(record, null, 'the request is queued under the checkout it stands in');
       assert.equal(record.name, 'feat-noidjob');
       assert.deepEqual(widgetState(ctx).lines, [WIDGET_DIM('Queued: warp feat-noidjob — waiting for 1 running background job')]);
-      assert.deepEqual(notifications, [
-        ['info', 'worktree warp: handoff queued — waiting for 1 running background job before the move'],
-      ]);
+      assert.deepEqual(notifications, [], 'the painted row is the only surface');
     } finally {
       busyLib.settlePendingWarp(rootKey);
     }
@@ -1939,6 +2056,54 @@ describe('warp-queue-order: the copy source is the session’s own checkout', ()
 });
 
 // ---------------------------------------------------------------------------
+// warp-queue-boundary T8 (S11): the copy question can never be answered by a
+// keystroke the human did not mean for it. The question is driven through the
+// REAL picker (`ctx.ui.custom` mounts `lib/warp-create-picker.js`), so what the
+// host does with a single buffered Enter is observed end to end.
+// ---------------------------------------------------------------------------
+describe('S11 (T8): the copy question is never answered by one immediate Enter', () => {
+  test('a single immediate Enter neither answers nor finishes the copy question', async () => {
+    const repo = makeRepo();
+    const maker = makeCtx(repo);
+    const here = await tools.get('worktree_create').execute('grace-1', { branch: 'feat/grace-here', odd: 'grace-here' }, undefined, undefined, maker);
+    assert.notEqual(here.isError, true, resultText(here));
+    const there = await tools.get('worktree_create').execute('grace-2', { branch: 'feat/grace-there', odd: 'grace-there' }, undefined, undefined, maker);
+    assert.notEqual(there.isError, true, resultText(there));
+    fs.writeFileSync(path.join(here.details.path, 'grace-only.txt'), 'here\n');
+
+    const { ctx, switches } = movableCtx(here.details.path);
+    clearPresence();
+    addJobs(ctx, []);
+    // The host mounts the question and the human's single Enter arrives at once —
+    // the Enter that submitted `/warp`, a double tap, or one meant for a queued
+    // message. The prompt then closes without an answer (what the host does when
+    // the overlay is dismissed).
+    const mounts = [];
+    const answers = [];
+    ctx.ui.custom = async (factory) => {
+      const component = factory({ requestRender: () => {} }, null, null, (out) => { answers.push(out); });
+      mounts.push(component);
+      component.handleInput('\r');
+      return undefined;
+    };
+    notifications.length = 0;
+    await commands.get('warp').handler('feat-grace-there', ctx);
+
+    assert.equal(mounts.length, 1, 'a typed warp mounts the copy question exactly once');
+    assert.deepEqual(answers, [], 'the immediate Enter answered nothing and finished nothing');
+    const rows = mounts[0].render(120).map(plainLine);
+    assert.ok(rows.some((line) => /^\s*❯\s+NO COPY$/.test(line)), `the question is still on screen on the safe answer: ${JSON.stringify(rows)}`);
+    assert.ok(!rows.some((line) => /^\s*❯\s+YES COPY$/.test(line)), 'the destructive choice is never the focused one');
+    assert.equal(switches.length, 0, 'an unanswered question moves nothing');
+    assert.equal(
+      fs.existsSync(path.join(there.details.path, 'grace-only.txt')),
+      false,
+      'one immediate Enter never writes the source changes into the destination',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // warp-settle-dispatch T1-T3 (S1-S6): a warp typed mid-run is QUEUED and fires
 // by itself at the host's settle boundary. The host's own idle state
 // (`ctx.isIdle()`) is the fourth busy source, so "the assistant is still
@@ -2000,10 +2165,8 @@ describe('warp-settle-dispatch: not-idle queues, agent_settled dispatches', () =
       const record = busyLib.pendingWarpFor(pendingKey());
       assert.notEqual(record, null, 'the request is queued');
       assert.equal(record.name, 'feat-mid');
-      assert.deepEqual(notifications, [
-        ['info', 'worktree warp: handoff queued — waiting for the current agent run before the move'],
-      ]);
       assert.deepEqual(widgetState(ctx).lines, [WIDGET_DIM('Queued: warp feat-mid — waiting for the current agent run')]);
+      assert.deepEqual(notifications, [], 'the painted row is the only surface');
     } finally {
       settlePending();
     }
@@ -2146,6 +2309,1015 @@ describe('warp-settle-dispatch: not-idle queues, agent_settled dispatches', () =
       assert.equal(host.sent.length, 0, 'a settle with nothing queued dispatches nothing');
     } finally {
       settlePending();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// warp-queue-boundary T1/T2/T5 (S1/S2/S5, warp-queue-boundary): a warp typed
+// mid-run takes effect at the SAME boundary Pi uses for a queued input message —
+// the end of the current assistant turn, after its tool calls and before the next
+// model call — and a dispatch is only ever attempted into an idle host. When the
+// host cannot paint the zone above the editor, the queued line falls back to ONE
+// fixed transcript entry.
+// ---------------------------------------------------------------------------
+describe('warp-queue-boundary: the queued warp lands at the turn boundary', () => {
+  // The host's own state. `isIdle` is false while the run is live, `abort` ends
+  // the run at the turn boundary (Pi then reports it as settled and idle), and
+  // `waitForIdle` never resolves mid-run, so a front that parks in a host wait is
+  // observable instead of hanging the suite.
+  function turnHost(ctx) {
+    const state = { idle: false, aborts: 0 };
+    ctx.isIdle = () => state.idle;
+    ctx.waitForIdle = () => {
+      if (state.idle) return Promise.resolve();
+      return new Promise((resolve) => setTimeout(resolve, 1500));
+    };
+    ctx.abort = () => {
+      state.aborts += 1;
+      state.idle = true;
+    };
+    return state;
+  }
+
+  // The host's turn boundary, driven through the handler the extension
+  // registered, once per registered handler. `tools` says whether the turn that
+  // just ended executed tool calls — the host's `event.toolResults`, which is
+  // S15's own signal: a turn with none is the agent's final answer.
+  async function turnEnd(ctx, { tools = true } = {}) {
+    const handlers = hooks.filter(([name]) => name === 'turn_end');
+    assert.ok(handlers.length > 0, 'the extension registers a turn_end handler');
+    const toolResults = tools ? [{ toolCallId: 'call-turn', toolName: 'bash', result: {} }] : [];
+    for (const [, handler] of handlers) {
+      const returned = await handler({ turnIndex: 0, timestamp: 1, toolResults, entries: [], outcome: 'completed' }, ctx);
+      assert.equal(returned, undefined, 'a turn boundary proposes nothing: entries and continue stay as the host built them');
+    }
+  }
+
+  // The host's settle boundary, once the run is over.
+  async function settle(ctx) {
+    const handlers = hooks.filter(([name]) => name === 'agent_settled');
+    assert.ok(handlers.length > 0, 'the extension registers an agent_settled handler');
+    for (const [, handler] of handlers) await handler({ aborted: true }, ctx);
+  }
+
+  async function created(ctx, callId, branch, odd) {
+    const made = await tools.get('worktree_create').execute(callId, { branch, odd }, undefined, undefined, ctx);
+    assert.notEqual(made.isError, true, resultText(made));
+    return made;
+  }
+
+  test('a warp typed mid-run moves at the turn boundary with no manual stop', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    await created(ctx, 'wb-1', 'feat/boundary', 'boundary');
+    clearPresence();
+    addJobs(ctx, []);
+    const state = turnHost(ctx);
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      await commands.get('warp').handler('feat-boundary', ctx);
+      assert.equal(state.aborts, 0, 'a request never aborts the run it was typed into');
+      assert.equal(switches.length, 0, 'nothing moved mid-run');
+      assert.equal(host.sent.length, 0, 'nothing was dispatched into the streaming host');
+      assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, 'the request is queued');
+      // S8: the row above the editor is the whole message — the chat holds no
+      // second copy of the same sentence.
+      assert.deepEqual(notifications, [], JSON.stringify(notifications));
+      assert.deepEqual(queuedSurface(ctx), ['Queued: warp feat-boundary — waiting for the current agent run']);
+
+      // The turn ends with its tool calls: the run itself is the only blocker, so
+      // S17 ends the run ONCE, synchronously, and sends the agent nothing.
+      await turnEnd(ctx);
+      assert.equal(state.aborts, 1, 'the first boundary ends the run exactly once');
+      assert.equal(host.steered.length, 0, 'nothing is ever sent to the agent');
+      assert.equal(host.sent.length, 0, 'the run just ended; the settle boundary does the dispatch');
+
+      // Pi reports the aborted run as settled and idle: the queued move starts.
+      await settle(ctx);
+      assert.equal(host.sent.length, 1, 'the settle boundary dispatched the queued move');
+      const [message] = host.sent[0];
+      assert.ok(message.startsWith('/warp @'), message);
+      notifications.length = 0;
+      await commands.get('warp').handler(message.slice('/warp '.length), ctx);
+      assert.equal(switches.length, 1, 'the move landed at the turn boundary with no manual stop');
+      assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'the move clears the record');
+      assert.deepEqual(notifications, [], 'a real move notifies nothing');
+
+      // A record aborts at most once, and a settled record aborts nothing at all.
+      await turnEnd(ctx);
+      assert.equal(state.aborts, 1, 'one record aborts once');
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('a tick while the host is still streaming never dispatches, and the settle tick still does', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    await created(ctx, 'wb-2', 'feat/stream', 'stream');
+    clearPresence();
+    addJobs(ctx, []);
+    const state = turnHost(ctx);
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      await commands.get('warp').handler('feat-stream', ctx);
+      assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, 'the request is queued');
+
+      // The poller keeps firing while the run is live: the host would reject the
+      // dispatch, so the record must stay pending and re-armed instead.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        assert.equal((await busyLib.pendingWarpTick(pendingKey())).status, 'waiting');
+        assert.equal(host.sent.length, 0, 'a streaming host never receives a dispatch');
+        assert.equal(busyLib.pendingWarpFor(pendingKey()).dispatching, false, `attempt ${attempt} never marked the record dispatched`);
+      }
+      assert.deepEqual(
+        widgetState(ctx).lines,
+        [WIDGET_DIM('Queued: warp feat-stream — waiting for the current agent run')],
+        'the row names the run it is waiting for',
+      );
+      assert.equal(switches.length, 0, 'nothing moved while the run is live');
+
+      // Once the run ends, the same record dispatches — the wedge is gone.
+      state.idle = true;
+      await settle(ctx);
+      assert.equal(host.sent.length, 1, 'the settle boundary dispatches the record the polls left pending');
+      assert.equal(busyLib.pendingWarpFor(pendingKey()).dispatching, true, 'the dispatched record waits for its own command');
+      const [message] = host.sent[0];
+      await commands.get('warp').handler(message.slice('/warp '.length), ctx);
+      assert.equal(switches.length, 1, 'the queued move lands');
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('the row survives a refused second warp and clears on the boundary dispatch', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    await created(ctx, 'wb-d1', 'feat/row-one', 'row-one');
+    await created(ctx, 'wb-d2', 'feat/row-two', 'row-two');
+    clearPresence();
+    addJobs(ctx, []);
+    const state = turnHost(ctx);
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      await commands.get('warp').handler('feat-row-one', ctx);
+      const shown = widgetState(ctx);
+      assert.deepEqual(shown.lines, [WIDGET_DIM('Queued: warp feat-row-one — waiting for the current agent run')]);
+
+      notifications.length = 0;
+      await commands.get('warp').handler('feat-row-two', ctx);
+      assert.deepEqual(notifications.map(([level]) => level), ['error'], 'the second warp is refused');
+      assert.equal(switches.length, 0, 'the refusal moves nothing');
+      assert.equal(widgetState(ctx).paints, shown.paints, 'the refusal repaints nothing');
+      assert.deepEqual(widgetState(ctx).lines, shown.lines, 'the pending row survives the refusal');
+      assert.equal(busyLib.pendingWarpFor(pendingKey()).name, 'feat-row-one', 'the pending request is never replaced');
+
+      // S17: the first boundary ends the run once, and nothing is sent to the agent.
+      const abortsBeforeBoundary = state.aborts;
+      host.steered.length = 0;
+      await turnEnd(ctx);
+      assert.equal(state.aborts, abortsBeforeBoundary + 1, 'the boundary ends the run once, for the pending record');
+      assert.equal(host.steered.length, 0, 'and sends the agent nothing');
+      state.idle = true;
+      await settle(ctx);
+      assert.equal(host.sent.length, 1, 'the settle boundary dispatches the pending record');
+      assert.equal(widgetState(ctx).lines, null, 'the dispatch clears the row');
+      assert.equal(busyLib.pendingWarpFor(pendingKey()).dispatching, true, 'the dispatched record waits for its own command');
+      const [message] = host.sent[0];
+      notifications.length = 0;
+      await commands.get('warp').handler(message.slice('/warp '.length), ctx);
+      assert.equal(switches.length, 1, 'the queued move lands');
+      assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'the move clears the record');
+      assert.equal(widgetState(ctx).lines, null, 'and no row is left behind');
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('a host with no widget zone gets ONE fixed transcript entry, never one per poll', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    delete ctx.ui.setWidget;
+    await created(ctx, 'wb-e1', 'feat/fallback', 'fallback');
+    clearPresence();
+    addJobs(ctx, []);
+    const state = turnHost(ctx);
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    appendedEntries.length = 0;
+    try {
+      await commands.get('warp').handler('feat-fallback', ctx);
+      assert.equal(widgetPaintsFor(ctx).length, 0, 'the host offers no row to paint');
+      assert.equal(appendedEntries.length, 1, 'the queue appends exactly one durable line');
+      assert.equal(
+        entryRenderers.has(appendedEntries[0].customType),
+        true,
+        'the entry carries a registered entry renderer, like Pi’s restored-messages line',
+      );
+      assert.deepEqual(fallbackLines(), [WIDGET_DIM('Queued: warp feat-fallback — waiting for the current agent run')]);
+
+      // The same reason adds nothing, and neither does a CHANGED reason: the
+      // fallback is one fixed line per record, never one per poll.
+      assert.equal((await busyLib.pendingWarpTick(pendingKey())).status, 'waiting');
+      assert.equal(appendedEntries.length, 1, 'an unchanged reason appends nothing');
+      for (const [, handler] of hooks.filter(([name]) => name === 'tool_execution_start')) {
+        await handler({ toolCallId: 'call-fb-1', toolName: 'bash', args: {} }, ctx);
+      }
+      assert.equal((await busyLib.pendingWarpTick(pendingKey())).status, 'waiting');
+      assert.equal(appendedEntries.length, 1, 'a changed reason adds no second line');
+      assert.deepEqual(
+        fallbackLines(),
+        [WIDGET_DIM('Queued: warp feat-fallback — waiting for the current agent run')],
+        'the durable line never restates its reason',
+      );
+
+      // The fallback is presentation, never state: the move still lands.
+      for (const [, handler] of hooks.filter(([name]) => name === 'tool_execution_end')) {
+        await handler({ toolCallId: 'call-fb-1', toolName: 'bash', result: {}, isError: false }, ctx);
+      }
+      state.idle = true;
+      await settle(ctx);
+      assert.equal(appendedEntries.length, 1, 'the dispatch appends nothing');
+      assert.equal(host.sent.length, 1, 'the queued move is dispatched');
+      const [message] = host.sent[0];
+      await commands.get('warp').handler(message.slice('/warp '.length), ctx);
+      assert.equal(switches.length, 1, 'the move lands with the fallback line in place');
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('a widget seam that throws falls back to the same one durable line', async () => {
+    const repo = makeRepo();
+    const { ctx } = movableCtx(repo);
+    ctx.ui.setWidget = () => { throw new Error('this host has no zone above the editor'); };
+    await created(ctx, 'wb-e2', 'feat/throw', 'throw');
+    clearPresence();
+    addJobs(ctx, []);
+    const state = turnHost(ctx);
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    appendedEntries.length = 0;
+    try {
+      await commands.get('warp').handler('feat-throw', ctx);
+      assert.equal(appendedEntries.length, 1, 'a throwing seam appends exactly one durable line');
+      assert.deepEqual(fallbackLines(), [WIDGET_DIM('Queued: warp feat-throw — waiting for the current agent run')]);
+      assert.equal((await busyLib.pendingWarpTick(pendingKey())).status, 'waiting');
+      assert.equal(appendedEntries.length, 1, 'the poll repaints nothing');
+      state.idle = true;
+      await settle(ctx);
+      assert.equal(host.sent.length, 1, 'the queue still dispatches with no paintable row');
+    } finally {
+      settlePending();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// warp-queue-boundary T9 (S13, warp-queue-boundary): the boundary abort lands
+// BETWEEN provider requests. The record's LAST SAMPLED activity decides, and the
+// abort is taken from it SYNCHRONOUSLY — no awaited read in front of it — so the
+// host has not started the next request when the run is ended and nothing is
+// streaming for it to cut. An awaited re-read is only the fallback for a sample
+// that is absent or too old to trust, and even then the abort follows the read
+// only when the read proves nothing is running.
+// ---------------------------------------------------------------------------
+describe('warp-queue-boundary: the boundary abort lands between requests', () => {
+  // One activity answer in the shape the queue stores: the run itself (host not
+  // idle) is the only thing it reports, unless `extra` names real work.
+  function sample(extra = {}) {
+    return {
+      status: 'ok',
+      running: 0,
+      queued: 0,
+      waiting: 0,
+      label: null,
+      heartbeat: null,
+      jobs: { status: 'ok', active: 0, count: 0 },
+      jobsUnknown: false,
+      tools: { inFlight: 0 },
+      host: { idle: false },
+      busy: true,
+      ...extra,
+    };
+  }
+
+  const handoff = { name: 'feat-s13', target: '/t', from: '/f', branch: 'feat/s13', changes: { mode: 'none', paths: [] } };
+
+  // One pending record with every seam injected: a static clock, no real timers,
+  // the reported activity as its LAST SAMPLE, and `isIdle` as the host's own
+  // state at the boundary. Returns the mutable clock so a test can age the sample.
+  function armed(key, { activity, read, dispatch, isIdle, pollMs = '60000' } = {}) {
+    const clock = { now: 1000 };
+    const queued = busyLib.queuePendingWarp({
+      key,
+      name: 'feat-s13',
+      token: '@s13',
+      handoff,
+      activity: activity === undefined ? sample() : activity,
+      now: () => clock.now,
+      env: { ODD_WORKTREE_WARP_PENDING_MS: '600000', ODD_WORKTREE_WARP_PENDING_POLL_MS: pollMs },
+      timers: { set: () => null, clear: () => {} },
+      isIdle,
+      read,
+      dispatch: dispatch || (() => ({ ok: true })),
+    });
+    assert.equal(queued.ok, true, JSON.stringify(queued));
+    return clock;
+  }
+
+  test('the abort lands synchronously, with no activity read in front of it', async () => {
+    const key = 'session:s13-order';
+    let reads = 0;
+    const order = [];
+    try {
+      armed(key, {
+        activity: sample(),
+        isIdle: () => false,
+        // A read that DID run before the abort is exactly the bug: it lets the
+        // host start the next provider request, which the abort then cuts. Its
+        // own order is recorded so a read cannot hide behind the fallback.
+        read: async () => {
+          reads += 1;
+          order.push(['read', order.length > 0 ? order[0][0] : 'first']);
+          return sample();
+        },
+      });
+      // NOT awaited yet: the abort must already have happened at this point,
+      // because `turn_end` has not yielded to the event loop.
+      const running = busyLib.pendingWarpTurnBoundary({ abort: () => { order.push(['abort', reads]); } });
+      assert.deepEqual(order, [['abort', 0]], 'the abort landed in the same synchronous stretch as the turn boundary, before any read');
+      const results = await running;
+      assert.deepEqual(results, [{ status: 'aborted' }]);
+      assert.equal(reads, 0, 'the normal path reads nothing before it aborts');
+      assert.deepEqual(order, [['abort', 0]], 'nothing ran after the abort either');
+    } finally {
+      busyLib.settlePendingWarp(key);
+    }
+  });
+
+  test('the last sampled work wins: a running job or a tool in flight never aborts, even if a re-read would say otherwise', async () => {
+    const cases = [
+      ['a running background job', sample({ jobs: { status: 'ok', active: 1, count: 1 } })],
+      ['a tool still executing', sample({ tools: { inFlight: 1 } })],
+      ['a running agent task', sample({ running: 1 })],
+      ['a queued agent task', sample({ queued: 2 })],
+    ];
+    for (const [label, activity] of cases) {
+      const key = `session:s13-busy-${label.replace(/\W+/g, '-')}`;
+      let reads = 0;
+      const aborts = [];
+      try {
+        armed(key, {
+          activity,
+          isIdle: () => false,
+          // A read that claimed the work had drained is the trap this pins: the
+          // sample says work is running, so the record must not be cut.
+          read: async () => { reads += 1; return sample(); },
+        });
+        assert.deepEqual(
+          await busyLib.pendingWarpTurnBoundary({ abort: () => aborts.push(label) }),
+          [{ status: 'busy' }],
+          `${label} is real work`,
+        );
+        assert.deepEqual(aborts, [], `${label} must hold the run open`);
+        assert.equal(reads, 0, `${label}: the last sample decided, no read was needed`);
+      } finally {
+        busyLib.settlePendingWarp(key);
+      }
+    }
+  });
+
+  test('a host that is already idle aborts nothing: the settle tick dispatches', async () => {
+    const key = 'session:s13-idle';
+    const aborts = [];
+    const dispatched = [];
+    try {
+      armed(key, {
+        activity: sample({ busy: false, host: { idle: true } }),
+        isIdle: () => true,
+        dispatch: (queuedHandoff, token) => { dispatched.push([queuedHandoff, token]); return { ok: true }; },
+      });
+      assert.deepEqual(await busyLib.pendingWarpTurnBoundary({ abort: () => aborts.push('abort') }), [{ status: 'idle' }]);
+      assert.deepEqual(aborts, [], 'an idle host needs no abort: nothing is running to end');
+      assert.equal((await busyLib.pendingWarpTick(key)).status, 'dispatched');
+      assert.deepEqual(dispatched, [[handoff, '@s13']], 'the settle tick moves the record itself');
+    } finally {
+      busyLib.settlePendingWarp(key);
+    }
+  });
+
+  test('one abort per record: a second boundary and a record waiting on its re-dispatch abort nothing', async () => {
+    const key = 'session:s13-once';
+    const aborts = [];
+    // A dispatch the host refuses leaves the record PENDING and re-armed, never
+    // spinning: the boundary still refuses to abort it a second time.
+    let refuse = true;
+    try {
+      armed(key, {
+        activity: sample(),
+        isIdle: () => false,
+        dispatch: () => (refuse ? { ok: false, error: 'the host cannot dispatch the warp command here' } : { ok: true }),
+      });
+      assert.deepEqual(
+        await busyLib.pendingWarpTurnBoundary({ abort: () => aborts.push('first') }),
+        [{ status: 'aborted' }],
+      );
+      assert.deepEqual(aborts, ['first'], 'the run is ended once, for this record');
+
+      // The same turn boundary again: the record already aborted this run.
+      assert.deepEqual(await busyLib.pendingWarpTurnBoundary({ abort: () => aborts.push('second') }), [{ status: 'skipped' }]);
+      assert.deepEqual(aborts, ['first'], 'a record never aborts twice');
+
+      // A refused dispatch releases the slot and re-arms instead of spinning, and
+      // the boundary still does not abort the record a second time.
+      refuse = true;
+      assert.equal((await busyLib.pendingWarpTick(key)).status, 'waiting');
+      assert.equal(busyLib.pendingWarpFor(key).dispatching, false, 'a refused dispatch stays pending and re-armed');
+      assert.deepEqual(await busyLib.pendingWarpTurnBoundary({ abort: () => aborts.push('third') }), [{ status: 'skipped' }]);
+      assert.deepEqual(aborts, ['first'], 'a refused dispatch never spins the session');
+    } finally {
+      busyLib.settlePendingWarp(key);
+    }
+  });
+
+  test('a sample too old to trust is re-read, and the abort follows only a read that proves nothing runs', async () => {
+    const key = 'session:s13-stale';
+    const order = [];
+    const answers = [];
+    try {
+      const clock = armed(key, {
+        activity: sample(),
+        pollMs: '1000',
+        isIdle: () => false,
+        read: async () => { order.push('read'); return answers.shift(); },
+      });
+      // Older than one poll interval: the poller would have re-sampled by now, so
+      // this sample cannot decide on its own.
+      clock.now += 5000;
+
+      // The re-read finds a running job: the record must not be cut.
+      answers.push(sample({ jobs: { status: 'ok', active: 1, count: 1 } }));
+      const aborts = [];
+      assert.deepEqual(
+        await busyLib.pendingWarpTurnBoundary({ abort: () => { order.push('abort'); aborts.push('abort'); } }),
+        [{ status: 'busy' }],
+      );
+      assert.deepEqual(order, ['read'], 'the stale sample is re-read before anything else');
+      assert.deepEqual(aborts, [], 'a read that finds real work aborts nothing');
+
+      // That read IS the record's new sample: inside one poll interval the next
+      // boundary decides from it again, with no read in front of the decision.
+      order.length = 0;
+      clock.now += 1;
+      assert.deepEqual(
+        await busyLib.pendingWarpTurnBoundary({ abort: () => order.push('abort') }),
+        [{ status: 'busy' }],
+      );
+      assert.deepEqual(order, [], 'the sample the fallback just proved good is trusted, so no read runs again');
+
+      // Once it ages past the poll interval the fallback reads again, and a read
+      // that proves nothing is running lets the abort follow it.
+      clock.now += 5000;
+      answers.push(sample());
+      assert.deepEqual(
+        await busyLib.pendingWarpTurnBoundary({ abort: () => order.push('abort') }),
+        [{ status: 'aborted' }],
+      );
+      assert.deepEqual(order, ['read', 'abort'], 'the abort follows the read only because it proved nothing runs');
+    } finally {
+      busyLib.settlePendingWarp(key);
+    }
+  });
+
+  test('a record queued with no sample at all is re-read, and aborts when the read proves nothing runs', async () => {
+    const key = 'session:s13-absent';
+    const order = [];
+    try {
+      assert.equal(busyLib.queuePendingWarp({
+        key,
+        name: 'feat-s13',
+        token: '@s13',
+        handoff,
+        activity: null,
+        now: () => 1000,
+        env: { ODD_WORKTREE_WARP_PENDING_MS: '600000' },
+        timers: { set: () => null, clear: () => {} },
+        isIdle: () => false,
+        read: async () => { order.push('read'); return sample(); },
+        dispatch: () => ({ ok: true }),
+      }).ok, true);
+      assert.deepEqual(
+        await busyLib.pendingWarpTurnBoundary({ abort: () => order.push('abort') }),
+        [{ status: 'aborted' }],
+      );
+      assert.deepEqual(order, ['read', 'abort'], 'no sample: the read comes first, and the abort follows only because it proved nothing runs');
+    } finally {
+      busyLib.settlePendingWarp(key);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// warp-queue-boundary T11 (S17, warp-queue-boundary): the boundary sends the
+// agent NOTHING and ends the run itself. At the first `turn_end` where the run is
+// the only blocker and the turn that just ended executed tools, the extension
+// aborts ONCE, synchronously, so the move lands at the queued-message boundary
+// and no message of any kind ever reaches the agent (S15's hidden steering
+// message is removed: a model may answer it with text, and a text turn produces
+// no later tool-using boundary for a safety net to fire on). A turn that ended
+// with no tool results is the agent's final answer — the run settles on its own —
+// and a record with real work pending or an idle host is left alone.
+// ---------------------------------------------------------------------------
+describe('warp-queue-boundary: the boundary ends the run itself and sends nothing', () => {
+  // One activity answer in the shape the queue stores: the run itself (host not
+  // idle) is all it reports, unless `extra` names real work.
+  function sample(extra = {}) {
+    return {
+      status: 'ok',
+      running: 0,
+      queued: 0,
+      waiting: 0,
+      label: null,
+      heartbeat: null,
+      jobs: { status: 'ok', active: 0, count: 0 },
+      jobsUnknown: false,
+      tools: { inFlight: 0 },
+      host: { idle: false },
+      busy: true,
+      ...extra,
+    };
+  }
+
+  const handoff = { name: 'feat-abort', target: '/t', from: '/f', branch: 'feat/abort', changes: { mode: 'none', paths: [] } };
+
+  // One pending record with every seam injected: a static clock, no real timers,
+  // the given activity as its LAST SAMPLE, and `isIdle` as the host's own state
+  // at the boundary.
+  function armed(key, { activity, read, isIdle, dispatch } = {}) {
+    const queued = busyLib.queuePendingWarp({
+      key,
+      name: 'feat-abort',
+      token: '@abort',
+      handoff,
+      activity: activity === undefined ? sample() : activity,
+      now: () => 1000,
+      env: { ODD_WORKTREE_WARP_PENDING_MS: '600000', ODD_WORKTREE_WARP_PENDING_POLL_MS: '60000' },
+      timers: { set: () => null, clear: () => {} },
+      isIdle,
+      read,
+      dispatch: dispatch || (() => ({ ok: true })),
+    });
+    assert.equal(queued.ok, true, JSON.stringify(queued));
+  }
+
+  // The host's own state for the front-driven tests: live until the boundary
+  // abort ends it, with `waitForIdle` parked so a front that waits forever is
+  // observable instead of hanging the suite.
+  function turnHost(ctx) {
+    const state = { idle: false, aborts: 0 };
+    ctx.isIdle = () => state.idle;
+    ctx.waitForIdle = () => {
+      if (state.idle) return Promise.resolve();
+      return new Promise((resolve) => setTimeout(resolve, 1500));
+    };
+    ctx.abort = () => {
+      state.aborts += 1;
+      state.idle = true;
+    };
+    return state;
+  }
+
+  // The host's turn boundary, driven through the handler the extension
+  // registered. `event.toolResults` is the host's own evidence about the turn that
+  // just ended: a turn with none is the agent's final answer.
+  async function turnEnd(ctx, { tools = true } = {}) {
+    const handlers = hooks.filter(([name]) => name === 'turn_end');
+    assert.ok(handlers.length > 0, 'the extension registers a turn_end handler');
+    const toolResults = tools ? [{ toolCallId: 'call-t11', toolName: 'bash', result: {} }] : [];
+    for (const [, handler] of handlers) {
+      const returned = await handler({ turnIndex: 0, timestamp: 1, toolResults, entries: [], outcome: 'completed' }, ctx);
+      assert.equal(returned, undefined, 'the boundary proposes nothing: entries and continue stay as the host built them');
+    }
+  }
+
+  async function settle(ctx) {
+    const handlers = hooks.filter(([name]) => name === 'agent_settled');
+    assert.ok(handlers.length > 0, 'the extension registers an agent_settled handler');
+    for (const [, handler] of handlers) await handler({ aborted: true }, ctx);
+  }
+
+  async function created(ctx, callId, branch, odd) {
+    const made = await tools.get('worktree_create').execute(callId, { branch, odd }, undefined, undefined, ctx);
+    assert.notEqual(made.isError, true, resultText(made));
+    return made;
+  }
+
+  test('the first boundary with tool results aborts once, and the host sends no message of any kind', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    await created(ctx, 't11-1', 'feat/abort-one', 'abort-one');
+    clearPresence();
+    addJobs(ctx, []);
+    const state = turnHost(ctx);
+    host.sent.length = 0;
+    host.steered.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      await commands.get('warp').handler('feat-abort-one', ctx);
+      assert.equal(host.steered.length, 0, 'queueing sends no message');
+      assert.equal(state.aborts, 0, 'queueing aborts nothing');
+      assert.deepEqual(queuedSurface(ctx), ['Queued: warp feat-abort-one — waiting for the current agent run']);
+
+      // The turn ends with its tool calls: the run is the only blocker, so the
+      // extension ends it — once, at THIS first boundary.
+      await turnEnd(ctx, { tools: true });
+      assert.equal(state.aborts, 1, 'the first boundary aborts the run exactly once');
+      assert.equal(host.steered.length, 0, 'the boundary sends the agent no message of any kind');
+      assert.deepEqual(notifications, [], 'and nothing of it is a chat line either');
+      assert.equal(switches.length, 0, 'nothing moved at the boundary');
+      assert.equal(host.sent.length, 0, 'nothing was dispatched into the live host');
+
+      // Pi reports the aborted run as settled and idle: the queued move lands.
+      state.idle = true;
+      await settle(ctx);
+      assert.equal(host.sent.length, 1, 'the settle boundary dispatches the queued move');
+      const [dispatch] = host.sent[0];
+      notifications.length = 0;
+      await commands.get('warp').handler(dispatch.slice('/warp '.length), ctx);
+      assert.equal(switches.length, 1, 'the move lands at the turn boundary with no manual stop');
+      assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'the move clears the record');
+      assert.deepEqual(notifications, [], 'a real move notifies nothing');
+      assert.equal(host.steered.length, 0, 'no message was sent at any point');
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('the abort lands synchronously, with no read in front of it, and there is no message seam at all', async () => {
+    const key = 'session:t11-order';
+    const order = [];
+    let reads = 0;
+    try {
+      armed(key, {
+        isIdle: () => false,
+        // A read that ran before the step is exactly the S13 bug: it lets the host
+        // start the next provider request, which the abort then cuts.
+        read: async () => { reads += 1; order.push('read'); return sample(); },
+      });
+      // NOT awaited: the abort must already have happened, because `turn_end` has
+      // not yielded to the event loop.
+      const running = busyLib.pendingWarpTurnBoundary({
+        abort: () => order.push('abort'),
+        sawTools: true,
+      });
+      assert.deepEqual(order, ['abort'], 'the abort landed in the same synchronous stretch as the boundary');
+      assert.deepEqual(await running, [{ status: 'aborted' }]);
+      assert.equal(reads, 0, 'the abort reads nothing in front of it');
+      // S17: the module offers no text to send, so no host could send one.
+      assert.equal(typeof busyLib.steerText, 'undefined', 'the steering seam is gone from the module surface');
+
+      // Every later boundary is inert: one abort per record.
+      order.length = 0;
+      assert.deepEqual(
+        await busyLib.pendingWarpTurnBoundary({ abort: () => order.push('abort-again'), sawTools: true }),
+        [{ status: 'skipped' }],
+      );
+      assert.deepEqual(order, [], 'a record never aborts twice');
+    } finally {
+      busyLib.settlePendingWarp(key);
+    }
+  });
+
+  test('a second boundary of the same record never aborts again, and the queued move still lands', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    await created(ctx, 't11-2', 'feat/abort-twice', 'abort-twice');
+    clearPresence();
+    addJobs(ctx, []);
+    const state = turnHost(ctx);
+    host.sent.length = 0;
+    host.steered.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      await commands.get('warp').handler('feat-abort-twice', ctx);
+
+      await turnEnd(ctx, { tools: true });
+      assert.equal(state.aborts, 1, 'the first boundary ends the run once');
+      assert.equal(host.steered.length, 0, 'and sends nothing');
+
+      // A later boundary of the same record is inert, however many arrive.
+      await turnEnd(ctx, { tools: true });
+      await turnEnd(ctx, { tools: true });
+      assert.equal(state.aborts, 1, 'one abort per record, never twice');
+      assert.equal(host.steered.length, 0, 'and still no message');
+
+      state.idle = true;
+      await settle(ctx);
+      assert.equal(host.sent.length, 1, 'the settle boundary still dispatches the queued move');
+      const [dispatch] = host.sent[0];
+      await commands.get('warp').handler(dispatch.slice('/warp '.length), ctx);
+      assert.equal(switches.length, 1, 'the move lands');
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('a turn with no tool results neither aborts nor sends, and the run settling dispatches', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    await created(ctx, 't11-3', 'feat/abort-final', 'abort-final');
+    clearPresence();
+    addJobs(ctx, []);
+    const state = turnHost(ctx);
+    host.sent.length = 0;
+    host.steered.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      await commands.get('warp').handler('feat-abort-final', ctx);
+      // No tool results: that turn WAS the agent's final answer, so the run
+      // settles by itself and the extension has nothing to send or to end.
+      await turnEnd(ctx, { tools: false });
+      assert.equal(state.aborts, 0, 'a final answer is never aborted');
+      assert.equal(host.steered.length, 0, 'and never messaged');
+      assert.equal(busyLib.pendingWarpFor(pendingKey()).dispatching, false, 'the record is still pending');
+
+      state.idle = true;
+      await settle(ctx);
+      assert.equal(host.sent.length, 1, 'the settled run dispatches the queued move on its own');
+      const [dispatch] = host.sent[0];
+      await commands.get('warp').handler(dispatch.slice('/warp '.length), ctx);
+      assert.equal(switches.length, 1, 'the move lands');
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('real work pending means no abort and no message', async () => {
+    const cases = [
+      ['a running background job', sample({ jobs: { status: 'ok', active: 1, count: 1 } })],
+      ['a tool still executing', sample({ tools: { inFlight: 1 } })],
+      ['a running agent task', sample({ running: 1 })],
+      ['a queued agent task', sample({ queued: 2 })],
+    ];
+    for (const [label, activity] of cases) {
+      const key = `session:t11-busy-${label.replace(/\W+/g, '-')}`;
+      const aborts = [];
+      try {
+        armed(key, { activity, isIdle: () => false });
+        assert.deepEqual(
+          await busyLib.pendingWarpTurnBoundary({
+            abort: () => aborts.push(label),
+            sawTools: true,
+          }),
+          [{ status: 'busy' }],
+          `${label} is real work`,
+        );
+        assert.deepEqual(aborts, [], `${label} must never cut the run`);
+      } finally {
+        busyLib.settlePendingWarp(key);
+      }
+    }
+  });
+
+  test('an idle host does nothing: the settle tick dispatches the move', async () => {
+    const key = 'session:t11-idle';
+    const aborts = [];
+    const dispatched = [];
+    try {
+      armed(key, {
+        activity: sample({ busy: false, host: { idle: true } }),
+        isIdle: () => true,
+        dispatch: (queuedHandoff, token) => { dispatched.push([queuedHandoff, token]); return { ok: true }; },
+      });
+      assert.deepEqual(
+        await busyLib.pendingWarpTurnBoundary({ abort: () => aborts.push('abort'), sawTools: true }),
+        [{ status: 'idle' }],
+      );
+      assert.deepEqual(aborts, [], 'an idle host has no run to end');
+      assert.equal((await busyLib.pendingWarpTick(key)).status, 'dispatched');
+      assert.deepEqual(dispatched, [[handoff, '@abort']], 'the settle tick moves the record itself');
+    } finally {
+      busyLib.settlePendingWarp(key);
+    }
+  });
+});
+// ---------------------------------------------------------------------------
+// warp-queue-boundary T6 (S8, warp-queue-boundary): the queue speaks through ONE
+// surface per request. When the fixed row above the editor (or its durable
+// fallback entry) showed the line, the chat gets NO second copy of the same
+// sentence; a host with no surface at all still gets the one notice, because
+// otherwise the human would never learn the request is queued.
+// ---------------------------------------------------------------------------
+describe('warp-queue-boundary: one surface per queued request', () => {
+  async function queuedCheckout(ctx, callId, branch, odd) {
+    const made = await tools.get('worktree_create').execute(callId, { branch, odd }, undefined, undefined, ctx);
+    assert.notEqual(made.isError, true, resultText(made));
+    return made;
+  }
+
+  test('a painted row is the only surface, and a host with no surface at all still gets one notice', async () => {
+    const repo = makeRepo();
+    const { ctx } = movableCtx(repo);
+    await queuedCheckout(ctx, 's8-1', 'feat/s8one', 's8one');
+    clearPresence();
+    const jobs = addJobs(ctx, [{ id: 'job-s8', status: 'running' }]);
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    appendedEntries.length = 0;
+    try {
+      await commands.get('warp').handler('feat-s8one', ctx);
+      const line = 'Queued: warp feat-s8one — waiting for 1 running background job';
+      assert.deepEqual(queuedSurface(ctx), [line], 'the row above the editor shows the one line');
+      assert.equal(queuedNotices().length, 0, `the chat holds no second copy: ${JSON.stringify(notifications)}`);
+      assert.deepEqual(notifications, [], 'the painted row is the whole message');
+      assert.equal(jobs.calls > 0, true, 'the request really was queued while the job ran');
+      settlePending();
+
+      // A host with NO surface at all: no zone above the editor and no
+      // `appendEntry` seam, so nothing can show the line. The one notice is then
+      // the only surface, and it is emitted exactly once.
+      const bare = makeCtx(repo);
+      delete bare.ui.setWidget;
+      const savedAppendEntry = host.appendEntry;
+      host.appendEntry = undefined;
+      addJobs(bare, [{ id: 'job-s8b', status: 'running' }]);
+      notifications.length = 0;
+      appendedEntries.length = 0;
+      try {
+        await commands.get('warp').handler('feat-s8one', bare);
+        assert.deepEqual(appendedEntries, [], 'the host offers no durable entry to fall back to');
+        assert.equal(widgetPaintsFor(bare).length, 0, 'and no row to paint');
+        assert.deepEqual(notifications, [['info', line]], 'a surface-less host gets the line exactly once');
+      } finally {
+        host.appendEntry = savedAppendEntry;
+      }
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('the queued answer still carries the line in its result object', async () => {
+    const repo = makeRepo();
+    const { ctx } = movableCtx(repo);
+    await queuedCheckout(ctx, 's8-2', 'feat/s8result', 's8result');
+    clearPresence();
+    addJobs(ctx, [{ id: 'job-s8r', status: 'running' }]);
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      const out = await mod.executeWorktreeWarp('feat-s8result', ctx);
+      assert.notEqual(out.isError, true, JSON.stringify(out));
+      assert.equal(out.stillQueued, true, 'the request is queued, not moved');
+      assert.equal(out.text, 'Queued: warp feat-s8result — waiting for 1 running background job', 'the result still carries the line');
+      assert.equal(out.details.queued, true);
+      assert.deepEqual(queuedSurface(ctx), [out.text], 'the row shows that same line, once');
+      assert.deepEqual(notifications, [], 'printing it again in the chat is the duplicate the report named');
+    } finally {
+      settlePending();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// warp-queue-boundary T7 (S9, warp-queue-boundary): a carrying copy the
+// destination REFUSES never blocks the move. When the refusal proves nothing
+// landed, the warp proceeds without copying, overwrites nothing and discloses it
+// in ONE line naming the copies it could not carry. A copy that DID land — even
+// partially — remains a hard failure, because that is real state.
+// ---------------------------------------------------------------------------
+describe('warp-queue-boundary: a refused carry-copy never blocks the move', () => {
+  // A destination that committed its own version of the same line the source has
+  // pending: the three-way merge has no automatic answer, so the copy refuses
+  // and writes nothing — the shape the report hit.
+  async function conflictedDestination(callId) {
+    const repo = makeRepo();
+    fs.writeFileSync(path.join(repo, 'conflict.txt'), 'l1\nl2\n');
+    git(repo, ['add', 'conflict.txt']);
+    git(repo, ['commit', '-m', 'base']);
+    const { ctx, switches } = movableCtx(repo);
+    const made = await tools.get('worktree_create').execute(callId, { branch: 'feat/s9dest', odd: 's9dest' }, undefined, undefined, ctx);
+    assert.notEqual(made.isError, true, resultText(made));
+    const destPath = made.details.path;
+    fs.writeFileSync(path.join(destPath, 'conflict.txt'), 'l1\nDEST-L2\n');
+    git(destPath, ['commit', '-am', 'destination: its own line']);
+    fs.writeFileSync(path.join(repo, 'conflict.txt'), 'l1\nSRC-PENDING-L2\n');
+    return { repo, ctx, switches, destPath };
+  }
+
+  test('the move happens without the copy, and the result names the refused copies in one line', async () => {
+    const { repo, ctx, switches, destPath } = await conflictedDestination('s9-1');
+    const handoff = {
+      name: 'feat-s9dest',
+      target: destPath,
+      from: repo,
+      branch: 'feat/s9dest',
+      changes: { mode: 'all', paths: [] },
+    };
+    notifications.length = 0;
+    const out = await mod.executeWorktreeWarp('feat-s9dest', ctx, { handoff });
+    assert.notEqual(out.isError, true, `a refused copy is disclosed, never the answer: ${out.text}`);
+    assert.equal(switches.length, 1, 'the human asked to move, so the session moves');
+    const lines = String(out.text).split('\n').filter((line) => /^changes not copied:/.test(line));
+    assert.equal(lines.length, 1, `ONE disclosure line, got ${JSON.stringify(out.text)}`);
+    assert.match(lines[0], /conflict\.txt/, 'the line names the copies it could not carry');
+    assert.match(lines[0], /nothing was overwritten/);
+    assert.equal(out.details.copyRefused, lines[0], 'the details record the same one line');
+    assert.deepEqual(out.details.copiedFiles, [], 'nothing was copied');
+    // Nothing was copied and nothing was overwritten on either side.
+    assert.equal(fs.readFileSync(path.join(destPath, 'conflict.txt'), 'utf8'), 'l1\nDEST-L2\n', 'the destination keeps its own version');
+    assert.equal(git(destPath, ['status', '--porcelain']).trim(), '', 'the destination stays clean');
+    assert.equal(fs.readFileSync(path.join(repo, 'conflict.txt'), 'utf8'), 'l1\nSRC-PENDING-L2\n', 'the source keeps its pending work');
+  });
+
+  test('a queued handoff with a refused copy moves and tells the human once', async () => {
+    const { ctx, switches, destPath } = await conflictedDestination('s9-2');
+    clearPresence();
+    const jobs = addJobs(ctx, [{ id: 'job-s9', status: 'running' }]);
+    const asked = dirtyAsker('yes');
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    host.sent.length = 0;
+    try {
+      await commands.get('warp').handler('feat-s9dest', ctx);
+      assert.equal(asked.length, 1, 'the pending-changes question is asked once, at request time');
+      const record = busyLib.pendingWarpFor(pendingKey());
+      assert.notEqual(record, null, 'the request is queued with its changes');
+      assert.deepEqual(record.handoff.changes, { mode: 'all', paths: [] });
+      assert.equal(switches.length, 0, 'nothing moves under the running job');
+
+      jobs.jobs[0].status = 'exited 0';
+      assert.equal((await busyLib.pendingWarpTick(pendingKey())).status, 'dispatched');
+      assert.equal(host.sent.length, 1);
+      assert.equal(widgetState(ctx).lines, null, 'the row goes with the dispatch');
+
+      notifications.length = 0;
+      await commands.get('warp').handler(host.sent[0][0].slice('/warp '.length), ctx);
+      assert.equal(switches.length, 1, 'the queued handoff moves even though the copy was refused');
+      assert.equal(
+        fs.readFileSync(path.join(destPath, 'conflict.txt'), 'utf8'),
+        'l1\nDEST-L2\n',
+        'the destination keeps its own version',
+      );
+      assert.equal(git(destPath, ['status', '--porcelain']).trim(), '', 'nothing was written there');
+      const errors = notifications.filter(([level]) => level === 'error');
+      assert.deepEqual(errors, [], `no error is reported for a move that happened: ${JSON.stringify(notifications)}`);
+      const told = notifications.filter(([level]) => level === 'info');
+      assert.equal(told.length, 1, `told once: ${JSON.stringify(notifications)}`);
+      assert.match(told[0][1], /^changes not copied: 1 file: conflict\.txt could not be carried/, 'one line, naming the file');
+      assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'the move clears the record');
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('a partial copy still fails hard: the session stays, and the landed file is named', async (t) => {
+    if (path.sep !== '/' || (typeof process.getuid === 'function' && process.getuid() === 0)) {
+      return t.skip('needs POSIX permission bits and a non-root user');
+    }
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    const made = await tools.get('worktree_create').execute('s9-3', { branch: 'feat/s9partial', odd: 's9partial' }, undefined, undefined, ctx);
+    assert.notEqual(made.isError, true, resultText(made));
+    const destPath = made.details.path;
+    // An empty read-only directory in the destination: planning creates nothing,
+    // so the second copy only fails once the writes begin — after the first one
+    // already landed. That is real state, and it must stop the move.
+    const blocked = path.join(destPath, 'blocked');
+    fs.mkdirSync(blocked);
+    fs.chmodSync(blocked, 0o555);
+    try {
+      fs.writeFileSync(path.join(repo, 'a-first.txt'), 'first\n');
+      fs.mkdirSync(path.join(repo, 'blocked'));
+      fs.writeFileSync(path.join(repo, 'blocked/second.txt'), 'second\n');
+      const handoff = {
+        name: 'feat-s9partial',
+        target: destPath,
+        from: repo,
+        branch: 'feat/s9partial',
+        changes: { mode: 'all', paths: [] },
+      };
+      const out = await mod.executeWorktreeWarp('feat-s9partial', ctx, { handoff });
+      assert.equal(out.isError, true, `a copy that landed a file is real state, never a move to make anyway: ${out.text}`);
+      assert.match(out.text, /1 of 2 files already copied/, `the failure counts what landed: ${out.text}`);
+      assert.match(out.text, /a-first\.txt/, 'and names it');
+      assert.equal(switches.length, 0, 'the session stays where it is');
+      assert.equal(fs.readFileSync(path.join(destPath, 'a-first.txt'), 'utf8'), 'first\n', 'the landed file really landed');
+      assert.equal(fs.existsSync(path.join(destPath, 'blocked/second.txt')), false, 'and the refused one did not');
+    } finally {
+      fs.chmodSync(blocked, 0o755);
     }
   });
 });

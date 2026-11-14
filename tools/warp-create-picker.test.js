@@ -1354,3 +1354,100 @@ describe('S11: the shared palette', { concurrency: false }, () => {
     }
   });
 });
+
+// S11 (T8, warp-queue-boundary): the copy question can never be answered by a
+// keystroke the human did not mean for it. The prompt opens with the
+// NON-destructive answer focused and DROPS every input event that arrives inside
+// a short grace window after it mounts, so a buffered or double-tapped Enter
+// (submitting the command, or queueing a follow-up message while streaming)
+// cannot answer a question nobody saw. The clock is injected, so no test sleeps.
+describe('S11 (T8): the copy question cannot be answered by a stray Enter', { concurrency: false }, () => {
+  function openCopy(overrides = {}) {
+    const finished = [];
+    let t = 1000;
+    const view = picker.createSingleSelect({
+      title: 'Uncommitted changes: 1 file, +1/-0. Copy to the destination checkout?',
+      helpers: null,
+      hostTui: null,
+      theme: null,
+      ...picker.copyQuestionOptions(),
+      now: () => t,
+      done: (out) => { finished.push(out); },
+      ...overrides,
+    });
+    return { view, finished, advance: (ms) => { t += ms; } };
+  }
+  const plain = (view, width = 100) => view.render(width).join('\n').replace(/\x1b\[[0-9;]*m/g, '');
+
+  test('the wiring keeps the visible order and opens on NO COPY', () => {
+    const wiring = picker.copyQuestionOptions();
+    assert.deepEqual(wiring.items, ['YES COPY', 'NO COPY'], 'the visible item order is unchanged');
+    assert.equal(wiring.initialSelected, 'NO COPY', 'the safe answer is the one passed as initialSelected');
+    const { view } = openCopy();
+    const text = plain(view);
+    assert.match(text, /^\s*❯\s+NO COPY$/m, 'the cursor opens on NO COPY');
+    assert.match(text, /^\s+YES COPY$/m, 'YES COPY is still offered, unfocused, on its own row');
+  });
+
+  test('an Enter inside the grace window does not finish the picker and does not answer', () => {
+    const { view, finished, advance } = openCopy();
+    view.handleInput('\r');
+    view.handleInput('\n');
+    assert.deepEqual(finished, [], 'a buffered/double-tapped Enter answers nothing');
+    advance(399);
+    view.handleInput('\r');
+    assert.deepEqual(finished, [], 'still inside the window: the panel survives the stray Enter');
+    assert.match(plain(view), /NO COPY/, 'the question is still on screen and unanswered');
+    assert.equal(view.state.cursor, 1, 'the dropped input moved nothing either');
+  });
+
+  test('an Enter after the window confirms the focused row', () => {
+    const { view, finished, advance } = openCopy();
+    view.handleInput('\r');
+    advance(400);
+    view.handleInput('\r');
+    assert.deepEqual(finished, ['NO COPY'], 'only the keypress made after the window answers');
+  });
+
+  test('with the copy question’s wiring the first Enter cannot produce YES COPY', () => {
+    const { view, finished } = openCopy();
+    view.handleInput('\r');
+    assert.ok(!finished.includes('YES COPY'), 'the stray Enter never answers the destructive choice');
+    assert.deepEqual(finished, [], 'the panel answers nothing at all inside the window');
+  });
+
+  test('YES COPY is still reachable deliberately (navigate, then confirm)', () => {
+    const { view, finished, advance } = openCopy();
+    advance(400);
+    view.handleInput('\x1b[A');
+    assert.match(plain(view), /^\s*❯\s+YES COPY$/m, 'an arrow after the window moves the cursor');
+    view.handleInput('\r');
+    assert.deepEqual(finished, ['YES COPY'], 'the deliberate answer is the chosen row');
+  });
+
+  test('Esc still cancels after the window, and is dropped inside it', () => {
+    const inside = openCopy();
+    inside.view.handleInput('\x1b');
+    assert.deepEqual(inside.finished, [], 'a stray Esc inside the window does not kill the question');
+    inside.advance(400);
+    inside.view.handleInput('\x1b');
+    assert.deepEqual(inside.finished, [null], 'Esc after the window cancels');
+  });
+
+  test('without inputGraceMs every other picker keeps its immediate Enter', () => {
+    const finished = [];
+    const view = picker.createSingleSelect({
+      title: 'Type',
+      items: ['feat', 'fix'],
+      helpers: null,
+      hostTui: null,
+      theme: null,
+      done: (out) => { finished.push(out); },
+    });
+    view.handleInput('\r');
+    assert.deepEqual(finished, ['feat'], 'the default (no grace window) confirms on the first Enter');
+    const zeroed = openCopy({ inputGraceMs: 0 });
+    zeroed.view.handleInput('\r');
+    assert.deepEqual(zeroed.finished, ['NO COPY'], 'an explicit 0 is the same: no grace window');
+  });
+});

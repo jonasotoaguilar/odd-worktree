@@ -1937,3 +1937,215 @@ describe('warp-queue-order: the copy source is the session’s own checkout', ()
     assert.equal(fs.existsSync(path.join(target, 'principal-two.txt')), false, 'nothing was copied out of the principal');
   });
 });
+
+// ---------------------------------------------------------------------------
+// warp-settle-dispatch T1-T3 (S1-S6): a warp typed mid-run is QUEUED and fires
+// by itself at the host's settle boundary. The host's own idle state
+// (`ctx.isIdle()`) is the fourth busy source, so "the assistant is still
+// thinking" — no tool executing, no agent task, no job — is busy too.
+// ---------------------------------------------------------------------------
+describe('warp-settle-dispatch: not-idle queues, agent_settled dispatches', () => {
+  // The host's own idle state, mutated by the test. `waitForIdle` never resolves
+  // while the host is processing a run, so a front that parks in a host wait is
+  // observable instead of hanging the suite: it returns, and the wait is counted.
+  function hostIdleState(ctx) {
+    const state = { idle: false, waits: 0 };
+    ctx.isIdle = () => state.idle;
+    ctx.waitForIdle = () => {
+      state.waits += 1;
+      // The host would settle later: a front that parks here is observed by the
+      // race below instead of hanging the suite when the assertion fails.
+      return state.idle ? Promise.resolve() : new Promise((resolve) => setTimeout(resolve, 1500));
+    };
+    return state;
+  }
+
+  // The host's settle boundary, driven through the handler the extension
+  // registered. Awaited so a dispatch it starts is observable when it returns.
+  async function settle(ctx) {
+    const handlers = hooks.filter(([name]) => name === 'agent_settled');
+    assert.ok(handlers.length > 0, 'the extension registers an agent_settled handler');
+    for (const [, handler] of handlers) await handler({ aborted: false }, ctx);
+  }
+
+  async function createdCheckout(ctx, callId, branch, odd) {
+    const created = await tools.get('worktree_create').execute(callId, { branch, odd }, undefined, undefined, ctx);
+    assert.notEqual(created.isError, true, resultText(created));
+    return created;
+  }
+
+  test('a mid-run warp with zero counters is queued, never awaited, and paints its row', async () => {
+    const repo = makeRepo();
+    const ctx = makeCtx(repo);
+    const created = await createdCheckout(ctx, 'settle-1', 'feat/mid', 'mid');
+    assert.notEqual(created.isError, true, resultText(created));
+    clearPresence();
+    const jobs = addJobs(ctx, []);
+    const idle = hostIdleState(ctx);
+    const switches = [];
+    ctx.switchSession = async (file) => { switches.push(file); return { cancelled: false }; };
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      const answered = await Promise.race([
+        commands.get('warp').handler('feat-mid', ctx).then(() => 'returned'),
+        new Promise((resolve) => setTimeout(() => resolve('still-waiting'), 400)),
+      ]);
+      assert.equal(answered, 'returned', 'a mid-run request never waits for the host');
+      assert.equal(idle.waits, 0, 'the handler entered no host wait');
+      assert.equal(switches.length, 0, 'nothing moves while the run is live');
+      assert.equal(host.sent.length, 0, 'nothing is dispatched before the settle boundary');
+      assert.ok(jobs.calls > 0, 'the counters were read as they are');
+      const record = busyLib.pendingWarpFor(pendingKey());
+      assert.notEqual(record, null, 'the request is queued');
+      assert.equal(record.name, 'feat-mid');
+      assert.deepEqual(notifications, [
+        ['info', 'worktree warp: handoff queued — waiting for the current agent run before the move'],
+      ]);
+      assert.deepEqual(widgetState(ctx).lines, [WIDGET_DIM('Queued: warp feat-mid — waiting for the current agent run')]);
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('the settle boundary dispatches the pending record once, as /warp <token>', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    await createdCheckout(ctx, 'settle-2', 'feat/settled', 'settled');
+    clearPresence();
+    addJobs(ctx, []);
+    const idle = hostIdleState(ctx);
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      await commands.get('warp').handler('feat-settled', ctx);
+      assert.equal(idle.waits, 0, 'the mid-run request waited for nothing');
+      assert.equal(host.sent.length, 0, 'nothing is dispatched while the run is live');
+      assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, 'the request is queued');
+
+      // The run settles: the counters were already zero, and now the host is
+      // idle too. The boundary tick dispatches without waiting for a poll.
+      idle.idle = true;
+      await settle(ctx);
+      assert.equal(host.sent.length, 1, 'the record is dispatched at the settle boundary');
+      const [message, options] = host.sent[0];
+      assert.deepEqual(options, { expandPromptTemplates: true });
+      assert.ok(message.startsWith('/warp @'), `the queued command is /warp (${message})`);
+      assert.equal(widgetState(ctx).lines, null, 'the dispatch clears the row');
+
+      // The dispatched command is the queued move: it lands and settles the
+      // record, so the move started when the session settled.
+      notifications.length = 0;
+      await commands.get('warp').handler(message.slice('/warp '.length), ctx);
+      assert.equal(switches.length, 1, 'the move lands at the settle boundary');
+      assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'the move clears the record');
+      assert.deepEqual(notifications, [], 'a real move notifies nothing');
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('a settle tick that arrives while a dispatch is already in flight dispatches nothing more', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    await createdCheckout(ctx, 'settle-3', 'feat/race', 'race');
+    clearPresence();
+    // A deliberately slow job list: the first tick is still inside its read when
+    // the second arrives, which is exactly the window a second lock would paper
+    // over. The record's own `dispatching` guard must already cover it.
+    let reads = 0;
+    ctx.tools = [{ name: 'job_list' }];
+    ctx.executeTool = async () => {
+      reads += 1;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return { content: [{ type: 'text', text: 'No background jobs in this session.' }] };
+    };
+    const idle = hostIdleState(ctx);
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      await commands.get('warp').handler('feat-race', ctx);
+      assert.equal(host.sent.length, 0);
+      assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null);
+
+      idle.idle = true;
+      const settled = settle(ctx);
+      assert.equal(await until(() => reads > 0), true, 'the boundary tick reached the counters');
+      const polled = busyLib.pendingWarpTick(pendingKey());
+      await settled;
+      assert.equal((await polled).status, 'waiting', 'the tick that found one in flight waits instead of dispatching');
+      assert.equal(host.sent.length, 1, 'one record is dispatched at most once');
+      assert.equal(host.sent[0][0].startsWith('/warp @'), true);
+      assert.notEqual(busyLib.pendingWarpFor(pendingKey()), null, 'the record survives its own dispatch');
+      assert.equal(switches.length, 0, 'nothing moved before the dispatched command ran');
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('a second warp while one is pending is refused at once and touches no host wait', async () => {
+    const repo = makeRepo();
+    const ctx = makeCtx(repo);
+    await createdCheckout(ctx, 'settle-4', 'feat/first', 'first');
+    await createdCheckout(ctx, 'settle-5', 'feat/second', 'second');
+    clearPresence();
+    addJobs(ctx, []);
+    const idle = hostIdleState(ctx);
+    const switches = [];
+    ctx.switchSession = async (file) => { switches.push(file); return { cancelled: false }; };
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      await commands.get('warp').handler('feat-first', ctx);
+      const queued = busyLib.pendingWarpFor(pendingKey());
+      assert.notEqual(queued, null, 'the first request is queued');
+
+      notifications.length = 0;
+      const answered = await Promise.race([
+        commands.get('warp').handler('feat-second', ctx).then(() => 'returned'),
+        new Promise((resolve) => setTimeout(() => resolve('still-waiting'), 400)),
+      ]);
+      assert.equal(answered, 'returned', 'a second warp answers at once');
+      assert.equal(idle.waits, 0, 'the refusal entered no host wait');
+      assert.equal(switches.length, 0, 'the refused second warp moves nothing');
+      assert.equal(host.sent.length, 0, 'the refusal dispatches nothing');
+      assert.deepEqual(notifications.map(([level]) => level), ['error']);
+      assert.match(
+        notifications[0][1],
+        /^worktree warp: a warp to feat-first is already pending for this session — it runs when this session's tools, agent tasks and background jobs finish; wait for it or let it expire$/,
+      );
+      assert.equal(busyLib.pendingWarpFor(pendingKey()).queuedAt, queued.queuedAt, 'the pending request is never replaced');
+    } finally {
+      settlePending();
+    }
+  });
+
+  test('an idle session still moves immediately: no queue, no row, no settle dispatch', async () => {
+    const repo = makeRepo();
+    const { ctx, switches } = movableCtx(repo);
+    await createdCheckout(ctx, 'settle-6', 'feat/quiet-idle', 'quiet-idle');
+    clearPresence();
+    addJobs(ctx, []);
+    const idle = hostIdleState(ctx);
+    idle.idle = true;
+    host.sent.length = 0;
+    notifications.length = 0;
+    widgetPaints.length = 0;
+    try {
+      await commands.get('warp').handler('feat-quiet-idle', ctx);
+      assert.equal(switches.length, 1, 'an idle session moves straight away');
+      assert.equal(idle.waits, 1, 'only the move path waits for idle');
+      assert.equal(busyLib.pendingWarpFor(pendingKey()), null, 'nothing was queued');
+      assert.deepEqual(notifications, [], 'a real move notifies nothing');
+      assert.equal(widgetPaintsFor(ctx).length, 0, 'an immediate move paints no row');
+      await settle(ctx);
+      assert.equal(host.sent.length, 0, 'a settle with nothing queued dispatches nothing');
+    } finally {
+      settlePending();
+    }
+  });
+});

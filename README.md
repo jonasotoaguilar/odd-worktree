@@ -73,11 +73,12 @@ as commands, and the two `worktree_*` tools are offered to the agent.
      names, else `init.defaultBranch`. When none of them resolves, the create is
      refused with `could not resolve a base branch: tried main, origin/HEAD,
      init.defaultBranch` before anything is written.
-   - Three refusals protect what already exists, each before a single write:
-     `worktree path already exists: …` (remove it or pass a different odd),
-     `branch … is already checked out in …` (use another branch, or work in that
-     worktree), and `branch main is the base branch; pick the branch this worktree
-     should work on`.
+   - Four refusals protect what already exists, each before a single write:
+     `odd … already has a worktree: …` (use that worktree instead of creating
+     another), `worktree path already exists: …` (remove it or pass a different
+     odd), `branch … is already checked out in …` (use another branch, or work in
+     that worktree), and `branch main is the base branch; pick the branch this
+     worktree should work on`.
    - A whitespace-only or otherwise unusable `odd` is refused here with
      `invalid odd name: …` — a deliberate divergence from the reference branch,
      where it would create a directory nobody can see and a record the store must
@@ -123,7 +124,7 @@ as commands, and the two `worktree_*` tools are offered to the agent.
 | --- | --- |
 | `↑`/`↓`, `j`/`k` | Move the selection |
 | `enter` | Warp to the focused checkout (`enter` on the `view all worktrees` row opens the extended list) |
-| `c` | Open the create flow: pick the change type, then the ODD — `tab`/`←`/`→` switch between the two fields, `↑`/`↓` pick from the active list, the ODD list's first entry is `new odd` (the only one that takes a typed name) and its other entries are the ODDs that exist in `main`, `enter` on the ODD creates, `esc` cancels |
+| `c` | Open the create flow: answer `Branch` (the change type from the eleven-type list, then the name — composed as `<type>/<name>`, `feat` by default) and `Odd` (the checkout's directory) — `tab`/`←`/`→` switch between the two fields, `↑`/`↓` pick from the active list, typing fills the active name, the ODD list's first entry is `new odd` (the only one that takes a typed name) and its other entries are the ODDs that exist in `main` minus the ones whose checkout already exists, `enter` on the ODD creates, `esc` cancels |
 | `ctrl+d` | Ask to delete the focused checkout; the extension owns the confirmation, the evidence and the removal |
 | `v` | Open the extended list of every other checkout (`↑`/`↓`, `pgUp`/`pgDn`, `enter`, `T` or `/` to filter, `esc` back) |
 | `r` | Reload the listing |

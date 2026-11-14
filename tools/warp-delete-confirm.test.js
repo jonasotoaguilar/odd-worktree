@@ -74,7 +74,7 @@ const TARGET = { name: 'feat-del', path: '/checkouts/feat-del', branch: 'feat/de
 const BASE_BODY = `Delete worktree checkout at ${TARGET.path} for branch '${TARGET.branch}'? This removes the checkout but keeps the branch.`;
 
 describe('S4: the keyboard delete dialog is always asked and always honest', () => {
-  test('the title names the worktree and a clean, zero-ahead checkout adds no warning', async () => {
+  test('the title states the confirmation and names the worktree, and a clean, zero-ahead checkout adds no warning', async () => {
     const repo = makeRepo('clean');
     git(repo, ['branch', 'main', 'HEAD']);
     const evidence = await confirmLib.readWarpDeleteEvidence(repo);
@@ -82,7 +82,7 @@ describe('S4: the keyboard delete dialog is always asked and always honest', () 
     assert.equal(evidence.aheadMain.status, 'none');
     assert.equal(evidence.aheadMain.ahead, 0);
     const prompt = confirmLib.warpDeletePrompt(TARGET, evidence);
-    assert.equal(prompt.title, "Delete worktree 'feat-del'?");
+    assert.equal(prompt.title, "Confirm delete: worktree 'feat-del'");
     assert.equal(prompt.body, BASE_BODY);
     assert.equal(prompt.force, false, 'a clean checkout is never forced');
   });
@@ -407,11 +407,13 @@ describe('A1: the confirmation is bound to the pending CONTENT, not to a line co
   });
 });
 
-// A2 (verification): a checkout can read CLEAN while git ignores files that
-// only exist inside it, and removing the checkout deletes them. They are
-// therefore disclosed in the question, and their path list is part of the
-// reading so a file that appears during the dialog is noticed.
-describe('A2: ignored files are disclosed, never silently deleted', () => {
+// A2 (verification, amended): a checkout can read CLEAN while git ignores files
+// that only exist inside it, and removing the checkout deletes them. The human
+// asked that the question stop naming them — untracked, ignored files are noise
+// there — so they are NO LONGER disclosed, while their path list stays part of
+// the reading: a file that appears during the dialog still changes the key and
+// still refuses the deletion.
+describe('A2: ignored files stay read as a safety net, and are never disclosed', () => {
   function withIgnored(tag) {
     const repo = makeRepo(tag);
     git(repo, ['branch', 'main', 'HEAD']);
@@ -424,7 +426,7 @@ describe('A2: ignored files are disclosed, never silently deleted', () => {
     return repo;
   }
 
-  test('a checkout that reads clean but holds ignored files discloses them', async () => {
+  test('a checkout that reads clean but holds ignored files discloses none of them', async () => {
     const repo = withIgnored('ignored-present');
     const evidence = await confirmLib.readWarpDeleteEvidence(repo);
     assert.equal(evidence.changes.status, 'clean', 'nothing git tracks is pending');
@@ -432,7 +434,16 @@ describe('A2: ignored files are disclosed, never silently deleted', () => {
     assert.equal(evidence.ignored.files, 2);
     assert.deepEqual(evidence.ignored.samples, ['build/out.txt', 'debug.log']);
     const prompt = confirmLib.warpDeletePrompt(TARGET, evidence);
-    assert.match(prompt.body, /Ignored files \(deleted with the checkout\): build\/out\.txt, debug\.log\./);
+    // A2 amended: the body is the clean dialog plus the one ahead fact this
+    // fixture really carries — no clause, no listing — so the ignored files are
+    // provably ABSENT from what the human reads, while the evidence above proves
+    // they are still read and still fingerprinted.
+    assert.equal(
+      prompt.body,
+      `${BASE_BODY} Commits ahead of main: ${evidence.aheadMain.ahead}.`,
+      'the ignored files are never named in the question',
+    );
+    assert.doesNotMatch(prompt.body, /Ignored files/i, 'no ignored-files clause is rendered');
     assert.equal(prompt.force, false, 'ignored files do not force: git needs no --force for them');
   });
 
@@ -585,7 +596,7 @@ describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () =
     const { repo, target, notifications, confirmations, ctx } = await panelFixture('clear');
     await commands.get('warp').handler('', ctx);
     assert.equal(confirmations.length, 1, 'exactly one deletion question');
-    assert.match(confirmations[0].title, /^Delete worktree '/);
+    assert.match(confirmations[0].title, /^Confirm delete: worktree '/);
     assert.match(confirmations[0].body, /Delete worktree checkout at /);
     assert.match(confirmations[0].body, /keeps the branch/);
     assert.equal(fs.existsSync(target), false, 'the approved checkout is removed');

@@ -580,13 +580,44 @@ async function runPortedWorktreeCreate(input, ctx) {
   // The canonical main worktree decides the destination AND runs the create, so a
   // session standing in a linked worktree still creates beside the clone.
   const listing = await portedGit(cwd, ["worktree", "list", "--porcelain"]);
-  const main = metadata.parseWorktreeListPorcelain(listing.code === 0 ? listing.stdout : "")[0];
+  const liveEntries = metadata.parseWorktreeListPorcelain(listing.code === 0 ? listing.stdout : "");
+  const main = liveEntries[0];
   if (main === undefined) return errorResult(`could not list the worktrees of ${repo.root}`, { branch });
   let mainRoot = main.path;
   try {
     mainRoot = fs.realpathSync(main.path);
   } catch {
     // Git's own spelling is all it answered.
+  }
+
+  // S11 (warp-branch-field): one ODD is one worktree, so a create for an ODD
+  // that already owns one refuses by saying THAT — the answer is "work there",
+  // never "pick another odd". Only a LIVE checkout of this clone earns this
+  // sentence: a plain directory at the destination keeps the core's own
+  // `worktree path already exists` refusal below, untouched. Read-only, so the
+  // refusal happens before anything is written.
+  if (typeof create.isWorktreeSegment === "function" && create.isWorktreeSegment(request.odd)) {
+    let destination = null;
+    try {
+      destination = create.worktreeDestinationPath(mainRoot, request.odd);
+    } catch {
+      destination = null;
+    }
+    if (destination !== null) {
+      const target = checkoutState(destination, repo.root);
+      const targetId = target.real !== null ? target.real : target.absolute;
+      const owner = targetId === null ? undefined : liveEntries.find((entry) => {
+        const state = checkoutState(entry.path, repo.root);
+        const id = state.real !== null ? state.real : state.absolute;
+        return id !== null && id === targetId;
+      });
+      if (owner !== undefined) {
+        return errorResult(
+          `odd ${request.odd} already has a worktree: ${owner.path}\nUse that worktree instead of creating another.`,
+          { branch, odd: request.odd },
+        );
+      }
+    }
   }
 
   // The panel's own selection is PREFLIGHTED read-only, before the plan writes anything:
@@ -4684,16 +4715,15 @@ const WARP_CHANGE_TYPES = [
   { id: "ci", label: "CI" },
   { id: "revert", label: "Revert" },
 ];
-// Branch names MUST match the skill's shape: `<type>/<slug>`.
-const WARP_CREATE_BRANCH_RE = /^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)\/[a-z0-9._-]+$/;
 
 // The create panel is the selector's create completion: it asks for exactly
-// TWO things — the change type, then the change name (S6) — and then
-// `executeWorktreeCreate` runs. It never prompts, the type plus the typed
-// name the panel collected is the human intent, and the session warps into
-// the fresh checkout. A creation supplies NEITHER `issues` nor `odd`: a
-// brand-new row is born without an association, so the invalid, duplicate,
-// occupied and principal refusals keep their exact shape.
+// TWO things — the BRANCH (`<type>/<name>`, composed by the panel) and the ODD
+// that names the checkout's directory (warp-branch-field S1,S2) — and then
+// `executeWorktreeCreate` runs. It never prompts: those two answers ARE the
+// human's intent, and the branch travels through unchanged (created when it is
+// absent, adopted when it exists). A creation supplies NEITHER `issues` nor a
+// derived name: a brand-new row is born without an association, so the invalid,
+// duplicate, occupied and principal refusals keep their exact shape.
 
 // The warp surface's overlay geometry (T3/S3-S4, L6). The SELECTOR keeps a
 // focusable `ctx.ui.custom()` overlay — gentle-shell's `setWidget()` panel is
@@ -4875,6 +4905,51 @@ async function askCreatePendingChanges({ ctx, git, fromCheckout }) {
   return { ok: true, copy: choice === 'yes', asked: true };
 }
 
+// S5 (warp-branch-field): the checkouts that already exist, as absolute paths —
+// the evidence the create panel filters its ODD list with. `git worktree list`
+// is the live side and the registry is the stored side, and a stored row only
+// counts while its directory still exists: reconciling the two is what keeps a
+// removed checkout's stale row from hiding an ODD that is free again. Never
+// throws — an unreadable side contributes nothing, and the create still refuses
+// a collision with its own sentence.
+async function warpOccupiedCheckoutPaths(git, cwd) {
+  const paths = new Set();
+  const add = (value) => {
+    if (typeof value !== "string" || value.length === 0) return;
+    try {
+      paths.add(path.resolve(value));
+    } catch {
+      // An unresolvable spelling names no checkout.
+    }
+  };
+  let live = [];
+  try {
+    live = await git.listWorktreesAsync(cwd, { runAsync: libRunner(git) });
+  } catch {
+    live = [];
+  }
+  for (const entry of Array.isArray(live) ? live : []) {
+    if (entry && typeof entry === "object") add(entry.path);
+  }
+  try {
+    const registry = libRequire("worktree-registry.js");
+    const repo = await git.repoIdentityAsync(cwd, { runAsync: libRunner(git) });
+    const read = registry.readRegistry(repo.root);
+    for (const row of read && Array.isArray(read.worktrees) ? read.worktrees : []) {
+      if (!row || typeof row.path !== "string" || !path.isAbsolute(row.path)) continue;
+      try {
+        if (!fs.statSync(row.path).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      add(row.path);
+    }
+  } catch {
+    // A stored side this process cannot read adds nothing.
+  }
+  return [...paths];
+}
+
 // Create-then-return (S7): the selector's create completion mounts the
 // TWO-FIELD panel (the change type and the ODD, where the ODD is picked from the
 // ODDs `main` carries with `new odd` as its first entry and its only typed case)
@@ -4930,6 +5005,12 @@ async function warpCreateAndEnter(ctx, git, notify) {
   } catch {
     oddOptions = [];
   }
+  // S5 (warp-branch-field): one ODD is one worktree, so an ODD whose checkout
+  // already exists is not a choice — the create would only refuse it. The
+  // evidence is the RECONCILED pair the create itself resolves against: git's
+  // live listing plus the registry rows whose directory still exists, so a stale
+  // row for a removed checkout never hides an ODD that is free again.
+  const occupiedPaths = await warpOccupiedCheckoutPaths(git, panelCwd);
   let out;
   try {
     out = await ctx.ui.custom(
@@ -4937,6 +5018,7 @@ async function warpCreateAndEnter(ctx, git, notify) {
         cwd: panelCwd,
         changeTypes: WARP_CHANGE_TYPES,
         oddOptions,
+        occupiedPaths,
         git,
         helpers,
         hostTui,
@@ -4958,18 +5040,18 @@ async function warpCreateAndEnter(ctx, git, notify) {
   // goes, including any checkout just made. `cancelled` distinguishes this from
   // a refusal; closing the RETURNED selector is what ends the flow.
   if (!out || out.ok !== true) return { closed: true, created: false, cancelled: true };
-  // S1: the create's only identity is the ODD, so the form answers it and nothing
-  // else — there is no second name to combine it with. The branch is only the git
-  // branch, derived from the two things the form asked for: created with the
-  // checkout, or adopted when it already exists.
+  // S1/S4 (warp-branch-field): the panel answers the branch it composed and the
+  // ODD that names the directory, and the branch travels through UNCHANGED —
+  // created when it is absent, adopted when it exists. Nothing derives it from
+  // the ODD any more; the create core still owns the branch's own validity.
   const odd = typeof out.odd === "string" ? out.odd.trim() : "";
   if (odd === "") {
     notify?.('warp: the ODD is required: it names the checkout\'s directory (for example "login-ui"); nothing was created.', "error");
     return { closed: true, created: false };
   }
-  const branch = `${out.type}/${git.slugifyBranch(odd)}`;
-  if (!WARP_CREATE_BRANCH_RE.test(branch)) {
-    notify?.(`warp: the ODD ${JSON.stringify(odd)} does not make a branch name (${branch}): use one with a letter or digit, for example "login-ui"; nothing was created.`, "error");
+  const branch = typeof out.branch === "string" ? out.branch.trim() : "";
+  if (branch === "") {
+    notify?.('warp: the branch is required (for example "feat/login-ui"); nothing was created.', "error");
     return { closed: true, created: false };
   }
   const createParams = { branch, odd };

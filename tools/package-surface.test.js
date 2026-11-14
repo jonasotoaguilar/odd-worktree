@@ -6,7 +6,8 @@
 // loads in plain Pi with git as its only external dependency, and ships none of
 // the removed functionality
 // (customize panel, plugin-tools toggles, worktree mode file, perf tracing,
-// CodeGraph commands or a CodeGraph gate).
+// CodeGraph commands, a CodeGraph gate or any CodeGraph probe or sync; the one
+// CodeGraph touch is the append-only `## CodeGraph` prompt section).
 // The issues reader, preview formatter and view are the migrated T2 units and
 // are shipped; `/issues` is the T3 command that mounts them, without any
 // worktree↔issue association.
@@ -116,20 +117,30 @@ describe('removed surface', () => {
     }
   });
 
-  test('the extension probes, registers and runs no CodeGraph surface (S2)', async () => {
+  test('the extension probes, registers and runs no CodeGraph surface; it only appends a prompt section (S2)', async () => {
     const source = stubbedSource();
-    assert.equal(/codegraph/i.test(source), false, 'the extension source mentions no CodeGraph at all');
-    const { commands, hooks } = await loadExtension({});
-    for (const gone of ['codegraph-hook', 'codegraph-init', 'codegraph-sync']) {
+    // The one reference is the require of the prompt-section module.
+    const mentions = source.split('\n').filter((line) => /codegraph/i.test(line.replace(/\/\/.*$/, '')));
+    assert.deepEqual(
+      mentions.map((line) => line.trim()),
+      ['libRequire("codegraph-rules.js").appendCodegraphSection(event);'],
+      'the only CodeGraph reference in the extension is the prompt section',
+    );
+    const { commands, tools, hooks } = await loadExtension({});
+    for (const gone of ['codegraph-hook', 'codegraph-init', 'codegraph-sync', 'codegraph']) {
       assert.equal(commands.has(gone), false, `no /${gone} command`);
+      assert.equal(tools.has(gone), false, `no ${gone} tool`);
     }
     assert.equal(
       hooks.some(([name]) => name === 'tool_result') && /scheduleSync/.test(source),
       false,
       'no edit/write sync hook is registered',
     );
-    for (const shipped of fs.readdirSync(path.join(ROOT, 'lib'))) {
-      assert.equal(/^codegraph-/.test(shipped), false, `lib/${shipped} is not shipped`);
+    const shipped = fs.readdirSync(path.join(ROOT, 'lib')).filter((entry) => /^codegraph-/.test(entry)).sort();
+    assert.deepEqual(shipped, ['codegraph-prompt', 'codegraph-rules.js'], 'lib ships only the prompt section module and its texts');
+    const lib = fs.readFileSync(path.join(ROOT, 'lib', 'codegraph-rules.js'), 'utf8');
+    for (const forbidden of ['spawn', 'exec(', 'execFile', 'child_process', 'writeFile', 'codegraph.db']) {
+      assert.equal(lib.includes(forbidden), false, `the section module never uses ${forbidden}`);
     }
   });
 

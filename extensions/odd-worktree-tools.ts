@@ -7135,6 +7135,13 @@ export default function (pi) {
     } catch {
       // The prompt block is best effort.
     }
+    // The role's CodeGraph text rides the same append-only channel. It only
+    // advises a session that already holds a CodeGraph tool.
+    try {
+      libRequire("codegraph-rules.js").appendCodegraphSection(event);
+    } catch {
+      // The prompt block is best effort.
+    }
   });
   // Register every live checkout the registry does not own yet. Dispatched here
   // and awaited by the barrier below: the host runs session_start handlers one

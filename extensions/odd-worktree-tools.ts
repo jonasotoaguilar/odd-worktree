@@ -34,12 +34,84 @@ const require = createRequire(import.meta.url);
 // Package-side helpers live in lib/. Tests point GENTLE_WORKTREE_LIB_DIR
 // at the real lib dir before importing the copied module; production
 // resolves relative to this file.
-function libRequire(name) {
+//
+// One load of this extension reads lib/ from disk ONCE, fresh, and then reuses
+// what it read for the rest of its life. Two facts make that the whole contract:
+//
+//   * the host loads the extension with jiti `moduleCache: false`
+//     (pi-coding-agent dist/core/extensions/loader.js:
+//     `createJiti(import.meta.url, { moduleCache: false, ... })`), so THIS file
+//     is re-read on every load — which is why an updated extension reaches a
+//     resumed session at all;
+//   * Node's own `require` cache is a different cache, and it survives that
+//     load. These lib modules are CommonJS, reached through `require`, so
+//     before this fix a reloaded extension kept binding the modules the FIRST
+//     load compiled. Observed live: `registry.parseWorktreePorcelain is not a
+//     function` — the function exists on disk and the new extension calls it,
+//     but the loaded module predates it — and a `neon` configuration that still
+//     drew float cards, because lib/card-style.js in memory was the old one.
+//
+// The host exposes no public loader to reuse: its package export map is `.` and
+// `./rpc-entry` only, and the loader itself is `dist/core/extensions/
+// jiti-loader.js`, which re-exports `createJiti` from `jiti` — a dependency of
+// the host, not of this package, and not a supported import. So the fix stays in
+// this package's own seam: drop this load's lib subtree from the require cache
+// once, before its first module read, and never again. That is "one load, one
+// fresh read": nothing is re-read per call, and no module survives into the next
+// load. Nothing here touches Gentle Shell.
+const purgedLibDirs = new Set();
+
+// The lib directory this call resolves. Read from the environment each time so
+// the tests' `GENTLE_WORKTREE_LIB_DIR` override keeps working exactly as before.
+function libDir() {
   const override = process.env.GENTLE_WORKTREE_LIB_DIR;
-  const dir = typeof override === "string" && override.length > 0
-    ? override
-    : path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "lib");
+  if (typeof override === "string" && override.length > 0) return override;
+  return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "lib");
+}
+
+// Every spelling of `dir` a cache key may carry: as given, and symlink-resolved
+// (require keys are the real paths Node loaded).
+function libDirSpellings(dir) {
+  const spellings = [dir];
+  try {
+    const resolved = fs.realpathSync(dir);
+    if (resolved !== dir) spellings.push(resolved);
+  } catch {
+    // An unresolvable directory simply has the one spelling; require will fail.
+  }
+  return spellings;
+}
+
+// Drop the lib subtree from the require cache, so the next require of anything
+// under it compiles the file as it is on disk now. Only this package's own lib
+// directory is touched — never node_modules, never the host.
+function purgeLibRequireCache(dir) {
+  const prefixes = libDirSpellings(dir).map((spelling) => (spelling.endsWith(path.sep) ? spelling : `${spelling}${path.sep}`));
+  const cache = require.cache;
+  if (cache === null || typeof cache !== "object") return;
+  for (const key of Object.keys(cache)) {
+    if (prefixes.some((prefix) => key.startsWith(prefix))) delete cache[key];
+  }
+}
+
+function libRequire(name) {
+  const dir = libDir();
+  if (!purgedLibDirs.has(dir)) {
+    purgedLibDirs.add(dir);
+    purgeLibRequireCache(dir);
+  }
   return require(path.join(dir, name));
+}
+
+// Test seam only, never a public surface: the lib module instance THIS extension
+// load actually uses, by file name ("worktree-git.js"). Because one load compiles
+// its own lib modules (see above), a test that needs to replace or observe a
+// module's behaviour — an injected runner, a fake `gh` client, the pending-warp
+// queue — must patch the instance the extension calls, not a `require` of the
+// same path, which is a different object after the last load. Production code
+// never calls this; `libRequire` is how the extension reaches lib/.
+function libModule(name) {
+  return libRequire(name);
 }
 
 // S21 (round 3): no INTERACTIVE path may block the host event loop. Every
@@ -831,12 +903,19 @@ function resolveWorktreeToolCardMetrics() {
   return worktreeToolCardMetricsAuto || null;
 }
 
-// One factory per metrics identity, so a render never rebuilds the cards and an
-// injected seam still takes effect on the next render.
+// One factory per metrics identity AND seam availability, so a render never
+// rebuilds the cards, an injected seam still takes effect on the next render, and
+// `session_start` (which is what makes a UI handle known) is picked up by the
+// very next card.
 function worktreeCardRenderer(toolName, metrics) {
-  if (worktreeToolCardsCache === undefined || worktreeToolCardsCache.metrics !== metrics) {
-    const cards = libRequire("worktree-cards.js").createWorktreeCards({ metrics });
-    worktreeToolCardsCache = { metrics, cards };
+  const seamed = worktreeCardUi !== null;
+  const cached = worktreeToolCardsCache;
+  if (cached === undefined || cached.metrics !== metrics || cached.seamed !== seamed) {
+    const deps = seamed
+      ? { metrics, toggleExpanded: toggleWorktreeCardExpanded }
+      : { metrics };
+    const cards = libRequire("worktree-cards.js").createWorktreeCards(deps);
+    worktreeToolCardsCache = { metrics, seamed, cards };
   }
   return worktreeToolCardsCache.cards.renderer(toolName);
 }
@@ -6708,4 +6787,4 @@ export default function (pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, libModule };

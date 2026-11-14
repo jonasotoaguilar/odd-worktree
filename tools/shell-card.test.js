@@ -26,6 +26,7 @@ const {
 	cardElapsed,
 	cardInnerWidth,
 	cardLine,
+	cardMouseEvent,
 	cardRunningLine,
 	cardTop,
 	cardTopLine,
@@ -597,6 +598,71 @@ test('too narrow for float, the neon outline answers instead of a broken rail', 
 	assert.match(stripAnsi(narrow[0]), /^╭/, 'nine columns is the neon frame');
 	assert.equal(narrow.some((row) => row.includes('\x1b')), false, 'and no background is painted there');
 	assert.deepEqual(render(0).filter((row) => row !== ''), [], 'no width draws no content');
+});
+
+// ---- the card's one click area ----
+
+// The installed Pi build delivers a click only to the component that CLAIMED the
+// press (pi-tui tui-alt-screen.js records `mousePressTarget` from the press
+// dispatch and retargets the synthesized `click` to it), so a card claims the
+// cells it wants and nothing else. The whole drawn card is that area, and the
+// click flips the host's own expansion flag — the same one `ctrl+o` flips.
+const ROWS = ['abcdef', 'ghijkl'];
+
+function mouseEvent(patch) {
+	return { type: 'click', button: 'left', x: 0, y: 0, width: 6, height: 2, screenX: 0, screenY: 0, shift: false, alt: false, ctrl: false, ...patch };
+}
+
+function countingToggle() {
+	const toggle = () => {
+		toggle.calls += 1;
+	};
+	toggle.calls = 0;
+	return toggle;
+}
+
+test('a left press claims the card so the click that follows can toggle it', () => {
+	const toggle = countingToggle();
+	assert.deepEqual(cardMouseEvent(mouseEvent({ type: 'press', x: 3, y: 0 }), ROWS, toggle), { handled: true, render: false }, 'the press claims the gesture without repainting the row it measured');
+	assert.equal(toggle.calls, 0, 'a press alone never toggles');
+	assert.deepEqual(cardMouseEvent(mouseEvent({ type: 'click', x: 3, y: 0 }), ROWS, toggle), { handled: true }, 'the retargeted click is handled');
+	assert.equal(toggle.calls, 1, 'the click on the heading toggles once');
+});
+
+test('every cell of the drawn card is the click area, not only the hint', () => {
+	const toggle = countingToggle();
+	for (let y = 0; y < ROWS.length; y += 1) {
+		for (const x of [0, 3, 5]) {
+			assert.deepEqual(cardMouseEvent(mouseEvent({ x, y }), ROWS, toggle), { handled: true }, `cell ${x},${y} is on the card`);
+		}
+	}
+	assert.equal(toggle.calls, ROWS.length * 3, 'each click toggled exactly once');
+});
+
+test('nothing outside the card and no other gesture is claimed', () => {
+	const toggle = countingToggle();
+	assert.equal(cardMouseEvent(mouseEvent({ y: ROWS.length }), ROWS, toggle), undefined, 'a row below the card belongs to the host');
+	assert.equal(cardMouseEvent(mouseEvent({ y: -1 }), ROWS, toggle), undefined, 'a row above the card belongs to the host');
+	assert.equal(cardMouseEvent(mouseEvent({ x: 6 }), ROWS, toggle), undefined, 'a column right of the card belongs to the host');
+	assert.equal(cardMouseEvent(mouseEvent({ x: -1 }), ROWS, toggle), undefined, 'a column left of the card belongs to the host');
+	assert.equal(cardMouseEvent(mouseEvent({ button: 'right' }), ROWS, toggle), undefined, 'the right button is the host\'s paste');
+	assert.equal(cardMouseEvent(mouseEvent({ button: 'middle' }), ROWS, toggle), undefined);
+	for (const type of ['move', 'drag', 'release', 'wheel']) {
+		assert.equal(cardMouseEvent(mouseEvent({ type }), ROWS, toggle), undefined, `a ${type} is not a click`);
+		assert.equal(cardMouseEvent(mouseEvent({ type: 'press' }), ROWS, toggle).handled, true, `a press is still claimed before a ${type}`);
+	}
+	assert.equal(cardMouseEvent(mouseEvent({ x: 'one' }), ROWS, toggle), undefined, 'a cell that is not a number is not a hit');
+	assert.equal(cardMouseEvent(undefined, ROWS, toggle), undefined, 'no event, nothing to claim');
+	assert.equal(cardMouseEvent(mouseEvent({}), [], toggle), undefined, 'nothing drawn, nothing claimed');
+	assert.equal(cardMouseEvent(mouseEvent({ width: 0 }), ROWS, toggle), undefined, 'a zero-width card has no cell');
+	assert.equal(toggle.calls, 0, 'none of the above toggled anything');
+});
+
+test('a hostile toggle never breaks the card or the transcript', () => {
+	const boom = () => {
+		throw new Error('host callback failed');
+	};
+	assert.deepEqual(cardMouseEvent(mouseEvent({}), ROWS, boom), { handled: true }, 'the click stays handled even when the toggle throws');
 });
 
 test('the card source writes no colour and no raw escape literal', () => {

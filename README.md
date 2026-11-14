@@ -264,6 +264,14 @@ the elapsed time are identical in both; only the chrome differs.
   refreshes it at startup, on every `session_start` and right after its
   Customize save. The cards read it at each render, so a change reaches the next
   card with no restart and no file watcher.
+- **Clicking expands.** A left click anywhere on a worktree card — `/warp`'s
+  confirmation card and both tool cards alike — expands it, and the next click
+  collapses it. The click flips the same expansion flag `ctrl+o` flips, so the
+  mouse and the keyboard can never disagree. The card claims only its own drawn
+  cells: the right button, the wheel, OSC 8 links and every cell outside the card
+  stay the host's. A press inside the card belongs to that click (it is what
+  makes the click reach the card at all), so start a drag-selection on a row
+  outside the card.
 - **Fallback.** With no shell running, the style comes from
   `<home>/card-style.json` — `{ "schema": "gentle-pi.card-style/v1", "style":
   "neon" | "float" }` — and `<home>` resolves `GENTLE_PI_CONFIG_HOME` →

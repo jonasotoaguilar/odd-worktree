@@ -156,3 +156,232 @@ describe('removed surface', () => {
     }
   });
 });
+
+// ---- how the extension loads its own lib/ modules ----
+//
+// Pi loads an extension with jiti `moduleCache: false`
+// (`@earendil-works/pi-coding-agent` dist/core/extensions/loader.js:
+// `createJitiImpl(import.meta.url, { moduleCache: false, ... })`), so the
+// extension file is re-read on every load. Node's own require cache is a
+// different cache and it outlives a load, so a reloaded extension used to run
+// against the lib modules of the FIRST load. These cases prove the observable
+// half of that: a module rewritten on disk is seen by the NEXT load, and only by
+// the next load.
+const os = require('node:os');
+const { pathToFileURL } = require('node:url');
+
+const scratchDirs = [];
+after(() => {
+  for (const dir of scratchDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
+
+function scratch(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  scratchDirs.push(dir);
+  return dir;
+}
+
+// The listing module this test rewrites: nothing else of the tool is replaced, so
+// what the assertion reads is the module on disk, reached through the public tool.
+const listingProbe = (marker) => [
+  "'use strict';",
+  `const MARKER = ${JSON.stringify(marker)};`,
+  'module.exports = {',
+  '  worktreeListView: () => ({ text: MARKER, details: { worktrees: [], hiddenOutside: 0 } }),',
+  '};',
+  '',
+].join('\n');
+
+// The git seam the list reads, faked so this case spawns no child: a repository
+// root and one main checkout are all `worktree_list` needs to reach the view.
+const gitStub = (root) => [
+  "'use strict';",
+  `const ROOT = ${JSON.stringify(root)};`,
+  'module.exports = {',
+  '  runArgvAsync: async () => ({ status: 1, stdout: "", stderr: "" }),',
+  '  repoIdentityAsync: async () => ({ root: ROOT }),',
+  '  listWorktreesAsync: async () => [{ path: ROOT, branch: "main", head: "1a2b3c4" }],',
+  '};',
+  '',
+].join('\n');
+
+/** Register an already-imported extension module against a fake host and hand back what the host received. */
+async function registered(copy) {
+  const mod = await import(pathToFileURL(copy).href);
+  const tools = new Map();
+  const messageRenderers = new Map();
+  const hooks = [];
+  mod.default({
+    registerCommand: () => {},
+    registerTool: (tool) => { tools.set(tool.name, tool); },
+    registerMessageRenderer: (type, renderer) => { messageRenderers.set(type, renderer); },
+    on: (event, handler) => { hooks.push([event, handler]); },
+  });
+  return { mod, tools, messageRenderers, hooks };
+}
+
+/** Load the extension against `libDir`, exactly as the host loads it: a fresh module each time. */
+async function loadFromLibDir(libDir) {
+  process.env.GENTLE_WORKTREE_LIB_DIR = libDir;
+  const copy = path.join(scratch('odd-ext-load-'), 'odd-worktree-tools.mjs');
+  fs.writeFileSync(copy, stubbedSource());
+  return registered(copy);
+}
+
+const listText = async (tools, cwd) => {
+  const result = await tools.get('worktree_list').execute('probe', {}, undefined, undefined, { cwd });
+  assert.notEqual(result.isError, true, JSON.stringify(result));
+  return result.content.map((part) => part.text).join('');
+};
+
+describe('the extension loads its lib modules once per load', () => {
+  const savedLibDir = process.env.GENTLE_WORKTREE_LIB_DIR;
+  after(() => {
+    if (savedLibDir === undefined) delete process.env.GENTLE_WORKTREE_LIB_DIR;
+    else process.env.GENTLE_WORKTREE_LIB_DIR = savedLibDir;
+  });
+
+  test('a rewritten module is seen by the next extension load, and only by it', async () => {
+    const libDir = path.join(scratch('odd-lib-fresh-'), 'lib');
+    fs.cpSync(LIB_DIR, libDir, { recursive: true });
+    const root = fs.realpathSync(scratch('odd-lib-root-'));
+    fs.writeFileSync(path.join(libDir, 'worktree-git.js'), gitStub(root));
+    fs.writeFileSync(path.join(libDir, 'worktree-list.js'), listingProbe('probe: first'));
+
+    const first = await loadFromLibDir(libDir);
+    assert.equal(await listText(first.tools, root), 'probe: first', 'the first load reads the module on disk');
+
+    fs.writeFileSync(path.join(libDir, 'worktree-list.js'), listingProbe('probe: second'));
+
+    assert.equal(await listText(first.tools, root), 'probe: first', 'one load reads its lib modules once, never again per call');
+
+    const second = await loadFromLibDir(libDir);
+    assert.notEqual(second.mod, first.mod, 'a load is a new extension instance');
+    assert.equal(await listText(second.tools, root), 'probe: second', 'a reloaded extension runs the NEW module, not the one the first load cached');
+    assert.equal(await listText(second.tools, root), 'probe: second', 'and it keeps reading it for its whole lifetime');
+  });
+
+  test('with no override the extension reads the lib/ beside itself', async () => {
+    // The production layout: <pkg>/extensions/<entry> with <pkg>/lib beside it, and
+    // no GENTLE_WORKTREE_LIB_DIR set at all.
+    const pkg = scratch('odd-pkg-');
+    fs.mkdirSync(path.join(pkg, 'extensions'));
+    fs.cpSync(LIB_DIR, path.join(pkg, 'lib'), { recursive: true });
+    const copy = path.join(pkg, 'extensions', 'odd-worktree-tools.mjs');
+    fs.writeFileSync(copy, stubbedSource());
+    delete process.env.GENTLE_WORKTREE_LIB_DIR;
+    const { tools } = await registered(copy);
+    // A directory outside any repository is refused by the READ module, so the
+    // answer proves the package's own lib directory resolved to real modules.
+    const loose = fs.realpathSync(scratch('odd-lib-loose-'));
+    const result = await tools.get('worktree_list').execute('probe', {}, undefined, undefined, { cwd: loose });
+    assert.equal(result.isError, true);
+    assert.equal(result.content.map((part) => part.text).join(''), `not a git repository: ${loose}`);
+  });
+});
+
+// ---- the click seam, wired end to end ----
+//
+// pi-tui's alternate screen delivers a click only to the component that claimed
+// the press, and the component it reaches is the one the host put in the
+// transcript — the card the render hook returned. These cases drive the
+// registered surfaces, so the wiring between the host toggle and the three cards
+// is asserted where a reader would see it: a click expands, another collapses.
+const probeMetrics = {
+  visibleWidth: (value) => [...value.replace(/\x1b\[[0-9;]*m/g, '')].length,
+  truncateToWidth: (value, width, ellipsis = '') => {
+    const text = value.replace(/\x1b\[[0-9;]*m/g, '');
+    if (width <= 0) return '';
+    if ([...text].length <= width) return value;
+    return `${[...text].slice(0, Math.max(0, width - [...String(ellipsis ?? '')].length)).join('')}${String(ellipsis ?? '')}`;
+  },
+  wrapTextWithAnsi: (value, width) => {
+    const text = value.replace(/\x1b\[[0-9;]*m/g, '');
+    if (width <= 0) return [text];
+    const rows = [];
+    const chars = [...text];
+    while (chars.length > width) rows.push(chars.splice(0, width).join(''));
+    rows.push(chars.join(''));
+    return rows;
+  },
+};
+
+const probeTheme = { fg: (_role, value) => value };
+
+function mouse(component, rows, type, x = 3, y = 0) {
+  return component.handleMouse({
+    type,
+    button: 'left',
+    x,
+    y,
+    width: 60,
+    height: rows.length,
+    screenX: x,
+    screenY: y,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  });
+}
+
+describe('a click expands every worktree card', () => {
+  test('the two tool cards and the warp card flip the host flag on a click', async () => {
+    const { mod, tools, messageRenderers, hooks } = await loadFromLibDir(LIB_DIR);
+    const flag = { expanded: false, writes: [] };
+    const ui = {
+      getToolsExpanded: () => flag.expanded,
+      setToolsExpanded: (value) => {
+        flag.expanded = value;
+        flag.writes.push(value);
+      },
+    };
+    // The extension remembers the session's UI handle in its FIRST session_start
+    // hook, which is the only way a render hook can reach the host flag.
+    const startHook = hooks.find(([name]) => name === 'session_start');
+    assert.ok(startHook, 'the extension registers a session_start hook');
+    startHook[1]({}, { hasUI: true, ui });
+
+    try {
+      mod.setWorktreeToolCardMetrics(probeMetrics);
+      const context = { isPartial: false, keyHint: (_name, text) => `ctrl+o ${text}` };
+      for (const name of ['worktree_create', 'worktree_list']) {
+        const component = tools.get(name).renderCall({}, probeTheme, context);
+        const rows = component.render(60);
+        assert.equal(typeof component.handleMouse, 'function', `${name}: the card carries the click seam`);
+        assert.deepEqual(mouse(component, rows, 'press'), { handled: true, render: false }, `${name}: the press claims the card`);
+        assert.deepEqual(mouse(component, rows, 'click'), { handled: true }, `${name}: the click is handled`);
+        assert.deepEqual(mouse(component, rows, 'click'), { handled: true });
+      }
+      assert.deepEqual(flag.writes, [true, false, true, false], 'four clicks on the two tool cards flipped the host flag four times');
+
+      const warp = messageRenderers.get('worktree-warp');
+      const message = { customType: 'worktree-warp', content: 'session warped to feat-two', details: { fromName: 'feat-one', name: 'feat-two', to: '/clone-worktrees/feat-two', branch: 'feat/two' } };
+      const card = warp(message, {}, probeTheme);
+      const cardRows = card.render(60);
+      assert.ok(cardRows.length > 1, 'the warp card draws');
+      assert.equal(typeof card.handleMouse, 'function', 'the warp card carries the click seam');
+      assert.deepEqual(mouse(card, cardRows, 'press'), { handled: true, render: false });
+      assert.deepEqual(mouse(card, cardRows, 'click'), { handled: true });
+      assert.equal(flag.expanded, true, 'the warp card flips the same host flag');
+    } finally {
+      mod.setWorktreeToolCardMetrics(undefined);
+    }
+  });
+
+  test('with no host UI the cards stay keyboard-only', async () => {
+    const { mod, tools, messageRenderers, hooks } = await loadFromLibDir(LIB_DIR);
+    const startHook = hooks.find(([name]) => name === 'session_start');
+    startHook[1]({}, { hasUI: false });
+    try {
+      mod.setWorktreeToolCardMetrics(probeMetrics);
+      const component = tools.get('worktree_list').renderCall({}, probeTheme, { isPartial: false });
+      assert.equal('handleMouse' in component, false, 'no UI, no click seam');
+      const warp = messageRenderers.get('worktree-warp')({ customType: 'worktree-warp', content: '', details: {} }, {}, probeTheme);
+      assert.equal('handleMouse' in warp, false, 'and no warp click either');
+    } finally {
+      mod.setWorktreeToolCardMetrics(undefined);
+    }
+  });
+});

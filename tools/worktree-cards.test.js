@@ -557,3 +557,83 @@ test('the style is read on every render, so a live change reaches the very next 
 		useStyle(undefined);
 	}
 });
+
+// ---- the click area: the whole card, not only the hint ----
+//
+// The installed Pi build delivers a click only to the component that CLAIMED the
+// press (`@earendil-works/pi-tui` tui-alt-screen.js: `mousePressTarget` is
+// recorded from the press dispatch and the synthesized `click` is retargeted to
+// it), and the host's own `MouseRegion` around a tool card reacts to `click`
+// alone — so a card that claims nothing is never clicked at all. Both halves of a
+// tool card therefore claim their own drawn cells and flip the host's expansion
+// flag, which is the flag `ctrl+o` flips; the card keeps no state of its own.
+
+/** A toggle seam that counts, so a click that forgot to toggle is visible. */
+function clickSpy() {
+	const spy = { calls: 0, toggleExpanded: () => { spy.calls += 1; } };
+	return spy;
+}
+
+/** The component a render hook returns, rendered once so it knows its own geometry. */
+function mount(component, width) {
+	const rows = component.render(width);
+	const screen = { width, height: rows.length, screenX: 0, screenY: 0, shift: false, alt: false, ctrl: false };
+	const send = (type, x, y, patch = {}) => component.handleMouse({ type, button: 'left', x, y, ...screen, ...patch });
+	return { rows, send };
+}
+
+test('a left click anywhere on a tool card toggles expansion, not only the hint', () => {
+	const spy = clickSpy();
+	const seamed = createWorktreeCards({ metrics, toggleExpanded: spy.toggleExpanded });
+	const context = { isPartial: false, expanded: false, keyHint: (name, text) => `ctrl+o ${text}` };
+
+	for (const tool of ['worktree_create', 'worktree_list']) {
+		spy.calls = 0;
+		const callMount = mount(seamed.renderer(tool).renderCall({}, plainTheme, context), 60);
+		// The heading's left end is the cell furthest from the right-aligned hint.
+		assert.deepEqual(callMount.send('press', 3, 0), { handled: true, render: false }, `${tool}: the press claims the heading so the host retargets the click`);
+		assert.equal(spy.calls, 0, `${tool}: a press alone never toggles`);
+		assert.deepEqual(callMount.send('click', 3, 0), { handled: true }, `${tool}: the click on the heading is handled`);
+		assert.equal(spy.calls, 1, `${tool}: one click on the heading toggles once`);
+
+		const resultMount = mount(seamed.renderer(tool).renderResult(textResult(CREATE_TEXT), {}, plainTheme, {}), 60);
+		assert.ok(resultMount.rows.length > 2, 'the result card has a body to click on');
+		for (const y of [0, 1, resultMount.rows.length - 1]) {
+			assert.deepEqual(resultMount.send('press', 2, y), { handled: true, render: false }, `${tool}: row ${y} of the result is on the card`);
+			assert.deepEqual(resultMount.send('click', 2, y), { handled: true }, `${tool}: row ${y} of the result is clickable`);
+		}
+		assert.equal(spy.calls, 4, `${tool}: one click on the heading and three on the result toggled four times`);
+	}
+});
+
+test('a click on the hint still toggles, and no cell outside the card is claimed', () => {
+	const spy = clickSpy();
+	const seamed = createWorktreeCards({ metrics, toggleExpanded: spy.toggleExpanded });
+	const hint = 'ctrl+o to expand';
+	const component = seamed.renderer('worktree_create').renderCall({}, plainTheme, { isPartial: false, keyHint: () => hint });
+	const { rows, send } = mount(component, 60);
+	const heading = stripAnsi(rows[0]);
+	const hintStart = heading.indexOf(hint);
+	assert.ok(hintStart > 0, 'the heading carries the hint');
+	assert.deepEqual(send('click', hintStart + 2, 0), { handled: true }, 'the hint cells stay clickable');
+	assert.equal(spy.calls, 1);
+
+	assert.equal(send('click', 0, rows.length), undefined, 'a row below the card is the host\'s');
+	assert.equal(send('click', 60, 0), undefined, 'a column right of the card is the host\'s');
+	assert.equal(send('click', 0, 0, { button: 'right' }), undefined, 'the right button is the host\'s');
+	assert.equal(send('drag', 0, 0), undefined, 'a drag is not a click');
+	assert.equal(send('move', 0, 0), undefined, 'a move is not a click');
+	assert.equal(spy.calls, 1, 'nothing outside the card toggled anything');
+});
+
+test('a card with no click seam has no mouse handler at all', () => {
+	const keyboardOnly = createWorktreeCards({ metrics });
+	const context = { isPartial: false };
+	for (const tool of WORKTREE_CARD_TOOLS) {
+		const callComponent = keyboardOnly.renderer(tool).renderCall({}, plainTheme, context);
+		const resultComponent = keyboardOnly.renderer(tool).renderResult(textResult(CREATE_TEXT), {}, plainTheme, {});
+		assert.equal('handleMouse' in callComponent, false, `${tool} call: ctrl+o stays the only way in`);
+		assert.equal('handleMouse' in resultComponent, false, `${tool} result: no host toggle, no claim`);
+		assert.ok(callComponent.render(60).length > 0, 'the card still draws');
+	}
+});

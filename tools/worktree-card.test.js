@@ -337,3 +337,65 @@ test('the card composes through the substrate and keeps no tone table of its own
 	}
 	assert.doesNotMatch(source, /\b(?:neon|float)\b\s*[:=]/, 'the card never names a style itself');
 });
+
+// ---- the click area: the whole card, not only the hint ----
+//
+// The message card reaches the same click protocol as a tool card: pi-tui's
+// `Container` forwards a normalized `TuiMouseEvent` to the renderer component
+// with coordinates local to it, and a click only exists for the component that
+// claimed the press. So the card claims every cell it drew and flips the host's
+// expansion flag — the flag `ctrl+o` flips; the card keeps no state of its own.
+
+function clickSpy() {
+	const spy = { calls: 0, toggleExpanded: () => { spy.calls += 1; } };
+	return spy;
+}
+
+function mountCard(component, width) {
+	const rows = component.render(width);
+	const screen = { width, height: rows.length, screenX: 0, screenY: 0, shift: false, alt: false, ctrl: false };
+	const send = (type, x, y, patch = {}) => component.handleMouse({ type, button: 'left', x, y, ...screen, ...patch });
+	return { rows, send };
+}
+
+test('a left click anywhere on the warp card toggles expansion, not only the hint', () => {
+	const spy = clickSpy();
+	const component = createWarpMessageRenderer({ ...metrics, toggleExpanded: spy.toggleExpanded })(MESSAGE, {}, plainTheme);
+	const { rows, send } = mountCard(component, 60);
+
+	// The heading's left end is the cell furthest from the right-aligned hint.
+	assert.deepEqual(send('press', 3, 0), { handled: true, render: false }, 'the press claims the card so the host retargets the click');
+	assert.equal(spy.calls, 0, 'a press alone never toggles');
+	assert.deepEqual(send('click', 3, 0), { handled: true }, 'the click on the heading is handled');
+	assert.equal(spy.calls, 1, 'one click toggled once');
+
+	for (const y of [1, rows.length - 1]) {
+		assert.deepEqual(send('press', 5, y), { handled: true, render: false }, `row ${y} is on the card`);
+		assert.deepEqual(send('click', 5, y), { handled: true }, `row ${y} is clickable`);
+	}
+	assert.equal(spy.calls, 3, 'every click toggled exactly once');
+});
+
+test('the hint cells stay clickable and nothing outside the card is claimed', () => {
+	const spy = clickSpy();
+	const component = createWarpMessageRenderer({ ...metrics, toggleExpanded: spy.toggleExpanded })(MESSAGE, {}, plainTheme);
+	const { rows, send } = mountCard(component, 60);
+	const start = stripAnsiAll(rows[0]).indexOf('ctrl+o to expand');
+	assert.ok(start > 0, 'the heading carries the hint');
+	assert.deepEqual(send('click', start + 1, 0), { handled: true }, 'the hint cells were already clickable and still are');
+	assert.equal(spy.calls, 1);
+
+	assert.equal(send('click', 0, rows.length), undefined, 'a row below the card is the host\'s');
+	assert.equal(send('click', 0, -1), undefined, 'a row above the card is the host\'s');
+	assert.equal(send('click', 60, 0), undefined, 'a column right of the card is the host\'s');
+	assert.equal(send('click', 0, 0, { button: 'right' }), undefined, 'the right button is the host\'s');
+	assert.equal(send('drag', 0, 0), undefined, 'a drag is not a click');
+	assert.equal(send('move', 0, 0), undefined, 'a move is not a click');
+	assert.equal(spy.calls, 1, 'nothing outside the card toggled anything');
+});
+
+test('with no click seam the warp card has no mouse handler at all', () => {
+	const component = renderer()(MESSAGE, {}, plainTheme);
+	assert.equal('handleMouse' in component, false, 'ctrl+o stays the only way in');
+	assert.ok(component.render(60).length > 0, 'the card still draws');
+});

@@ -293,12 +293,14 @@ describe('the Branch field: name on top, the types under it (S1,S6)', { concurre
 
   test('a name that is not a branch segment refuses with its own words', () => {
     const { view, finished } = openPanel();
+    // The space is not what refuses this name: it collapses to one dash like
+    // every other space run, and the UPPERCASE is the surviving reason.
     typeText(view, 'Bad Name');
     assert.equal(previewText(view, 'branch'), '-', 'an invalid branch previews no branch');
     assert.equal(previewText(view, 'path'), WORKTREE_ROOT, 'the path row stays neutral, not blank');
     submit(view);
     assert.deepEqual(finished, [], 'an invalid branch creates nothing');
-    assert.match(allText(renderedLines(view)), /cannot create: invalid branch name: feat\/Bad Name/);
+    assert.match(allText(renderedLines(view)), /cannot create: invalid branch name: feat\/Bad-Name/);
   });
 });
 
@@ -355,6 +357,94 @@ describe('both typed fields share one input design (S7,S8,S9,S10)', { concurrenc
     for (const line of rows(odd.view).filter((text) => /dagea$/.test(text) && text.includes('❯'))) {
       assert.ok(!line.includes('▊'), 'no document row is styled as an input');
     }
+  });
+});
+
+// Both typed fields apply ONE rule before anything is composed: one or more
+// consecutive spaces become a single `-`, so `change    cost` is the ODD (or the
+// branch name) `change-cost`. The rule sits AFTER the trim and BEFORE the
+// composition, so leading and trailing spaces still vanish instead of becoming
+// dashes, every other character keeps its existing rule, and a name that
+// normalizes to nothing still refuses with its own words. The preview, the input
+// row and the submitted value are the SAME derivation, never three spellings.
+describe('both typed names collapse a run of spaces into one dash', { concurrency: false }, () => {
+  test('change    cost previews feat/change-cost', () => {
+    const { view } = openPanel();
+    typeText(view, 'change    cost');
+    assert.equal(previewText(view, 'branch'), 'feat/change-cost', 'a run of spaces is one dash');
+    assert.equal(rows(view)[rowIndex(rows(view), '▊')].trim(), '❯ feat/change-cost▊', 'the input row shows the normalized name too');
+  });
+
+  test('several spaces collapse to one dash, and a single space becomes one too', () => {
+    const many = openPanel();
+    typeText(many.view, 'a     b     c');
+    assert.equal(previewText(many.view, 'branch'), 'feat/a-b-c', 'each run is exactly one dash');
+    assert.ok(!previewText(many.view, 'branch').includes('--'), 'no run is expanded into several dashes');
+
+    const one = openPanel();
+    typeText(one.view, 'change cost');
+    assert.equal(previewText(one.view, 'branch'), 'feat/change-cost', 'a single space is one dash as well');
+  });
+
+  test('the submitted branch is exactly the previewed branch', () => {
+    const { view, finished } = openPanel({ oddOptions: ['login-ui'] });
+    typeText(view, 'change    cost');
+    focusOdd(view);
+    view.handleInput('\x1b[B'); // down: login-ui
+    const preview = previewText(view, 'branch');
+    view.handleInput('enter');
+    assert.deepEqual(finished, [{ ok: true, branch: preview, odd: 'login-ui' }], 'the create makes what the preview showed');
+    assert.equal(finished[0].branch, 'feat/change-cost');
+  });
+
+  test('the same rule holds in the ODD field, naming the path and the directory', () => {
+    const { view, finished } = openPanel();
+    typeText(view, 'sign-in');
+    focusOdd(view);
+    typeText(view, 'change    cost');
+    assert.equal(rows(view)[rowIndex(rows(view), '▊')].trim(), '❯ new odd: change-cost▊', 'the ODD input row shows the normalized name');
+    const preview = previewText(view, 'path');
+    assert.equal(preview, path.join(WORKTREE_ROOT, 'change-cost'), 'the ODD names the directory with the dash');
+    view.handleInput('enter');
+    assert.deepEqual(finished, [{ ok: true, branch: 'feat/sign-in', odd: 'change-cost' }], 'the create makes what the path preview showed');
+    assert.equal(path.basename(preview), finished[0].odd, 'the previewed directory is the submitted ODD');
+  });
+
+  test('leading and trailing spaces still vanish: the trim keeps its place', () => {
+    const { view } = openPanel();
+    typeText(view, '  name  ');
+    assert.equal(previewText(view, 'branch'), 'feat/name', 'the trim runs before the collapse, so no edge dash appears');
+  });
+
+  test('other characters keep their existing rules: a dot and an underscore are still fine', () => {
+    const { view, finished } = openPanel({ oddOptions: ['login-ui'] });
+    typeText(view, 'fix_it.now');
+    focusOdd(view);
+    view.handleInput('\x1b[B'); // down: login-ui
+    view.handleInput('enter');
+    assert.deepEqual(finished, [{ ok: true, branch: 'feat/fix_it.now', odd: 'login-ui' }], 'punctuation is untouched');
+  });
+
+  test('a branch name that normalizes to nothing refuses with its own words', () => {
+    const { view, finished } = openPanel({ oddOptions: ['login-ui'] });
+    typeText(view, '   ');
+    assert.equal(previewText(view, 'branch'), 'feat/', 'an empty name still previews the type prefix');
+    focusOdd(view);
+    view.handleInput('\x1b[B'); // down: login-ui
+    view.handleInput('enter');
+    assert.deepEqual(finished, [], 'nothing is created');
+    assert.match(allText(renderedLines(view)), /cannot create: branch name is empty/);
+  });
+
+  test('an ODD that normalizes to nothing refuses with its own words', () => {
+    const { view, finished } = openPanel();
+    typeText(view, 'sign-in');
+    focusOdd(view);
+    typeText(view, '   ');
+    assert.equal(previewText(view, 'path'), WORKTREE_ROOT, 'the path row stays neutral, not dashed');
+    view.handleInput('enter');
+    assert.deepEqual(finished, [], 'nothing is created');
+    assert.match(allText(renderedLines(view)), /cannot create: odd is empty/);
   });
 });
 

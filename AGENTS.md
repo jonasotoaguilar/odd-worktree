@@ -45,6 +45,13 @@ its presence records.
 | `lib/odd-*.js` | `odd-docs.js` (document discovery and ordering), `odd-view.js` (two-pane reader), `odd-markdown.js` (the shared markdown renderer). |
 | `lib/odd-prompt/odd-worktrees.md` | The `## ODD worktrees` prompt prose: one text, no variants. |
 | `lib/odd-worktrees-prompt.js` | The append-only injection helper that reads that file. |
+| `lib/codegraph-prompt/*.md` | The `## CodeGraph` prose: one approved text per role (orchestrator, explore, verify, worker, fix, judge, generic). |
+| `lib/codegraph-rules.js` | Selects a role's text from the session's own facts and appends it. Runs and probes nothing. |
+| `lib/codegraph-session.js` | The single CodeGraph wiring point (invariant 19): session start, compaction, the observed native init, the edit/write sync and shutdown, only with the CLI installed. |
+| `lib/codegraph-index.js`, `lib/codegraph-lock.js`, `lib/codegraph-compaction.js` | Create-or-sync, worktree seeding, the CLI probe and the notices; the one init lock and the per-project sync lease; the compaction sync. |
+| `lib/codegraph-edit-sync.js`, `lib/codegraph-role.js` | The debounced edit/write sync; the index role that keeps verify and the judges read-only. |
+| `lib/codegraph-daemon.js`, `lib/codegraph-warmup.js`, `lib/codegraph-mcp.js`, `lib/codegraph-mcp-config.js`, `lib/codegraph-paths.js` | The per-checkout daemon registry and client; the warm-up through CodeGraph's own proxy; the MCP exposure warnings; the one `mcp.json` entry writer; root identity and the argv to start `codegraph`. |
+| `lib/codegraph-card.js`, `lib/codegraph-card-preview.js` | The CodeGraph tool card for the native tool, the MCP explore tool and a `bash` call that runs CodeGraph, on the card substrate. |
 | `lib/gh-issues.js` | The `gh` client: checkout repository scope, identity pinning, issue pages, details, labels, assignees, comments, close, and the `viewerPermission` → capability mapping. |
 | `lib/issues-view.js`, `lib/issue-preview.js` | The pure `/issues` view and its preview formatter. |
 | `lib/tui-paint.js`, `lib/view-layout.js`, `lib/preview-scroll-keys.js`, `lib/clipboard.js`, `lib/open-external.js` | Shared presentation helpers: the one palette, window/layout maths, the one preview scroll decision, clipboard, external opener. |
@@ -71,11 +78,14 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
 1. **One extension entry point.** `package.json` `pi.extensions` is exactly
    `["./extensions/odd-worktree-tools.ts"]`, and `extensions/` holds no other
    file. A second entry point changes what the host loads.
-2. **No customize / plugin-tools / Herdr-panel surface.** No customize command,
-   no plugin-tools toggles, no Herdr plugin management, no `worktree-mode` file,
-   no perf tracing, and no `herdr-gentle:` command name — and no CodeGraph probe,
-   command or sync either. `tools/package-surface.test.js` asserts both the loaded
-   surface and the source text.
+2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
+   invariants 18 and 19 allow.** No customize command, no plugin-tools toggles, no
+   Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
+   `herdr-gentle:` command name. CodeGraph adds no command and no model-facing tool:
+   no `/codegraph-*` command, no tool named `codegraph`, no override of another
+   extension's tool. `tools/package-surface.test.js` asserts the loaded surface, the
+   one-line registration in the extension, the closed list of `lib/codegraph-*`
+   modules and what each may do.
 3. **The shipped surface is exactly three commands and two tools.** `/warp`,
    `/odd-list`, `/issues`; `worktree_create`, `worktree_list`. No agent surface
    moves the session or removes a checkout: `/warp` moves the session (its
@@ -269,6 +279,48 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     painted string, and none that a painted string is never painted twice: both
     would be false.
 
+18. **The `## CodeGraph` section is advice, selected by the session's own facts.**
+    It rides `systemPromptOptions.appendSystemPrompt` like invariant 14: appended,
+    idempotent by heading, never a returned `systemPrompt`, suppressed by
+    `ODD_WORKTREE_PROMPT=0`. It is added only when the session already holds the
+    native `codegraph` tool or `mcp__codegraph__codegraph_explore` (in a child, the
+    requested-tools list counts). The text is chosen by role: a primary session gets
+    `orchestrator.md`; a child's agent name, read from its own argv
+    (`gentle-pi-subagent-<agent>-<random>/`), picks `explore`, `verify`, `worker`,
+    `fix` or `judge` (both judges share one); any other child, or a name that cannot
+    be read, gets `generic.md`; a `review-*` agent gets nothing. A missing or
+    heading-less file falls back to `generic.md`, and a missing generic means no
+    section. Only the orchestrator and explore texts name the native operations; the
+    other roles name the MCP tool in full; no text mentions `init`, `sync` or an
+    index fallback, because no agent prepares the index: the package does
+    (invariant 19).
+
+19. **CodeGraph runs only with its CLI, in the background, and writes one config
+    entry.** `lib/codegraph-session.js` is the single wiring point (the extension
+    calls `registerCodegraph(pi)` once) and registers nothing when the `codegraph`
+    CLI is not installed; the probe runs once per process, so installing it needs a
+    restart. With the CLI: (a) a primary session ensures, once per process,
+    `mcpServers.codegraph` of `<agent dir>/mcp.json` (`command: "codegraph"`,
+    `args: ["serve", "--mcp"]`, `toolExposure.codegraph_explore: "direct"`) — it adds
+    the entry or fixes only the fields that differ, keeps every other server and
+    field, rewrites only when something changed, atomically and with the file's
+    permission bits, and leaves an invalid file untouched. It is the only writer of
+    the user's configuration, and `tools/` never touches a real agent directory.
+    (b) Session start (not `/reload`, not a subagent child, except a child in its own
+    linked worktree) creates or syncs the session's index and warms its daemon; a
+    linked worktree without an index is seeded from the main checkout's and never
+    shares it. (c) A compaction requests one sync, never an init. (d) After a
+    successful native `codegraph init` the package requests one coordinated sync and
+    appends its honest outcome to the tool's result; a failed init keeps its error
+    and starts no sync. (e) After a successful `edit` or `write` a debounced sync of
+    that file's checkout is requested, unless a live daemon watches it. Every write
+    goes through the one init lock and the per-project sync lease, so a queued,
+    coalesced or failed run is never reported as synced. Verify and the judges (a
+    command tool and no file-writing tool) never start an index write.
+    `worktree_create` is not involved: it already starts CodeGraph for its checkout.
+    Nothing awaits an index, a daemon or the configuration on the host's path, and
+    every child is a fixed argv with a bounded timeout (invariant 9).
+
 ## Commits and pull requests
 
 `pr-check.yml` enforces Conventional Commits on the PR title (which becomes the
@@ -337,7 +389,8 @@ lists every shipped surface.
 
 | Document | Use when | Path |
 | --- | --- | --- |
-| README | Install, requirements, panel keys, user-facing behaviour | [`README.md`](README.md) |
+| README | Install, requirements, the shipped surface at a glance | [`README.md`](README.md) |
+| Reference | Panel keys, how each surface behaves, its limits, tests and releases in detail | [`docs/reference.md`](docs/reference.md) |
 | CI matrix and test command | What CI runs and on which Node versions | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 | PR gates | Commit and PR-title conventions | [`.github/workflows/pr-check.yml`](.github/workflows/pr-check.yml) |
 | Release flow | Tag, environment, OIDC publish, verification | [`.github/workflows/release.yml`](.github/workflows/release.yml) |

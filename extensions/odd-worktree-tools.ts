@@ -7135,7 +7135,22 @@ export default function (pi) {
     } catch {
       // The prompt block is best effort.
     }
+    // The role's CodeGraph text rides the same append-only channel. It only
+    // advises a session that already holds a CodeGraph tool.
+    try {
+      libRequire("codegraph-rules.js").appendCodegraphSection(event);
+    } catch {
+      // The prompt block is best effort.
+    }
   });
+  // CodeGraph, only with its CLI installed: the global MCP entry, create-or-sync at session
+  // start, the compaction sync, the observed native init and the edit/write sync. Every
+  // piece runs in the background and none can fail the host.
+  try {
+    libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
+  } catch {
+    // CodeGraph is best effort.
+  }
   // Register every live checkout the registry does not own yet. Dispatched here
   // and awaited by the barrier below: the host runs session_start handlers one
   // at a time, so awaiting the scan inside this handler would put the session's

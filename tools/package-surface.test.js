@@ -6,7 +6,8 @@
 // loads in plain Pi with git as its only external dependency, and ships none of
 // the removed functionality
 // (customize panel, plugin-tools toggles, worktree mode file, perf tracing,
-// CodeGraph commands or a CodeGraph gate).
+// CodeGraph commands, a CodeGraph gate or any CodeGraph probe or sync; the one
+// CodeGraph touch is the append-only `## CodeGraph` prompt section).
 // The issues reader, preview formatter and view are the migrated T2 units and
 // are shipped; `/issues` is the T3 command that mounts them, without any
 // worktree↔issue association.
@@ -116,20 +117,50 @@ describe('removed surface', () => {
     }
   });
 
-  test('the extension probes, registers and runs no CodeGraph surface (S2)', async () => {
+  test('CodeGraph is wired through one registration and adds no command or tool (S2)', async () => {
     const source = stubbedSource();
-    assert.equal(/codegraph/i.test(source), false, 'the extension source mentions no CodeGraph at all');
-    const { commands, hooks } = await loadExtension({});
-    for (const gone of ['codegraph-hook', 'codegraph-init', 'codegraph-sync']) {
-      assert.equal(commands.has(gone), false, `no /${gone} command`);
-    }
-    assert.equal(
-      hooks.some(([name]) => name === 'tool_result') && /scheduleSync/.test(source),
-      false,
-      'no edit/write sync hook is registered',
+    // The extension mentions CodeGraph only to require the prompt section and the one registration.
+    const mentions = source.split('\n').filter((line) => /codegraph/i.test(line.replace(/\/\/.*$/, '')));
+    assert.deepEqual(
+      mentions.map((line) => line.trim()),
+      ['libRequire("codegraph-rules.js").appendCodegraphSection(event);', 'libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });'],
+      'the only CodeGraph references in the extension are the prompt section and the one registration',
     );
-    for (const shipped of fs.readdirSync(path.join(ROOT, 'lib'))) {
-      assert.equal(/^codegraph-/.test(shipped), false, `lib/${shipped} is not shipped`);
+    const { commands, tools } = await loadExtension({});
+    for (const gone of ['codegraph-hook', 'codegraph-init', 'codegraph-sync', 'codegraph']) {
+      assert.equal(commands.has(gone), false, `no /${gone} command`);
+      assert.equal(tools.has(gone), false, `no ${gone} tool`);
+    }
+    assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'the model-facing tools are still exactly the two');
+  });
+
+  test('the CodeGraph modules are a closed list with narrow powers (S1, S2)', () => {
+    const lib = path.join(ROOT, 'lib');
+    const shipped = fs.readdirSync(lib).filter((entry) => /^codegraph-/.test(entry)).sort();
+    const allowed = [
+      'codegraph-card-preview.js', 'codegraph-card.js', 'codegraph-compaction.js', 'codegraph-daemon.js',
+      'codegraph-edit-sync.js', 'codegraph-index.js', 'codegraph-lock.js', 'codegraph-mcp-config.js', 'codegraph-mcp.js',
+      'codegraph-paths.js', 'codegraph-prompt', 'codegraph-role.js', 'codegraph-rules.js', 'codegraph-session.js',
+      'codegraph-warmup.js',
+    ];
+    for (const entry of shipped) assert.ok(allowed.includes(entry), `lib/${entry} is not an allowed CodeGraph module`);
+    const read = (name) => fs.readFileSync(path.join(lib, name), 'utf8');
+    // Code only: a comment may say what a module does not do.
+    const code = (name) => read(name).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    for (const entry of shipped.filter((name) => name.endsWith('.js'))) {
+      const text = code(entry);
+      for (const blocked of ['spawnSync', 'execSync', 'execFileSync']) {
+        assert.equal(text.includes(blocked), false, `${entry} never uses ${blocked}`);
+      }
+    }
+    // The prompt section only advises: it runs, probes and writes nothing.
+    const rules = code('codegraph-rules.js');
+    for (const forbidden of ['spawn', 'exec(', 'execFile', 'child_process', 'writeFile', 'codegraph.db']) {
+      assert.equal(rules.includes(forbidden), false, `the prompt section module never uses ${forbidden}`);
+    }
+    // The user's MCP configuration has exactly one writer, and it touches only its own entry.
+    for (const entry of shipped.filter((name) => name.endsWith('.js') && name !== 'codegraph-mcp-config.js')) {
+      assert.equal(/mcp\.json/.test(read(entry).replace(/\/\/.*$/gm, '')) && /writeFile|rename\(/.test(read(entry)), false, `${entry} does not write mcp.json`);
     }
   });
 

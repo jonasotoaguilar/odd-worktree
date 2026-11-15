@@ -8026,6 +8026,25 @@ export default function (pi) {
   } catch {
     // The card is cosmetic.
   }
+  // S1 (T5): the file cards, through the same host hook. A `read`/`edit`/`write` call whose
+  // path names a customized skill or an ODD artifact heads as that file while its switch
+  // (`Card skill` / `Card odd`) is on; every other call keeps the host's own boxed row, which
+  // the card reproduces because the hook decides per tool name and never sees the arguments.
+  // A host without `pi.registerToolRenderer` registers nothing and keeps drawing them itself.
+  try {
+    libRequire("file-card-resolver.js").registerFileCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
+  } catch {
+    // The card is cosmetic.
+  }
+  // S1 (T5): the two switches in `/gentle:customize` -> `Cards`, through the bridge's
+  // `registerRows` alone — no command, no tool, no store of its own: the choice is this
+  // package's document (`lib/card-files-mode.js`). Without a bridge nothing is registered and
+  // no surface changes.
+  try {
+    libRequire("cards-customize.js").registerCardsCustomize(pi);
+  } catch {
+    // The switches are best effort.
+  }
   // Register every live checkout the registry does not own yet. Dispatched here
   // and awaited by the barrier below: the host runs session_start handlers one
   // at a time, so awaiting the scan inside this handler would put the session's

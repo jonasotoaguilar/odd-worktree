@@ -377,7 +377,7 @@ function registryFile(root) {
 // Gate the extension through session_start with a scratch cwd (so the
 // unrelated worktree discovery never touches the fixture repo), then run the
 // command handler against the fixture checkout.
-async function openIssues(root, { runner, rows = 24, prepare } = {}) {
+async function openIssues(root, { runner, rows = 24, prepare, args = '' } = {}) {
   const loaded = await loadExtension();
   // `prepare` receives the load that is about to run the command, so a test's fake
   // lands on the instance the command actually mounts.
@@ -394,7 +394,7 @@ async function openIssues(root, { runner, rows = 24, prepare } = {}) {
     cwd: root,
     customImpl: async (captured) => { factory = captured; return null; },
   });
-  await def.handler('', ctx);
+  await def.handler(args, ctx);
   assert.ok(factory, 'the overlay opens');
   const { component, done } = openComponent(factory, host);
   await tick();
@@ -421,7 +421,7 @@ async function capturedIssuesOptions(root, options = {}) {
       factory(host.tui, {}, {}, () => {});
       return null;
     };
-    await loaded.commands.get('issues').handler('', ctx);
+    await loaded.commands.get('issues').handler(options.args || '', ctx);
     await tick();
     assert.ok(capture.holder.options, 'the command mounts the view');
     return {
@@ -494,7 +494,7 @@ describe('/issues gate (S3)', () => {
 });
 
 describe('/issues overlay and arguments', () => {
-  test('opens full screen fed by the scoped searches and the All connection', async () => {
+  test('opens full screen fed by the three scoped searches, and leaves All until it is asked for', async () => {
     const root = makeRepo({ tag: 'issues-open' });
     const { runner, calls } = makeIssuesRunner();
     const { component, customs, notes } = await openIssues(root, { runner });
@@ -513,15 +513,110 @@ describe('/issues overlay and arguments', () => {
       'assignee:@me sort:updated-desc',
       'involves:@me -author:@me sort:updated-desc',
     ], 'every scoped tab is read once with its own exact query');
-    assert.equal(connectionReads(calls).length, 1, 'the All tab is read once through the issue connection');
+    assert.equal(connectionReads(calls).length, 0,
+      'opening the panel reads no connection page: All is read when it is entered (S2)');
     const body = clean(component.render(110).join('\n'));
     assert.match(body, /My issues/);
     assert.match(body, /Assigned/);
     assert.match(body, /Involved/);
+    assert.doesNotMatch(clean(component.render(110)[2]), /\bAll\b/, 'All is no longer a tab (S1)');
     assert.match(body, /76/, 'the listed issue number');
     assert.match(body, /chore: update/, 'the listed issue title');
     assert.match(body, /◈ Issues/, 'the header names the surface');
     assert.ok(!body.includes(path.basename(root)), 'the header never repeats the checkout name');
+  });
+
+  test('All is read the first time the shortcut enters it, and re-entering reuses it (S1/S2)', async () => {
+    const root = makeRepo({ tag: 'issues-all-lazy' });
+    const { runner, calls } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner });
+    await tick();
+    assert.equal(connectionReads(calls).length, 0, 'the mount reads no connection page');
+    assert.equal(searchQueries(calls).length, 3, 'and exactly the three scoped searches');
+    component.handleInput('g');
+    await tick();
+    const reads = connectionReads(calls);
+    assert.equal(reads.length, 1, 'entering All issues one connection read');
+    const bar = clean(component.render(110)[2]);
+    assert.match(bar, /▸ All \(\d+\)/, `the bar reads only the All view: ${bar}`);
+    for (const label of ['My issues', 'Assigned', 'Involved']) {
+      assert.ok(!bar.includes(label), `the scoped tabs leave the bar in the All view: ${bar}`);
+    }
+    // The full legend only fits a wide frame; the label is what is under test.
+    assert.match(clean(component.render(200).at(-2)), /g related issues/,
+      'inside All the hint says the key goes back (D1)');
+    component.handleInput('g');
+    await tick();
+    assert.match(clean(component.render(200).at(-2)), /g all issues/,
+      'outside All the hint names what the key opens (D1)');
+    assert.equal(connectionReads(calls).length, 1, 'leaving All reads nothing');
+    component.handleInput('g');
+    await tick();
+    assert.equal(connectionReads(calls).length, 1, 're-entering All reuses the page it read (S2)');
+  });
+
+  test('a typed filter is read by the three scoped tabs, and the All view searches instead of connecting (S3/S4/S5)', async () => {
+    const root = makeRepo({ tag: 'issues-filter' });
+    const { runner, calls } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner });
+    await tick();
+    const mount = searchQueries(calls).length;
+    assert.equal(mount, 3, 'the mount read the three scoped buckets');
+    component.handleInput('t');
+    for (const ch of 'label:bug') component.handleInput(ch);
+    await waitFor(() => searchQueries(calls).length >= mount + 3);
+    await tick();
+    assert.deepEqual(searchQueries(calls).slice(mount), [
+      'author:@me sort:updated-desc label:bug',
+      'assignee:@me sort:updated-desc label:bug',
+      'involves:@me -author:@me sort:updated-desc label:bug',
+    ], 'the settled filter re-reads all three scoped buckets, each with its own scope');
+    component.handleInput('enter');
+    await tick();
+    // Entering All while the filter is on is a SEARCH read: the connection takes
+    // no text, and the search count is capped, so the view never claims it exact.
+    const before = searchQueries(calls).length;
+    component.handleInput('g');
+    await waitFor(() => searchQueries(calls).length > before);
+    await tick();
+    assert.deepEqual(searchQueries(calls).slice(before), ['sort:updated-desc label:bug'],
+      'a filtered All goes through the search path, with the filter');
+    assert.equal(connectionReads(calls).length, 0, 'and never reads the unfiltered connection');
+    await waitFor(() => /▸ All \(\d+\+\)/.test(clean(component.render(110)[2])));
+    assert.match(clean(component.render(110)[2]), /▸ All \(\d+\+\)/,
+      'a filtered All marks its count inexact instead of claiming an exact total');
+    assert.match(clean(component.render(110)[3]), /via search/, 'the frame names the read on screen');
+  });
+
+  // S5: the route trims a whitespace-only query into "no filter" and takes the
+  // repository CONNECTION, so the note the view paints has to name that same
+  // read — the route and the note decide from one fact.
+  test('a whitespace-only filter takes the connection read, and the note names it (S5)', async () => {
+    const root = makeRepo({ tag: 'issues-blank-filter' });
+    const { runner, calls } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner });
+    await tick();
+    const mount = searchQueries(calls).length;
+    assert.equal(mount, 3, 'the mount read the three scoped buckets');
+    component.handleInput('g');
+    await waitFor(() => connectionReads(calls).length === 1);
+    await tick();
+    component.handleInput('t');
+    component.handleInput(' ');
+    await waitFor(() => connectionReads(calls).length === 2);
+    await tick();
+    assert.deepEqual(searchQueries(calls).slice(mount), [
+      'author:@me sort:updated-desc',
+      'assignee:@me sort:updated-desc',
+      'involves:@me -author:@me sort:updated-desc',
+    ], 'the scoped tabs re-read their own searches with no stray text appended');
+    assert.equal(connectionReads(calls).length, 2,
+      'the All view reads the repository connection again, never a search');
+    const note = clean(component.render(110)[3]);
+    assert.match(note, /via connection \(exact total\)/, `the note names the read on screen: ${note}`);
+    const bar = clean(component.render(110)[2]);
+    assert.match(bar, /▸ All \(\d+\)/, `and the exact connection total wears no mark: ${bar}`);
+    assert.ok(!/\(\d+\+\)/.test(bar), `no inexact total is claimed for an exact read: ${bar}`);
   });
 
   test('an argument notifies and opens nothing', async () => {
@@ -714,7 +809,7 @@ describe('/issues actions (S3,S4)', () => {
     const primed = searchQueries(calls);
     assert.equal(primed.length, 3, 'the mount read every scoped bucket once');
     const connections = connectionReads(calls).length;
-    assert.equal(connections, 1, 'and the All bucket once, through the connection');
+    assert.equal(connections, 0, 'and no page of the All connection (S2)');
 
     const before = clean(component.render(110).join('\n'));
     component.handleInput('f');
@@ -813,6 +908,8 @@ describe('/issues page seam (S5,D1)', () => {
         ['involved', 'Involved', null],
         ['all', 'All', null],
       ], 'bucket metadata only: no accumulated rows are handed to the view');
+      assert.deepEqual(options.pages.filter((page) => page.lazy === true).map((page) => page.id), ['all'],
+        'the All bucket is marked lazy so the mount-time prefetch skips it (S2)');
       assert.equal(options.loadPages, undefined, 'no eager/lazy-list loader is passed beside the fresh seam');
       assert.equal(typeof options.loadIssuePage, 'function');
       const first = run.pages[0];
@@ -1109,7 +1206,7 @@ describe('/issues repository identity (S5)', () => {
     const run = await capturedIssuesOptions(root, { runner: gh.runner, calls: gh.calls });
     const gitCalls = [];
     const original = worktreeGit.runArgvAsync;
-    worktreeGit.runArgvAsync = async (bin, argv) => {
+    worktreeGit.runArgvAsync = async (_bin, argv) => {
       gitCalls.push({ argv: argv.slice() });
       return { status: 0, stdout: '', stderr: '', error: null };
     };
@@ -1138,7 +1235,7 @@ describe('/issues repository identity (S5)', () => {
     const run = await capturedIssuesOptions(root, { runner: gh.runner, calls: gh.calls });
     const gitCalls = [];
     const original = worktreeGit.runArgvAsync;
-    worktreeGit.runArgvAsync = async (bin, argv) => {
+    worktreeGit.runArgvAsync = async (_bin, argv) => {
       gitCalls.push({ argv: argv.slice() });
       return { status: 0, stdout: '', stderr: '', error: null };
     };
@@ -1245,5 +1342,138 @@ describe('/issues registration survives a reused module', () => {
     reloaded.clear();
     factory(api);
     assert.ok(reloaded.has('issues'), 'a rebuilt registry on the same API must also regain the command');
+  });
+});
+
+// S7 (issues-all-toggle): `/issues <number>` opens the same panel on `Assigned`
+// with that issue selected and its detail shown, exactly as if the reader had
+// moved to Assigned and arrowed down to it. Anything that is not a bare
+// positive integer (optionally `#`-prefixed) keeps the command's original
+// refusal. S8 (the sidebar's cache) is another task and is not exercised here.
+describe('/issues <number> opens the panel on one issue (S7)', () => {
+  const assignedSearches = (calls) => searchQueries(calls).filter((query) => query.startsWith('assignee:@me'));
+
+  function syntheticRow(number, title = `assigned issue ${number}`) {
+    return {
+      number,
+      title,
+      state: 'OPEN',
+      createdAt: '2026-02-01T00:00:00Z',
+      updatedAt: '2026-02-01T00:00:00Z',
+      url: `https://example.test/issues/${number}`,
+    };
+  }
+
+  // A runner that answers the scoped SEARCH reads from per-bucket row lists,
+  // and everything else from the shared fixture runner, so the mounted view's
+  // own cursor paging is exercised through the real client seam.
+  function pagedSearchRunner(rowsByBucket) {
+    const base = makeIssuesRunner();
+    const calls = [];
+    const runner = async (bin, argv, opts) => {
+      calls.push({ bin, argv: argv.slice(), cwd: opts ? opts.cwd : undefined });
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        const query = graphqlField(argv, 'query', '-f') || '';
+        if (query.includes('type: ISSUE')) {
+          const search = graphqlField(argv, 'search') || '';
+          const rows = search.includes('assignee:@me') ? rowsByBucket.assigned
+            : search.includes('involves:@me') ? rowsByBucket.involved
+              : rowsByBucket.mine;
+          return { status: 0, stdout: graphqlSearchPage(argv, rows || []), stderr: '', error: null };
+        }
+      }
+      return base.runner(bin, argv, opts);
+    };
+    return { runner, calls };
+  }
+
+  test('a bare number opens on Assigned with that row selected and its detail shown', async () => {
+    const root = makeRepo({ tag: 'issues-one-number' });
+    const { runner, calls } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner, args: '76' });
+    await tick();
+    const frame = clean(component.render(200).join('\n'));
+    assert.match(frame, /▸ Assigned/, 'the panel opens on the Assigned tab');
+    assert.match(frame, /▸ chore: update/, 'the matching row is the selected one');
+    assert.ok(calls.some((call) => call.argv[0] === 'issue' && call.argv[1] === 'view'
+      && call.argv.includes('76') && call.argv.includes('--json')),
+    'the requested issue detail was read through gh');
+    assert.equal(searchQueries(calls).length, 3, 'opening still reads exactly the three scoped buckets');
+    assert.equal(connectionReads(calls).length, 0, 'and never the All connection (S2)');
+  });
+
+  test('the #-prefixed form opens the same panel on the same issue', async () => {
+    const root = makeRepo({ tag: 'issues-one-hash' });
+    const { runner } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner, args: '#76' });
+    await tick();
+    const frame = clean(component.render(200).join('\n'));
+    assert.match(frame, /▸ Assigned/);
+    assert.match(frame, /▸ chore: update/);
+  });
+
+  test('anything else keeps the exact old refusal and opens nothing', async () => {
+    const root = makeRepo({ tag: 'issues-one-refused' });
+    const { commands, mod, hooks } = await loadExtension();
+    ghIssues.setGhRunner(makeIssuesRunner().runner);
+    const scratch = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-gate-')));
+    await fireSessionStart(hooks, gateCtx(scratch, []));
+    mod.setIssuesTuiLoader(async () => stubTui);
+    for (const arg of ['0', '-3', '12abc', 'all', '5 6', '#', '#0']) {
+      const { ctx, customs, notes } = makeCtx({ cwd: root, customImpl: async () => null });
+      await commands.get('issues').handler(arg, ctx);
+      assert.equal(customs.length, 0, `${arg}: no overlay is opened`);
+      assert.deepEqual(notes, [[`Unknown option "${arg}". Use /issues.`, 'error']], `${arg}: the old refusal is unchanged`);
+    }
+  });
+
+  test('a number that is not in Assigned says so and keeps the first row', async () => {
+    const root = makeRepo({ tag: 'issues-one-missing' });
+    const { runner } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner, args: '51' });
+    assert.ok(await waitFor(() => clean(component.render(200).join('\n')).includes('#51 is not in Assigned')));
+    const frame = clean(component.render(200).join('\n'));
+    assert.match(frame, /#51 is not in Assigned/, 'the note row names the miss');
+    assert.match(frame, /▸ chore: update/, 'the first row is still the selection');
+  });
+
+  test('a number on a later Assigned page is found by paging and selected', async () => {
+    const root = makeRepo({ tag: 'issues-one-page2' });
+    const rows = Array.from({ length: 18 }, (_, at) => syntheticRow(at + 1));
+    const { runner, calls } = pagedSearchRunner({ mine: [], assigned: [...rows, syntheticRow(51)], involved: [] });
+    const { component } = await openIssues(root, { runner, args: '51' });
+    await tick();
+    const frame = clean(component.render(200).join('\n'));
+    assert.match(frame, /▸ assigned issue 51/, 'the second-page match is selected');
+    assert.equal(assignedSearches(calls).length, 2, 'exactly one more page was read to find it');
+  });
+
+  test('paging for a missing number stops at five Assigned pages', async () => {
+    const root = makeRepo({ tag: 'issues-one-bound' });
+    const rows = Array.from({ length: 200 }, (_, at) => syntheticRow(at + 1));
+    const { runner, calls } = pagedSearchRunner({ mine: [], assigned: rows, involved: [] });
+    const { component } = await openIssues(root, { runner, args: '999' });
+    assert.ok(await waitFor(() => assignedSearches(calls).length >= 5));
+    await tick();
+    assert.equal(assignedSearches(calls).length, 5, 'the bound is five Assigned pages in total');
+    const frame = clean(component.render(200).join('\n'));
+    assert.match(frame, /#999 is not in Assigned/, 'the panel discloses the miss');
+    assert.match(frame, /▸ assigned issue 1/, 'the first row stays selected');
+  });
+
+  test('plain /issues still opens on My issues and is handed no initial issue', async () => {
+    const root = makeRepo({ tag: 'issues-one-plain' });
+    const run = await capturedIssuesOptions(root);
+    try {
+      assert.equal('initialBucket' in run.options, false, 'a plain open passes no initial bucket');
+      assert.equal('initialIssue' in run.options, false, 'and no initial issue');
+    } finally {
+      run.restore();
+    }
+    const { runner } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner });
+    const frame = clean(component.render(200).join('\n'));
+    assert.match(frame, /▸ My issues/, 'a plain open still starts on My issues');
+    assert.ok(!frame.includes('is not in'), 'and paints no initial-issue note');
   });
 });

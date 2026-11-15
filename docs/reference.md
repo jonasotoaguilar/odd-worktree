@@ -86,12 +86,15 @@ open the document in `$VISUAL`/`$EDITOR`, `s` toggles the order between `recent`
 and `name`, `r` reload, `esc` close. `←`/`→` and `[`/`]` scroll the list; the
 document pane pages with `ctrl+j`/`ctrl+k`.
 
-`/issues` — bucket tabs are `My issues`, `Assigned`, `Involved` and `All`.
+`/issues` — the tab bar reads `My issues (<n>)`, `Assigned (<n>)` and
+`Involved (<n>)`; `All` is not a tab, it is the `g` shortcut's own view, and there
+the bar reads only `All (<n>)`.
 
 | Key | Action | Needs |
 | --- | --- | --- |
 | `↑`/`↓`, `j`/`k` | Move the selection | — |
-| `←`/`→` (also `tab`/`shift+tab`) | Switch bucket | — |
+| `←`/`→` (also `tab`/`shift+tab`) | Cycle the three scoped tabs; inside `All` they do nothing | — |
+| `g` | Enter `All`; the same key returns to the tab you came from. Inside the search box it types a letter | — |
 | `]`/`[` | Scroll the list one page; the hint is deliberately absent from the footer | — |
 | `ctrl+j`/`ctrl+k` | Scroll the preview a page (`ctrl+shift+j/k`, `shift+J/K` and `pgUp`/`pgDn` also work; `ctrl+d`/`ctrl+u` scroll half a page) | — |
 | `t` | Open the search box (`T` and `/` also open it) | — |
@@ -102,6 +105,25 @@ document pane pages with `ctrl+j`/`ctrl+k`.
 | `c` | Comment | read access |
 | `x` (and `X`) | Close the issue, after the host's confirmation; only `x` rides the legend | triage |
 | `esc`, `q`, `ctrl+c` | Close the reader | — |
+
+**The shortcut teaches itself.** Outside `All` the footer reads `g all issues`;
+inside it the same key reads `g related issues`, because there it goes back — to
+the tab that was active when you entered, never always the first one. The key is
+`g` and not `a` because `a` already assigns, and the letters the reading
+interaction binds are taken anyway (`l` labels, `c` comments, `x` closes, `o`
+opens the browser, `t` and `/` search, `r` refreshes, `j`/`k` move and scroll, `q`
+closes). While a search box is open `g` is a letter of the query and moves
+nothing.
+
+**The legend drops hints rather than clipping them.** One row holds the keys:
+while the full tokens fit it keeps them, then it compacts to its short spellings,
+and past that it drops its lowest-priority hints first — `esc close` is dropped
+last and `↑↓ move` just before it. The `g` hint sits below the editor hints in that
+order, so a narrow row loses it before `c comment` or `a assign` does, and the
+narrowest rows carry only `↑↓ move · esc close`: the key still works there, it is
+simply not taught. The footer is a guide, not a complete key list — `]`/`[`, `T`,
+`/`, `X`, `home`/`end`, `q` and the preview's paging alternates all work without a
+token.
 
 Creating a **new** label is a separate capability inside the labels editor and
 needs `write`, so a triage-only viewer opens the editor normally and sees
@@ -246,6 +268,46 @@ All three sources are read **best effort**, and none is ever guessed:
   still runs, and the queued line never carries a caveat. The one place the
   unreadable job state is still disclosed is the expiry notice, which says
   nothing moved and names the state it could not read.
+
+## `/issues`: three tabs, one shortcut, one filter
+
+Opening the panel reads the three scoped buckets only — `My issues`
+(`author:@me`), `Assigned` (`assignee:@me`) and `Involved`
+(`involves:@me -author:@me`) — one cursor page each, open issues, newest update
+first. `All` costs nothing until you ask for it, which is the point of the split:
+the common case is your own issues, and reading every open issue of the
+repository to paint three tabs was work nobody asked for.
+
+- **`All` is read on first entry, then reused.** The `g` view reads its first page
+  the first time you enter it and paints what it already holds on the way back, so
+  moving in and out costs one read. A changed filter and a successful edit are
+  what make it read again.
+- **Two honest reads, and a note row that says which one is on screen.**
+  Unfiltered, `All` reads the repository's issue connection: every open issue of
+  the repository, paged to its end, with an exact total, and not deduplicated
+  against the three scoped tabs. GitHub takes no search text on that connection, so
+  a filtered `All` goes through the search path instead, which GitHub caps: its
+  count wears a `+` (`n+`) rather than claiming a total it cannot know. The note
+  row between the tabs and the list names the read — `via connection (exact
+  total)` or `via search (total capped)` — and a save, an error, a notice or a
+  read in flight outranks it there.
+- **One filter, three tabs.** The search box's settled query is read by all three
+  scoped tabs, not only the one on screen, and each tab's count is the FILTERED
+  total. A tab that has not answered for the current filter shows `–` instead of a
+  number from the previous one.
+- **The filter travels into `All`, and `All`'s page does not survive it.** Entering
+  `All` with a filter reads it with that filter, and editing the filter drops
+  `All`'s loaded rows and total, so it can never list rows that belong to a
+  previous one. Clearing the filter re-reads the three scoped tabs; `All` is read
+  again when you enter it, or at once if you are in it when the query changes.
+- **`/issues <number>` opens on one issue.** `/issues 42` and `/issues #42` open
+  the panel on `Assigned` with #42 selected and its detail loaded. The view pages
+  up to five pages of that tab looking for it, the first page counting; a number it
+  does not find leaves the first row selected and says so on the note row:
+  `#42 is not in Assigned`. Any other argument keeps the command's refusal,
+  `Unknown option "<what you typed>". Use /issues.`, so a typo opens nothing. The
+  selection is one-shot: the first key you press spends it, and a later filter,
+  refresh, tab switch or page never moves the focus back to that number.
 
 ## `/issues` pins the repository
 

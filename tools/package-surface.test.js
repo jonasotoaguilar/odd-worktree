@@ -12,10 +12,9 @@
 // are shipped; `/issues` is the T3 command that mounts them, without any
 // worktree↔issue association.
 //
-// The ONE preference is the bash card mode, and it is not a command (S3): it is
-// a `Card tool` row group contributed through gentle-shell-bridge's published
-// row API into `/gentle:customize` → `Cards`, so the shipped surface is exactly
-// three commands, two tools and one sidebar section.
+// The bash activity is not a preference here: it is a design on gentle-shell-bridge's
+// own `bash` line, so the shipped surface is exactly three commands, two tools and
+// one sidebar section.
 //
 // Everything here reads the observable surface: the registered command and
 // tool objects, the manifest, the files on disk. No internal state is read.
@@ -68,10 +67,9 @@ describe('manifest', () => {
     // The issue reader, preview formatter and view are the migrated units (T2
     // S1,S3): the per-tab cache is still gone, but the `gh` client, the
     // formatter and the issues view `/issues` mounts are shipped, so their
-    // presence is asserted rather than forbidden. The three bash card modules
-    // are the shipped drawing (T2/T4): a classifier, the card and its resolver,
-    // and the mode module plus the customize row that owns the one preference.
-    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-card.js', 'bash-card-resolver.js', 'card-bash-mode.js', 'card-bash-customize.js']) {
+    // presence is asserted rather than forbidden. The bash drawing is the
+    // classifier and the one design registered on the bridge.
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-design.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
   });
@@ -87,31 +85,16 @@ describe('registration', () => {
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
 
-  // S3: the ONE preference this package owns is the bash card mode, and it has
-  // no command name any more. It is a preference with a document in the Pi home
-  // — not a configuration surface — whose only control is the customize row
-  // group contributed through the bridge API.
-  test('the one preference this package writes is the bash card mode, controlled by a customize row', async () => {
+  // The bash card is not a preference of this package: it contributes one design to
+  // the bridge's own `bash` line, and owns no document, command or customize row.
+  test('this package owns no preference: the bash activity is a design on the bridge', async () => {
     const source = stubbedSource();
-    assert.ok(source.includes('libRequire("card-bash-customize.js")'), 'the preference reaches /gentle:customize through the bridge API');
-    assert.ok(source.includes('function registerCardBashCustomize'), 'its registration is a named step');
+    assert.ok(source.includes('libRequire("bash-design.js")'), 'the design reaches the bridge through its published API');
     assert.equal(source.includes('registerCommand("card:bash"'), false, 'the preference has no command name');
-    assert.equal(source.includes('writeCardBashMode'), false, 'no command writes the preference: the customize action is the only caller');
-    for (const gone of ['cardBashStateLabel', 'cardBashSaveReason', 'cardBashSaveFailureLine', 'registerCardBashCommand']) {
-      assert.equal(source.includes(gone), false, `${gone} is gone with the command`);
-    }
-
-    // `lib/card-bash-mode.js` stays the only writer of the one document, and the
-    // customize row is its only caller.
     const lib = path.join(ROOT, 'lib');
-    const modules = fs.readdirSync(lib).filter((entry) => entry.endsWith('.js') && entry !== 'card-bash-mode.js');
-    const callers = modules
-      .filter((entry) => /writeCardBashMode\s*\(/.test(fs.readFileSync(path.join(lib, entry), 'utf8')))
-      .sort();
-    assert.deepEqual(callers, ['card-bash-customize.js'], 'the customize row is the writer\'s only caller');
-    const named = modules.filter((entry) => /CARD_BASH_FILE\s*=\s*['"]/.test(fs.readFileSync(path.join(lib, entry), 'utf8')));
-    assert.deepEqual(named, [], 'the document is named once, in the mode module');
-
+    for (const gone of ['card-bash-mode.js', 'card-bash-customize.js', 'bash-card.js', 'bash-card-resolver.js']) {
+      assert.equal(fs.existsSync(path.join(lib, gone)), false, `lib/${gone} is gone`);
+    }
     const { commands } = await loadExtension({});
     assert.equal(commands.has('card:bash'), false, 'no /card:bash command is registered');
     for (const gone of ['card-style', 'card-bash', 'customize', 'worktree-mode']) {
@@ -126,23 +109,14 @@ describe('registration', () => {
     assert.equal(source.split('api.registerSection(').length - 1, 1, 'exactly one sidebar section is contributed');
   });
 
-  test('the bash activity card registers through one host hook, next to the CodeGraph card (T4)', async () => {
-    // S2/S5: one call, one line, through the host's `registerToolRenderer`. Nothing is
-    // registered as a tool or a command: the card only chooses how a `bash` row is drawn.
+  test('the bash design is wired through exactly one registration and adds no name', async () => {
     const source = stubbedSource();
-    const calls = source
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.includes('registerBashCard('));
-    assert.deepEqual(
-      calls,
-      ['libRequire("bash-card-resolver.js").registerBashCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });'],
-      'the bash card is wired through exactly one call',
-    );
+    assert.equal(source.split('design.registerBashDesign(').length - 1, 1, 'one registration call');
+    assert.equal(source.includes('registerBashCard'), false, 'no resolver of ours draws bash');
     const { commands, tools } = await loadExtension({});
     for (const gone of ['bash-card', 'card-bash', 'bash']) {
-      assert.equal(commands.has(gone), false, `the card adds no /${gone} command`);
-      assert.equal(tools.has(gone), false, `the card adds no ${gone} tool`);
+      assert.equal(commands.has(gone), false, `the design adds no /${gone} command`);
+      assert.equal(tools.has(gone), false, `the design adds no ${gone} tool`);
     }
   });
 

@@ -10,11 +10,10 @@
 //   /issues    read this checkout's GitHub issues, with label/assignee,
 //              comment and close actions when the repository permits them
 //
-// The one preference — whether a `bash` call is drawn as this package's activity
-// card or left to the host's own drawing — is NOT a command (S3): it is the one
-// `Card tool` row group in Gentle Shell's `/gentle:customize` → `Cards`,
-// contributed through gentle-shell-bridge's published API, and it is remembered in
-// `<home>/card-bash.json` by lib/card-bash-mode.js.
+// The bash card is not a preference of this package: it contributes one DESIGN
+// (`activity`) to gentle-shell-bridge's `bash` line in `/gentle:customize` → `Cards`
+// (`native` | `activity`), which the bridge owns, persists and repaints
+// (lib/bash-design.js).
 //
 // Plus two tools: worktree_create and worktree_list. Create prompts for approval
 // when the host offers dialog UI; list never mutates anything; `/warp` is the
@@ -7641,38 +7640,32 @@ function mountIssuesSidebar(pi, api) {
   issuesSidebarDisposer = typeof disposer === "function" ? disposer : null;
 }
 
-// S3 (T3, card-bash): the bash-card preference is a `/gentle:customize` row, not
-// a command, and it reaches the host through the SAME published object the rail
-// section uses — never an import and never a dependency. `lib/card-bash-customize.js`
-// owns the one `Card tool` row group (`default` | `activity`); this seam only
-// hands it the object when the object is there. Without a bridge nothing is
-// registered: no command, no throw, and the mode keeps its default `activity`.
-//
-// The preference's document and reader do not move: `lib/card-bash-mode.js` stays
-// the only writer of `<home>/card-bash.json` and the resolver the bash card reads
-// on every paint, so a click on the row changes what the next frame draws and
-// what survives a restart with one path.
-function registerCardBashCustomizeRows(api) {
+// The bash activity design reaches the host ONLY through gentle-shell-bridge's
+// published object (`registerToolDesign`), never an import. The bridge owns the
+// renderer resolver, the `bash` customize line, its persistence and the repaint of
+// cards already on screen, so nothing here depends on extension load order.
+// Without a bridge (or one older than the API) nothing is registered.
+function registerBashDesignRows(api) {
   try {
-    const customize = libRequire("card-bash-customize.js");
-    if (!customize || typeof customize.registerCardBashCustomize !== "function") return;
-    customize.registerCardBashCustomize(api);
+    const design = libRequire("bash-design.js");
+    if (!design || typeof design.registerBashDesign !== "function") return;
+    design.registerBashDesign(api);
   } catch {
-    // The preference has no control surface; the mode keeps its default.
+    // The design is cosmetic; the host keeps drawing its own bash cards.
   }
 }
 
 // S2 (issues-sidebar): the rail section reaches the rail ONLY through the bridge's
 // published object. A host without it is subscribed to the ready announcement
 // ONCE and nothing else happens: no notify, no throw, no other surface touched.
-// The customize row group takes the same two paths, so one subscription carries
-// every bridge surface this package contributes.
+// The bash design takes the same two paths, so one subscription carries every
+// bridge surface this package contributes.
 function registerIssuesSidebar(pi) {
   try {
     if (issuesSidebarHandle !== null) return;
     const api = issuesSidebarBridge();
     if (api !== null) {
-      registerCardBashCustomizeRows(api);
+      registerBashDesignRows(api);
       mountIssuesSidebar(pi, api);
       return;
     }
@@ -7815,24 +7808,6 @@ function refreshIssuesSidebarIfDrawn() {
     // A failed activity read never breaks the session; the next frame retries.
   }
 }
-// ---------------------------------------------------------------------------
-// The bash card preference (S3): ONE `Card tool` row group in Gentle Shell's
-// `/gentle:customize` → `Cards`, contributed through gentle-shell-bridge's
-// published API (`lib/card-bash-customize.js`), and NOT a command any more. The
-// document and its writer stay where they were — lib/card-bash-mode.js owns both.
-//
-// The click needs no repaint request of its own: the card is what re-decides. The
-// host resolves the renderer once, when a row's component is created
-// (`ToolExecutionComponent` keeps the resolved `toolDefinition`), but the component a
-// renderer RETURNS has its `render(width)` called on every frame — so a card that builds
-// its rows inside that build re-reads the mode while it paints, and one click on the row
-// repaints rows already on screen (lib/bash-card.js; odd/tasks/card-bash.md L8). Nothing
-// here routes a repaint through the session-wide tool-expansion flag or appends a fake
-// entry: both would repaint a row without re-deciding how it is drawn. One asymmetry is
-// deliberate: a row created while the mode was `default` stays the host's own row for
-// its lifetime, because its box must never become this package's.
-// ---------------------------------------------------------------------------
-
 export default function (pi) {
   // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
   // moves the session, so the command is where a handoff waits and lands.
@@ -7846,7 +7821,7 @@ export default function (pi) {
   registerIssuesRefusalEntryRenderer(pi);
   // S2 (issues-sidebar): the rail section, only when gentle-shell-bridge
   // published its API; otherwise one ready-announcement subscription. The same
-  // path contributes the one customize row group (S3, card-bash).
+  // path contributes the bash activity design.
   registerIssuesSidebar(pi);
   registerWarpCommand(pi);
   registerOddCommand(pi);
@@ -8014,17 +7989,6 @@ export default function (pi) {
     libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
   } catch {
     // CodeGraph is best effort.
-  }
-  // S2 (T4): the bash activity card, through the same host hook and in the same shape as the
-  // card above — one call, one line. It composes with that card at paint time: a `codegraph …`
-  // command keeps the CodeGraph identity, every other bash call wears this package's activity
-  // card while the preference is `activity` (`own`) and the host's own drawing while it is
-  // `default`. A host without `pi.registerToolRenderer` registers nothing and keeps drawing
-  // every bash row itself.
-  try {
-    libRequire("bash-card-resolver.js").registerBashCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
-  } catch {
-    // The card is cosmetic.
   }
   // Register every live checkout the registry does not own yet. Dispatched here
   // and awaited by the barrier below: the host runs session_start handlers one

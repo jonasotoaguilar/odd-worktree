@@ -2929,6 +2929,10 @@ function cachedDefaultBranch(git, root) {
 // memoized per checkout, so the hot path costs one `Map` hit per call.
 function guardWorktreeBashCall(event, ctx) {
   try {
+    // `ODD_WORKTREE_GUARD=0` turns the guards off for this process, the way
+    // `ODD_WORKTREE_PROMPT=0` turns off the prompt blocks. Read per call: a guard is
+    // cheap, and an escape hatch that needs a restart is not one.
+    if (process.env.ODD_WORKTREE_GUARD === "0") return undefined;
     if (!event || event.toolName !== "bash") return undefined;
     const guard = libRequire("worktree-guard.js");
     if (!guard || typeof guard.decideBashGuard !== "function") return undefined;

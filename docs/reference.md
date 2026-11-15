@@ -556,7 +556,8 @@ them.
   segment of a compound command counts, so an allowed switch never hides a later one.
 - **Everything else passes**: `git status`, `git branch` alone or with an option,
   `git restore`, `git worktree remove|prune|move`, and every tool but `bash`.
-- No switch, option or variable turns them off.
+- `ODD_WORKTREE_GUARD=0` turns them off for the process, like `ODD_WORKTREE_PROMPT=0`
+  for the prompt blocks. No other value does, and nothing else configures them.
 
 ## The `## ODD worktrees` block in the system prompt
 

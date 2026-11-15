@@ -421,8 +421,9 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     only: no script, alias or file is read, and a command it cannot judge passes. It
     never throws (a throwing `tool_call` handler blocks the tool), an unreadable
     repository leaves only the worktree refusals active, and the default branch is
-    resolved lazily and memoized per checkout. There is no switch, option or
-    environment variable that disables it, and it registers no command or tool name
+    resolved lazily and memoized per checkout. `ODD_WORKTREE_GUARD=0` is the one way
+    to turn it off, like `ODD_WORKTREE_PROMPT=0` for the prompt blocks; no other
+    value, option or config file does, and it registers no command or tool name
     (invariant 3). The refusal sentences name `worktree_list` first and
     `worktree_create` second; the prompt block (invariant 14) is what keeps the agent
     from reaching them, so a change to one is read against the other.

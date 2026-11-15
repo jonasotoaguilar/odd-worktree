@@ -71,13 +71,14 @@ inspection (`git status`, `git branch` with no argument or only options,
 non-`bash` tool call are unaffected. Staging, committing, merging, rebasing and
 pushing are out of scope: not requested.
 
-**S7 — No new surface, no escape hatch.**
-Decision (questionnaire): *"Sin escape: siempre bloquean"* — no environment
-variable, no config file, no command, no tool, no option. The shipped surface
-stays three commands, two tools and one sidebar section (AGENTS.md invariant 3);
-the guard is a `tool_call` observation registered in
-`extensions/odd-worktree-tools.ts` that introduces no name the host or the agent
-can call.
+**S7 — No new surface, and one named way to turn the guards off.**
+The shipped surface stays the commands, tools and section it already has (AGENTS.md
+invariant 3); the guard is a `tool_call` observation registered in
+`extensions/odd-worktree-tools.ts` that introduces no name the host or the agent can
+call. `ODD_WORKTREE_GUARD=0` turns the guards off for the process, the way
+`ODD_WORKTREE_PROMPT=0` turns off the prompt blocks; no other value, option or config
+file does. The questionnaire's "always block" decision is superseded by the user's
+later instruction (L9).
 
 **S8 — Honest failure, never a false block.**
 The handler never throws, because a thrown `tool_call` handler blocks the tool
@@ -184,3 +185,8 @@ finding is also fixed: the branch-create refusal lacked "only when it has none"
 inside passes; `echo git worktree add` is refused because the text contains it.
 Risk: item 2 (guards) — independent verification was unavailable, so this
 evidence is the parent's.
+
+**L9** (user, verbatim): *"igual pon que se pueda apagar con alguna variable de
+entorno mientras"* and, when asked what it turns off, *"los guards"*. The env variable
+is `ODD_WORKTREE_GUARD=0` (the existing `ODD_WORKTREE_*` family), read per call, so no
+restart is needed. This supersedes L3's "no escape".

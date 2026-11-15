@@ -566,6 +566,27 @@ describe('the tool_call handler the extension registers', () => {
     );
   });
 
+  test('ODD_WORKTREE_GUARD=0 turns the guards off, and only that value', async () => {
+    const previous = process.env.ODD_WORKTREE_GUARD;
+    try {
+      for (const value of ['0', 'false', '', '1']) {
+        process.env.ODD_WORKTREE_GUARD = value;
+        const answer = await callTool(loaded.hooks, bash('git worktree add ../odd-b'), principal);
+        if (value === '0') assert.equal(answer, undefined, 'value "0" turns them off');
+        else assert.deepEqual(answer, { block: true, reason: WORKTREE_ADD_REFUSAL }, `value ${JSON.stringify(value)}`);
+      }
+      delete process.env.ODD_WORKTREE_GUARD;
+      assert.deepEqual(
+        await callTool(loaded.hooks, bash('git worktree add ../odd-b'), principal),
+        { block: true, reason: WORKTREE_ADD_REFUSAL },
+        'unset keeps them on',
+      );
+    } finally {
+      if (previous === undefined) delete process.env.ODD_WORKTREE_GUARD;
+      else process.env.ODD_WORKTREE_GUARD = previous;
+    }
+  });
+
   test('lets every other call through', async () => {
     const calls = [
       bash('git status'),

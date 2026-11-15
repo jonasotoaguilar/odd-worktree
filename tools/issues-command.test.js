@@ -1771,6 +1771,87 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
   // match the `issueCount` the response reported (its next sync is a full
   // re-read), so a total derived from those rows is exactly the number the rail
   // itself refuses to claim. The panel must paint it inexact too.
+  // E18 (S4, verify round 5 blocker b): a seeded page is rows on screen before its
+  // own read answers, and the verifier's exact scenario is `/issues 22` over a
+  // seeded `Assigned` of `[21, 22]` with that page still in flight: the initial
+  // selection landed on 21, and `c` then `ctrl+s` posted a comment on 21 while the
+  // human asked for 22. A mutation on an issue nobody chose is the one thing the
+  // identity work exists to prevent.
+  //
+  // The property: with `Assigned` seeded and `/issues <n>` where `n` is the second
+  // seeded row, no mutation of any kind — comment, labels, assignees, close — can
+  // reach any row other than `n`.
+  test('a seeded Assigned page never lends a mutation to another issue (E18)', async () => {
+    const root = makeRepo({ tag: 'issues-seed-mutation' });
+    const related = relatedAnswer({
+      assigned: [
+        { number: 21, title: 'Assigned twenty-one', updatedAt: '2026-02-03T00:00:00Z' },
+        { number: 22, title: 'Assigned twenty-two', updatedAt: '2026-02-02T00:00:00Z' },
+      ],
+    });
+    const warmed = await warmRail(root, related);
+    const { loaded, gh } = warmed;
+    const { component } = await mountIssues(loaded, root, { args: '22' });
+    const frame = () => clean(component.render(240).join('\n'));
+    const writes = () => gh.calls.filter((call) => call.argv[0] === 'issue'
+      && ['comment', 'edit', 'close'].includes(call.argv[1]));
+
+    assert.ok(await waitFor(() => gh.held.length >= 1), 'the numbered open issued its own Assigned read');
+    assert.deepEqual(searchQueries([gh.held[0]]), ['assignee:@me sort:updated-desc'],
+      'the held read is the bucket the panel was opened on');
+
+    // The verifier's exact scenario: `c`, then `ctrl+s`, in that window.
+    component.handleInput('c');
+    for (const ch of 'looks right') component.handleInput(ch);
+    component.handleInput('ctrl+s');
+    assert.ok(await waitFor(() => writes().length > 0), 'the comment reached gh');
+    assert.deepEqual(writes().map((call) => call.argv.slice(0, 3)), [['issue', 'comment', '22']],
+      'the comment names the issue the human asked for, never the seeded #21');
+
+    // The page's own answer lands. The correct issue is still the only one any
+    // mutation can reach.
+    gh.held[0].release([
+      issueRow(21, 'Assigned twenty-one'),
+      issueRow(22, 'Assigned twenty-two'),
+    ]);
+    assert.ok(await waitFor(() => frame().includes('l labels')),
+      'the answer is on screen and the detail confirmed the role');
+
+    component.handleInput('l');
+    await tick();
+    component.handleInput('down');
+    component.handleInput('space');
+    component.handleInput('ctrl+s');
+    assert.ok(await waitFor(() => writes().some((call) => call.argv[1] === 'edit'
+      && call.argv.includes('--add-label'))), 'the label save reached gh');
+    assert.ok(await waitFor(() => component.state.mode === 'list'), 'the label save closed the editor');
+    // A successful write re-reads the detail, and the editor keys are only
+    // offered once that answer confirms the repository role again.
+    const roleBack = await waitFor(() => frame().includes('l labels'));
+    if (!roleBack) console.log('DEBUG2>>>\n' + frame().split('\n').filter((line) => !line.trim().startsWith('│') || line.includes('Assigned twenty') || line.includes('·')).join('\n') + '\n<<<DEBUG2');
+    assert.ok(roleBack, 'the refreshed detail confirms the role');
+
+    component.handleInput('a');
+    assert.ok(await waitFor(() => frame().includes('Assignees (space toggle')), 'the assignee editor opened');
+    assert.ok(await waitFor(() => !frame().includes('loading assignees')), 'the assignable users answered');
+    component.handleInput('space');
+    component.handleInput('ctrl+s');
+    const assigneeWrite = (call) => call.argv[1] === 'edit'
+      && (call.argv.includes('--add-assignee') || call.argv.includes('--remove-assignee'));
+    assert.ok(await waitFor(() => writes().some(assigneeWrite)), 'the assignee save reached gh');
+    assert.ok(await waitFor(() => component.state.mode === 'list'), 'the assignee save closed the editor');
+    assert.ok(await waitFor(() => frame().includes('x close')), 'the refreshed detail confirms the role again');
+
+    component.handleInput('x');
+    component.handleInput('enter');
+    assert.ok(await waitFor(() => writes().some((call) => call.argv[1] === 'close')), 'the close reached gh');
+
+    assert.deepEqual(writes().map((call) => call.argv[2]), ['22', '22', '22', '22'],
+      'every mutation this panel ran named #22, the issue the human asked for');
+    assert.equal(writes().some((call) => call.argv[2] === '21'), false,
+      'and not one of them ever named the seeded #21');
+  });
+
   test('an inconsistent cached entry never claims an exact total', async () => {
     const root = makeRepo({ tag: 'issues-cache-inconsistent' });
     // ONE read whose assigned `issueCount` (2) outruns the nodes it returned

@@ -7497,11 +7497,26 @@ async function dispatchIssuesPanel(pi, number, identity) {
   // contradict the one this checkout proves.
   const rowIdentity = typeof identity === "string" && identity.length > 0 ? identity : null;
   if (namesIssue && rowIdentity !== null) {
+    // E18 (S4): the proof below waits on git (and, on a single-remote checkout,
+    // on `gh`), and the session can move to another checkout while it does:
+    // `session_start` bumps this generation BEFORE anything it awaits, and so do
+    // `session_shutdown` and a bridge rebinding. A proof that STARTED under one
+    // session says nothing about the next one — A's #11 proved, then delivered as
+    // B's `/issues 11`, would open B's own #11, which is the silent wrong issue
+    // the identity proof exists to prevent. So the click dispatches only while
+    // the generation it started under is still the current one.
+    const generation = issuesSidebarCacheGeneration;
     const proof = await issuesCurrentCheckoutIdentity();
     if (proof.ok !== true) {
       return {
         ok: false,
         error: `${ISSUES_SIDEBAR_OTHER_CHECKOUT} and this checkout's repository could not be proven (${proof.error}); the /issues panel was not opened`,
+      };
+    }
+    if (issuesSidebarCacheGeneration !== generation) {
+      return {
+        ok: false,
+        error: "the session moved to another checkout while this click was being proved; the /issues panel was not opened",
       };
     }
     if (proof.identity !== rowIdentity) {

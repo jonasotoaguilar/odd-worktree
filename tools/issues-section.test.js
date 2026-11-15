@@ -2717,3 +2717,72 @@ test('S6/S9 (T16): a checkout switch cuts the previous read out of the cache', a
     "the previous checkout's rows never survive the move");
   assert.match(section.meta(ctxB), /^1 assigned/, 'the header counts only the moved session rows');
 });
+
+// E18 (S4, verify round 5 blocker a): the click's identity proof runs asynchronously
+// and the session can move to another checkout while it does. The proof for A says
+// nothing about B, so a click whose proof outlived its session must dispatch
+// NOTHING — the reproduced defect was A's proof releasing into `/issues 11` for B,
+// where B's own #11 would then open silently.
+//
+// The seam is the extension's own (`dispatchIssuesPanel`, exported for exactly this
+// contract like the other test seams): it is the function the row click defers.
+test('S4 (E18): a proof still running when the session moves dispatches nothing', async () => {
+  // Two checkouts of the SAME repository: the identity comparison passes for both,
+  // so a refusal can only come from the session itself having moved.
+  const checkoutA = makeCheckout([['origin', 'git@github.com:myfork/project.git']]);
+  const checkoutB = makeCheckout([['origin', 'git@github.com:myfork/project.git']]);
+  const sent = [];
+  const dispatch = { sendUserMessage: (text, opts) => { sent.push({ text, opts }); } };
+  const { mod, hooks } = await loadSeam(dispatch);
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub({ repoView: 'myfork/project' });
+  ghIssues.setGhRunner(gh.runner);
+
+  await fireSessionStart(hooks, { cwd: checkoutA, ui: { notify: () => {} } });
+
+  // Baseline (the rule keeps working): the same click with no session change in
+  // between dispatches the panel exactly as it always did.
+  const settled = await mod.dispatchIssuesPanel(dispatch, 11, 'github.com/myfork/project');
+  assert.deepEqual(settled, { ok: true });
+  assert.deepEqual(sent, [{ text: '/issues 11', opts: { expandPromptTemplates: true } }],
+    'a click with no session change dispatches its issue');
+
+  // The proof is HELD: the checkout's own git read waits until the test releases it.
+  const worktreeGit = require(path.join(LIB_DIR, 'worktree-git.js'));
+  const original = worktreeGit.runArgvAsync;
+  let holdNext = false;
+  let release = () => {};
+  const gate = new Promise((resolve) => { release = resolve; });
+  worktreeGit.runArgvAsync = async (bin, argv, opts) => {
+    if (holdNext && bin === 'git' && argv[0] === 'rev-parse' && argv[1] === '--show-toplevel') {
+      holdNext = false;
+      await gate;
+    }
+    return original(bin, argv, opts);
+  };
+
+  try {
+    holdNext = true;
+    const clicking = mod.dispatchIssuesPanel(dispatch, 11, 'github.com/myfork/project');
+    // The session moves to the other checkout while that proof is in flight.
+    await fireSessionStart(hooks, { cwd: checkoutB, ui: { notify: () => {} } });
+    release();
+    const outcome = await clicking;
+
+    assert.equal(outcome.ok, false, 'a proof that outlived its session dispatches nothing');
+    assert.match(outcome.error, /another checkout/,
+      'the refusal says the session changed checkout');
+    assert.match(outcome.error, /the \/issues panel was not opened/,
+      'and says nothing was opened');
+    assert.deepEqual(sent, [{ text: '/issues 11', opts: { expandPromptTemplates: true } }],
+      'no second dispatch: the number proved under the old session never reaches the new one');
+
+    // The same click in the settled session dispatches again: the guard is the
+    // boundary itself, never a lockout.
+    const again = await mod.dispatchIssuesPanel(dispatch, 11, 'github.com/myfork/project');
+    assert.deepEqual(again, { ok: true });
+    assert.equal(sent.length, 2, 'a click made inside the current session still opens the panel');
+  } finally {
+    worktreeGit.runArgvAsync = original;
+  }
+});

@@ -14,11 +14,11 @@ Two agent tools, three panels, one sidebar section and one preference, loaded fr
 | `/odd-list` | panel | Reads this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
 | `/issues` | panel | Reads this checkout's GitHub issues — the three scoped tabs on open, every open issue behind `g` — and, when your role allows it, edits them. |
 | `ISSUES` rail section | sidebar section | Lists the open issues of this checkout's repository assigned to you, seven at a time plus a count of the rest; a click opens that issue in `/issues` on `Assigned` and the overflow row opens `/issues`. Needs `gh` and gentle-shell-bridge with its rail. |
-| `activity` bash design | design on the bridge's `bash` line | Optional: `/gentle:customize` → `Cards` → `bash`, with `native` (the host's own card, the default) and `activity` (the card's heading names what the command does: `⌕ exploring`, `✓ checking`, …). Registered through gentle-shell-bridge's `registerToolDesign`; the bridge owns the choice, remembers it and repaints cards already on screen. |
+| `activity` bash design | design on the bridge's `bash` line | Optional: `/gentle:customize` → `Cards` → `bash`, with `native` (the host's own card) and `activity`, which is selected for you on the first run (the card's heading names what the command does: `⌕ exploring`, `✓ checking`, …). Registered through gentle-shell-bridge's `registerToolDesign`; the bridge owns the choice, remembers it and repaints cards already on screen. |
 
 Moving the session and removing a checkout are human actions: only `/warp` does either, and no agent tool can. A checkout has one identity, its ODD: the directory name is the ODD it serves, and `branch` is only the git branch.
 
-The bash card is a design, not a preference of this package: it adds the value `activity` to the bridge's own `bash` line, which keeps `native` (the host's own card) as the default. Nothing is stored by this package and load order does not matter. See [the bash design](docs/reference.md#the-bash-card-and-its-preference).
+The bash card is a design, not a preference of this package: it adds the value `activity` to the bridge's own `bash` line, which keeps `native` (the host's own card) available. On the first run, and only when you have not chosen yet, the package selects `activity` once; a later choice of `native` is never undone. Load order does not matter. See [the bash design](docs/reference.md#the-bash-card-and-its-preference).
 
 ## Quick Start
 

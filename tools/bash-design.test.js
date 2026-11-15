@@ -8,6 +8,7 @@ const {
   applyBashActivityHeading,
   bashActivityDesign,
   registerBashDesign,
+  seedBashDesignSelection,
 } = require('../lib/bash-design.js');
 
 const CALL = { tool: 'bash', part: 'call', width: 90 };
@@ -121,5 +122,83 @@ describe('the registration', () => {
     dispose();
     assert.equal(seen.length, 0);
     assert.equal(registerBashDesign({ registerToolDesign: () => { throw new Error('refused'); } }), null);
+  });
+});
+
+// A bridge whose `createStore` keeps one in-memory file per plugin id, like the real one.
+function fakeBridge(files = {}) {
+  const writes = [];
+  const createStore = (id) => ({
+    get: (key, fallback) => (files[id] && Object.hasOwn(files[id], key) ? files[id][key] : fallback),
+    set: (key, value) => { writes.push([id, key]); files[id] = { ...files[id], [key]: value }; },
+  });
+  return { api: { registerToolDesign: () => () => {}, createStore }, files, writes };
+}
+const SELECTIONS = ['bridge-tool-designs', 'selections'];
+
+describe('the first-run selection', () => {
+  test('a first load with no choice selects activity for bash and keeps the other tools', () => {
+    const { api, files } = fakeBridge({ 'bridge-tool-designs': { selections: { write: 'x.write' } } });
+    assert.equal(seedBashDesignSelection(api), true);
+    assert.deepEqual(files['bridge-tool-designs'].selections, { write: 'x.write', bash: BASH_DESIGN_ID });
+  });
+
+  test('a fresh install with no store file at all selects activity', () => {
+    const { api, files } = fakeBridge();
+    assert.equal(seedBashDesignSelection(api), true);
+    assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID });
+  });
+
+  test('a choice the user already made is never overwritten, native included', () => {
+    for (const chosen of ['native', 'someone.else']) {
+      const { api, files } = fakeBridge({ 'bridge-tool-designs': { selections: { bash: chosen } } });
+      assert.equal(seedBashDesignSelection(api), false, chosen);
+      assert.equal(files['bridge-tool-designs'].selections.bash, chosen);
+    }
+  });
+
+  test('it seeds once: native chosen afterwards stays native on the next load', () => {
+    const { api, files } = fakeBridge();
+    assert.equal(seedBashDesignSelection(api), true);
+    files['bridge-tool-designs'] = { selections: { bash: 'native' } };
+    assert.equal(seedBashDesignSelection(api), false);
+    // Even with the selection removed entirely, the marker says it was already offered.
+    files['bridge-tool-designs'] = { selections: {} };
+    assert.equal(seedBashDesignSelection(api), false);
+    assert.deepEqual(files['bridge-tool-designs'].selections, {});
+  });
+
+  test('a bridge without createStore, a malformed file or a failing store seeds nothing and never throws', () => {
+    assert.equal(seedBashDesignSelection({}), false);
+    assert.equal(seedBashDesignSelection(null), false);
+    const malformed = fakeBridge({ 'bridge-tool-designs': { selections: 'oops' } });
+    assert.doesNotThrow(() => seedBashDesignSelection(malformed.api));
+    const failing = { createStore: () => ({ get: (_k, f) => f, set: () => { throw new Error('disk full'); } }) };
+    assert.equal(seedBashDesignSelection(failing), false);
+  });
+
+  test('a failed write leaves no marker, so the next load tries again', () => {
+    let fail = true;
+    const files = {};
+    const createStore = (id) => ({
+      get: (key, fallback) => (files[id] && Object.hasOwn(files[id], key) ? files[id][key] : fallback),
+      set: (key, value) => { if (fail && id === SELECTIONS[0]) throw new Error('disk full'); files[id] = { ...files[id], [key]: value }; },
+    });
+    assert.equal(seedBashDesignSelection({ createStore }), false);
+    fail = false;
+    assert.equal(seedBashDesignSelection({ createStore }), true);
+    assert.equal(files['bridge-tool-designs'].selections.bash, BASH_DESIGN_ID);
+  });
+
+  test('registering the design on a bridge seeds it, and a rejected registration seeds nothing', () => {
+    const accepted = fakeBridge();
+    const dispose = registerBashDesign(accepted.api);
+    assert.equal(typeof dispose, 'function');
+    assert.equal(accepted.files['bridge-tool-designs'].selections.bash, BASH_DESIGN_ID);
+    dispose();
+    const refused = fakeBridge();
+    refused.api.registerToolDesign = () => { throw new Error('refused'); };
+    assert.equal(registerBashDesign(refused.api), null);
+    assert.deepEqual(refused.writes, []);
   });
 });

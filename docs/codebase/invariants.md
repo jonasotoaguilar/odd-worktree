@@ -55,9 +55,13 @@ The question this page answers: which rules must every change preserve, and what
    disposer, and does nothing at all when the API is absent or older — no throw,
    no command, no warning beyond the section's own discoverability one. The bridge
    owns Pi's one tool-renderer resolver, builds the host's own card, reads its
-   `bash` line (`native` | `activity`, default `native`) on every render pass and
-   persists the choice in its own store, so this package stores no document, reads
-   no file, has no `/card:bash` command and depends on no extension load order.
+   `bash` line (`native` | `activity`) on every render pass and persists the choice
+   in its own store. The only thing this package writes is the first-run seed:
+   `seedBashDesignSelection` selects `activity` once, only when the bridge holds no
+   `bash` choice, and records `bashActivitySeeded` in its own `odd-worktree` store so
+   a later `native` is never undone; a stored choice is never overwritten and a
+   failure seeds nothing. It reads no other file, has no `/card:bash` command and
+   depends on no extension load order.
    The design is pure: `apply(lines, ctx)` rewrites only the heading row of a
    `call` part, swapping the host's `$` for the family `lib/bash-activity.js`
    names, taking the added columns from the row's own fill; every other row, every

@@ -610,7 +610,13 @@ shows the WHOLE command: no `…` abbreviation, no `… +N lines` fold, no conti
 row, and nothing after the command but the host's fill and hint. A command the
 classifier cannot name, a heading that hides part of the command and a row with no
 fill to pay for the word all keep the host's `$` exactly as drawn. The default is
-`native`; the design draws nothing until the user picks `activity`.
+`native` only for a user who already chose it. The bridge has no default design (an
+absent value reads `native`), so on its first load with a bridge that has `createStore`,
+this package selects `activity` for `bash` **once**: only when the bridge's
+`bridge-tool-designs` store holds no `bash` choice, and it then writes its own marker
+(`odd-worktree` store, `bashActivitySeeded`). A choice already stored (`native`
+included) is never overwritten, a later switch to `native` is never undone, and a failed
+write leaves no marker so the next load tries again.
 
 The CodeGraph card is separate: with the `codegraph` CLI installed it still claims
 `codegraph …` bash rows through its own resolver (invariant 19).

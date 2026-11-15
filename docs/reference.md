@@ -625,17 +625,6 @@ two keys, this package's schema string and one of the two modes.
   document or the new one and never half of either. The document goes first and
   the live slot second, so a failure leaves both on the old mode and there is
   nothing to roll back.
-- **One legacy shape is read, and the next write migrates it.** A file written by
-  an older tool carries the same schema and one `bash` key instead of `mode`:
-
-  ```json
-  { "schema": "gentle-pi.card-bash/v1", "bash": "activity" }
-  ```
-
-  `activity` means `own` and `default` means `default`, so the customize row marks
-  it like any other document and one click replaces it with the canonical
-  `{"schema":"gentle-pi.card-bash/v1","mode":…}`. It is the ONLY shape outside
-  the canonical one that is understood.
 - **A document this package cannot parse is never overwritten.** A wrong schema,
   an unknown value, an extra key, invalid JSON or no read permission reads as
   `own`, is reported as `malformed_file` or `unreadable_file`, and a selection

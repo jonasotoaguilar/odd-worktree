@@ -47,7 +47,7 @@ its presence records.
 | `lib/worktree-card.js` | The `worktree-warp` message renderer (the moved/queued card), composed on the card substrate like the tool cards. |
 | `lib/card-style.js` | The one style reader: the live process-wide slot Gentle Shell publishes, then the strict `<home>/card-style.json`, then `float`. It reports the source and the reason it fell back, caches only the document branch, and is re-read on `session_start`. |
 | `lib/card-content.js` | The one reader of the card content level Gentle Shell publishes (`default` or `minimal`), read at paint time; `/warp` and the CodeGraph card honor it, while the two worktree tool cards keep their three info rows in both levels (S2). |
-| `lib/card-bash-mode.js` | The one bash-card mode reader and writer: the live process-wide slot a customize click sets, then the strict `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1","mode":"own"|"default"}`), then `own`. Same resolution order and reasons as `lib/card-style.js`; the writer is atomic, owner-only, document-first and never rewrites a document it cannot parse — except that the one recognized legacy shape (`{"schema":"gentle-pi.card-bash/v1","bash":"activity"|"default"}`) is READ and migrated by the next write. |
+| `lib/card-bash-mode.js` | The one bash-card mode reader and writer: the live process-wide slot a customize click sets, then the strict `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1","mode":"own"|"default"}`), then `own`. Same resolution order and reasons as `lib/card-style.js`; the writer is atomic, owner-only, document-first and never rewrites a document it cannot parse. No legacy spelling exists. |
 | `lib/card-bash-customize.js` | The preference's one control surface: the `Card tool` row group (`default` | `activity`) registered through gentle-shell-bridge's published `registerRows` API into `/gentle:customize` → `Cards`, idempotent per process, with a disposer, each row's `current()` read from `lib/card-bash-mode.js` and its action a write through `writeCardBashMode`. The mode module's only caller. It imports no bridge and registers nothing when the API is absent. |
 | `lib/bash-activity.js` | The classifier the bash card heads with: the one quote-aware segmenter, the eight named families and the mark and theme role each wears, and the package's own conservatism — a segment it cannot name leaves the call unnamed, which is what the generic `$ bash` heading is. |
 | `lib/bash-destructive.js` | The destructive family's evidence: the segment that names a deleting program, and the whole command whose pipe or heredoc feeds a database client its statements. Evidence only — no permission, guard or execution decision may read it. |
@@ -154,12 +154,11 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1",
    "mode":"own"|"default"}` and nothing else), written only by
    `lib/card-bash-mode.js` — atomically, owner-only, document first and slot second,
-   and never over a document it cannot parse. One legacy shape is READ as its mode
-   and rewritten to the canonical document on the next write:
-   `{"schema":"gentle-pi.card-bash/v1","bash":"activity"}` (`activity` is `own`)
-   and its `"default"` twin. A wrong schema, an unknown value, an extra key,
-   invalid JSON or no read permission is still `malformed_file`/`unreadable_file`,
-   reads as `own`, and is never rewritten. `<home>` is the same one
+   and never over a document it cannot parse. There is no legacy shape and no
+   migration path: this package has never shipped another spelling, so a wrong
+   schema, an unknown value, an extra key, invalid JSON or no read permission is
+   `malformed_file`/`unreadable_file`, reads as `own`, and is never rewritten.
+   `<home>` is the same one
    `lib/card-style.js` resolves (`GENTLE_PI_CONFIG_HOME` →
    `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`). There is no second document,
    store or cache, and no settings file. Without the bridge the preference has no

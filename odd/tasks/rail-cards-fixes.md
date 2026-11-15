@@ -27,14 +27,24 @@ exists: no command, no name, no message. The preference appears in Gentle Shell'
 `activity` the default, contributed through gentle-shell-bridge's published API only (no import
 of that package, no dependency on it). Selecting a value applies it at once and it survives a
 restart. Persistence keeps its one home: `<home>/card-bash.json`, written only by
-`lib/card-bash-mode.js`, atomically and owner-only. A document this package cannot parse is never
-rewritten, except the one legacy shape the user's own file carries — `{"schema":
-"gentle-pi.card-bash/v1","bash":"activity"}` (and `"bash":"default"`) — which is read as that
-mode and rewritten to the canonical `{"schema":"gentle-pi.card-bash/v1","mode":…}` on the next
-write. Without the bridge the preference has no control surface and the mode stays `activity`.
+`lib/card-bash-mode.js`, atomically and owner-only. There is NO legacy document and no migration
+path — this package has never shipped another spelling, so a document carrying anything but
+exactly `{"schema":"gentle-pi.card-bash/v1","mode":"own"|"default"}` is `malformed_file`, reads
+as `activity`, and is never rewritten. Without the bridge the preference has no control surface and
+the mode stays `activity`.
 User: "card bash elimina comando y registrala dentro de gentle customize con el bridge en
 seccions cards como 'Card tool: default | activity' con activity por defecto y arreglas la
 persistencia entre sesiones y el fallo."
+
+L6 (user, verbatim, llega después de la implementación):
+
+> no existe plugin, no necesitamos archivo legados, si aun no lo publicamos asi que esta demas
+> no dejes nunca algo legacy
+
+Consecuencia aplicada: la tolerancia al documento `{"schema", "bash"}` se elimina del lector, de
+sus tests y de las tres piezas de documentación; el archivo malformado que hoy vive en
+`~/.pi/gentle-ai/card-bash.json` se borra (su contenido no es una preferencia válida para este
+paquete y su ausencia lee `activity`, el default).
 
 **S4 — A `codegraph init` result carries no plugin prose.** After a successful native
 `codegraph init` the tool result gains no `pi-odd-worktree:` sentence and no second paragraph:

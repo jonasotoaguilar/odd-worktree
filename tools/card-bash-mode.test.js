@@ -36,9 +36,6 @@ const { registerCardBashCustomize } = require('../lib/card-bash-customize.js');
 const { loadExtension } = require('./fixtures/load-extension.js');
 
 const VALID = (mode) => JSON.stringify({ schema: CARD_BASH_SCHEMA, mode });
-// The one legacy shape the human's own file carries (S3): the same schema and a
-// `bash` key whose value is the card's own vocabulary.
-const LEGACY = (value) => JSON.stringify({ schema: CARD_BASH_SCHEMA, bash: value });
 const CANONICAL = (mode) => `${JSON.stringify({ schema: CARD_BASH_SCHEMA, mode })}\n`;
 // The bridge's published object, read from its slot and never imported.
 const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
@@ -125,8 +122,8 @@ describe('the mode reader', () => {
 			JSON.stringify({ schema: CARD_BASH_SCHEMA, mode: 'activity' }),
 			JSON.stringify({ schema: CARD_BASH_SCHEMA, mode: 1 }),
 			JSON.stringify([{ schema: CARD_BASH_SCHEMA, mode: CARD_BASH_MODE.OWN }]),
-			// S3: a wrong schema, an extra key and an unknown value are still
-			// malformed — only the one recognized legacy shape is read.
+			// S3: there is no legacy shape. `bash` instead of `mode` is a malformed
+			// document like any other, whatever it carries.
 			JSON.stringify({ schema: 'gentle-pi.card-bash/v2', bash: 'activity' }),
 			JSON.stringify({ schema: CARD_BASH_SCHEMA, bash: 'activity', mode: CARD_BASH_MODE.OWN }),
 			JSON.stringify({ schema: CARD_BASH_SCHEMA, bash: 'activity', extra: true }),
@@ -139,21 +136,6 @@ describe('the mode reader', () => {
 		for (const value of [undefined, null, 1, {}]) {
 			assert.equal(parseCardBashModeFile(value), undefined, 'a non-string is not a document');
 		}
-	});
-
-	test('the legacy document shape reads its mode, in the card\'s own vocabulary', () => {
-		assert.equal(parseCardBashModeFile(LEGACY('activity')), CARD_BASH_MODE.OWN, '"activity" is our card');
-		assert.equal(parseCardBashModeFile(LEGACY('default')), CARD_BASH_MODE.DEFAULT, '"default" is the host\'s drawing');
-		assert.equal(parseCardBashModeFile(`${LEGACY('default')}\n`), CARD_BASH_MODE.DEFAULT, 'a trailing newline is the same document');
-
-		const home = newHome('legacy-read');
-		writeDocument(home, LEGACY('default'));
-		assert.deepEqual(
-			resolveCardBashMode({ gentlePiConfigHome: home }),
-			{ mode: CARD_BASH_MODE.DEFAULT, source: 'file', reason: null, slot: undefined, globalFile: documentIn(home) },
-			'the legacy document is a real answer, not a malformed file',
-		);
-		assert.equal(cardBashMode({ gentlePiConfigHome: home }), CARD_BASH_MODE.DEFAULT);
 	});
 
 	test('a missing document is our card switched on, and the reader says why', () => {
@@ -282,17 +264,6 @@ describe('the mode writer', () => {
 		assert.equal(result.ok, true);
 		assert.equal(readFileSync(documentIn(home), 'utf8'), CANONICAL(CARD_BASH_MODE.DEFAULT));
 		assert.equal(globalThis[CARD_BASH_MODE_SLOT], CARD_BASH_MODE.DEFAULT, 'the live session reads the new mode at once');
-	});
-
-	test('a write over the legacy shape succeeds and produces the canonical document', () => {
-		const home = newHome('legacy-write');
-		writeDocument(home, LEGACY('activity'));
-		assert.equal(cardBashMode({ gentlePiConfigHome: home }), CARD_BASH_MODE.OWN, 'the legacy document reads before the write');
-
-		const result = writeCardBashMode(CARD_BASH_MODE.DEFAULT, { gentlePiConfigHome: home });
-		assert.deepEqual(result, { ok: true, file: documentIn(home), mode: CARD_BASH_MODE.DEFAULT });
-		assert.equal(readFileSync(documentIn(home), 'utf8'), CANONICAL(CARD_BASH_MODE.DEFAULT), 'the next write migrates it to the one document');
-		assert.deepEqual(readdirSync(home), [CARD_BASH_FILE], 'the temporary file is gone');
 	});
 
 	test('a wrong-schema, extra-key or unknown-value document is still malformed and still refused', () => {
@@ -456,19 +427,6 @@ describe('the customize row', () => {
 		await actionOf(rowsOf(providers[0], home), 'default')({});
 		assert.equal(readFileSync(documentIn(home), 'utf8'), broken, 'a document this package cannot parse is never replaced');
 		assert.deepEqual(repaints, [], 'and nothing claims the change took effect');
-	});
-
-	test('the legacy document reads as its mode and a click replaces it with the canonical one', async () => {
-		const home = newHome('customize-legacy');
-		process.env.GENTLE_PI_CONFIG_HOME = home;
-		writeDocument(home, LEGACY('default'));
-		const { providers } = installBridge();
-		await loadExtension({});
-		const rows = rowsOf(providers[0], home);
-		assert.deepEqual(currentOf(rows), [true, false], 'the legacy `bash` value is the mode the row marks');
-
-		await actionOf(rows, 'activity')({});
-		assert.equal(readFileSync(documentIn(home), 'utf8'), CANONICAL(CARD_BASH_MODE.OWN), 'one click migrates the document');
 	});
 
 	test('a bridge without registerRows registers nothing and throws nothing', async () => {

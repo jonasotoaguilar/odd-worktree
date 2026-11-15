@@ -355,7 +355,10 @@ and `<n> assigned · stale` while the rows on screen are the last good ones.
   click proves this checkout's repository is the one the row was read from,
   because a row stays on screen across a checkout change: a row from another
   checkout, or a checkout whose own repository cannot be proven, dispatches
-  nothing and the panel does not open. That refusal is recorded on the section's
+  nothing and the panel does not open. The proof is pinned to the session it was
+  made in: if `session_start` moves the session to another checkout while the
+  proof is still running, the click dispatches nothing either, because the number
+  was proven against the checkout you left. That refusal is recorded on the section's
   snapshot instead of thrown, and the list on screen stays exactly as it was —
   the rail paints no click error of its own, so what you see is that nothing
   opened. The `and N more issues` row names no issue, so it sends plain `/issues`.
@@ -438,7 +441,14 @@ and `<n> assigned · stale` while the rows on screen are the last good ones.
   read, its merge, the count invariant above, its clear at shutdown), and nothing
   the panel does adds, shrinks or rewrites it. `All` is never seeded: the cache
   holds the three scoped views only, so that view still costs its own read the
-  first time you enter it. An entry the rail calls inconsistent, and a view it
+  first time you enter it. A seeded row is not an answer: it carries the query it
+  actually answered (the empty one), so typing a filter stops painting it and its
+  count becomes `–` until the filtered read answers, exactly as a freshly loaded
+  page behaves. And a numbered open that has not yet proven its number refuses
+  every one-row action — labels, assignees, comment, close and the browser — with a
+  line naming the number, keeping your draft, so a click can never act on a row
+  other than the one you asked for while the page is still loading. An entry the
+  rail calls inconsistent, and a view it
   reports truncated, are seeded inexact — the tab's count wears a `+` — because a
   total derived from rows the rail itself does not trust is a number it refuses to
   report.

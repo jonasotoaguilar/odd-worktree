@@ -198,9 +198,10 @@ describe('extension wiring', () => {
       const { loadExtension } = require('./fixtures/load-extension.js');
       const { hooks } = await loadExtension({});
       const handlers = hooks.filter(([name]) => name === 'before_agent_start').map(([, handler]) => handler);
-      assert.equal(handlers.length, 1);
+      assert.ok(handlers.length >= 1, 'the section has a before_agent_start handler');
       const options = { selectedTools: ['codegraph'] };
-      await handlers[0]({ systemPromptOptions: options }, { cwd: os.tmpdir() });
+      for (const handler of handlers) await handler({ systemPromptOptions: options }, { cwd: os.tmpdir() });
+      assert.equal(options.appendSystemPrompt.split('## CodeGraph').length - 1, 1, 'the section is appended once');
       assert.ok(options.appendSystemPrompt.includes(file('orchestrator')));
       assert.ok(options.appendSystemPrompt.includes('## ODD worktrees'), 'the worktrees block is still there');
     } finally {

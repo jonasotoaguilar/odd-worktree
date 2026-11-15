@@ -182,9 +182,9 @@ describe('removed surface', () => {
     const shipped = fs.readdirSync(lib).filter((entry) => /^codegraph-/.test(entry)).sort();
     const allowed = [
       'codegraph-card-preview.js', 'codegraph-card.js', 'codegraph-compaction.js', 'codegraph-daemon.js',
-      'codegraph-edit-sync.js', 'codegraph-index.js', 'codegraph-lock.js', 'codegraph-mcp-config.js', 'codegraph-mcp.js',
-      'codegraph-paths.js', 'codegraph-prompt', 'codegraph-role.js', 'codegraph-rules.js', 'codegraph-session.js',
-      'codegraph-warmup.js',
+      'codegraph-edit-sync.js', 'codegraph-guard-target.js', 'codegraph-guard.js', 'codegraph-index.js',
+      'codegraph-lock.js', 'codegraph-mcp-config.js', 'codegraph-mcp.js', 'codegraph-paths.js', 'codegraph-prompt',
+      'codegraph-role.js', 'codegraph-rules.js', 'codegraph-session.js', 'codegraph-warmup.js',
     ];
     for (const entry of shipped) assert.ok(allowed.includes(entry), `lib/${entry} is not an allowed CodeGraph module`);
     const read = (name) => fs.readFileSync(path.join(lib, name), 'utf8');
@@ -205,6 +205,20 @@ describe('removed surface', () => {
     for (const entry of shipped.filter((name) => name.endsWith('.js') && name !== 'codegraph-mcp-config.js')) {
       assert.equal(/mcp\.json/.test(read(entry).replace(/\/\/.*$/gm, '')) && /writeFile|rename\(/.test(read(entry)), false, `${entry} does not write mcp.json`);
     }
+  });
+
+  test('the two reminders advise only: one text, no surface, no child of their own', () => {
+    const lib = path.join(ROOT, 'lib');
+    const read = (name) => fs.readFileSync(path.join(lib, name), 'utf8');
+    const code = (name) => read(name).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    for (const entry of ['codegraph-guard.js', 'codegraph-guard-target.js']) {
+      const text = code(entry);
+      for (const forbidden of ['registerTool', 'registerCommand', 'ui.notify', 'writeFile', 'appendFile', 'rename(', 'child_process', 'spawn']) {
+        assert.equal(text.includes(forbidden), false, `${entry} never does ${forbidden}: a reminder is one text on a result`);
+      }
+    }
+    // The git toplevel is the ONE child, and it is the async bounded runner the edit sync already owns.
+    assert.ok(code('codegraph-guard-target.js').includes("require('./codegraph-edit-sync.js')"), 'the target reuses the bounded git read');
   });
 
   test('the /issues command keeps its migrated client and view', () => {

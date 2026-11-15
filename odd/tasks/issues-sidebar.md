@@ -151,6 +151,18 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   independent, and T12/T4 cannot exist without it), then this branch, which takes the panel by merging
   `main` into it and only then implements T12 (a row click opens the panel on that issue) and T4 (the
   panel opens from this cache).
+- **E19 (recheck of the T18 fix): closed, and one requirement withdrawn as wrong.** (a) a held proof is refused
+  by a session switch, by a `session_start` on the same root and by a shutdown, while an unchanged session
+  still dispatches. (b) the seeded numbered open selects the asked row, refuses pending edits on #21,
+  comments on #22 once the answer lands, leaves a plain seeded open ungated, and keeps the one-shot
+  selection. (c) I first recorded as a defect that seeded rows keep painting through the debounce after
+  the first typed character; the verifier then measured the REFERENCE — a freshly loaded, unseeded page —
+  and it does exactly the same: rows stay while the query is being typed and are hidden when the request
+  starts. The seed is therefore already identical to a freshly loaded page, which is what S3 asks for.
+  Hiding at the keystroke would have made the seed stricter than the rest of the panel and would have
+  added a flash to every keystroke, so that requirement is withdrawn (T19 dropped before any code was
+  written). What the seed must never do — claim an exact count for a query it did not answer — it does
+  not: the count is `–` from the first character.
 - **E18 (verify round 5, two blockers the join introduced):** (a) the click proves the row's identity, but
   nothing pins that proof to the session: with the proof for checkout A in flight, `session_start` for B
   and the proof's release dispatch `/issues <n>` against B. The click must capture the session's own

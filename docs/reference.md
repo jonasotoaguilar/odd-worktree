@@ -470,6 +470,14 @@ rounded `╭ ╮ ╰ ╯` frame (`neon`) or the `▎` rail over a painted band (
 the default). Content, order, truncation, the collapsed three-row preview and
 the elapsed time are identical in both; only the chrome differs.
 
+- **A collapsed result keeps three info rows in both content levels.** A
+  `worktree_create` result draws the created checkout's path, the branch with
+  `(created)`/`(adopted)`, and the odd; a `worktree_list` result draws its worktree
+  rows first — the main checkout's branch row included — and the `project:`/`path:`
+  metadata after them, and still expands to every row. The Gentle Shell
+  `minimal` level does not withhold those rows: they are the information the card
+  exists to show. A failure still says why, and `ctrl+o` still shows everything.
+
 - **Live.** Gentle Shell keeps the resolved style in a process-wide slot and
   refreshes it at startup, on every `session_start` and right after its
   Customize save. The cards read it at each render, so a change reaches the next
@@ -506,13 +514,15 @@ the elapsed time are identical in both; only the chrome differs.
   (`toolSuccessBg`, `toolPendingBg` for a running call, `toolErrorBg` for a
   failure). No hex value and no escape sequence is written by this package.
 - **The card content level decides how much a collapsed card shows.** Gentle Shell
-  publishes the level (`default` or `minimal`) and every card reads it on each paint,
-  so a switch applies to the next paint. At `default` a collapsed card shows its
-  heading and at most three body rows; at `minimal` it is the heading alone, closed by
-  the rule that carries the elapsed time. A failure still says why at either level,
-  and `ctrl+o` expands any card to everything. A host without Gentle Shell reads as
-  `default`. This holds for `worktree_create`, `worktree_list`, `/warp` and the
-  CodeGraph card alike.
+  publishes the level (`default` or `minimal`) and the cards that honor it read it on
+  each paint, so a switch applies to the next paint. At `default` a collapsed card
+  shows its heading and at most three body rows; at `minimal` it is the heading
+  alone, closed by the rule that carries the elapsed time. A failure still says why at
+  either level, and `ctrl+o` expands any card to everything. A host without Gentle
+  Shell reads as `default`. This holds for `/warp` and the CodeGraph card. The two
+  worktree tool cards are the exception (S2): their three info rows are their point,
+  so a collapsed `worktree_create`/`worktree_list` result keeps them at both
+  levels.
 - **A row is clipped while it is still plain, and painted after.** Text is
   wrapped, clipped to the card's inner width (with the `…` mark) and padded first;
   the role wraps that result and nothing this package painted is measured again.
@@ -897,7 +907,7 @@ children, and none of it can fail or wait for the host.
 | Session start (new, resume, fork; not `/reload`, not a subagent child) | The global MCP entry is ensured once per process. Then the checkout's index is created (`init`) or synced, and its daemon is warmed. A linked worktree without an index is seeded from the main checkout's index and synced once; it never shares it. |
 | A subagent child in its own linked worktree | The same seed or init for that worktree; any other child leaves the parent's index alone. |
 | After a compaction | One background sync of an existing index, never an `init`. |
-| After a successful native `codegraph init` | One coordinated sync, and its honest outcome appended to the tool's result. A failed init keeps its error and starts no sync. |
+| After a successful native `codegraph init` | One coordinated sync, in the background. A completed sync appends nothing to the tool result; a sync that did not complete appends one short line naming that failure. A failed init keeps its error and starts no sync. |
 | After a successful `edit` or `write` | A debounced sync of the checkout of the edited file (its git toplevel), unless a live daemon already watches that checkout. |
 
 **Coordination.** Every index write goes through one init lock and one per-project sync lease,
@@ -936,15 +946,23 @@ With the CLI installed the package also draws CodeGraph's tool rows as a card on
 substrate as the worktree tools: the native `codegraph` tool, the MCP `codegraph_explore` tool
 (bare or `mcp__codegraph__codegraph_explore`) and a `bash` call that runs CodeGraph: any
 command in which `codegraph` is the command word of some segment, with or without a launcher
-such as `npx` or `pnpm exec`, in any pipeline or `;`/`&&` sequence. A command that only
-mentions it (`echo codegraph init`, `cat codegraph.json`, `grep -r codegraph src`) stays the
-host's own `bash` row. A `bash` card shows the command itself as its detail, on one line
-collapsed and whole when expanded, with no operation label. It is registered through the host's tool-renderer hook, adds no tool or command, and
+such as `npx`, `pnpm exec`, `yarn` or `bunx`, in any pipeline or `;`/`&&`/`|`/`||`
+sequence, with or without arguments after the subcommand. A command that only
+mentions it (`echo codegraph init`, `git -C codegraph status`, `cat codegraph.json`,
+`grep -r codegraph src`) stays the host's own `bash` row. A `bash` card names the
+input after its program word (`codegraph status .` reads `· status .`), on one line
+collapsed and whole when expanded, with no operation label. The MCP explore card's
+heading is `codegraph · explore <query>` and continues ` · <last path segment>` only
+when its `projectPath` names a checkout other than the session's cwd; the full path
+never appears, and an absent, empty or same-checkout argument adds nothing. It is
+registered through the host's tool-renderer hook, adds no tool or command, and
 hands every other tool back exactly as the host resolved it; a `bash` command that is not
 CodeGraph's is forwarded to the host's own renderer. A host without that hook draws nothing of
 ours. Every card in this package, the two worktree tools and the CodeGraph rows alike, declares `renderShell: "self"`: it frames itself in float or neon, and the host's own filled box is never drawn under it. The collapsed card is one factual row per operation (an init, a sync, a query or explore
-count); `ctrl+o` expands it to the whole output, and the Gentle Shell card content level
-(`minimal`) hides the result body while a failure still says why. A `codegraph …`
+count); `ctrl+o` expands it to the whole output, except an `init`, which expands to
+its `→ initialized`/`→ already initialized` row plus the index facts it printed and
+never the CLI's `Use "codegraph index" …` advisory. The Gentle Shell card content
+level (`minimal`) hides the result body while a failure still says why. A `codegraph …`
 `bash` call is that card's only while the CLI is installed; without it [the bash
 card](#the-bash-card-and-its-preference) draws the same command with the classifier's
 `codegraph` identity.

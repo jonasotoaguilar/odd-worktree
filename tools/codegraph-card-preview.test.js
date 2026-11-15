@@ -18,6 +18,7 @@ const {
   codeGraphSyncOutcome,
   codegraphCallDetail,
   codegraphCallFromCommand,
+  projectPathSegment,
   cardText,
 } = require('../lib/codegraph-card-preview.js');
 const {
@@ -157,6 +158,46 @@ test('every codegraph invocation is a CodeGraph call, whatever its subcommand or
     'echo "=== codegraph node warpPendingGate ==="; codegraph node warpPendingGate 2>&1 | head -40',
   ].join(' ');
   assert.equal(codegraphCallFromCommand(queries) !== undefined, true, 'a sequence of CodeGraph steps is one CodeGraph call');
+});
+
+test('S5: any segment whose program is codegraph is a CodeGraph call, with its arguments', () => {
+  for (const [command, expected] of [
+    ['codegraph', {}],
+    ['codegraph status .', { operation: 'status' }],
+    ['codegraph status', { operation: 'status' }],
+    ['/usr/local/bin/codegraph status .', { operation: 'status' }],
+    ['npx codegraph status .', { operation: 'status' }],
+    ['pnpm exec codegraph status .', { operation: 'status' }],
+    ['yarn codegraph status .', { operation: 'status' }],
+    ['yarn exec codegraph status .', { operation: 'status' }],
+    ['bunx codegraph status .', { operation: 'status' }],
+    ['cd /tmp/ws && codegraph status .', { operation: 'status' }],
+    ['codegraph status .; echo done', { operation: 'status' }],
+    ['codegraph status . | head', { operation: 'status' }],
+    ['codegraph status . || true', { operation: 'status' }],
+  ]) {
+    assert.deepEqual(codegraphCallFromCommand(command), expected, command);
+  }
+
+  // A string or a different program that merely mentions it is never the program.
+  for (const command of ['echo codegraph', 'echo "codegraph status ."', 'git -C codegraph status', 'node codegraph.js init', 'cat codegraph status .']) {
+    assert.equal(codegraphCallFromCommand(command), undefined, command);
+  }
+});
+
+test('S6: the explored project is a last path segment, and only when it is not the session cwd', () => {
+  const checkout = '/home/jona/.pi/agent/git/github.com/Gentleman-Programming/gentle-shell';
+  assert.equal(projectPathSegment(checkout, '/work/repo'), 'gentle-shell', 'the last segment, never the full path');
+  assert.equal(projectPathSegment(`${checkout}/`, '/work/repo'), 'gentle-shell', 'a trailing slash is not part of the segment');
+  assert.equal(projectPathSegment('C:\\work\\gentle-shell', 'C:\\other'), 'gentle-shell', 'either path separator');
+  assert.equal(projectPathSegment('/work/repo', '/work/repo'), undefined, 'the session cwd names no other checkout');
+  assert.equal(projectPathSegment('/work/repo/', '/work/repo'), undefined, 'a trailing slash does not make it another checkout');
+  assert.equal(projectPathSegment('gentle-shell', '/work/repo/gentle-shell'), undefined, 'a bare name compares equal to the same name as cwd');
+  assert.equal(projectPathSegment('gentle-shell', '/work/repo'), 'gentle-shell', 'a bare name elsewhere is another checkout');
+  assert.equal(projectPathSegment(undefined, '/work/repo'), undefined);
+  assert.equal(projectPathSegment('', '/work/repo'), undefined);
+  assert.equal(projectPathSegment('   ', '/work/repo'), undefined);
+  assert.equal(projectPathSegment(checkout, undefined), 'gentle-shell', 'a seam that cannot answer still names the explicit argument');
 });
 
 test('a command that merely mentions codegraph is not a CodeGraph call', () => {

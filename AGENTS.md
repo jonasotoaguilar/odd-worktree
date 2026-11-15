@@ -46,7 +46,7 @@ its presence records.
 | `lib/checkout-facts.js` | The facts one checkout row shows in the selector. |
 | `lib/worktree-card.js` | The `worktree-warp` message renderer (the moved/queued card), composed on the card substrate like the tool cards. |
 | `lib/card-style.js` | The one style reader: the live process-wide slot Gentle Shell publishes, then the strict `<home>/card-style.json`, then `float`. It reports the source and the reason it fell back, caches only the document branch, and is re-read on `session_start`. |
-| `lib/card-content.js` | The one reader of the card content level Gentle Shell publishes (`default` or `minimal`), read at paint time; every card honors it. |
+| `lib/card-content.js` | The one reader of the card content level Gentle Shell publishes (`default` or `minimal`), read at paint time; `/warp` and the CodeGraph card honor it, while the two worktree tool cards keep their three info rows in both levels (S2). |
 | `lib/card-bash-mode.js` | The one bash-card mode reader and writer: the live process-wide slot a customize click sets, then the strict `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1","mode":"own"|"default"}`), then `own`. Same resolution order and reasons as `lib/card-style.js`; the writer is atomic, owner-only, document-first and never rewrites a document it cannot parse — except that the one recognized legacy shape (`{"schema":"gentle-pi.card-bash/v1","bash":"activity"|"default"}`) is READ and migrated by the next write. |
 | `lib/card-bash-customize.js` | The preference's one control surface: the `Card tool` row group (`default` | `activity`) registered through gentle-shell-bridge's published `registerRows` API into `/gentle:customize` → `Cards`, idempotent per process, with a disposer, each row's `current()` read from `lib/card-bash-mode.js` and its action a write through `writeCardBashMode`. The mode module's only caller. It imports no bridge and registers nothing when the API is absent. |
 | `lib/bash-activity.js` | The classifier the bash card heads with: the one quote-aware segmenter, the eight named families and the mark and theme role each wears, and the package's own conservatism — a segment it cannot name leaves the call unnamed, which is what the generic `$ bash` heading is. |
@@ -385,9 +385,12 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     linked worktree) creates or syncs the session's index and warms its daemon; a
     linked worktree without an index is seeded from the main checkout's and never
     shares it. (c) A compaction requests one sync, never an init. (d) After a
-    successful native `codegraph init` the package requests one coordinated sync and
-    appends its honest outcome to the tool's result; a failed init keeps its error
-    and starts no sync. (e) After a successful `edit` or `write` a debounced sync of
+    successful native `codegraph init` the package requests one coordinated sync in
+    the background and appends NOTHING to the tool result when it completes: the
+    tool's own content is the whole answer. Only a sync that did not complete appends
+    one short line naming that failure, with no `pi-odd-worktree:` prefix and no
+    second paragraph; a failed init keeps its error and starts no sync. (e) After a
+    successful `edit` or `write` a debounced sync of
     that file's checkout is requested, unless a live daemon watches it. Every write
     goes through the one init lock and the per-project sync lease, so a queued,
     coalesced or failed run is never reported as synced. Verify and the judges (a

@@ -388,29 +388,41 @@ function withContent(level, run) {
 	}
 }
 
-test('a minimal card draws the call alone, and the level is read on every paint', () => {
-	let level = CARD_CONTENT.DEFAULT;
-	// The seam is a function of the mutable `level` the case moves, so one renderer
-	// answers both levels, the way the shell's own slot switches under one card.
-	const driven = createWorktreeCards({ metrics, cardContent: () => level }).renderer('worktree_create');
-	const component = driven.renderResult(textResult(CREATE_TEXT), { expanded: false, isPartial: false }, plainTheme, {});
-	const atDefault = component.render(60);
-	assert.equal(atDefault.length, 4, 'the default level draws its three-row preview and the closing rule');
-	assert.match(bodyText(atDefault[0]), /^worktree created:/, 'and that preview is the tool text');
+test('S2: a minimal worktree card keeps its three info rows, exactly as default does', () => {
+	// S2: the content level no longer withholds these rows. The reader's own level is
+	// still published on the slot, and both tools draw the same preview under either.
+	const createAt = (level) => withContent(level, () => resultRows('worktree_create', textResult(CREATE_TEXT), { expanded: false, isPartial: false }, plainTheme, {}, 120));
+	const createDefault = createAt(CARD_CONTENT.DEFAULT);
+	assert.equal(createDefault.length, 4, 'three body rows and the closing rule');
+	assert.deepEqual(createAt(CARD_CONTENT.MINIMAL), createDefault, 'minimal does not withhold the three rows');
+	const createBody = createDefault.slice(0, -1).map(bodyText);
+	assert.equal(createBody[0], 'worktree created: /home/jona/dev/projects/odd-worktree-worktrees/cards-v2', 'the created checkout path');
+	assert.equal(createBody[1], 'branch: feat/cards-v2 (created)', 'the branch and how it was obtained');
+	assert.equal(createBody[2], 'odd: -…', 'the odd, marked because more rows follow');
+	assertFramed(createDefault, 120);
 
-	level = CARD_CONTENT.MINIMAL;
-	const minimal = component.render(60);
-	assert.deepEqual(minimal, [`╰${'─'.repeat(58)}╯`], 'the same component repaints as the closing rule alone: nothing under the call');
-	assertFramed(minimal, 60);
+	const listText = listViewOf(true).text;
+	const listAt = (level) => withContent(level, () => resultRows('worktree_list', textResult(listText), { expanded: false, isPartial: false }, plainTheme, {}, 120));
+	const listDefault = listAt(CARD_CONTENT.DEFAULT);
+	assert.equal(listDefault.length, 4, 'three body rows and the closing rule');
+	assert.deepEqual(listAt(CARD_CONTENT.MINIMAL), listDefault, 'minimal does not withhold the three rows');
+	assert.deepEqual(
+		listDefault.slice(0, -1).map(bodyText),
+		['main: main 1a2b3c4', '1 cards-v2 feat/cards-v2', 'project: gentle-shell…'],
+		'the worktree rows come first, the main branch among them, and the metadata after',
+	);
+	assertFramed(listDefault, 120);
+});
 
-	level = CARD_CONTENT.DEFAULT;
-	assert.deepEqual(component.render(60), atDefault, 'and back again, with no new renderer and no rebuild');
+test('S2: a collapsed worktree_list preview leads with its checkouts and still expands to every row', () => {
+	const view = listViewOf(true);
+	const collapsed = resultRows('worktree_list', textResult(view.text), { expanded: false, isPartial: false }, plainTheme, {}, 120);
+	const collapsedBody = collapsed.slice(0, -1).map(bodyText);
+	assert.deepEqual(collapsedBody, ['main: main 1a2b3c4', '1 cards-v2 feat/cards-v2', 'project: gentle-shell…'], 'the preview puts the worktree rows first');
+	assert.equal(collapsedBody.some((row) => row.startsWith('path: ')), false, 'the path metadata is what the third row hides');
 
-	// The call above is the whole card either way: the level hides body rows only.
-	const callAt = (levelValue) => withContent(levelValue, () => call('worktree_create', CREATE_ARGS, plainTheme, { isPartial: false }, 60));
-	assert.equal(callAt(CARD_CONTENT.MINIMAL).length, 1, 'a minimal call is one heading line');
-	assert.deepEqual(callAt(CARD_CONTENT.MINIMAL), callAt(CARD_CONTENT.DEFAULT), 'the call is the same line at either level');
-	assert.equal(driven.renderCall(CREATE_ARGS, plainTheme, { isPartial: false }).render(60).length, 1, 'and the injected seam draws it the same way');
+	const expanded = resultRows('worktree_list', textResult(view.text), { expanded: true, isPartial: false }, plainTheme, {}, 120);
+	assert.deepEqual(expanded.slice(0, -1).map(bodyText), view.text.split('\n'), 'expanded shows every row, in the tool order');
 });
 
 test('a minimal refusal still says why', () => {
@@ -421,14 +433,15 @@ test('a minimal refusal still says why', () => {
 	assert.equal(refused.at(-1), `╰${'─'.repeat(58)}╯`, 'and the card still closes with its rule');
 	assertFramed(refused, 60);
 
-	// The same text without the failure is nothing to draw under the call at all.
+	// S2: a successful result keeps its rows too, at the same level.
 	const quiet = withContent(CARD_CONTENT.MINIMAL, () => resultRows('worktree_list', textResult(REFUSAL_TEXT), { expanded: false, isPartial: false }, plainTheme, {}, 60));
-	assert.equal(quiet.length, 1, 'a successful minimal result is the closing rule alone');
+	assert.ok(quiet.length > 1, 'a successful minimal result still draws its info rows');
+	assert.match(bodyText(quiet[0]), /^branch feat\/cards-v2 is/, 'and the first row is the tool text');
 
-	// A minimal card that is still streaming draws nothing at all: no rows, and no
-	// closing rule, which belongs to the result that settles.
+	// A minimal card that is still streaming draws no closing rule: it belongs to the
+	// result that settles.
 	const streaming = withContent(CARD_CONTENT.MINIMAL, () => resultRows('worktree_list', textResult('worktree list: 2 checkouts'), { expanded: false, isPartial: true }, plainTheme, {}, 60));
-	assert.equal(streaming.length, 0, 'a streamed result has nothing to draw at the minimal level');
+	assert.equal(streaming.length, 1, 'a streamed result draws its row but no closing rule');
 });
 
 test('an expanded card shows everything at either level', () => {

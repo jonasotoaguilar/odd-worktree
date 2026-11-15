@@ -88,16 +88,12 @@ function installBridge(overrides = {}) {
 	return bridge;
 }
 
-// A fake host: the ONE notice seam and the ONE event bus, both recorded.
+// A fake host: the ONE event bus, recorded. It deliberately has NO `ui`: the
+// extension factory's `pi` is not an ExtensionContext, so a notifier read there is
+// undefined in production and a test that invented one would hide exactly that.
 function fakeHost(options = {}) {
-	const notices = [];
 	const subscriptions = [];
 	const host = {
-		ui: {
-			notify: (text, level) => {
-				notices.push({ text, level });
-			},
-		},
 		events: {
 			on: (event, handler) => {
 				subscriptions.push({ event, handler });
@@ -106,7 +102,7 @@ function fakeHost(options = {}) {
 		},
 		...options,
 	};
-	return { host, notices, subscriptions };
+	return { host, subscriptions };
 }
 
 before(() => {
@@ -214,11 +210,10 @@ describe('registration', () => {
 	});
 
 	test('no bridge with no event bus registers nothing and throws nothing', () => {
-		const { host, notices } = fakeHost({ events: undefined });
+		const { host } = fakeHost({ events: undefined });
 		const outcome = registerCardsCustomize(host);
 		assert.equal(outcome.registered, false);
 		assert.equal(outcome.reason, 'no_bridge');
-		assert.deepEqual(notices, []);
 		assert.doesNotThrow(() => registerCardsCustomize());
 	});
 
@@ -233,11 +228,13 @@ describe('registration', () => {
 		]) {
 			clearSlots();
 			const { calls } = installBridge(overrides);
-			const { host, notices } = fakeHost();
-			const outcome = registerCardsCustomize(host);
+			const { host } = fakeHost();
+			let outcome;
+			assert.doesNotThrow(() => {
+				outcome = registerCardsCustomize(host);
+			});
 			assert.equal(outcome.registered, false, JSON.stringify(overrides));
 			assert.equal(calls.length, 0, 'nothing is registered for a refused bridge');
-			assert.deepEqual(notices, [], 'a refused bridge is silent');
 		}
 	});
 
@@ -292,9 +289,12 @@ describe('applying a row', () => {
 	};
 
 	test("applying 'off' persists the document and flips current()", () => {
-		const { host, notices } = fakeHost();
+		const { host } = fakeHost();
 		const rows = rowsFor(host);
-		const outcome = rows[1].action();
+		let outcome;
+		assert.doesNotThrow(() => {
+			outcome = rows[1].action();
+		}, 'a switch that stuck returns normally');
 		assert.equal(outcome.ok, true);
 
 		assert.equal(
@@ -306,39 +306,54 @@ describe('applying a row', () => {
 		assert.equal(rows[0].choice.current(), false, 'the on row is no longer current');
 		assert.equal(rows[1].choice.current(), true, 'the off row is current');
 		assert.equal(rows[2].choice.current(), true, 'the other setting is untouched');
-		assert.deepEqual(notices, [], 'a switch that stuck says nothing');
 	});
 
-	test('a refused write is reported and leaves the switch unchanged', () => {
+	test('a refused write THROWS the sentence the user needs and leaves the switch unchanged', () => {
 		writeDocument('{"schema":');
-		const { host, notices } = fakeHost();
+		const { host } = fakeHost();
 		const rows = rowsFor(host);
 
-		const outcome = rows[1].action();
-		assert.equal(outcome.ok, false);
-		assert.equal(outcome.reason, 'malformed_file');
-
-		assert.equal(notices.length, 1, 'the refusal reaches the user');
-		assert.equal(notices[0].level, 'warning');
-		assert.match(notices[0].text, /Card skill/);
-		assert.match(notices[0].text, /malformed_file/);
-		assert.match(notices[0].text, /unchanged/);
+		// The production seam is the bridge's own action wrapper: it catches a
+		// synchronous throw and reports it. Nothing inside this module may swallow it.
+		assert.throws(
+			() => rows[1].action(),
+			(error) => {
+				assert.ok(error instanceof Error, 'the failure leaves as an Error');
+				assert.match(error.message, /Card skill/, 'the sentence names the switch');
+				assert.match(error.message, /off/, 'the sentence names what was asked');
+				assert.match(error.message, /malformed/, 'the reason is in words');
+				assert.match(error.message, /malformed_file/, 'the writer code is kept');
+				assert.match(error.message, /unchanged/, 'it says the switch did not move');
+				return true;
+			},
+		);
 
 		assert.equal(readDocument(), '{"schema":', 'the unreadable document is never rewritten');
 		assert.equal(cardFileEnabled('skill'), true, 'the switch did not move');
-		assert.equal(rows[0].choice.current(), true);
+		assert.equal(rows[0].choice.current(), true, 'current() still reads the old value');
 		assert.equal(rows[1].choice.current(), false);
 	});
 
-	test('a host with no notice seam still refuses without throwing', () => {
+	test('with no injection at all the refusal still leaves as a throw', () => {
 		writeDocument('{"schema":');
 		const rows = cardsCustomizeRows();
-		let outcome;
-		assert.doesNotThrow(() => {
-			outcome = rows[1].action();
-		});
-		assert.equal(outcome.ok, false);
-		assert.equal(outcome.reason, 'malformed_file');
+		assert.throws(() => rows[1].action(), /Card skill.*unchanged/s);
 		assert.equal(cardFileEnabled('skill'), true);
+	});
+
+	test('a writer that throws is a refusal too, never a silent success', () => {
+		const rows = cardsCustomizeRows({
+			write: () => {
+				throw new Error('disk gone');
+			},
+		});
+		assert.throws(
+			() => rows[0].action(),
+			(error) => {
+				assert.match(error.message, /write_failed/);
+				assert.match(error.message, /unchanged/);
+				return true;
+			},
+		);
 	});
 });

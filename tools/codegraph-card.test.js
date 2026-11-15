@@ -1034,89 +1034,43 @@ function drawThrough(resolvers, command, output) {
   return { call, result };
 }
 
-const CARD_BASH_MODE_SLOT = Symbol.for('gentle-pi.card-bash-mode');
-
 let composed;
-let composedOrder;
+let codegraphAt;
 
 before(async () => {
-  // The user's own preference: `activity`, this package's cards (`own`).
-  globalThis[CARD_BASH_MODE_SLOT] = 'own';
   composed = await loadComposedExtension();
-  // Which resolver is which, read from what each hands back: only the CodeGraph card
-  // claims the native `codegraph` tool, and only the bash card claims a bash row when
-  // nothing follows it. The extension must register them in that order — the richer
-  // card first, so it receives the bash card as its `next()` and claims its own rows.
-  const codegraphAt = composed.resolvers.findIndex((resolver) => resolver(CODEGRAPH_TOOL, () => HOST_BASH) !== HOST_BASH);
-  const bashAt = composed.resolvers.findIndex((resolver) => resolver('bash', () => undefined) !== undefined);
-  composedOrder = { codegraphAt, bashAt };
+  // Only the CodeGraph card claims the native `codegraph` tool.
+  codegraphAt = composed.resolvers.findIndex((resolver) => resolver(CODEGRAPH_TOOL, () => HOST_BASH) !== HOST_BASH);
 });
 
 after(() => {
-  delete globalThis[CARD_BASH_MODE_SLOT];
   composed = undefined;
 });
 
-test('the extension registers the CodeGraph card first and the bash card second', () => {
-  const { codegraphAt, bashAt } = composedOrder;
+test('the extension registers the CodeGraph card through the host hook', () => {
   assert.notEqual(codegraphAt, -1, 'the CodeGraph card is registered through the host hook');
-  assert.notEqual(bashAt, -1, 'the bash card is registered through the same hook');
-  assert.ok(codegraphAt < bashAt, `the CodeGraph card comes first (${codegraphAt} < ${bashAt}), which is what hands it the bash row`);
 });
 
-test('S5 composition: a `codegraph status .` bash call is the CodeGraph card, and the bash card is never asked', () => {
-  const { codegraphAt, bashAt } = composedOrder;
-  const bashCard = countedResolver(composed.resolvers[bashAt]);
-  const chain = composed.resolvers.map((resolver, index) => (index === bashAt ? bashCard.resolver : resolver));
+test('a bash call that runs no CodeGraph is drawn exactly as the host draws it', () => {
+  // The activity heading is applied by the bridge's design (lib/bash-design.js), never by a
+  // resolver of this package: the chain hands this row to the host's own renderers.
+  const drawn = drawThrough(composed.resolvers, 'pnpm test', 'Tests 12 passed');
+  const host = drawThrough([], 'pnpm test', 'Tests 12 passed');
+  assert.deepEqual(drawn, host);
+});
 
-  // A status output whose rows the CodeGraph card composes and the bash card's own
-  // output tail would not draw the same way.
+test('a `codegraph status .` bash call is drawn by the CodeGraph card', () => {
   const output = ['┌  CodeGraph status', '│', '◆  Workspace: /tmp/ws', '●  42 nodes, 66 edges', '│', '└  Done'].join('\n');
-  const drawn = drawThrough(chain, 'codegraph status .', output);
-  const codegraphAlone = drawThrough([composed.resolvers[codegraphAt]], 'codegraph status .', output);
-  // The reference is the raw resolver: only the chain draw is counted.
-  const bashAlone = drawThrough([composed.resolvers[bashAt]], 'codegraph status .', output);
-
-  assert.deepEqual(drawn, codegraphAlone, 'the chain draws exactly what the CodeGraph card draws for this call');
-  assert.notDeepEqual(drawn, bashAlone, 'and not what the bash activity card would draw for it');
-
+  const drawn = drawThrough(composed.resolvers, 'codegraph status .', output);
   const heading = drawn.call.join('\n');
   assert.ok(heading.includes(`${CODEGRAPH_MARK} ${CODEGRAPH_TOOL}`), `the heading carries the CodeGraph mark and name in "${heading}"`);
   assert.match(heading, /codegraph · status \./, 'the subcommand and its argument are the heading detail');
-  assert.doesNotMatch(heading, /\$ bash/, 'the row never reads as the generic bash card');
   assert.ok(drawn.result.some((row) => row.includes('◆  Workspace: /tmp/ws')), 'the body is the CLI output the CodeGraph card composes');
-  assert.deepEqual(bashCard.asked, [], 'the bash card never saw this row: its slots were not asked at all');
 });
 
-test('S5 composition: a `codegraph init` bash call is the CodeGraph card, and the bash card is never asked', () => {
-  const { codegraphAt, bashAt } = composedOrder;
-  const bashCard = countedResolver(composed.resolvers[bashAt]);
-  const chain = composed.resolvers.map((resolver, index) => (index === bashAt ? bashCard.resolver : resolver));
-
-  const drawn = drawThrough(chain, 'codegraph init', INIT_FRESH);
-  const codegraphAlone = drawThrough([composed.resolvers[codegraphAt]], 'codegraph init', INIT_FRESH);
-  const bashAlone = drawThrough([composed.resolvers[bashAt]], 'codegraph init', INIT_FRESH);
-
-  assert.deepEqual(drawn, codegraphAlone, 'the chain draws exactly what the CodeGraph card draws for this call');
-  assert.notDeepEqual(drawn, bashAlone, 'and not what the bash activity card would draw for it');
+test('a `codegraph init` bash call is drawn by the CodeGraph card', () => {
+  const drawn = drawThrough(composed.resolvers, 'codegraph init', INIT_FRESH);
   const heading = drawn.call.join('\n');
   assert.ok(heading.includes(`${CODEGRAPH_MARK} ${CODEGRAPH_TOOL}`), `the heading carries the CodeGraph mark and name in "${heading}"`);
   assert.match(heading, /codegraph · init/, 'the operation is the heading detail');
-  assert.deepEqual(bashCard.asked, [], 'the bash card never saw this row: its slots were not asked at all');
-});
-
-test('S5 composition: a bash call that runs no CodeGraph is the bash activity card, not the CodeGraph one', () => {
-  const { codegraphAt, bashAt } = composedOrder;
-  const bashCard = countedResolver(composed.resolvers[bashAt]);
-  const chain = composed.resolvers.map((resolver, index) => (index === bashAt ? bashCard.resolver : resolver));
-
-  const drawn = drawThrough(chain, 'pnpm test', 'Tests 12 passed');
-  const bashAlone = drawThrough([composed.resolvers[bashAt]], 'pnpm test', 'Tests 12 passed');
-
-  assert.deepEqual(drawn, bashAlone, 'the chain draws exactly what the bash activity card draws for this call');
-  const heading = drawn.call.join('\n');
-  assert.match(heading, /✓ checking/, 'the row wears the activity card\'s own family');
-  assert.doesNotMatch(heading, /codegraph ·/, 'and never the CodeGraph heading');
-  assert.notDeepEqual(composed.resolvers[codegraphAt]('bash', () => HOST_BASH), undefined, 'the CodeGraph card is in the chain');
-  assert.deepEqual(bashCard.asked, ['renderCall', 'renderResult'], 'the bash card drew this row, call and result');
 });

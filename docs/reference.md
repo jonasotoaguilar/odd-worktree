@@ -500,7 +500,8 @@ on screen are the last good ones.
 
 ## Card style follows your shell
 
-The worktree tool cards follow the card style chosen in Gentle Shell — the
+The tool cards — the two worktree tools, the file cards and CodeGraph's rows —
+follow the card style chosen in Gentle Shell — the
 rounded `╭ ╮ ╰ ╯` frame (`neon`) or the `▎` rail over a painted band (`float`,
 the default). Content, order, truncation, the collapsed three-row preview and
 the elapsed time are identical in both; only the chrome differs.
@@ -555,9 +556,9 @@ the elapsed time are identical in both; only the chrome differs.
   alone, closed by the rule that carries the elapsed time. A failure still says why at
   either level, and `ctrl+o` expands any card to everything. A host without Gentle
   Shell reads as `default`. This holds for `/warp`, the CodeGraph card and the
-  file cards. The two worktree tool cards are the exception (S2): their three
-  info rows are their point, so a collapsed `worktree_create`/`worktree_list`
-  result keeps them at both levels.
+  file cards. The two worktree tool cards are the exception (S2): their three info
+  rows are their point, so a collapsed `worktree_create`/`worktree_list` result
+  keeps them at both levels.
 - **A row is clipped while it is still plain, and painted after.** Text is
   wrapped, clipped to the card's inner width (with the `…` mark) and padded first;
   the role wraps that result and nothing this package painted is measured again.
@@ -587,155 +588,33 @@ the elapsed time are identical in both; only the chrome differs.
 
 ## The bash card, and its preference
 
-The bash card mode is one of this package's three preferences, and it is not a
-command: `/card:bash` does not exist. The preference is the single `Card tool` row group
-in Gentle Shell's `/gentle:customize`, under `Cards`, and its two values are the
-two ways a `bash` tool call can be drawn:
+The bash card is a **design**, not a renderer and not a preference of this package.
+`lib/bash-design.js` registers one design (`odd-worktree.bash-activity`, label
+`activity`) through gentle-shell-bridge's `registerToolDesign`. The bridge owns Pi's one
+tool-renderer resolver, builds the host's own card (whatever `Card style` and
+`Card content` are chosen), reads its `bash` line in `/gentle:customize` → `Cards`
+(`native` | `activity`) on every render pass, and hands the design the rows the host
+drew. So the choice is the bridge's, survives a restart there, repaints cards already
+on screen as well as new ones, and does not depend on extension load order. With no
+bridge, or one older than `registerToolDesign`, nothing is registered.
 
-- `activity` — this package's activity card, named after what the command does.
-  It is the default, and it is `own` in the mode module's own vocabulary.
-- `default` — the host's own bash drawing.
+What the design changes is one thing on the card's heading row: the host's `$` mark
+becomes the family the classifier (`lib/bash-activity.js`) names for the command —
+`⌕ exploring`, `✓ checking`, `⚠ destructive`, and so on — and the columns the longer
+mark adds are taken from the row's own fill, so the row keeps its width. Every other
+row comes back byte for byte, results are never touched, and the heading keeps the
+host's own paint.
 
-Selecting a value applies it at once (the next frame of a card already on screen
-reads the new mode) and it survives a restart. The row is contributed ONLY
-through `gentle-shell-bridge`'s published row API: `lib/card-bash-customize.js`
-registers one provider (`odd-worktree-card-bash`, one `Card tool` setting) when
-the bridge object is on its `Symbol.for("gentle-shell-bridge/api/v1")` slot, at
-most once per process, and the host renders the two rows as one setting line with
-`Enter` applying the choice. There is no import of that package and no dependency
-on it. Without the bridge the preference has no control surface at all — nothing
-is registered, nothing throws, and the mode stays `activity`.
+The rule is the classifier's: never guess. The design context carries no arguments, so
+the heading is the only evidence, and a call is named only when the heading provably
+shows the WHOLE command: no `…` abbreviation, no `… +N lines` fold, no continuation
+row, and nothing after the command but the host's fill and hint. A command the
+classifier cannot name, a heading that hides part of the command and a row with no
+fill to pay for the word all keep the host's `$` exactly as drawn. The default is
+`native`; the design draws nothing until the user picks `activity`.
 
-The choice lives in `<home>/card-bash.json`, and that document is strict: exactly
-two keys, this package's schema string and one of the two modes.
-
-```json
-{ "schema": "gentle-pi.card-bash/v1", "mode": "own" }
-```
-
-- `<home>` is the one `card-style.json` resolves: `GENTLE_PI_CONFIG_HOME` →
-  `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`.
-- **The mode is read live.** The process-wide slot a selection sets answers
-  first, then the document read fresh on every call, then `own`; there is no
-  cache, so no paint can answer with a mode the file no longer states. A missing,
-  unreadable, malformed or wrong-schema document reads as `own`, and the reader
-  reports which of those it was.
-- **The write is atomic and owner-only.** A temporary file beside the document is
-  written with `0o600` bits and renamed into place, so a reader sees the old
-  document or the new one and never half of either. The document goes first and
-  the live slot second, so a failure leaves both on the old mode and there is
-  nothing to roll back.
-- **A document this package cannot parse is never overwritten.** A wrong schema,
-  an unknown value, an extra key, invalid JSON or no read permission reads as
-  `own`, is reported as `malformed_file` or `unreadable_file`, and a selection
-  leaves it byte-identical. There is no second document, store or cache behind
-  this one.
-
-**The heading names the activity, never a guess.** `lib/bash-activity.js` reads
-the command alone and answers one family or nothing; `lib/bash-card.js` dresses
-that answer and restates no family of its own, so a family added to the classifier
-is drawn with no second table to keep in step.
-
-| Mark | Heading | The commands it names |
-| --- | --- | --- |
-| `⚠` | destructive | A segment that deletes something irreversible: `rm`, `shred`, `truncate`, `dd` to a file or a device, `git reset --hard` / `clean -f` / a path checkout, a `docker` or `kubectl` removal or prune, a shell body or `eval` that does one, and the SQL a pipe or a heredoc feeds `psql`, `mysql`, `mariadb` or `sqlite3`. |
-| `✓` | checking | The verification runners: `pnpm test`, `node --test`, `vitest`, `pytest`, `go test`, `cargo check`, `tsc`, `eslint`; a formatter told to report (`black --check`, `gofmt -l`); a listed `make` recipe or package-manager script; and a check behind `timeout`. |
-| `≋` | formatting | A formatter or lint fixer that rewrites what it reads: `prettier --write`, `black`, `cargo fmt`, `go fmt`, `gofmt -w`, `ruff check --fix`, `deno fmt`. |
-| `⚒ ` | preparing | Installing, scaffolding and storing configuration: `pnpm install`, `pip install`, `uv sync`, `brew install`, `cargo install`, `git init` / `clone`, `mkdir` / `touch` / `cp` / `ln`, `git config <key> <value>`, `pnpm config set`. |
-| `↑` | publishing | Remote writes: `git push`, and the `gh` verbs that create, edit, close, merge or review a pull request, issue, label, release, repository or stack. |
-| `⎇` | versioning | Local history: `git add`, `commit` (and `--amend`), `rebase`, `cherry-pick`, and a stack's local `gh stack init` / `add`. |
-| `󰆼` | codegraph | A `codegraph …` command in the command position, read exactly as the CodeGraph card reads it. |
-| `⌕` | exploring | Read-only inspection: `git status` / `log` / `diff` / `show`, `ls`, `cat`, `grep`, `head`, `find`, `gh pr view`, and `--help` on any program the classifier knows. |
-
-Preparing's mark carries one trailing space of its own: U+2692 is painted two
-cells wide by an emoji-fallback font while the host counts it as one, so the
-heading's counted width matches what the terminal paints.
-
-Among the segments of one command a deletion wins first, then CodeGraph: a call that
-runs the program is its card whatever else it does, because the card's detail is the
-command itself. Among the rest the strongest wins: a check, a remote write, a history
-change, a rewrite, a build-up, and plain inspection last.
-
-**The generic `$ bash` heading is what declining looks like.** A command no family
-names keeps the shell tool's own mark, word and theme role — never a family's mark
-with a generic word, because a reader must be able to tell a named activity from a
-declined one at a glance. It declines rather than half-naming when any single
-segment carries no reliable signal: an unknown program, a chain that mixes
-`pnpm test` with `./scripts/deploy.sh`, a command hidden in a substitution the
-segmenter does not follow (a backtick or `<(`), a redirect that puts the output in
-a file, a family whose own flags say it is not the thing it looks like, or a
-deletion it cannot prove. `lib/bash-destructive.js` is evidence, not a verdict: a
-deletion whose evidence is not provable is not called destructive, and a help
-request, a dry run or a recovery keeps the identity the call really has. Its
-header states the rule the package keeps: no permission, guard or execution
-decision may read it, because "would a reader want to see what this deletes?" is
-a different question from "may this run?".
-
-**Collapsed**, the card is one heading row with the command as its detail:
-
-- A leading `cd X &&` chain is folded, because it is setup rather than the work;
-  lines beyond the first are stated as `… +N lines` instead of swallowing the
-  card; and a command still too wide for the rule ends in `…`. Expanding the call
-  draws the complete command, so nothing is lost behind the ellipsis.
-- The body is what the command printed, plus nothing else: no label, no summary
-  and no invented line. Collapsed it is the last three rows — the end of an output
-  is where a summary, a count or a failure is written — painted in the theme's
-  `toolOutput` role, or in the `error` role when the call failed. An output with
-  no text draws no body row at all.
-- A call still running says `running…` in the muted role, is painted in the
-  warning tone and closes its own frame; the result that follows closes it in the
-  info tone (or the error tone) and carries the elapsed time bottom-right on the
-  closing rule, in the form the other cards use (`61ms`, `1.2s`). A streamed
-  result draws its rows and no closing rule: the rule and its time belong to the
-  final one.
-
-**Expanded**, the card draws the whole command on the rows below the heading and
-the whole output, row for row. Expansion is the host's own: the card offers the
-host's expand key hint on a settled call, and the host's `expanded` flag
-(`ctrl+o`) decides what is drawn.
-
-**The preference repaints what is on screen.** The mode is read twice. When a row is
-created the resolver asks it, so a row created while the mode was `default` is the
-host's own row and stays the host's for its lifetime — its shell must never become
-ours. And a card already on screen reads it again on every paint: the card builds
-its rows inside the component's `render(width)`, which the host calls on every
-frame, so choosing a value on the `Card tool` row repaints the bash rows this card
-drew. There is no repaint hook to ask `ctx.ui` for, and the row does not pretend to
-have one: it writes the mode, and the next frame decides.
-
-**Composition with the CodeGraph card is load order.** `own` means every bash call
-is ours, a `codegraph …` command included, and the CodeGraph card is registered
-BEFORE this one, on purpose. With the `codegraph` CLI installed that card receives
-these slots as the chain's `next()`, reads `codegraph …` as its own and claims the
-row with its richer body, so this card's slots are never asked; without the CLI no
-CodeGraph card is registered at all (invariant 19), so the same command is drawn
-here with the `codegraph` identity. The two readers agree on which commands those
-are (`lib/codegraph-card-preview.js` and `lib/bash-activity.js`; a test states
-it), so no row falls between them, and there is no second copy of the rule to keep
-in step. Both cards declare `renderShell: "self"`, so the host never draws its own
-filled box under either of them.
-
-**What this is not.**
-
-- It only draws. The resolver chooses renderers for the `bash` tool and hands
-  every other row back exactly as the chain resolved it; nothing is registered,
-  spawned, guarded, intercepted or shadowed, and the command runs exactly as it
-  would have.
-- A host without the tool-renderer hook, or without a usable measurement seam,
-  keeps drawing its own bash rows: the card is cosmetic and announces nothing.
-- The gentle-shell reference's per-row reveal meter is dropped, not deferred: a
-  collapsed card already states whether its input was folded (`…` on the row and a
-  `… +N lines` suffix), so a measurement deciding whether to OFFER the expand key
-  answers a question the drawing already answers. Its `activity|output` sub-modes are
-  not ported either. The toggle here is ours-versus-the-host's, and the body is the
-  output.
-- A collapsed body states the last three output lines and does **not** announce the
-  cut, so a two-line output and a two-hundred-line one draw the same body. Expansion
-  is how a reader sees the rest; the count was left out on purpose, because the four
-  limits above are about what the card refuses to claim and this one is about what it
-  declines to add.
-- `default` is a drawing preference, not a guard: it never makes anything run or
-  stop running.
+The CodeGraph card is separate: with the `codegraph` CLI installed it still claims
+`codegraph …` bash rows through its own resolver (invariant 19).
 
 ## The file cards and their switches
 
@@ -795,13 +674,13 @@ both in `/gentle:customize` → `Cards` and both on by default.
 ```
 
 - **The document** is `<home>/card-files.json`, and it is strict: that schema
-  string, the two booleans and nothing else. `<home>` is the one
-  `card-style.json` and `card-bash.json` resolve: `GENTLE_PI_CONFIG_HOME` →
-  `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`.
-- **The switch is read live**, in the order and with the reasons the bash card's
-  mode uses: the process-wide slot a toggle sets, then the document read fresh,
-  then both on. A missing, unreadable, malformed, wrong-schema or non-boolean
-  document reads as on, and an unknown name is never on.
+  string, the two booleans and nothing else. `<home>` is the one `card-style.json`
+  resolves: `GENTLE_PI_CONFIG_HOME` → `GENTLE_SHELL_CONFIG_HOME` →
+  `~/.pi/gentle-ai`.
+- **The switch is read live**, in the order and with the reasons the card style
+  uses: the process-wide slot a toggle sets, then the document read fresh, then
+  both on. A missing, unreadable, malformed, wrong-schema or non-boolean document
+  reads as on, and an unknown name is never on.
 - **The write is atomic and owner-only**, document first and slot second, so a
   failed write leaves both on the old state and there is nothing to roll back. It
   merges the one switch into the state it can see, so saving `odd` keeps `skill`
@@ -811,44 +690,40 @@ both in `/gentle:customize` → `Cards` and both on by default.
   `odd-worktree.cards.file-switches`): each setting is two consecutive rows, `on`
   then `off`, sharing one setting name under the bridge's own cursor, with a
   `current()` read at build time and an `action()` that persists before the host
-  repaints. A refusal is a throw from that action — the writer refused, so
-  nothing was saved — and the customize menu catches it and shows its message
-  (`Card odd was not switched on: the card-files document is malformed
-  (malformed_file); the switch is unchanged.`) as one error notice, with the
-  stored value and the drawn switch exactly as they were. The bridge gate is the
-  issues section's: the published API's schema and major version, then the one
-  hook used, and one `gentle-shell-bridge:ready` retry when the bridge publishes
-  later. With no bridge nothing registers and no other surface changes; there is
-  no customize command, no tool and no settings file here.
+  repaints. A refusal is a throw from that action — the writer refused, so nothing
+  was saved — and the customize menu catches it and shows its message (`Card odd
+  was not switched on: the card-files document is malformed (malformed_file); the
+  switch is unchanged.`) as one error notice, with the stored value and the drawn
+  switch exactly as they were. The bridge gate is the issues section's: the
+  published API's schema and major version, then the one hook used, and the one
+  `gentle-shell-bridge:ready` announcement for a bridge that publishes later. With
+  no bridge nothing registers and no other surface changes; there is no customize
+  command, no tool and no settings file here.
 - **A flip repaints what is on screen.** Both switches are read inside the card's
   build, which the host calls on every frame, so flipping one repaints the rows
   already drawn.
 - **Style and content level are the shell's.** The cards are on the same substrate
-  as the others, so `neon`'s rounded frame and `float`'s painted band draw the
-  same content. The content level applies too: at `default` a collapsed result
-  shows at most three body rows, at `minimal` it draws no body at all — its
-  closing rule, with the elapsed time, is the one row — while the call above it
-  keeps its heading; `ctrl+o` expands it to everything, and a failure still says
-  why at either level. Both slots are read at paint time, so a change reaches a
-  card already on screen.
+  as the others, so `float`'s painted band (the default) and `neon`'s rounded
+  frame draw the same content. The content level applies too: at `default` a
+  collapsed result shows at most three body rows, at `minimal` it draws no body at
+  all — its closing rule, with the elapsed time, is the one row — while the call
+  above it keeps its heading; `ctrl+o` expands it to everything, and a failure
+  still says why at either level. Both slots are read at paint time, so a change
+  reaches a card already on screen.
 
-**The host's box is reproduced, because the hook decides per tool name.** The
-host resolves a tool's renderers by NAME (`registerToolRenderer`) and never shows
-them a call's arguments, so the shell a resolver declares is fixed for every call
-of that tool. Declaring `self` — which this card does for the rows it draws —
-takes the host's own box off all of them, so a forwarded row is drawn exactly as
-the host would draw it: inside the host's box — `Box(outputPad, 1, bgFn)`:
-`outputPad` columns of padding each side, and one painted blank row above the call
-and one below the result, in `toolPendingBg` while the call streams, `toolErrorBg`
-once it failed and `toolSuccessBg` otherwise — for a renderer whose own shell is
-the default, which `read` and `write` are; and untouched, with no box, no padding
-and no background, for one that frames itself, like the host's `edit`.
-
-**What this is not.** The card only draws: the resolver claims `read`, `edit` and
-`write` and hands every other tool back exactly as the chain resolved it, and
-nothing is executed, edited, guarded or shadowed. A path naming neither identity,
-a call whose switch is off, a host without the tool-renderer hook and a host
-without a usable measurement seam all keep the host's own drawing.
+**The host's box is reproduced, because the hook decides per tool name.** The host
+resolves a tool's renderers by NAME (`registerToolRenderer`) and never shows them
+a call's arguments, so the shell a resolver declares is fixed for every call of
+that tool. Declaring `self` — which this card does for the rows it draws — takes
+the host's own box off all of them, so a forwarded row is drawn exactly as the
+host would have drawn it: inside the host's box — `Box(outputPad, 1, bgFn)`,
+`outputPad` columns of padding each side, one painted blank row above the call and
+one below the result, in `toolPendingBg` while the call streams, `toolErrorBg`
+once its result failed and `toolSuccessBg` otherwise — for a row of a renderer
+whose own shell is the default (`read`, `write`), and untouched, with no box, no
+padding and no background, for one that frames itself (Pi's `edit`). A path that
+names neither identity is that same forwarded row, so an ordinary file call looks
+exactly as it did before the card existed.
 
 ## The list
 
@@ -862,7 +737,7 @@ undecorated, so it reads the same on every run:
 ```text
 project: repo
 path: /code/repo
-main: main 1a2b3c4
+main: 1a2b3c4
 1 worktree-tools feat/worktree-tools
 2 billing feat/billing
 ```
@@ -890,17 +765,13 @@ Session names derived from an ODD write, and the warp's fork/resume bookkeeping,
 travel in the Pi session files the host already owns. The setup logs live under
 the system temp directory (`odd-worktree-setup-*`), one directory per create.
 
-Two documents hold preferences rather than worktrees. The first is
-`<home>/card-bash.json`, the bash card mode the `Card tool` customize row
-writes; its format, reader and writer are in [the bash card, and its
-preference](#the-bash-card-and-its-preference). The second holds the two
-file-card switches together in `<home>/card-files.json`
-(`{"schema":"gentle-pi.card-files/v1","skill":true,"odd":false}`), written by
-the `Cards` rows and never by a command; its format, reader and writer are in
-[the file cards and their switches](#the-file-cards-and-their-switches).
-Nothing else in user configuration is written by this package, except — with
-the `codegraph` CLI installed — the one `codegraph` entry of
-`<agent dir>/mcp.json` (see [CodeGraph:
+One document holds a preference rather than worktrees: `<home>/card-files.json`,
+the two file-card switches the `Cards` rows write; its format, reader and writer
+are in [the file cards and their switches](#the-file-cards-and-their-switches).
+The bash design's choice is not stored here at all: it belongs to the bridge
+([the bash card](#the-bash-card-and-its-preference)). Nothing else in user
+configuration is written by this package, except — with the `codegraph` CLI
+installed — the one `codegraph` entry of `<agent dir>/mcp.json` (see [CodeGraph:
 index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry)); Gentle
 Shell's own `card-style.json` is read here, never written.
 
@@ -950,8 +821,9 @@ a worktree lives and that the directory is the ODD it serves, to call
 ODD's worktree when it has one, `worktree_create` it when it has none), to carry the
 current checkout's pending changes that belong to that work with `copy_changes`, that an
 ODD is an area of work with one worktree, to delegate agents in parallel unless they
-would edit the same files, and that after the merge the branch is kept and the checkout
-removed unless a live session stands in it. Moving the session stays the human's.
+would edit the same files, and that after the merge the default branch is updated, then the
+checkout is removed and its branch kept, unless a live session stands in it. Moving the
+session stays the human's.
 
 It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other
@@ -1104,7 +976,7 @@ its own last segment. No filesystem is read to decide it. It is
 registered through the host's tool-renderer hook, adds no tool or command, and
 hands every other tool back exactly as the host resolved it; a `bash` command that is not
 CodeGraph's is forwarded to the host's own renderer. A host without that hook draws nothing of
-ours. Every card in this package, the two worktree tools and the CodeGraph rows alike, declares `renderShell: "self"`: it frames itself in float or neon, and the host's own filled box is never drawn under it. The collapsed card is one factual row per operation (an init, a sync, a query or explore
+ours. Every card in this package, the two worktree tools, the file cards and the CodeGraph rows alike, declares `renderShell: "self"`: it frames itself in float or neon, and the host's own filled box is never drawn under it. The collapsed card is one factual row per operation (an init, a sync, a query or explore
 count); `ctrl+o` expands it to the whole output, except an `init`, which expands to
 its `→ initialized`/`→ already initialized` row plus the index facts it printed and
 never the CLI's `Use "codegraph index" …` advisory. The Gentle Shell card content
@@ -1112,20 +984,21 @@ level (`minimal`) hides the result body while a failure still says why — excep
 init's one outcome row (`→ initialized` / `→ already initialized`), which is what
 the call did rather than its body and is drawn at BOTH levels; a minimized init
 keeps that row alone and its index facts wait for the expansion. A `codegraph …`
-`bash` call is that card's only while the CLI is installed; without it [the bash
-card](#the-bash-card-and-its-preference) draws the same command with the classifier's
-`codegraph` identity.
+`bash` call is that card's only while the CLI is installed; without it the host draws
+it, and [the bash design](#the-bash-card-and-its-preference) may head it with the
+classifier's `codegraph` identity.
 
 ## Deliberately absent
 
 This package is the worktree / ODD / issues surface only: two agent tools, three
-panels, one optional rail section and the three preferences (the bash card mode
-and the two file-card switches), no customize panel, no plugin-tools
+panels, one optional rail section, one bash design on the bridge and the two
+file-card switches, no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
-companion-app integration, and no worktree↔issue association. Its customize
-contributions are the `Card tool` row group and the `Card skill` / `Card odd`
-pair, which add no command and no tool of their own. Apart from those rows there
-is nothing to configure, and `/warp`, `/odd-list` and `/issues` are always
+companion-app integration, and no worktree↔issue association. Its
+customize-side contributions are the `activity` value of the bridge's `bash` line
+and the `Card skill` / `Card odd` rows, which add no command or tool of their own.
+There is nothing to configure here beyond those two switches, and `/warp`,
+`/odd-list` and `/issues` are always
 on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 

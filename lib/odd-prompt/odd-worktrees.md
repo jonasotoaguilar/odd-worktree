@@ -11,5 +11,5 @@ the same ODD and worktree, and work on a different area is another ODD with its 
 worktree. Delegate agents in parallel, on the same or different worktrees, unless they would
 edit the same files.
 
-After the merge, keep the branch and remove the worktree, unless a session is standing in
-that checkout.
+After the merge, update the default branch, then remove the worktree and keep its branch,
+unless a session is standing in that checkout.

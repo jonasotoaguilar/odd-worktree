@@ -341,7 +341,7 @@ test("a result body is the tool's own text, wrapped, padded and closed by one ru
 	const listBody = listRows.slice(0, -1).map(bodyText);
 	assert.equal(listBody[0], 'project: gentle-shell');
 	assert.equal(listBody[1], 'path: /clone');
-	assert.equal(listBody[2], 'main: main 1a2b3c4', 'the main row carries no stored state suffix');
+	assert.equal(listBody[2], 'main: 1a2b3c4', 'the main row carries no stored state suffix');
 	assert.equal(listBody[3], '1 cards-v2 feat/cards-v2', 'the row carries the checkout name and its branch');
 });
 
@@ -408,21 +408,26 @@ test('S2: a minimal worktree card keeps its three info rows, exactly as default 
 	assert.deepEqual(listAt(CARD_CONTENT.MINIMAL), listDefault, 'minimal does not withhold the three rows');
 	assert.deepEqual(
 		listDefault.slice(0, -1).map(bodyText),
-		['main: main 1a2b3c4', '1 cards-v2 feat/cards-v2', 'project: gentle-shell…'],
-		'the worktree rows come first, the main branch among them, and the metadata after',
+		['project: gentle-shell', 'path: /clone', 'main: 1a2b3c4…'],
+		'the preview is the first three rows of the expanded list, in the tool\'s own order, marked because more follow',
 	);
 	assertFramed(listDefault, 120);
 });
 
-test('S2: a collapsed worktree_list preview leads with its checkouts and still expands to every row', () => {
+test('S2: a collapsed worktree_list preview is the first three rows of the expanded list', () => {
 	const view = listViewOf(true);
 	const collapsed = resultRows('worktree_list', textResult(view.text), { expanded: false, isPartial: false }, plainTheme, {}, 120);
 	const collapsedBody = collapsed.slice(0, -1).map(bodyText);
-	assert.deepEqual(collapsedBody, ['main: main 1a2b3c4', '1 cards-v2 feat/cards-v2', 'project: gentle-shell…'], 'the preview puts the worktree rows first');
-	assert.equal(collapsedBody.some((row) => row.startsWith('path: ')), false, 'the path metadata is what the third row hides');
-
 	const expanded = resultRows('worktree_list', textResult(view.text), { expanded: true, isPartial: false }, plainTheme, {}, 120);
-	assert.deepEqual(expanded.slice(0, -1).map(bodyText), view.text.split('\n'), 'expanded shows every row, in the tool order');
+	const expandedBody = expanded.slice(0, -1).map(bodyText);
+	assert.deepEqual(expandedBody, view.text.split('\n'), 'expanded shows every row, in the tool order');
+	assert.deepEqual(
+		collapsedBody,
+		[expandedBody[0], expandedBody[1], `${expandedBody[2]}…`],
+		'collapsed is exactly the first three expanded rows, the last one marked because more follow',
+	);
+	assert.equal(collapsedBody[0].startsWith('project: '), true, 'the project leads, as it does when expanded');
+	assert.equal(collapsedBody.some((row) => /^\d+ cards-v2/.test(row)), false, 'no worktree row jumps ahead of the metadata');
 });
 
 test('a minimal refusal still says why', () => {
@@ -574,7 +579,7 @@ function contentOf(rows) {
 
 // Short lines only, so neither style's two-column difference can move a wrap
 // boundary: this is the "same text, different chrome" card.
-const SHORT_LIST = ['project: gentle-shell', 'path: /clone', 'main: main 1a2b3c4', '1 cards-v2 feat/cards-v2'].join('\n');
+const SHORT_LIST = ['project: gentle-shell', 'path: /clone', 'main: 1a2b3c4', '1 cards-v2 feat/cards-v2'].join('\n');
 const CREATE_SHORT = ['worktree created: /clone-worktrees/cards-v2', 'branch: feat/cards-v2 (created)'].join('\n');
 
 test('the same result card is the same text in float and in neon, and only the chrome differs', () => {

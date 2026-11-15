@@ -8,28 +8,27 @@ The question this page answers: which rules must every change preserve, and what
 2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
    invariants 18 and 19 allow.** No customize COMMAND, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
-   `herdr-gentle:` command name. The THREE preferences this package owns are the
-   bash card mode and the two file-card switches (invariant 3), and they
-   contribute exactly TWO customize row groups — the `Card tool` line, and the
-   `Card skill` / `Card odd` pair — through gentle-shell-bridge's published
-   `registerRows` API. Their strict documents live in the one `<home>`
-   (invariant 3). Those rows are a contribution to the host's own page,
-   not a customize surface of this package: they register no command, no page, no
-   setting of its own, no key and no settings file; no other setting is read,
-   written or offered. CodeGraph
+   `herdr-gentle:` command name. This package owns exactly TWO preferences — the
+   file cards' `Card skill` and `Card odd` switches (invariant 3, invariant 23) —
+   and its customize-side contributions are only the rows that carry them and a
+   bash DESIGN (the `activity` value) on gentle-shell-bridge's own `bash` line
+   (invariant 3); the design is not a preference here, because the bridge owns
+   that choice and its store. It registers no command, no page, no setting, no
+   settings file and no key of its own, and no other setting is read, written or
+   offered. CodeGraph
    adds no command and no model-facing tool: no `/codegraph-*` command, no tool
    named `codegraph`, no override of another extension's tool.
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
 3. **The shipped surface is exactly three commands, two tools, one sidebar
-   section and two customize row groups.** `/warp`, `/odd-list`, `/issues`;
-   `worktree_create`, `worktree_list`; the one fourth kind of surface, a sidebar
-   section (`lib/issues-section.js`) that is neither a command nor a tool and
-   registers no name the host or the agent can call; and the two `Cards` row
-   groups (`lib/card-bash-customize.js` for `Card tool`, `lib/cards-customize.js`
-   for `Card skill` and `Card odd`), which are neither commands nor tools either
-   and add no name to either registry. Neither moving the session nor
+   section, one bash design and the one `Cards` row group.** `/warp`, `/odd-list`,
+   `/issues`; `worktree_create`, `worktree_list`; the one fourth kind of surface, a
+   sidebar section (`lib/issues-section.js`) that is neither a command nor a tool and
+   registers no name the host or the agent can call; the one bash design
+   (`lib/bash-design.js`) and the one `Cards` row group (`lib/cards-customize.js`,
+   which carries `Card skill` and `Card odd`), which are neither commands nor tools
+   either and add no name to either registry. Neither moving the session nor
    removing a checkout is exposed to the agent: `/warp` is the person's front for
    both (its `ctrl+d`, the selector, a typed name, a queued handoff for moving; its
    `ctrl+d` for removing). That is a rule about this package's surface, not about
@@ -46,60 +45,49 @@ The question this page answers: which rules must every change preserve, and what
    that HAS the bridge but draws no rail registers the section and never paints it,
    which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the bridge, not by this package (invariant 2 keeps every customize
-   surface out of it except those two row groups). A host without the bridge otherwise hears nothing about it;
+   surface out of it except the `Cards` row group). A host without the bridge
+   otherwise hears nothing about it;
    the one warning it can get is discoverability — once per process, from a primary
    session only (`GENTLE_PI_AGENTS_CHILD` is not `1`), naming
    `pi install npm:gentle-shell-bridge`, timed after the announcement window because
    an empty slot at `session_start` may still be a bridge that has not loaded, and
    immediate on a host with no event bus to announce on.
 
-   **The three preferences this package owns are customize rows, not commands.**
-   The first is the bash card mode, and `/card:bash` does not exist: no command,
-   no name, no message, and no command handler writes the preference
-   (`tools/package-surface.test.js` asserts both). The preference appears in
-   Gentle Shell's `/gentle:customize` → `Cards` as `Card tool`, with the two
-   values `default` (the host's own bash drawing) and `activity` (this package's
-   activity card, the default), contributed ONLY through gentle-shell-bridge's
-   published `registerRows` API (invariant 2): `lib/card-bash-customize.js`
-   registers one provider, id `odd-worktree-card-bash`, at most once per process,
-   returns a disposer like the issues section, and does nothing at all when the
-   API is absent — no throw, no command, no warning beyond the section's own
-   discoverability one. Selecting a value applies it at once (the writer publishes
-   the live slot) and survives a restart.
+   **The bash card is a design on the bridge, not a preference here.**
+   `lib/bash-design.js` registers ONE design (`tool: "bash"`, id
+   `odd-worktree.bash-activity`, label `activity`) through the bridge's published
+   `registerToolDesign` API, at most once per process, with an idempotent
+   disposer, and does nothing at all when the API is absent or older — no throw,
+   no command, no warning beyond the section's own discoverability one. The bridge
+   owns Pi's one tool-renderer resolver, builds the host's own card, reads its
+   `bash` line (`native` | `activity`, default `native`) on every render pass and
+   persists the choice in its own store, so this package stores no document for it,
+   reads no file for it, has no `/card:bash` command and depends on no extension
+   load order.
+   The design is pure: `apply(lines, ctx)` rewrites only the heading row of a
+   `call` part, swapping the host's `$` for the family `lib/bash-activity.js`
+   names, taking the added columns from the row's own fill; every other row, every
+   result and every unproven heading is returned byte for byte (invariant 20).
 
-   **The other two preferences are `Card skill` and `Card odd`**, and they say
-   whether a `read`, `edit` or `write` call on a customized skill or an ODD
-   artifact is drawn as that file's own card (invariant 23). Both are on by
-   default and both are published the same way: `lib/cards-customize.js`
-   registers one provider, id `odd-worktree.cards.file-switches`, at most once per
-   process, with two consecutive rows sharing one `choice.setting` per switch — an
-   `on` row and an `off` row — a `current()` that reads the live switch and an
-   `action()` that persists before it returns. A refused write leaves the `action`
-   as a throw, which the customize menu reports and shows as one error notice, and
-   the stored value and the drawn switch stay where they were. Without the bridge
-   neither switch has a control surface, and nothing throws.
-
-   Persistence keeps its one home, with one strict document per preference: the
-   strict document
-   `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1",
-   "mode":"own"|"default"}` and nothing else), written only by
-   `lib/card-bash-mode.js` — atomically, owner-only, document first and slot second,
-   and never over a document it cannot parse. There is no legacy shape and no
-   migration path: this package has never shipped another spelling, so a wrong
-   schema, an unknown value, an extra key, invalid JSON or no read permission is
-   `malformed_file`/`unreadable_file`, reads as `own`, and is never rewritten.
-   The two file-card switches live in their own document,
+   **The two file-card switches are the only preferences this package owns.**
+   `lib/cards-customize.js` registers ONE row provider
+   (`odd-worktree.cards.file-switches`) through the same published `registerRows`
+   API, into the same `Cards` page, at most once per process: each switch is two
+   consecutive rows sharing one `choice.setting` — an `on` row then an `off` row —
+   a `current()` that reads the live switch and an `action()` that persists before
+   the host repaints. `Card skill` and `Card odd` are both on by default, add no
+   command, tool or key, and their whole state is one strict document,
    `<home>/card-files.json`
    (`{"schema":"gentle-pi.card-files/v1","skill":true,"odd":false}` and nothing
-   else), written only by `lib/card-files-mode.js` with the same atomic,
-   owner-only, document-first write and the same refusal to rewrite a document it
-   cannot parse; a missing, unreadable, malformed, wrong-schema or non-boolean
-   document reads as both on. `<home>` is the same one
-   `lib/card-style.js` resolves (`GENTLE_PI_CONFIG_HOME` →
-   `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`). There is no other document,
-   store or cache, and no settings file. Without the bridge a preference has no
-   control surface: the bash card mode stays `activity` and both file cards stay
-   on.
+   else), written only by `lib/card-files-mode.js` — atomically, owner-only,
+   document first and slot second, and never over a document it cannot parse — in
+   the one `<home>` `lib/card-style.js` resolves (`GENTLE_PI_CONFIG_HOME` →
+   `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`). A missing, unreadable,
+   malformed, wrong-schema or non-boolean document reads as both on. A refused
+   write leaves the row's `action` as a throw, which the customize menu reports as
+   ONE error notice, with the stored value and the drawn switch unchanged
+   (invariant 23). Without the bridge neither switch has a control surface, and
+   nothing throws.
 4. **Deletion refuses on a live session.** The only surface that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
    before the pending-change question and again immediately before removal. This
@@ -113,7 +101,8 @@ The question this page answers: which rules must every change preserve, and what
    (with `--force` only when the caller asked) and the branch is kept. No other
    application is closed, opened or removed on any path — including the panel's
    create and `worktree_create`, which use git and the canonical directory alone.
-   The post-merge cleanup of an ODD uses that same argv: an agent removes its
+   The post-merge cleanup of an ODD uses that same argv: an agent first updates the
+   default branch, then removes its
    checkout with `git worktree remove <absolute path>` once the branch tip is an
    ancestor of `origin/<default>` and the tree is clean, and the branch survives.
    It is reported and skipped — never forced — when the checkout is dirty or when a
@@ -340,28 +329,19 @@ The question this page answers: which rules must every change preserve, and what
     Nothing awaits an index, a daemon or the configuration on the host's path, and
     every child is a fixed argv with a bounded timeout (invariant 9).
 
-20. **The bash card only draws, and it draws what the classifier names.**
-    `lib/bash-card-resolver.js` registers exactly one resolver through the host's
-    `registerToolRenderer` hook, and chooses renderers for the `bash` tool alone:
-    every other row is handed back exactly as the chain resolved it, and a host
-    without that hook, or without a usable measurement seam, keeps drawing its own
-    bash rows. While the preference is `own` (the customize row's `activity`) every
-    bash call is this card's
-    (`lib/bash-card.js`), a `codegraph …` command included; while it is `default`
-    the resolver steps aside and the host draws the row. Nothing here executes,
-    spawns, guards, intercepts or shadows a tool — it is drawing only, and the
-    destructive evidence of `lib/bash-destructive.js` is presentation: no
-    permission, guard or execution decision may read it. The heading's identity is
-    the classifier's (`lib/bash-activity.js`): a named family's mark and word, or
-    the generic `$ bash` when any segment names nothing, and it is never invented
-    at paint time. The mode is read when a row is created and again on every paint
-    (the card builds its rows inside `render(width)`), so a click on the `Card
-    tool` row repaints rows this card already drew, while a row created during
-    `default` stays the host's
-    for its lifetime. The CodeGraph card is registered BEFORE this one on purpose
-    (invariant 19): it claims its own `codegraph …` rows with its richer body and
-    this card's slots are never asked for them; without the CLI no CodeGraph card
-    exists, so those rows are drawn here with the `codegraph` identity.
+20. **The bash design only draws, and it draws what the classifier names.**
+    `lib/bash-design.js` changes nothing but a heading row: it executes, spawns,
+    guards, intercepts and shadows nothing, and the destructive evidence of
+    `lib/bash-destructive.js` is presentation: no permission, guard or execution
+    decision may read it. The design context carries no arguments, so the
+    heading is the only evidence and a call is named only when the heading provably
+    shows the WHOLE command — no `…` abbreviation, no `… +N lines` fold, no
+    continuation row, nothing after the command but the host's fill and hint — and
+    the classifier (`lib/bash-activity.js`) names exactly one family for it. Any
+    other case, a row with no fill to pay for the word included, keeps the host's
+    `$` exactly as drawn. The design never throws and never mutates its input. The
+    CodeGraph card (invariant 19) keeps its own resolver for `codegraph …` rows;
+    this package registers no other tool-renderer resolver for `bash`.
 
 21. **The two CodeGraph reminders advise; they never block and never add a surface.**
     `lib/codegraph-guard.js` decides, and `lib/codegraph-session.js` appends its
@@ -425,34 +405,31 @@ The question this page answers: which rules must every change preserve, and what
 
 23. **The file card only draws, and it claims exactly three tools.** `read`, `edit`
     and `write`, and no fourth: `lib/file-card-resolver.js` registers one resolver
-    through the host's `registerToolRenderer` hook, hands every other row back
-    exactly as the chain resolved it, registers nothing at all when that hook is
-    absent, and leaves a host without a usable measurement seam its own rows. What
-    a call heads as comes from its `path`
-    alone, through the pure functions of `lib/skill-odd-card.js`: a customized skill
-    is a `SKILL.md` that a `skills` folder holds, an ODD artifact is any file below
-    an `odd/tasks` folder, identity is read as path components with both separators
-    and with the marker closest to the file winning. The card then states the
-    identity's own mark and label, the tool, the path and — for a read only — the
-    line range the call asked for. A path naming neither identity, and a call whose
-    switch is off, is the chain's own row.
+    through the host's `registerToolRenderer` hook, hands every row of every other
+    tool back exactly as the chain resolved it, registers nothing when that hook is
+    absent, and leaves a host without a usable measurement seam its own rows. What a
+    call heads as comes from its `path` alone, through the pure functions of
+    `lib/skill-odd-card.js`: a skill is a `SKILL.md` a `skills` folder holds, an ODD
+    artifact is any file below an `odd/tasks` folder, both read as path components
+    with both separators, and a path that names both is decided by the marker
+    closest to the file. The card states that identity's mark and label, the tool,
+    the path and — for a read only — the line range the call asked for. A path
+    naming neither identity, and a call whose switch is off, is the chain's own row.
 
-    **The host's shell is fixed per tool, so the card reproduces its box.**
-    `registerToolRenderer` decides per TOOL NAME — a resolver never sees a call's
-    arguments — so `renderShell` is fixed for every call of a tool. Declaring `self`
-    (which this card does for the rows it draws) takes the host's own box off all of
-    them, so a forwarded row is drawn as the host would have drawn it: inside the
-    host's box — `Box(outputPad, 1, bgFn)`: `outputPad` columns of padding each
-    side, and one painted blank row above the call and one below the result, in
-    `toolPendingBg` while the call streams, `toolErrorBg` once its result failed and
-    `toolSuccessBg` otherwise — for a renderer whose own shell is the default
-    (`read`, `write`), and untouched, with no box, no padding and no background, for
-    one that frames itself (Pi's `edit`).
+    **The host's shell is fixed per tool name, so the card reproduces its box.**
+    `registerToolRenderer` decides per TOOL NAME and never sees a call's arguments,
+    so a resolver's `renderShell` is fixed for every call of a tool. Declaring
+    `self` — which this card does for the rows it draws — takes the host's own box
+    off all of them, so a forwarded row is drawn as the host would have drawn it:
+    inside the host's box — `Box(outputPad, 1, bgFn)`, one painted blank row above
+    the call and one below the result, in `toolPendingBg` while the call streams,
+    `toolErrorBg` once its result failed and `toolSuccessBg` otherwise — for a row of
+    a default-shell renderer (`read`, `write`), and untouched, with no box, no
+    padding and no background, for one that frames itself (Pi's `edit`).
 
-    Both switches (`/gentle:customize` → `Cards` → `Card skill` / `Card odd`, read
-    through `lib/card-files-mode.js`), the card style slot (`lib/card-style.js`) and
-    the content level (`lib/card-content.js`) are read at paint time, inside the
-    component's `render(width)`, so a flip repaints rows already drawn. The card
-    adds no command and no tool, and its only customize surface is the bridge's two
-    `Cards` rows (`lib/cards-customize.js`): no settings file, no key, and nothing
-    registered without the bridge.
+    Both switches (`Card skill`, `Card odd`, read through `lib/card-files-mode.js`),
+    the card style slot (`lib/card-style.js`) and the content level
+    (`lib/card-content.js`) are read at paint time, inside the component's
+    `render(width)`, so a flip repaints rows already drawn. The card only draws: it
+    adds no command and no tool, and its only customize surface is the bridge's
+    `Cards` rows (`lib/cards-customize.js`).

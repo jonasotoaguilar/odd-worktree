@@ -309,18 +309,23 @@ and `<n> assigned · stale` while the rows on screen are the last good ones.
   ever schedule the refresh. Nothing is read at `session_start`; a snapshot older
   than 60 s schedules exactly one deferred refresh, and only a drawn body frame
   schedules it at all — the header call never does. Each turn of yours
-  (`before_agent_start`, then `turn_end`) asks for a read behind a 30 s floor, but
-  only while the section was drawn within the last two minutes — because a frame
-  only exists when the host has a reason to produce one, so the rail can never
-  stay stale while you are using the session. A hidden section draws nothing, so
+  (`before_agent_start`, then `turn_end`) asks for a read behind a 30 s floor
+  measured on the last ATTEMPT: a failed read starts the floor too, so a `gh`
+  that keeps failing is not retried every turn, and the in-frame TTL counts from
+  the attempt rather than from the last success. It asks only while the section
+  was drawn within the last two minutes — because a frame only exists when the
+  host has a reason to produce one — so while frames keep coming and reads keep
+  succeeding the rail does not stay stale. A hidden section draws nothing, so
   nothing stamps it afresh and it starts no timer of its own: once the two-minute
   window lapses it makes no call at all, while a collapsed section is still drawn
   — its header is painted, and that stamps the frame — so the activity read
   applies to it too. There is no polling and no repeating timer; the one
   deferral is a task scheduled off the paint path. `session_shutdown` and a session
   that starts in another checkout drop the snapshot, so the rail falls back to
-  `loading…` instead of the previous checkout's rows, and a read still in flight
-  lands nowhere. A `/reload` fires no `session_start`; the section re-learns its
+  `loading…` instead of the previous checkout's rows; a read still in flight at
+  that boundary paints nothing and writes nothing to the cache, and a refresh
+  still queued dies with the generation it was queued under instead of reading
+  with no context. A `/reload` fires no `session_start`; the section re-learns its
   session on the next turn, so it keeps reading the checkout the session runs in
   and not the host process's own directory.
 - **A failed refresh keeps the rows.** Once a list is on screen, a refresh that
@@ -344,9 +349,12 @@ and `<n> assigned · stale` while the rows on screen are the last good ones.
   by issue number. A merge cannot see an issue that was closed or unassigned, so
   each view is held to one invariant: after a merge its cached count must equal the
   `issueCount` the same answer reported, and a mismatch makes the NEXT read a full
-  one; so does an entry older than ten minutes. A view with more than 100 issues is
+  one; so does an entry whose last FULL read is older than ten minutes, since a
+  delta renews only the sync time and never that bound. A view with more than 100 issues is
   reported truncated — that is the `N+` in the overflow row — instead of being
-  looped over, and a failed read leaves the cache untouched. The section draws only
+  looped over, and a failed read leaves the cache untouched. Clearing it is durable:
+  a read in flight when the session shuts down cannot repopulate it, and an answer
+  older than one already applied is ignored rather than written over it. The section draws only
   the assigned view; the other two are held for a later consumer, and nothing reads
   them yet: `/issues` keeps its own four tabs.
 - **The scope is this checkout's repository, and nothing else moves.** It is the one

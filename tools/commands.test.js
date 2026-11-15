@@ -469,3 +469,37 @@ describe('/odd-list', () => {
     assert.deepEqual(notifications, [['error', 'Unknown option "nope". Use /odd-list.']]);
   });
 });
+
+// ---- `/card:bash` (T1 S1,S6,S7) ----
+//
+// The mode, its document and its failure paths have their own suite
+// (tools/card-bash-mode.test.js); this is the command driven beside the other
+// three, on the extension instance this suite already loaded. The document lives
+// in a scratch home and the live slot is cleared afterwards, so no other case in
+// this file inherits a mode.
+describe('/card:bash', () => {
+  test('flips the bash card, reports each state and persists the choice', async () => {
+    const home = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-cmd-card-bash-')));
+    const repo = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-cmd-card-bash-cwd-')));
+    const savedHome = process.env.GENTLE_PI_CONFIG_HOME;
+    process.env.GENTLE_PI_CONFIG_HOME = home;
+    try {
+      notifications.length = 0;
+      await commands.get('card:bash').handler('', makeCtx(repo));
+      await commands.get('card:bash').handler('', makeCtx(repo));
+      assert.deepEqual(notifications, [
+        ['info', 'bash cards: gentle default'],
+        ['info', 'bash cards: own (activity)'],
+      ]);
+      assert.equal(
+        fs.readFileSync(path.join(home, 'card-bash.json'), 'utf8'),
+        '{"schema":"gentle-pi.card-bash/v1","mode":"own"}\n',
+        'the second toggle left the strict document on the state it reported',
+      );
+    } finally {
+      delete globalThis[Symbol.for('gentle-pi.card-bash-mode')];
+      if (savedHome === undefined) delete process.env.GENTLE_PI_CONFIG_HOME;
+      else process.env.GENTLE_PI_CONFIG_HOME = savedHome;
+    }
+  });
+});

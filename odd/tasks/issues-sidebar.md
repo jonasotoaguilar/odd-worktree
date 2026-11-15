@@ -137,6 +137,7 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 | T13 | S3 (a hidden section costs nothing) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
 | T14 | S9 (one combined read, the cache, the count invariant) | worker | `lib/gh-issues.js`, `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
 | T15 | S3, S6, S8, S9 (round 3 defects: the floor counts attempts, a queued refresh dies with its section, the cache TTL is absolute, cache writes are generation-guarded) | worker | `lib/issues-section.js`, `lib/related-issues-cache.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js`, `tools/related-issues-cache.test.js` | pending |
+| T16 | S6, S9 (a checkout switch must also cut the cache write path) | worker | `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
 
 ## Log
 
@@ -147,6 +148,13 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   independent, and T12/T4 cannot exist without it), then this branch, which takes the panel by merging
   `main` into it and only then implements T12 (a row click opens the panel on that issue) and T4 (the
   panel opens from this cache).
+- **E16 (verify round 4, one defect left at the checkout boundary):** the generation that guards cache writes
+  is bumped by `session_shutdown` and by a bridge rebinding, but NOT by `session_start`'s `invalidate()`.
+  So a read started in checkout A that is still in flight when the session moves to checkout B writes the
+  cache even though the section discarded its answer; and because the identity (not the checkout) keys the
+  cache, B then plans a 20-row delta instead of a full read and can start from rows the session had already
+  thrown away. Reproduced on `b7262b4` and on `e2f113a`; the shutdown and `/reload` variants pass, which is
+  why round 3 missed it. The fix is the same generation, bumped where the section is already invalidated.
 - **E15 (verify round 3 on e2f113a, five reproduced defects, one cause):** the section's snapshot is
   guarded against out-of-order answers, but the deferred refresh and the cache that feeds it were not.
   (1) the 30 s activity floor measures the last SUCCESS, so a failing `gh` is retried at the same instant

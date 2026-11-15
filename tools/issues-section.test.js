@@ -2500,3 +2500,65 @@ test('S9 (T15): a read in flight at session_shutdown never repopulates the cache
   assert.ok(!section.lines(ctx).some((row) => row.label === '#11 Gone eleven'),
     "the ended session's answer never became cached rows");
 });
+
+test('S6/S9 (T16): a checkout switch cuts the previous read out of the cache', async () => {
+  // Two checkouts of the SAME repository: the identity keys the cache, so this is
+  // the case where a stale answer can seed the repository the session moved to.
+  const firstCheckout = makeCheckout();
+  const secondCheckout = makeCheckout();
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+
+  const lists = [];
+  ghIssues.setGhRunner((_bin, argv, runOpts = {}) => {
+    const env = runOpts.env || {};
+    if (argv[0] === 'api' && argv[1] === 'user') return Promise.resolve(okJson('{"login":"me"}'));
+    if (argv[0] === 'repo' && argv[1] === 'view') {
+      return Promise.resolve(okJson(JSON.stringify({ nameWithOwner: 'original/project' })));
+    }
+    if (argv[0] === 'api' && argv[1] === 'graphql') {
+      const entry = { repo: env.GH_REPO, query: graphqlQueryOf({ argv }), settle: null };
+      entry.answer = new Promise((resolve) => {
+        entry.settle = (payload) => resolve(okJson(JSON.stringify(payload)));
+      });
+      lists.push(entry);
+      return entry.answer;
+    }
+    return Promise.resolve(okJson(''));
+  });
+
+  const ctxA = { cwd: firstCheckout, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctxA);
+  const section = registered[0];
+  section.lines(ctxA);
+  await waitFor(() => lists.length === 1, 'the drawn section never read its issues');
+
+  // The session moves to another checkout of the same repository while A's read
+  // is still in flight.
+  const ctxB = { cwd: secondCheckout, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctxB);
+
+  // A's answer lands after the move: the section discarded it, so the cache must
+  // not adopt it either.
+  lists[0].settle(relatedAnswer({
+    assigned: [{ number: 11, title: 'Left behind', updatedAt: '2024-01-01T00:00:00Z' }],
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  section.lines(ctxB);
+  await waitFor(() => lists.length === 2, 'the moved session never read its issues');
+  assert.equal((lists[1].query.match(/first: 100/g) || []).length, 3,
+    "the abandoned checkout's answer never seeded the cache, so the moved session starts with a full read");
+
+  lists[1].settle(relatedAnswer({
+    assigned: [{ number: 22, title: 'Fresh twenty-two', updatedAt: '2024-02-01T00:00:00Z' }],
+  }));
+  await waitFor(
+    () => section.lines(ctxB).some((row) => row.label === '#22 Fresh twenty-two'),
+    'the moved session never painted its own rows',
+  );
+  assert.ok(!section.lines(ctxB).some((row) => row.label === '#11 Left behind'),
+    "the previous checkout's rows never survive the move");
+  assert.match(section.meta(ctxB), /^1 assigned/, 'the header counts only the moved session rows');
+});

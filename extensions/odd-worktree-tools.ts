@@ -7511,6 +7511,13 @@ export default function (pi) {
   // therefore makes no child process and no network call, and starts no timer.
   pi.on("session_start", async (event, ctx) => {
     rememberIssuesSidebarSession(ctx);
+    // T16 (S6/S9): a session that starts in another checkout also cuts the CACHE
+    // write path, not just the section's snapshot. The identity — not the checkout
+    // — keys the cache, so two checkouts of one repository share an entry: an
+    // answer the previous checkout's read still holds must not seed the repository
+    // the session moved to, or the moved session starts from rows it discarded and
+    // its first read would be a delta instead of a full one.
+    issuesSidebarCacheGeneration += 1;
     invalidateIssuesSidebar();
     // T11 (S2 amended): the missing-plugin hint. It is armed in the same
     // boundary as the section's own state, and it says nothing yet when the

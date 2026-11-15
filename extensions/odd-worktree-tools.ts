@@ -876,6 +876,9 @@ function worktreeCallPlainText(toolName, args) {
 /** The two render hooks one tool definition carries, bound to that tool's card. */
 function worktreeToolRenderers(toolName) {
   return {
+    // The card frames itself in both styles; without this the host wraps every tool in its own filled box, and a neon
+    // frame drawn inside it is two designs at once.
+    renderShell: "self",
     renderCall(args, theme, context) {
       const metrics = resolveWorktreeToolCardMetrics();
       if (metrics !== null) {

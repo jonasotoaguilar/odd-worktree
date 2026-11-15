@@ -134,6 +134,13 @@ describe('removed surface', () => {
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'the model-facing tools are still exactly the two');
   });
 
+  test('both worktree tools frame their own card, so the host draws no filled box under it', async () => {
+    const { tools } = await loadExtension({});
+    for (const name of ['worktree_create', 'worktree_list']) {
+      assert.equal(tools.get(name).renderShell, 'self', `${name} declares renderShell: self`);
+    }
+  });
+
   test('the CodeGraph modules are a closed list with narrow powers (S1, S2)', () => {
     const lib = path.join(ROOT, 'lib');
     const shipped = fs.readdirSync(lib).filter((entry) => /^codegraph-/.test(entry)).sort();

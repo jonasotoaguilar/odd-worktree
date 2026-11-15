@@ -374,8 +374,13 @@ describe('the customize row', () => {
 		const { providers } = installBridge();
 		const loaded = await loadExtension({});
 
-		assert.equal(providers.length, 1, 'exactly one row provider is registered');
-		const provider = providers[0];
+		// The bash switch has its own provider; the file cards add a second one
+		// (`odd-worktree.cards.file-switches`), so this asserts the row group instead of
+		// the total: one provider for this setting, and every provider under Cards.
+		const provider = providers.find((entry) => entry.id === 'odd-worktree-card-bash');
+		assert.ok(provider, 'exactly one row provider carries the Card tool setting');
+		assert.equal(providers.filter((entry) => entry.id === 'odd-worktree-card-bash').length, 1, 'and it is registered once');
+		for (const entry of providers) assert.equal(entry.category, 'Cards', 'every provider this package contributes lives under Cards');
 		assert.equal(provider.id, 'odd-worktree-card-bash');
 		assert.equal(provider.category, 'Cards');
 		assert.equal(provider.name, 'Odd worktree');

@@ -136,7 +136,10 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    that HAS the bridge but draws no rail registers the section and never paints it,
    which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the bridge, not by this package (invariant 2 keeps the customize
-   surface out of it). A host without the bridge otherwise hears nothing about it;
+   surface out of it), and the section declares NO preview: every `Sections` row
+   draws the host's one shared list of active sections and the bridge adds this
+   section's `rowLabel` to it itself, shown or left out with the row's own
+   hypothetical (`registerSection` has no `preview` field — do not add one). A host without the bridge otherwise hears nothing about it;
    the one warning it can get is discoverability — once per process, from a primary
    session only (`GENTLE_PI_AGENTS_CHILD` is not `1`), naming
    `pi install npm:gentle-shell-bridge`, timed after the announcement window because

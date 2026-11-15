@@ -394,7 +394,12 @@ and `<n> assigned · stale` while the rows on screen are the last good ones.
   has the bridge but draws no rail registers the section and never paints it — that
   is the bridge's answer to a host without a sidebar, not a failure here. Its
   `/gentle:customize` → `Sections` visibility toggle belongs to the bridge, so a
-  host without the bridge has neither the section nor the toggle.
+  host without the bridge has neither the section nor the toggle. The section
+  declares no preview of its own: every `Sections` row draws the host's single
+  shared list of active sections — `[changes] [rdd] [agents] [todo] [usageCost] …` —
+  and the bridge appends this section's `rowLabel` (`issues`) to it while the
+  section is shown, leaving it out of a `hidden` row's hypothetical. There is
+  nothing to opt into, and `registerSection` has no `preview` field.
 - **A frame never waits on `gh`.** The host calls `lines()` and `meta()` once per
   frame and both return synchronously: they read one in-memory snapshot and only
   ever schedule the refresh. Nothing is read at `session_start`; a snapshot older

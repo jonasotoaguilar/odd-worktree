@@ -227,6 +227,108 @@ test('S4: a click defers open, calls it once, and never lets a failure escape', 
     'an async opener rejection lands in the snapshot, not in the host');
 });
 
+test('S4: an opener that RESOLVES { ok: false } records its error and keeps the ready rows', async () => {
+  const sched = manualSchedule();
+  const handle = createIssuesSection({
+    load: async () => ({
+      ok: true,
+      identity: 'github.com/myfork/project',
+      mine: [issue(9, 'Open fails', '2024-01-01T00:00:00Z')],
+      assigned: [],
+    }),
+    // The extension's real opener catches and RESOLVES this shape; it never
+    // rejects.
+    open: () => Promise.resolve({ ok: false, error: 'cannot open the issue in the browser' }),
+    schedule: sched.schedule,
+  });
+  await handle.refresh();
+  const rows = handle.section.lines({});
+  assert.deepEqual(rows.map((row) => row.label), ['#9 Open fails']);
+
+  rows[0].onClick();
+  await sched.flush();
+
+  assert.equal(handle.snapshot().error, 'cannot open the issue in the browser',
+    'a resolved { ok: false } failure lands in the snapshot like a throw');
+  assert.equal(handle.snapshot().status, 'ready');
+  assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#9 Open fails'],
+    'a click failure never turns a ready list into an error row');
+});
+
+test('S3: only lines() schedules the TTL refresh, a meta-only frame schedules nothing', async () => {
+  let clock = 1000;
+  let loads = 0;
+  const sched = manualSchedule();
+  const handle = createIssuesSection({
+    load: async () => {
+      loads += 1;
+      return { ok: true, identity: 'github.com/myfork/project', mine: [], assigned: [] };
+    },
+    open: () => {},
+    schedule: sched.schedule,
+    now: () => clock,
+    ttlMs: 100,
+  });
+
+  // An absent snapshot: the collapsed header draws `meta()` alone.
+  assert.equal(handle.section.meta({}), undefined);
+  assert.equal(sched.pending(), 0, 'a meta-only frame over an absent snapshot schedules nothing');
+  handle.section.lines({});
+  assert.equal(sched.pending(), 1, 'the drawn body schedules exactly one refresh');
+  await sched.flush();
+  assert.equal(loads, 1);
+  assert.equal(handle.section.meta({}), '0 mine · 0 assigned');
+
+  // A ready snapshot past its TTL: still only the drawn body schedules.
+  clock += 200;
+  handle.section.meta({});
+  assert.equal(sched.pending(), 0, 'a meta-only frame over a stale snapshot schedules nothing');
+  handle.section.lines({});
+  assert.equal(sched.pending(), 1, 'the drawn body schedules exactly one refresh');
+  await sched.flush();
+  assert.equal(loads, 2, 'the stale frame starts exactly one read');
+});
+
+test('S1/S6: an explicit refresh never coalesces, and an older answer never overwrites the latest', async () => {
+  const deferred = [];
+  const handle = createIssuesSection({
+    load: () => new Promise((resolve) => { deferred.push(resolve); }),
+    open: () => {},
+    schedule: () => {},
+  });
+
+  // Repository A's read is in flight when a checkout switch fires the second
+  // explicit refresh for repository B.
+  const first = handle.refresh();
+  const second = handle.refresh();
+  assert.equal(deferred.length, 2, 'an explicit refresh starts its own read instead of joining the in-flight one');
+
+  deferred[1]({
+    ok: true,
+    identity: 'github.com/myfork/repo-b',
+    mine: [issue(20, 'B issue', '2024-02-01T00:00:00Z')],
+    assigned: [],
+  });
+  await second;
+  assert.equal(handle.snapshot().identity, 'github.com/myfork/repo-b');
+  assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#20 B issue']);
+  assert.equal(handle.section.meta({}), '1 mine · 0 assigned');
+
+  // A settles later: its rows are dropped, never applied over B's.
+  deferred[0]({
+    ok: true,
+    identity: 'github.com/myfork/repo-a',
+    mine: [issue(10, 'A issue', '2024-01-01T00:00:00Z')],
+    assigned: [issue(11, 'A assigned', '2024-01-02T00:00:00Z')],
+  });
+  await first;
+  assert.equal(handle.snapshot().identity, 'github.com/myfork/repo-b');
+  assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#20 B issue'],
+    'the older answer never overwrites the newer one');
+  assert.equal(handle.section.meta({}), '1 mine · 0 assigned',
+    'the metadata is the newer repository\'s too');
+});
+
 test('S5: loading, empty and error are rows, never a throw', async () => {
   const loading = createIssuesSection({
     load: async () => ({ ok: true, identity: 'github.com/myfork/project', mine: [], assigned: [] }),

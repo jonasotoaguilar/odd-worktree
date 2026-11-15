@@ -276,8 +276,10 @@ buckets it read: `<n> mine · <n> assigned`.
   `Symbol.for("gentle-shell-bridge/api/v1")` slot, after its schema and version gate
   — or from the one `gentle-shell-bridge:ready` announcement when the bridge
   publishes later. There is no dependency on that package and no import of it. With
-  no bridge (or on a host with no rail) the section simply never appears: nothing is
-  registered, nothing is notified, and no other surface changes. Its
+  no bridge the section never appears at all: nothing is registered, nothing is
+  notified, and no other surface changes. A host that has the bridge but draws no
+  rail registers the section and never paints it — that is the bridge's answer to a
+  host without a sidebar, not a failure here. Its
   `/gentle:customize` → `Sections` visibility toggle belongs to the bridge, so a
   host without the bridge has neither the section nor the toggle.
 - **A frame never waits on `gh`.** The host calls `lines()` and `meta()` once per

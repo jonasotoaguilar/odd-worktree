@@ -23,7 +23,7 @@ Moving the session and removing a checkout are human actions: only `/warp` does 
 | --- | --- |
 | Pi (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`) | Peer dependencies supplied by the host; the package installs no runtime dependencies. |
 | Node.js >= 18 and `git` | Every repository operation is a `git` child process. |
-| `gh`, authenticated (`gh auth login`) | `/issues` only. Without it the command stays registered and says what is missing. |
+| `gh`, authenticated (`gh auth login`) | `/issues` and the `ISSUES` rail section. Without it the command stays registered and says what is missing, and the section shows its error row. |
 | Gentle Shell (recommended) | Supplies the session records the deletion guard reads to see other sessions. |
 | Gentle Shell with `gentle-shell-bridge` and its rail | The `ISSUES` rail section only. Without the bridge nothing is registered and no other surface changes; the package has no dependency on it. |
 

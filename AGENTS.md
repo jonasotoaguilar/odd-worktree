@@ -101,9 +101,10 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    its `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
    gate, or the one `gentle-shell-bridge:ready` announcement when the bridge
    publishes later. There is NO dependency on that package and no import of it
-   anywhere in this repo. Without a bridge — or on a host with no rail — the
-   section simply never appears: nothing is registered, nothing is notified, and no
-   other surface changes. Its `/gentle:customize` → `Sections` visibility toggle is
+   anywhere in this repo. Without a bridge the section never appears at all:
+   nothing is registered, nothing is notified, and no other surface changes. A host
+   that HAS the bridge but draws no rail registers the section and never paints it,
+   which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the bridge, not by this package (invariant 2 keeps the customize
    surface out of it).
 4. **Deletion refuses on a live session.** The only front that removes a checkout

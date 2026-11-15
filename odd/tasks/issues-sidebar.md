@@ -58,10 +58,11 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 
 | ID | Spec | Route | Surface | Commit |
 | --- | --- | --- | --- | --- |
-| T1 | S1, S3, S4, S5 | worker | `lib/issues-section.js`, `tools/issues-section.test.js` | `feat(issues): a sidebar section built from the related issues` |
-| T2 | S2, S6, S7 | worker | `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | same slice |
-| T3 | S8 | parent | `AGENTS.md`, `README.md`, `docs/reference.md` | same slice |
-| T4 | S4 (amended) | worker | `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | same slice |
+| T1 | S1, S3, S4, S5 | worker | `lib/issues-section.js`, `tools/issues-section.test.js` | `54d9c7b` |
+| T2 | S2, S6, S7 | worker | `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | `54d9c7b` |
+| T3 | S8 | parent | `AGENTS.md`, `README.md`, `docs/reference.md` | `54d9c7b` |
+| T4 | S4 (amended) | worker | `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | `54d9c7b` |
+| T5 | S1, S3, S4, S6 (verify blockers) | worker | `lib/issues-section.js`, `tools/issues-section.test.js` | fix commit |
 
 ## Log
 
@@ -78,6 +79,28 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   (`src/types.ts:110-197`), sync per-frame `lines`, 8-row body cap with `… +N more`
   (`src/sidebar-render.ts:82-85`), optional `requestRepaint` (`src/api.ts:151-153`), discovery recipe
   (`docs/contract.md:330-358`).
+- **E6 (independent verify, 3 blockers, against `54d9c7b`):** (a) `lib/issues-section.js:195` ignores an
+  opener that RESOLVES `{ ok: false, error }` — which is exactly what the extension's opener returns —
+  so `snapshot.error` stays null (S4). (b) `meta()` calls `ensureFresh()`, and the installed bridge
+  calls `meta` even for a collapsed section, so a collapsed header schedules network (S3).
+  (c) `refresh()` coalesces a new `session_start` onto an in-flight load, so after a checkout switch
+  the OLD repository's rows land and nothing re-reads until the TTL (S1, S6). T5 fixes all three,
+  with one test each, in a commit of its own so the fix is reviewed apart from the feature.
+- **E7 (T5 outcome):** all three fixed in `lib/issues-section.js` — the opener's resolved
+  `{ ok: false, error }` now records through `recordOpenError`, `meta()` never schedules (only
+  `lines()` does), and `refresh()` is latest-wins behind a run token so a newer checkout's read can
+  never be overwritten by an older one. RED for each was observed first (11 → 14 tests). The
+  verifier's OWN three probes, re-run against the fixed module, pass 3/3 — the same probes that
+  failed against `54d9c7b`. Three documentation mismatches it also reported were corrected:
+  `AGENTS.md` and `docs/reference.md` no longer claim nothing is registered on a bridge host with no
+  rail (the bridge does receive the section), and `README.md` now lists `gh` as a requirement of the
+  rail too, not of `/issues` alone.
+- **E5 (slice boundary, recorded):** the whole feature is ONE commit, `54d9c7b`, 1263 changed
+  lines over 7 files. It is past the ~400-line review slice on purpose: the module, its wiring and
+  its tests are one behavior — splitting them would ship a half that does not load or a test file
+  with nothing to test. The delivery strategy is therefore "one reviewable unit, verified whole",
+  and there is no second commit planned for this ODD. `git diff` for that commit is the unit a
+  reviewer reads.
 - **E4 (review finding, parent):** T2 as delivered resolved the click identity only from
   `checkoutRepoScope().identity`, which is `null` on a single-remote checkout — the common case — so
   the row opened nothing while `/issues` opens the same issue fine. `/issues` composes the identity

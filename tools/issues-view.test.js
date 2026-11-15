@@ -2254,7 +2254,9 @@ describe('issues close/reopen permission gate', () => {
     await tick();
     view.handleInput('l');
     assert.equal(view.state.mode, 'labels', 'triage permission alone still opens the editor');
-    assert.match(bodyOf(view, 120), /Labels \(space toggle/, 'the existing labels are listed');
+    // S10: the title is the sub-mode's name alone; the keys are on the footer
+    // row, and the create key follows the WRITE capability the create row does.
+    assert.match(bodyOf(view, 120), /Labels/, 'the existing labels are listed');
     const editor = bodyOf(view, 120);
     assert.ok(!editor.includes('n new'), 'the editor names no create keybinding');
     assert.ok(!editor.includes('create new'), 'no create row is listed');
@@ -5336,5 +5338,216 @@ describe('a seeded bucket never lends its rows to the wrong issue (E18)', () => 
     assert.match(leftColumn(view, 160), /issue title 21/, 'the seeded rows paint before any answer');
     assert.match(leftColumn(view, 160), /issue title 22/);
     assert.match(bodyOf(view, 160), /Assigned \(2\)/, 'with the count they hold');
+  });
+});
+
+// T12 (S10): a sub-mode's keys belong to the footer, and only there. The
+// editors' titles are the sub-mode's name alone; while a sub-mode holds the
+// keyboard the ONE footer row carries that sub-mode's keys instead of the
+// reading legend, in the same place on screen, and leaving the sub-mode puts
+// the legend back.
+//
+// T13 (S11): the footer only offers what works now. The five hints that act on
+// the selected issue need an issue that is both focused and loaded, and the
+// three repository actions keep their literal-`true` capability gate.
+// Everything that still works — movement, the bucket switch, the search key,
+// the `All` shortcut and the escape — stays on the row.
+describe('S10/S11: the footer offers only the keys that work now', () => {
+  const footerOf = (view, width) => strip(view.render(width).at(-2));
+  const READ_LEGEND = ['↑↓ move', '←→ bucket', 'c comment', 'o web', 't search', 'g all issues', 'esc close'];
+  const ISSUE_ACTIONS = ['l labels', 'a assign', 'c comment', 'x close', 'o web'];
+
+  async function opened(opts = {}) {
+    const { view } = makeView({
+      pages: pagesOf([[issue(1)], [], []]),
+      issues: [issue(1)],
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: EDITABLE }), comments: [] }),
+      ...opts,
+    });
+    await tick();
+    return view;
+  }
+
+  test('the labels editor title is its name alone', async () => {
+    const view = await opened({
+      labels: [{ name: 'bug' }],
+      loadLabels: () => ({ ok: true, labels: [{ name: 'bug' }] }),
+    });
+    view.handleInput('l');
+    await tick();
+    const rows = rightRows(view, 160);
+    assert.ok(rows.some((row) => row.trim() === 'Labels'), `the title is the sub-mode's name: ${JSON.stringify(rows.slice(0, 2))}`);
+    assert.ok(!rows[0].includes('space toggle'), 'the title carries no parenthetical key list');
+    assert.ok(!rows[0].includes('ctrl+s'), 'and no save key either');
+  });
+
+  test('while the labels editor is open the footer carries its keys instead of the legend', async () => {
+    const view = await opened({
+      labels: [{ name: 'bug' }],
+      loadLabels: () => ({ ok: true, labels: [{ name: 'bug' }] }),
+    });
+    const legend = footerOf(view, 200);
+    for (const token of READ_LEGEND) assert.ok(legend.includes(token), `the legend names ${token} before the editor: ${legend}`);
+
+    view.handleInput('l');
+    await tick();
+    const footer = footerOf(view, 200);
+    for (const token of ['space toggle', 'n new', 'ctrl+s apply', 'esc back']) {
+      assert.ok(footer.includes(token), `the labels keys are on the footer row: ${token} in ${footer}`);
+    }
+    for (const token of ['↑↓ move', '←→ bucket', 'l labels', 'a assign', 'c comment', 'x close', 'o web', 't search', 'g all issues', 'esc close']) {
+      assert.ok(!footer.includes(token), `the reading legend left the row: ${token} in ${footer}`);
+    }
+    assert.equal(view.render(200).map(strip).filter((line) => /space toggle/.test(line)).length, 1,
+      'exactly one row names the editor keys');
+  });
+
+  test('leaving the labels editor restores the reading legend', async () => {
+    const view = await opened({
+      labels: [{ name: 'bug' }],
+      loadLabels: () => ({ ok: true, labels: [{ name: 'bug' }] }),
+    });
+    view.handleInput('l');
+    await tick();
+    view.handleInput('escape');
+    const footer = footerOf(view, 200);
+    assert.equal(view.state.mode, 'list', 'esc backs out of the editor');
+    for (const token of READ_LEGEND) assert.ok(footer.includes(token), `the legend is back: ${token} in ${footer}`);
+    assert.ok(!footer.includes('space toggle'), 'the editor keys left with the editor');
+    assert.ok(!footer.includes('ctrl+s apply'), 'and so did the save key');
+  });
+
+  test('the assignees editor title is its name alone and its keys ride the footer', async () => {
+    const view = await opened({ loadAssignees: () => ({ ok: true, users: [{ login: 'ann' }] }) });
+    view.handleInput('a');
+    await tick();
+    const rows = rightRows(view, 160);
+    assert.ok(rows.some((row) => row.trim() === 'Assignees'), `the title is the sub-mode's name: ${JSON.stringify(rows.slice(0, 2))}`);
+    assert.ok(!rows[0].includes('space toggle'), 'the title carries no parenthetical key list');
+    const footer = footerOf(view, 200);
+    for (const token of ['space toggle', 'ctrl+s apply', 'esc back']) assert.ok(footer.includes(token), `the assignee keys are on the footer row: ${token} in ${footer}`);
+    for (const token of ['↑↓ move', '←→ bucket', 'o web', 't search', 'g all issues', 'esc close']) {
+      assert.ok(!footer.includes(token), `the reading legend left the row: ${token} in ${footer}`);
+    }
+    view.handleInput('escape');
+    for (const token of READ_LEGEND) assert.ok(footerOf(view, 200).includes(token), `the legend is back: ${token}`);
+  });
+
+  test('the comment editor title is its name alone and its keys ride the footer', async () => {
+    const view = await opened();
+    view.handleInput('c');
+    const rows = rightRows(view, 160);
+    assert.ok(rows.some((row) => row.trim() === 'Leave a comment…'), `the title is the sub-mode's name: ${JSON.stringify(rows.slice(0, 2))}`);
+    assert.ok(!rows[0].includes('enter newline'), 'the title carries no parenthetical key list');
+    const footer = footerOf(view, 200);
+    for (const token of ['enter newline', 'ctrl+s post', 'esc discard']) assert.ok(footer.includes(token), `the comment keys are on the footer row: ${token} in ${footer}`);
+    for (const token of ['↑↓ move', '←→ bucket', 'l labels', 'c comment', 'o web', 't search', 'g all issues', 'esc close']) {
+      assert.ok(!footer.includes(token), `the reading legend left the row: ${token} in ${footer}`);
+    }
+    view.handleInput('escape');
+    assert.equal(view.state.mode, 'list', 'an empty draft leaves without asking');
+    for (const token of READ_LEGEND) assert.ok(footerOf(view, 200).includes(token), `the legend is back: ${token}`);
+  });
+
+  test('the search box keeps its own footer while a legend waits behind it', async () => {
+    const view = await opened();
+    view.handleInput('t');
+    const footer = footerOf(view, 200);
+    assert.match(footer, /enter\/esc keep/, 'the search keys own the row in the box');
+    assert.ok(!footer.includes('↑↓ move'), 'and the reading legend is not on it');
+    view.handleInput('escape');
+    assert.match(footerOf(view, 200), /↑↓ move/, 'leaving the box restores the reading legend');
+  });
+
+  test('an empty bucket offers none of the five issue hints and keeps the rest', async () => {
+    const { view } = makeView({
+      pages: pagesOf([[], [issue(9)], []]),
+      issues: [],
+      loadIssue: (n) => ({ ok: true, issue: issue(n), comments: [] }),
+    });
+    await tick();
+    const footer = footerOf(view, 220);
+    for (const token of ISSUE_ACTIONS) assert.ok(!footer.includes(token), `nothing is focused, so ${token} is absent: ${footer}`);
+    for (const token of ['↑↓ move', '←→ bucket', 't search', 'g all issues', 'esc close']) {
+      assert.ok(footer.includes(token), `the key that still works stays: ${token} in ${footer}`);
+    }
+  });
+
+  test('a failed read offers none of the five issue hints and keeps the rest', async () => {
+    const { view } = makeView({
+      pages: pagesOf([[issue(1)], [], []]),
+      issues: [issue(1)],
+      loadIssue: () => ({ ok: false, error: 'gh issue view failed: HTTP 500' }),
+    });
+    await tick();
+    const footer = footerOf(view, 220);
+    for (const token of ISSUE_ACTIONS) assert.ok(!footer.includes(token), `an unreadable issue offers ${token}: ${footer}`);
+    for (const token of ['↑↓ move', '←→ bucket', 't search', 'g all issues', 'esc close']) {
+      assert.ok(footer.includes(token), `the key that still works stays: ${token} in ${footer}`);
+    }
+  });
+
+  test('an issue still loading offers none of the five issue hints', async () => {
+    const gate = deferred();
+    const { view } = makeView({
+      pages: pagesOf([[issue(1)], [], []]),
+      issues: [issue(1)],
+      loadIssue: () => gate.promise,
+    });
+    await tick();
+    const footer = footerOf(view, 220);
+    for (const token of ISSUE_ACTIONS) assert.ok(!footer.includes(token), `a pending issue offers ${token}: ${footer}`);
+    for (const token of ['↑↓ move', '←→ bucket', 't search', 'g all issues', 'esc close']) {
+      assert.ok(footer.includes(token), `the key that still works stays: ${token} in ${footer}`);
+    }
+    gate.resolve({ ok: true, issue: issue(1, { permissions: EDITABLE }), comments: [] });
+    await tick();
+    for (const token of ISSUE_ACTIONS) assert.ok(footerOf(view, 220).includes(token), `the loaded issue offers ${token}`);
+  });
+
+  test('a focused issue with no TRIAGE keeps c and o web but not l, a or x', async () => {
+    const { view } = makeView({
+      pages: pagesOf([[issue(1)], [], []]),
+      issues: [issue(1)],
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: { canEditLabels: false, canEditAssignees: false, canCloseIssues: false } }), comments: [] }),
+    });
+    await tick();
+    const footer = footerOf(view, 220);
+    assert.ok(footer.includes('c comment'), `commenting needs read access only: ${footer}`);
+    assert.ok(footer.includes('o web'), `the browser needs read access only: ${footer}`);
+    for (const token of ['l labels', 'a assign', 'x close']) {
+      assert.ok(!footer.includes(token), `no capability, no ${token}: ${footer}`);
+    }
+    for (const token of ['↑↓ move', '←→ bucket', 't search', 'g all issues', 'esc close']) {
+      assert.ok(footer.includes(token), `the key that still works stays: ${token} in ${footer}`);
+    }
+  });
+
+  test('a focused issue the repository role permits offers all five', async () => {
+    const view = await opened();
+    const footer = footerOf(view, 220);
+    for (const token of ISSUE_ACTIONS) assert.ok(footer.includes(token), `the permitted issue offers ${token}: ${footer}`);
+  });
+
+  test('a stale hint can never fire: the key handlers keep their own guards', async () => {
+    const calls = [];
+    const { view } = makeView({
+      pages: pagesOf([[], [issue(9)], []]),
+      issues: [],
+      loadIssue: (n) => ({ ok: true, issue: issue(n), comments: [] }),
+      actions: {
+        postComment: (_n, text) => { calls.push(['comment', text]); return { ok: true }; },
+        openBrowser: (n) => { calls.push(['browser', n]); return { ok: true }; },
+        setState: (n, state) => { calls.push(['state', n, state]); return { ok: true }; },
+      },
+    });
+    await tick();
+    view.handleInput('c');
+    await tick();
+    assert.equal(view.state.mode, 'list', 'c opens no editor with nothing focused');
+    view.handleInput('o');
+    view.handleInput('x');
+    await tick();
+    assert.deepEqual(calls, [], 'and no action ran');
   });
 });

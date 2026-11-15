@@ -98,12 +98,12 @@ the bar reads only `All (<n>)`.
 | `]`/`[` | Scroll the list one page; the hint is deliberately absent from the footer | — |
 | `ctrl+j`/`ctrl+k` | Scroll the preview a page (`ctrl+shift+j/k`, `shift+J/K` and `pgUp`/`pgDn` also work; `ctrl+d`/`ctrl+u` scroll half a page) | — |
 | `t` | Open the search box (`T` and `/` also open it) | — |
-| `o` | Open the issue in the browser through `gh issue view <n> --web -R` | — |
+| `o` | Open the issue in the browser through `gh issue view <n> --web -R` | a loaded issue |
 | `r` | Re-read the list and the preview freshly, and re-read your repository role | — |
-| `l` | Labels editor: apply or remove an existing label | triage |
-| `a` | Assignee editor | triage |
-| `c` | Comment | read access |
-| `x` (and `X`) | Close the issue, after the host's confirmation; only `x` rides the legend | triage |
+| `l` | Labels editor: apply or remove an existing label | triage and a loaded issue |
+| `a` | Assignee editor | triage and a loaded issue |
+| `c` | Comment | read access and a loaded issue |
+| `x` (and `X`) | Close the issue, after the host's confirmation; only `x` rides the legend | triage and a loaded issue |
 | `esc`, `q`, `ctrl+c` | Close the reader | — |
 
 **The shortcut teaches itself.** Outside `All` the footer reads `g all issues`;
@@ -124,6 +124,25 @@ narrowest rows carry only `↑↓ move · esc close`: the key still works there,
 simply not taught. The footer is a guide, not a complete key list — `]`/`[`, `T`,
 `/`, `X`, `home`/`end`, `q` and the preview's paging alternates all work without a
 token.
+
+**The footer offers only what works now.** The five tokens that act on the
+selected issue — `l labels`, `a assign`, `c comment`, `x close`, `o web` — are
+painted only while an issue is focused AND loaded: an empty bucket, a read still
+in flight and a failed read all drop them, and the three repository actions keep
+their literal-`true` capability gate on top. Movement, the bucket switch, `t
+search`, `g all issues` and `esc close` stay on the row either way, so a token on
+it is always an action you can take at that moment. The keys keep their own
+guards, so a hint that has left the row can never fire an action.
+
+**A sub-mode's keys replace the legend.** While the labels, assignees or comment
+editor holds the keyboard, the same footer row — same place, same left-to-right
+shape — carries that editor's keys instead of the reading legend: `space toggle ·
+n new · ctrl+s apply · esc back` for labels (`n new` only with `write`), `space
+toggle · ctrl+s apply · esc back` for assignees, and `enter newline · ctrl+s post
+· esc discard` for a comment. The editor's title is its name alone (`Labels`,
+`Assignees`, `Leave a comment…`), so the keys are never in two places. Leaving
+the sub-mode — apply, `esc back` or `esc discard` — restores the reading legend.
+The search box keeps its own footer row, unchanged.
 
 Creating a **new** label is a separate capability inside the labels editor and
 needs `write`, so a triage-only viewer opens the editor normally and sees

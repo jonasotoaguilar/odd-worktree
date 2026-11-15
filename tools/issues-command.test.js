@@ -1850,7 +1850,9 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
       '│ › Search │',
       '│ loading issues… │',
       ...new Array(19).fill('│ │'),
-      '│ ↑↓ move · ctrl+j/k scroll · ←→ bucket · c comment · o web · t search · g all issues · esc close │',
+      // S11: no issue is under the cursor on the first frame, so the five
+      // tokens that act on one are absent; every other hint stays.
+      '│ ↑↓ move · ctrl+j/k scroll · ←→ bucket · t search · g all issues · esc close │',
       '╰─…╯',
     ], 'the first frame is today\'s loading frame, byte for byte');
   });
@@ -1941,7 +1943,9 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
     assert.ok(roleBack, 'the refreshed detail confirms the role');
 
     component.handleInput('a');
-    assert.ok(await waitFor(() => frame().includes('Assignees (space toggle')), 'the assignee editor opened');
+    // S10: the editor's title is its name alone; its keys are the footer row.
+    assert.ok(await waitFor(() => frame().includes('Assignees') && frame().includes('space toggle')),
+      'the assignee editor opened');
     assert.ok(await waitFor(() => !frame().includes('loading assignees')), 'the assignable users answered');
     component.handleInput('space');
     component.handleInput('ctrl+s');

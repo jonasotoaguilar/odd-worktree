@@ -130,6 +130,22 @@ function recordingTheme() {
   };
 }
 
+/** A theme that names every role it paints and can paint the float background, so a cell's role is readable. */
+function railTheme() {
+  const roles = { fg: [], bg: [] };
+  return {
+    roles,
+    fg(role, value) {
+      roles.fg.push(role);
+      return `<${role}>${value}</${role}>`;
+    },
+    bg(role, value) {
+      roles.bg.push(role);
+      return `\x1b[48;5;240m${value}\x1b[49m`;
+    },
+  };
+}
+
 // S10: the style seam — the process-wide slot Gentle Shell publishes — and a
 // scratch preference home, so no case reads or writes the real user's document.
 const CARD_STYLE_SLOT = Symbol.for('gentle-pi.card-style');
@@ -241,20 +257,23 @@ test('the native tool, the MCP explore tool and a bash call are one card', () =>
   }
   assert.deepEqual(codegraphShape('bash', { command: 'codegraph explore --path /tmp/ws -- auth login' }), {
     surface: 'bash',
+    command: 'codegraph explore --path /tmp/ws -- auth login',
     operation: 'explore',
     query: 'auth login',
   });
 
-  // The same call heads the same way whatever surface it came from: one program, one card.
+  // The same call heads the same way whatever surface it came from: one program, one
+  // card. The two tools name the operation; the bash card names the command it ran.
   const native = codegraphShape(CODEGRAPH_TOOL, { operation: 'explore', query: 'auth login' });
   const mcp = codegraphShape(MCP_PREFIXED_TOOL, { query: 'auth login' });
   const shell = codegraphShape('bash', { command: 'cd /tmp/ws && codegraph explore -- auth login' });
   assert.deepEqual(codegraphCallRows(native), codegraphCallRows(mcp));
-  assert.deepEqual(codegraphCallRows(native), codegraphCallRows(shell));
+  assert.equal(codegraphCallRows(shell)[0].text, codegraphCallRows(native)[0].text, 'one mark and one name');
   assert.deepEqual(codegraphCallRows(native), [
     { text: '\u{F01BC} codegraph', role: 'mdCode' },
     { text: 'explore auth login', role: 'muted' },
   ]);
+  assert.deepEqual(codegraphCallRows(shell)[1], { text: 'cd /tmp/ws && codegraph explore -- auth login', role: 'muted' }, 'a bash call names the command it ran');
   // No row carries a colour or an escape of its own: the shell paints the roles above.
   for (const row of codegraphCallRows(native)) {
     assert.equal(row.text.includes(String.fromCharCode(27)), false, row.text);
@@ -267,8 +286,10 @@ test('a call whose operation is not known yet says so instead of guessing one', 
   // The MCP tool's own name is the operation it runs.
   assert.deepEqual(codegraphShape(CODEGRAPH_MCP_TOOL, {}), { surface: 'mcp', operation: 'explore' });
   // Only a call that named exactly one payload word has a query; options are never read as one.
-  assert.deepEqual(codegraphShape('bash', { command: 'codegraph query "a b"' }), { surface: 'bash', operation: 'query', query: 'a b' });
-  assert.deepEqual(codegraphShape('bash', { command: 'codegraph query --path /tmp/ws alpha' }), { surface: 'bash', operation: 'query' });
+  assert.deepEqual(codegraphShape('bash', { command: 'codegraph query "a b"' }), { surface: 'bash', command: 'codegraph query "a b"', operation: 'query', query: 'a b' });
+  assert.deepEqual(codegraphShape('bash', { command: 'codegraph query --path /tmp/ws alpha' }), { surface: 'bash', command: 'codegraph query --path /tmp/ws alpha', operation: 'query' });
+  // An invocation with no readable operation is still the card: it names the command.
+  assert.deepEqual(codegraphShape('bash', { command: 'codegraph --help' }), { surface: 'bash', command: 'codegraph --help' });
 });
 
 test('the two tool names are the card\'s, and nothing else is', () => {
@@ -286,20 +307,67 @@ test('a call draws one heading with the CodeGraph mark and the operation as its 
   const resolver = cardFor();
   const rows = callRows(resolver, CODEGRAPH_TOOL, { operation: 'init' }, taggedTheme, { isPartial: false }, 60);
   assert.equal(rows.length, 1, 'a settled call draws its heading and lets the result close the frame');
-  assert.match(rows[0], /^<border>╭<\/border><border>─ <\/border>/, 'the frame keeps the theme border role');
+  assert.match(rows[0], /^<mdCode>╭<\/mdCode><mdCode>─ <\/mdCode>/, 'the frame carries the CodeGraph role, not the plain border');
   assert.match(rows[0], /<mdCode>󰆼 codegraph<\/mdCode>/, 'the label carries the CodeGraph title role');
   assert.match(rows[0], /<muted>·<\/muted> <muted>init<\/muted>/, 'the operation is the heading detail');
   assertFramed(rows, 60);
 
-  // The same heading for the MCP tool and for a bash call, because it is the same program.
+  // The same heading for the MCP tool, because it is the same program; a bash call
+  // is the same card too but names the command it ran instead of an operation.
   const mcp = callRows(resolver, MCP_PREFIXED_TOOL, { query: 'auth' }, plainTheme, { isPartial: false }, 60);
   const bash = callRows(resolver, 'bash', { command: 'codegraph explore auth' }, plainTheme, { isPartial: false }, 60);
-  assert.equal(stripAnsi(mcp[0]), stripAnsi(bash[0]), 'one program, one heading');
   assert.match(stripAnsi(mcp[0]), /󰆼 codegraph · explore auth/, 'the query is part of the detail');
+  assert.match(stripAnsi(bash[0]), /󰆼 codegraph · codegraph explore auth/, 'a bash call names the command it ran');
 
   // A call still streaming its arguments says so rather than guessing an operation.
   const streaming = callRows(resolver, CODEGRAPH_TOOL, {}, plainTheme, { isPartial: false }, 60);
   assert.match(stripAnsi(streaming[0]), /· \.\.\./, 'no operation yet is shown as "..."');
+});
+
+test('a settled card paints its whole box in the CodeGraph role, a running or failed one keeps its tone', () => {
+  const resolver = cardFor();
+  // Neon: the frame, not only the label, wears the CodeGraph role.
+  const call = callRows(resolver, CODEGRAPH_TOOL, { operation: 'init' }, taggedTheme, { isPartial: false }, 60);
+  assert.match(call[0], /^<mdCode>╭<\/mdCode><mdCode>─ <\/mdCode><mdCode>󰆼 codegraph<\/mdCode> <muted>·<\/muted> <muted>init<\/muted><mdCode> /, 'corners, lead and rule are the CodeGraph role');
+  assert.equal(call[0].includes('<border>'), false, 'no cell of the box keeps the plain border role');
+  const result = resultRows(resolver, CODEGRAPH_TOOL, textResult(INIT_FRESH), { isPartial: false }, taggedTheme, { args: { operation: 'init' } }, 60);
+  assert.match(result[0], /^<mdCode>│<\/mdCode> /, 'the result continues the same box');
+  assert.match(result.at(-1), /^<mdCode>╰/);
+  // The bash surface is the same card, so it paints the same box.
+  const bash = callRows(resolver, 'bash', { command: 'codegraph status' }, taggedTheme, { isPartial: false }, 60);
+  assert.match(bash[0], /^<mdCode>╭<\/mdCode>/);
+
+  // A running call keeps its warning tone and a failed one its error tone: an active
+  // state speaks for the call, so no identity role overrides it.
+  const running = callRows(resolver, CODEGRAPH_TOOL, { operation: 'init' }, taggedTheme, { isPartial: true }, 40);
+  assert.match(running[0], /^<warning>╭<\/warning>/);
+  assert.match(running[1], /^<warning>│<\/warning> /);
+  assert.match(running[2], /^<warning>╰<\/warning>/);
+  const failed = resultRows(resolver, CODEGRAPH_TOOL, textResult(INIT_FAILED, true), { isPartial: false }, taggedTheme, { args: { operation: 'init' } }, 60);
+  assert.match(failed[0], /^<error>│<\/error> /);
+  assert.match(failed.at(-1), /^<error>╰/);
+});
+
+test('the float card paints its rail in the CodeGraph role and keeps the tone band', () => {
+  const resolver = cardFor();
+  const theme = railTheme();
+  globalThis[CARD_STYLE_SLOT] = CARD_STYLE.FLOAT;
+  try {
+    const rows = callRows(resolver, CODEGRAPH_TOOL, { operation: 'init' }, theme, { isPartial: false }, 40);
+    assert.ok(rows.length > 0, 'the float card draws');
+    for (const row of rows) assert.ok(row.includes('<mdCode>▎</mdCode>'), `"${row}" does not paint its rail in the CodeGraph role`);
+    assert.equal(rows.join('\n').includes('<border>'), false, 'the left rail is the CodeGraph role and nothing of the band is plain border');
+    assert.deepEqual(theme.roles.bg, ['toolSuccessBg'], 'the tone still decides the band the rail rides on');
+
+    // A running card keeps its tone, band and rail alike.
+    const running = railTheme();
+    const pending = callRows(resolver, CODEGRAPH_TOOL, { operation: 'init' }, running, { isPartial: true }, 40);
+    assert.ok(pending.join('\n').includes('<warning>▎</warning>'));
+    assert.equal(pending.join('\n').includes('<mdCode>▎</mdCode>'), false);
+    assert.deepEqual(running.roles.bg, ['toolPendingBg']);
+  } finally {
+    globalThis[CARD_STYLE_SLOT] = CARD_STYLE.NEON;
+  }
 });
 
 test('a running call is the warning tone and closes its own frame', () => {
@@ -328,7 +396,7 @@ test('a collapsed result is the one factual row the output supports, in the mute
     assert.equal(rows.length, 2, `${operation}: one body row and the closing rule`);
     assert.equal(bodyText(rows[0]), expected, `${operation} collapses to its own fact`);
     assert.match(rows[0], /<muted>/, `${operation}: the preview is the muted role`);
-    assert.match(rows[1], /^<border>╰/, `${operation}: the result closes the frame`);
+    assert.match(rows[1], /^<mdCode>╰/, `${operation}: the result closes the frame in the CodeGraph role`);
     assertFramed(rows, 60);
   }
 
@@ -373,10 +441,118 @@ test('a card body row is painted in the output role, the preview in muted, a fai
   const recorder = recordingTheme();
   callRows(resolver, MCP_PREFIXED_TOOL, { query: 'auth' }, recorder, { isPartial: false }, 80);
   resultRows(resolver, MCP_PREFIXED_TOOL, textResult(EXPLORE), { isPartial: false }, recorder, {}, 80);
-  assert.deepEqual([...new Set(recorder.roles)].sort(), ['border', 'mdCode', 'muted'], 'the heading role, the frame role and the preview role');
+  assert.deepEqual([...new Set(recorder.roles)].sort(), ['mdCode', 'muted'], 'the CodeGraph role paints the box and the label, the preview the muted role');
   const expandedRecorder = recordingTheme();
   resultRows(resolver, MCP_PREFIXED_TOOL, textResult(EXPLORE), { expanded: true, isPartial: false }, expandedRecorder, {}, 80);
-  assert.deepEqual([...new Set(expandedRecorder.roles)].sort(), ['border', 'toolOutput'], 'an expanded body is the shell\'s tool-output role');
+  assert.deepEqual([...new Set(expandedRecorder.roles)].sort(), ['mdCode', 'toolOutput'], 'an expanded body is the shell\'s tool-output role');
+});
+
+// ---- a bash call that runs codegraph is the CodeGraph card ----
+
+/**
+ * The content of a heading and of any detail it wrapped onto body rows, with the
+ * chrome, the mark and the title removed: what the reader reads there.
+ */
+function headingText(rows) {
+  return rows
+    .map((row, index) => {
+      const text = unpaint(row);
+      if (index > 0) return text.replace(/^│ /, '').replace(/ +│$/, '').replace(/^· /, '');
+      return text.replace(/^╭─ /, '').replace(/ ─*╮$/, '').replace(/^󰆼 codegraph(?: · )?/, '');
+    })
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// The two compositions the session really ran. Both are one CodeGraph card.
+const HELP_AND_STATUS = 'codegraph --help 2>&1 | head -60; echo "--- STATUS ---"; codegraph status 2>&1 | head -40';
+const THREE_QUERIES = [
+  'echo "=== codegraph query cardBodyRows ==="; codegraph query cardBodyRows 2>&1 | head -20; echo;',
+  'echo "=== codegraph callers worktreeListView ==="; codegraph callers worktreeListView 2>&1 | head -20; echo;',
+  'echo "=== codegraph node warpPendingGate ==="; codegraph node warpPendingGate 2>&1 | head -40',
+].join(' ');
+
+test('a bash call that runs codegraph is the CodeGraph card, and names the command it ran', () => {
+  const resolver = cardFor();
+  const collapsed = callRows(resolver, 'bash', { command: HELP_AND_STATUS }, taggedTheme, { isPartial: false }, 40);
+  assert.equal(collapsed.length, 1, 'a collapsed call is one line: no operation label and no second heading');
+  assert.match(collapsed[0], /<mdCode>󰆼 codegraph<\/mdCode>/, 'the CodeGraph mark and name');
+  assert.match(collapsed[0], /<muted>·<\/muted> <muted>codegraph --help 2>&…<\/muted>/, 'the command is the heading detail');
+  assert.match(collapsed[0], /codegraph --help 2>&…/, 'a command too wide for the rule ends in an ellipsis instead of a second row');
+  assert.doesNotMatch(collapsed[0], /STATUS/, 'only what fits stays visible collapsed');
+  assertFramed(collapsed, 40);
+
+  // Expanded, the whole command is drawn: every line of it, wrapped, and nothing lost.
+  const expanded = callRows(resolver, 'bash', { command: HELP_AND_STATUS }, taggedTheme, { isPartial: false, expanded: true }, 80);
+  assert.ok(expanded.length > 1, 'the command continues on the rows below the rule');
+  assert.equal(headingText(expanded), HELP_AND_STATUS, 'the complete command is the heading detail');
+  assertFramed(expanded, 80);
+
+  // A multi-line command keeps every line too, once the reader expands it.
+  const script = 'codegraph status\necho done';
+  assert.equal(headingText(callRows(resolver, 'bash', { command: 'codegraph status; echo done' }, plainTheme, { isPartial: false, expanded: true }, 80)), 'codegraph status; echo done');
+  assert.equal(headingText(callRows(resolver, 'bash', { command: script }, plainTheme, { isPartial: false, expanded: true }, 80)), 'codegraph status echo done', 'a multi-line command keeps both of its lines');
+});
+
+test('any codegraph subcommand counts, and several of them in one command are one card', () => {
+  const resolver = cardFor();
+  for (const command of [
+    'codegraph --help',
+    'codegraph status',
+    'codegraph callers worktreeListView',
+    'codegraph node warpPendingGate',
+    'codegraph status 2>&1 | head -40',
+    'npx codegraph status',
+    'pnpm exec codegraph status',
+    HELP_AND_STATUS,
+    THREE_QUERIES,
+  ]) {
+    const rows = callRows(resolver, 'bash', { command }, plainTheme, { isPartial: false }, 60);
+    assert.equal(rows.length, 1, command);
+    assert.match(stripAnsi(rows[0]), /󰆼 codegraph · /, command);
+    const detail = headingText(rows);
+    assert.ok(command.startsWith(detail.endsWith('…') ? detail.slice(0, -1) : detail), `${command} is the detail the card names`);
+  }
+});
+
+test('a bash command that only mentions codegraph stays the host\'s own row', () => {
+  const resolver = cardFor();
+  const seen = [];
+  const host = {
+    renderShell: 'self',
+    renderCall(...args) {
+      seen.push(args);
+      return { render: () => ['host bash call'], invalidate() {} };
+    },
+    renderResult: () => ({ render: () => ['host bash result'], invalidate() {} }),
+  };
+  const slot = resolver('bash', () => host);
+  for (const command of ['echo codegraph init', 'cat codegraph.json', 'grep -r codegraph src', 'pnpm test && ls']) {
+    assert.equal(codegraphShape('bash', { command }), undefined, command);
+    assert.deepEqual(slot.renderCall({ command }, plainTheme, { isPartial: false }).render(60), ['host bash call'], command);
+  }
+  assert.equal(seen.length, 4, 'every mention-only command reached the host renderer');
+});
+
+test('a bash CodeGraph card keeps the three content levels: the command, a three-row preview, everything', () => {
+  const resolver = cardFor();
+  const output = Array.from({ length: 8 }, (_, index) => `row ${index + 1}`).join('\n');
+  const args = { command: 'codegraph status' };
+  assert.match(stripAnsi(callRows(resolver, 'bash', args, plainTheme, { isPartial: false }, 60)[0]), /󰆼 codegraph · codegraph status/, 'the collapsed default shows the command line');
+
+  const preview = resultRows(resolver, 'bash', textResult(output), { isPartial: false }, plainTheme, { args }, 60);
+  assert.equal(preview.length, 4, 'at most three rows of output preview and the closing rule');
+  assert.equal(preview.slice(0, -1).map(bodyText).join('\n'), 'row 6\nrow 7\nrow 8');
+
+  withContent(CARD_CONTENT.MINIMAL, () => {
+    const minimal = resultRows(resolver, 'bash', textResult(output), { isPartial: false }, plainTheme, { args }, 60);
+    assert.equal(minimal.length, 1, 'the minimal level draws the command line alone');
+    assert.match(minimal[0], /^╰/, 'the result only closes the frame the call above opened');
+  });
+
+  const expanded = resultRows(resolver, 'bash', textResult(output), { expanded: true, isPartial: false }, plainTheme, { args }, 60);
+  assert.equal(expanded.slice(0, -1).map(bodyText).join('\n'), output, 'expanded shows every row it printed');
 });
 
 test('a minimized card draws no result at all, and a failure still says why', () => {
@@ -494,7 +670,7 @@ test('every tool the card does not own is handed back exactly as the chain resol
 
   // A bash call whose command DOES run CodeGraph is the card's.
   const codegraph = bash.renderCall({ command: 'codegraph init' }, plainTheme, { isPartial: false }).render(60);
-  assert.match(stripAnsi(codegraph[0]), /󰆼 codegraph · init/);
+  assert.match(stripAnsi(codegraph[0]), /󰆼 codegraph · codegraph init/);
 });
 
 test('the resolver takes its host seams as options and degrades to drawing nothing without the hook', () => {

@@ -7239,6 +7239,16 @@ export default function (pi) {
   } catch {
     // CodeGraph is best effort.
   }
+  // S2 (T4): the bash activity card, through the same host hook and in the same shape as the
+  // card above — one call, one line. It composes with that card at paint time: a `codegraph …`
+  // command keeps the CodeGraph identity, every other bash call wears this package's activity
+  // card while `/card:bash` is `own` and the host's own drawing while it is `default`. A host
+  // without `pi.registerToolRenderer` registers nothing and keeps drawing every bash row itself.
+  try {
+    libRequire("bash-card-resolver.js").registerBashCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
+  } catch {
+    // The card is cosmetic.
+  }
   // Register every live checkout the registry does not own yet. Dispatched here
   // and awaited by the barrier below: the host runs session_start handlers one
   // at a time, so awaiting the scan inside this handler would put the session's

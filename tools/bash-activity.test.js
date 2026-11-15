@@ -596,15 +596,47 @@ test('a codegraph call names its own card identity', () => {
 		assert.equal(inferBashActivity(command), 'codegraph', command);
 		assert.equal(isCodegraphCommand(command), true, command);
 	}
-	for (const command of ['codegraph', 'codegraph --version', 'codegraph --help', 'echo codegraph init', 'mytool codegraph init', 'codegraph init && ./script', 'codegraph init > build.log']) {
+		// Every invocation of the program is its card, whatever subcommand it names: the
+	// card's detail is the command itself, so no operation has to be readable.
+	for (const command of [
+		'codegraph',
+		'codegraph --version',
+		'codegraph --help',
+		'codegraph status',
+		'codegraph callers X',
+		'codegraph init > build.log',
+		'codegraph init && ./script',
+		// A launcher that runs what it names runs the program: only an explicit
+		// execution counts, never `npm run codegraph`, which is a script of that name.
+		'npx codegraph init',
+		'pnpx codegraph explore -- alpha',
+		'bunx codegraph status',
+		'pnpm exec codegraph status',
+		'pnpm dlx codegraph init',
+		'npm exec codegraph init',
+	]) {
+		assert.equal(inferBashActivity(command), 'codegraph', command);
+		assert.equal(isCodegraphCommand(command), true, command);
+	}
+	// Prose that merely mentions the program, or a script named after it, claims nothing.
+	for (const command of ['echo codegraph init', 'mytool codegraph init', 'npm run codegraph']) {
 		assert.equal(inferBashActivity(command), undefined, command);
+		assert.equal(isCodegraphCommand(command), false, command);
+	}
+	// A read of a file named after it is still the read it is, so the CodeGraph card
+	// never claims it.
+	for (const command of ['cat codegraph.json', 'grep -r codegraph src']) {
+		assert.equal(inferBashActivity(command), 'exploring', command);
 		assert.equal(isCodegraphCommand(command), false, command);
 	}
 	// A read that merely searches for the word is still the read it is.
 	assert.equal(inferBashActivity('git log --grep codegraph'), 'exploring');
-	// The precedence still ranks a check first, and CodeGraph above plain inspection.
-	assert.equal(inferBashActivity('codegraph init && pnpm test'), 'checking');
+	// When a call also runs the program, the card is CodeGraph's: it names what the call
+	// did to this project's graph, and a check beside it never takes the row.
+	assert.equal(inferBashActivity('codegraph init && pnpm test'), 'codegraph');
 	assert.equal(inferBashActivity('git status && codegraph init'), 'codegraph');
+	// A deletion still outranks it: it is the one consequence a reader cannot undo.
+	assert.equal(inferBashActivity('codegraph init && rm -rf dist'), 'destructive');
 });
 
 // Two readers answer the same question about one command: this classifier, and the

@@ -121,10 +121,42 @@ test('the identity reads the operation and query from the bash command', () => {
   assert.deepEqual(codegraphCallFromCommand('cd /tmp/ws && codegraph init'), { operation: 'init' });
   assert.deepEqual(codegraphCallFromCommand('CI=1 codegraph init'), { operation: 'init' });
   assert.deepEqual(codegraphCallFromCommand('/usr/local/bin/codegraph init'), { operation: 'init' });
-  // A read-only inspection beside the call is still one CodeGraph call.
   assert.deepEqual(codegraphCallFromCommand('codegraph explore auth && git status'), { operation: 'explore', query: 'auth' });
   assert.equal(codegraphCallDetail({ operation: 'init' }), 'init');
   assert.equal(codegraphCallDetail({ operation: 'query', query: 'alpha' }), 'query alpha');
+});
+
+test('every codegraph invocation is a CodeGraph call, whatever its subcommand or composition', () => {
+  // The deciding fact is that `codegraph` is the command word of a segment: no
+  // operation is read for the card's heading, so a subcommand this reader cannot
+  // interpret, a flags-only invocation and several subcommands in one command all
+  // count — and none of them needs an operation to be drawn.
+  for (const [command, expected] of [
+    ['codegraph', {}],
+    ['codegraph --help', {}],
+    ['codegraph --version', {}],
+    ['codegraph status', { operation: 'status' }],
+    ['codegraph callers worktreeListView', { operation: 'callers' }],
+    ['codegraph node warpPendingGate', { operation: 'node' }],
+    ['codegraph status 2>&1 | head -40', { operation: 'status' }],
+    ['codegraph init && ./script', { operation: 'init' }],
+    ['codegraph init; rm -rf src', { operation: 'init' }],
+    // A package runner that executes the program it names is the program too.
+    ['npx codegraph status', { operation: 'status' }],
+    ['pnpm exec codegraph status', { operation: 'status' }],
+  ]) {
+    assert.deepEqual(codegraphCallFromCommand(command), expected, command);
+  }
+
+  // The commands a session really ran, one whole composition each.
+  const helpAndStatus = 'codegraph --help 2>&1 | head -60; echo "--- STATUS ---"; codegraph status 2>&1 | head -40';
+  assert.deepEqual(codegraphCallFromCommand(helpAndStatus), { operation: 'status' }, 'the last CodeGraph step names the operation');
+  const queries = [
+    'echo "=== codegraph query cardBodyRows ==="; codegraph query cardBodyRows 2>&1 | head -20; echo;',
+    'echo "=== codegraph callers worktreeListView ==="; codegraph callers worktreeListView 2>&1 | head -20; echo;',
+    'echo "=== codegraph node warpPendingGate ==="; codegraph node warpPendingGate 2>&1 | head -40',
+  ].join(' ');
+  assert.equal(codegraphCallFromCommand(queries) !== undefined, true, 'a sequence of CodeGraph steps is one CodeGraph call');
 });
 
 test('a command that merely mentions codegraph is not a CodeGraph call', () => {
@@ -134,12 +166,10 @@ test('a command that merely mentions codegraph is not a CodeGraph call', () => {
     'cat codegraph.json',
     'node codegraph.js init',
     'mytool codegraph init',
+    'codegraph-cli init',
     'pnpm test',
-    'codegraph',
-    'codegraph --version',
-    'codegraph --help',
-    'codegraph init && ./script',
-    'codegraph init; rm -rf src',
+    'pnpm test && ls',
+    'grep -r codegraph src',
     '',
   ]) {
     assert.equal(codegraphCallFromCommand(command), undefined, command);

@@ -288,15 +288,25 @@ the elapsed time are identical in both; only the chrome differs.
   between renders.
 - **The tone is a theme role, never a colour.** A card paints the state's own
   theme role everywhere: the frame — the neon `╭ ╮ ╰ ╯` rule and the `float` `▎`
-  rail alike — carries `success` when a call settles, `warning` while it runs or
-  for `/warp`'s confirmation, `error` when it fails, and the plain `border` for an
-  informational card. The heading label carries the same role, except on the
+  rail alike — carries `warning` for the two worktree tools, running or settled, and
+  for `/warp`'s confirmation, `error` when a call fails, and the plain `border` for
+  an informational card. The CodeGraph card is the one exception: it paints its whole
+  box in its own `mdCode` role, and a running call still wears `warning` and a failed
+  one `error`. The heading label carries the same role, except on the
   informational card, whose label is the theme's `accent` on its plain border. A
   tool result's body is the theme's own `text` — and so is every row of `/warp`'s
   confirmation card — so a card's content never borrows the chrome's tone. The
   float band paints the tone's background role
   (`toolSuccessBg`, `toolPendingBg` for a running call, `toolErrorBg` for a
   failure). No hex value and no escape sequence is written by this package.
+- **The card content level decides how much a collapsed card shows.** Gentle Shell
+  publishes the level (`default` or `minimal`) and every card reads it on each paint,
+  so a switch applies to the next paint. At `default` a collapsed card shows its
+  heading and at most three body rows; at `minimal` it is the heading alone, closed by
+  the rule that carries the elapsed time. A failure still says why at either level,
+  and `ctrl+o` expands any card to everything. A host without Gentle Shell reads as
+  `default`. This holds for `worktree_create`, `worktree_list`, `/warp` and the
+  CodeGraph card alike.
 - **A row is clipped while it is still plain, and painted after.** Text is
   wrapped, clipped to the card's inner width (with the `…` mark) and padded first;
   the role wraps that result and nothing this package painted is measured again.
@@ -377,9 +387,10 @@ Preparing's mark carries one trailing space of its own: U+2692 is painted two
 cells wide by an emoji-fallback font while the host counts it as one, so the
 heading's counted width matches what the terminal paints.
 
-Among the segments of one command the strongest identity wins: a deletion first,
-then a check, a remote write, a history change, a rewrite, a build-up, and
-CodeGraph just above plain inspection.
+Among the segments of one command a deletion wins first, then CodeGraph: a call that
+runs the program is its card whatever else it does, because the card's detail is the
+command itself. Among the rest the strongest wins: a check, a remote write, a history
+change, a rewrite, a build-up, and plain inspection last.
 
 **The generic `$ bash` heading is what declining looks like.** A command no family
 names keeps the shell tool's own mark, word and theme role — never a family's mark
@@ -652,8 +663,12 @@ package never stops a daemon it did not start.
 
 With the CLI installed the package also draws CodeGraph's tool rows as a card on the same card
 substrate as the worktree tools: the native `codegraph` tool, the MCP `codegraph_explore` tool
-(bare or `mcp__codegraph__codegraph_explore`) and a `bash` call whose command is a CodeGraph
-command. It is registered through the host's tool-renderer hook, adds no tool or command, and
+(bare or `mcp__codegraph__codegraph_explore`) and a `bash` call that runs CodeGraph: any
+command in which `codegraph` is the command word of some segment, with or without a launcher
+such as `npx` or `pnpm exec`, in any pipeline or `;`/`&&` sequence. A command that only
+mentions it (`echo codegraph init`, `cat codegraph.json`, `grep -r codegraph src`) stays the
+host's own `bash` row. A `bash` card shows the command itself as its detail, on one line
+collapsed and whole when expanded, with no operation label. It is registered through the host's tool-renderer hook, adds no tool or command, and
 hands every other tool back exactly as the host resolved it; a `bash` command that is not
 CodeGraph's is forwarded to the host's own renderer. A host without that hook draws nothing of
 ours. Every card in this package, the two worktree tools and the CodeGraph rows alike, declares `renderShell: "self"`: it frames itself in float or neon, and the host's own filled box is never drawn under it. The collapsed card is one factual row per operation (an init, a sync, a query or explore

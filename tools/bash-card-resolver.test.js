@@ -325,9 +325,10 @@ test('with the CodeGraph card registered first, a codegraph command is the CodeG
   const slot = chain(codegraphResolver(), ours.resolver, HOST_SELF);
   assert.equal(slot.renderShell, 'self', 'the row is a self-framed card');
 
-  // One program, one card: the CodeGraph identity and its operation as the detail.
+  // One program, one card: the CodeGraph identity, with the command it ran as the
+  // detail, so an invocation whose operation cannot be read still names itself.
   const codegraphCall = callText(slot, { command: 'cd /tmp/ws && codegraph explore -- auth login' });
-  assert.match(codegraphCall, /codegraph · explore auth login/, 'a codegraph command keeps the CodeGraph card');
+  assert.match(codegraphCall, /codegraph · cd \/tmp\/ws && codegraph explore/, 'a codegraph command keeps the CodeGraph card');
   assert.doesNotMatch(codegraphCall, /⌕ exploring/, 'it is never this card\'s exploring identity');
   assert.deepEqual(ours.asked, [], 'the CodeGraph card owns the call row outright');
 

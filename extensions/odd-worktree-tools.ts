@@ -4,9 +4,11 @@
 // One package, one surface: the two agent worktree tools (create, list) and
 // the three read/inspect panels, plus the one preference this package owns.
 //
-// Registers four commands:
+// Registers five commands:
 //   /warp      move this session to another checkout of the project
 //   /odd-list  read this checkout's odd/ documents
+//   /files     browse one checkout's files with a live preview, insert the
+//              chosen paths into the editor, or open one in $EDITOR
 //   /issues    read this checkout's GitHub issues, with label/assignee,
 //              comment and close actions when the repository permits them
 //   /card:bash flip the bash tool card between this package's activity card and
@@ -6603,6 +6605,400 @@ function registerOddCommand(pi) {
 }
 
 // ---------------------------------------------------------------------------
+// `/files` (T7: S9, S14, S17): the file picker over one checkout of this clone.
+//
+// The command JOINS the modules that already own each half and decides nothing
+// they own: `lib/files-index.js` lists Git's files with their change state and
+// reads one bounded preview, `lib/files-orders.js` builds the three orders,
+// `lib/files-preview.js` paints the preview pane's cells, `lib/files-insert.js`
+// formats the text Enter pastes, `lib/files-scope-detail.js` reads the scope's
+// Git facts, and `lib/files-scope-view.js` / `lib/files-picker-view.js` paint the
+// two overlays. This front resolves the scopes from the package's own worktree
+// seam and ownership rule, mounts the two overlays, pastes the insertion and
+// hands the terminal to the editor.
+//
+// Read-only (S16): every child is the package's async runner behind one adapter,
+// so nothing is spawned synchronously and nothing blocks the host event loop. The
+// panel writes nothing; the only child it starts is the editor `ctrl+e` asks for.
+// ---------------------------------------------------------------------------
+
+// T7 honesty: there is no picker without an overlay, and this package offers no
+// second surface in its place, so the one line says exactly that.
+const FILES_NO_UI_LINE = 'files: the file picker needs an interactive session with overlay support';
+
+// S9: two overlay shapes. The scope step is the small single-choice card; the
+// picker takes the whole terminal's height budget (Pi truncates an overlay's rows
+// from the bottom, so a smaller percentage would drop the footer line) and the
+// width S15 needs for two panes.
+const FILES_SCOPE_OVERLAY = Object.freeze({
+  overlay: true,
+  overlayOptions: Object.freeze({ anchor: 'center', width: '70%', minWidth: 60, maxHeight: '85%' }),
+});
+const FILES_PICKER_OVERLAY = Object.freeze({
+  overlay: true,
+  overlayOptions: Object.freeze({ anchor: 'center', width: '85%', minWidth: 76, maxHeight: '100%' }),
+});
+
+let filesTuiLoader = () => import('@earendil-works/pi-tui');
+
+function setFilesTuiLoader(loader) {
+  filesTuiLoader = loader;
+}
+
+// S12: Pi's OWN highlighter and language mapper, resolved LAZILY at open time
+// from the package root and never imported at module load — this package ships no
+// node_modules, so a static import would break every load (the tests stub only
+// the two existing import lines). An absent package leaves the preview plain.
+let filesAgentLoader = () => import('@earendil-works/pi-coding-agent');
+
+function setFilesAgentLoader(loader) {
+  filesAgentLoader = loader;
+}
+
+function filesTerminalRows(hostTui) {
+  try {
+    const rows = hostTui && hostTui.terminal ? hostTui.terminal.rows : undefined;
+    if (Number.isFinite(rows) && rows > 0) return rows;
+  } catch {
+    // A hostile host object never breaks the panel.
+  }
+  return 24;
+}
+
+function filesRepaint(hostTui) {
+  try {
+    if (hostTui && typeof hostTui.requestRender === 'function') hostTui.requestRender();
+  } catch {
+    // A repaint failure never breaks the panel.
+  }
+}
+
+// The overlay settles ONCE, and a host that already closed it never turns that
+// into a throw on the way out.
+function filesSettle(done, value) {
+  try {
+    if (typeof done === 'function') done(value);
+  } catch {
+    // A settled overlay is not a failed command.
+  }
+}
+
+// The one runner shape the files modules take: `run(args, { cwd, timeoutMs })`
+// over ONE fixed argv array and the package's bounded async runner, so no caller
+// builds a shell string and no read blocks the host event loop (invariant 9).
+function filesRunner(git) {
+  return (args, options) => {
+    const opts = options !== null && typeof options === 'object' ? options : {};
+    const call = { cwd: typeof opts.cwd === 'string' ? opts.cwd : undefined };
+    const timeoutMs = Number(opts.timeoutMs);
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) call.timeoutMs = timeoutMs;
+    return git.runArgvAsync('git', args, call);
+  };
+}
+
+/**
+ * S9: the checkouts `/files` can browse — the principal checkout and every
+ * checkout this package created. Which checkouts are ours is the registry's one
+ * rule (the path under `<repo-name>-worktrees`), and only a LIVE checkout is
+ * offered: a directory Git still records but that no longer exists is no place to
+ * read files from. The reads are the awaited ones, so opening the picker never
+ * freezes the session.
+ */
+async function filesCheckouts(cwd) {
+  const git = libRequire('worktree-git.js');
+  const registry = libRequire('worktree-registry.js');
+  const runAsync = libRunner(git);
+  const repo = await git.repoIdentityAsync(cwd, { runAsync });
+  let entries = [];
+  try {
+    entries = await git.listWorktreesAsync(repo.root, { runAsync });
+  } catch {
+    entries = [];
+  }
+  const main = entries[0];
+  let mainRoot = main && typeof main.path === 'string' && main.path.length > 0 ? main.path : repo.root;
+  try {
+    mainRoot = fs.realpathSync(mainRoot);
+  } catch {
+    // Git's own spelling is all it answered.
+  }
+  const others = registry
+    .ownedCheckouts(entries.slice(main === undefined ? 0 : 1), mainRoot)
+    .filter((entry) => isLiveGitRecord(entry, repo.root));
+  return { repo, mainRoot, others };
+}
+
+// S9: the ODD directory IS a checkout's identity in this package (invariant 12),
+// so a worktree row reads `<odd> · <branch>`; a detached checkout names no branch
+// and keeps just its directory.
+function filesWorktreeLabel(root, branch) {
+  const name = path.basename(root);
+  return typeof branch === 'string' && branch.length > 0 ? `${name} · ${branch}` : name;
+}
+
+/**
+ * S9: the two numbers a scope row and its detail line show. The uncommitted set
+ * is the picker's own listing (`state !== "clean"`) and its newest mtime is "the
+ * age of the last modification"; the line above the footer is
+ * `lib/files-scope-detail.js` with `origin/main` for the principal row and the
+ * local `main` for every worktree. A read that failed leaves its fields absent, so
+ * the step paints less instead of claiming a zero nobody measured.
+ */
+async function filesScopeFacts(index, detailLib, run, scope) {
+  const facts = {};
+  try {
+    const listing = await index.listRepositoryEntries({ run, cwd: scope.root });
+    if (listing && listing.ok === true && Array.isArray(listing.entries)) {
+      let changed = 0;
+      let newest;
+      for (const entry of listing.entries) {
+        if (!entry || entry.state === 'clean') continue;
+        changed += 1;
+        const mtime = Number(entry.mtimeMs);
+        if (Number.isFinite(mtime) && (newest === undefined || mtime > newest)) newest = mtime;
+      }
+      facts.changedFiles = changed;
+      if (newest !== undefined) facts.lastModifiedMs = newest;
+    }
+    const loaded = await detailLib.loadScopeDetail({
+      run,
+      cwd: scope.root,
+      comparison: scope.kind === 'main' ? detailLib.REMOTE_MAIN : detailLib.LOCAL_MAIN,
+    });
+    // The view paints the count and the age out of `detail`, and orders the rows
+    // by the scope's own `lastModifiedMs`, so both carry the same numbers.
+    facts.detail = { ...(loaded !== null && typeof loaded === 'object' ? loaded : {}), ...facts };
+  } catch {
+    facts.detail = {};
+  }
+  return { ...scope, ...facts };
+}
+
+/** The scopes S9 offers, principal first; the view orders the rest by recency. */
+async function filesScopes(cwd) {
+  const checkouts = await filesCheckouts(cwd);
+  const mainScope = { root: checkouts.mainRoot, kind: 'main', label: 'main' };
+  // S9: with nothing else to offer the step never appears — and neither the
+  // uncommitted counts nor the Git detail are read at all, because the picker
+  // paints none of them.
+  if (checkouts.others.length === 0) return [mainScope];
+  const index = libRequire('files-index.js');
+  const detailLib = libRequire('files-scope-detail.js');
+  const run = filesRunner(libRequire('worktree-git.js'));
+  return Promise.all([
+    filesScopeFacts(index, detailLib, run, mainScope),
+    ...checkouts.others.map((entry) => filesScopeFacts(index, detailLib, run, {
+      root: entry.path,
+      kind: 'worktree',
+      label: filesWorktreeLabel(entry.path, entry.branch),
+    })),
+  ]);
+}
+
+/**
+ * S12: Pi's highlighter and language mapper, resolved once per open. The
+ * `highlight` seam hands back `undefined` for anything that is not real syntax
+ * colour: Pi paints a language whose grammar it has not loaded with the same
+ * uniform code tone it uses for no language at all, and the two passes are how
+ * that is told apart. Every throw degrades to plain text, never to a partial
+ * paint.
+ */
+async function filesAgentSeam() {
+  let agent;
+  try {
+    agent = await filesAgentLoader();
+  } catch {
+    return {};
+  }
+  if (agent === null || typeof agent !== 'object') return {};
+  const highlight = typeof agent.highlightCode === 'function'
+    ? (code, language) => {
+      try {
+        const painted = agent.highlightCode(code, language);
+        if (!Array.isArray(painted)) return undefined;
+        const plain = agent.highlightCode(code);
+        if (Array.isArray(plain) && plain.length === painted.length && plain.every((line, index) => line === painted[index])) {
+          return undefined;
+        }
+        return painted;
+      } catch {
+        return undefined;
+      }
+    }
+    : undefined;
+  const languageForPath = typeof agent.getLanguageFromPath === 'function'
+    ? (filePath) => {
+      try {
+        const language = agent.getLanguageFromPath(filePath);
+        return typeof language === 'string' && language.length > 0 ? language : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    : undefined;
+  return { highlight, languageForPath };
+}
+
+/**
+ * S7/S8: Enter's payload. The insertion form is `lib/files-insert.js`'s alone
+ * (`@` plus the path from the session cwd for a file of this checkout, the real
+ * absolute path for any other checkout), it goes into the editor through the
+ * host's own paste seam, and NOTHING is sent: the message stays unsent.
+ */
+function filesInsert(ctx, insertLib, scope, cwd, paths, notify) {
+  const text = insertLib.formatFileInsertion(paths, { root: scope.root, kind: scope.kind, cwd });
+  if (text.length === 0) return;
+  try {
+    if (ctx.ui && typeof ctx.ui.pasteToEditor === 'function') {
+      ctx.ui.pasteToEditor(text);
+      return;
+    }
+  } catch {
+    // Fall through to the honest line: the text never reached the editor.
+  }
+  if (notify) notify(`files: the editor did not accept the insertion: ${text}`, 'warning');
+}
+
+/**
+ * S14: the editor handoff. The picker repaints nothing on the way out (its own
+ * `finish` guarantees that), and this stops the terminal BEFORE the editor takes
+ * it — the same suspend/resume the odd viewer uses — so no frame is torn and the
+ * one full repaint happens after the editor EXITS, which is the jolt the
+ * reference complained about. The opener is the shared `lib/open-external.js`
+ * one, so a missing $VISUAL/$EDITOR is its own sentence, reported here.
+ */
+async function filesOpenEditor(hostTui, absolutePath, notify) {
+  let result;
+  try {
+    result = await openExternalSuspended(hostTui, absolutePath);
+  } catch (err) {
+    result = { ok: false, error: (err && err.message) || String(err) };
+  }
+  if (result && result.ok === true) return;
+  if (notify) notify(`files: ${(result && result.error) || 'cannot open the editor'}`, 'warning');
+}
+
+/** The picker overlay (S1-S6, S14, S15) over one resolved scope. */
+async function mountFilesPicker(ctx, input) {
+  const index = libRequire('files-index.js');
+  const insertLib = libRequire('files-insert.js');
+  const pickerView = libRequire('files-picker-view.js');
+  const run = filesRunner(libRequire('worktree-git.js'));
+  const agent = await filesAgentSeam();
+  const scope = input.scope;
+  await ctx.ui.custom(
+    (hostTui, theme, _keybindings, done) => pickerView.createFilesPickerView({
+      theme,
+      helpers: input.helpers,
+      rowsAvailable: () => filesTerminalRows(hostTui),
+      scope,
+      cwd: input.cwd,
+      // The listing and the preview are the T1 reader's own, read from the scope
+      // root rather than the session cwd: the picker browses another checkout.
+      loadEntries: () => index.listRepositoryEntries({ run, cwd: scope.root }),
+      loadPreview: (relative) => index.readFilePreview(scope.root, relative),
+      ...(agent.highlight === undefined ? {} : { highlight: agent.highlight }),
+      ...(agent.languageForPath === undefined ? {} : { languageForPath: agent.languageForPath }),
+      onInsert: (paths) => filesInsert(ctx, insertLib, scope, input.cwd, paths, input.notify),
+      onOpen: (relative) => {
+        // The file's real absolute path, never the repository-relative one: the
+        // editor is a plain child process and knows no checkout.
+        void filesOpenEditor(hostTui, path.join(scope.root, relative), input.notify);
+      },
+      onClose: () => filesSettle(done, null),
+      requestRender: () => filesRepaint(hostTui),
+    }),
+    FILES_PICKER_OVERLAY,
+  );
+}
+
+async function executeFiles(rawArgs, ctx) {
+  const notify = ctx && ctx.ui && typeof ctx.ui.notify === 'function'
+    ? (text, level) => {
+      try {
+        ctx.ui.notify(text, level);
+      } catch {
+        // A dead UI never fails the command.
+      }
+    }
+    : null;
+  const raw = String(rawArgs ?? '').trim();
+  if (raw !== '') {
+    if (notify) notify(`Unknown option "${raw}". Use /files with no argument.`, 'error');
+    return;
+  }
+  // S17: without an overlay there is no picker to paint, and the one line says
+  // so instead of opening a second surface or throwing into the host.
+  if (!ctx || !ctx.ui || typeof ctx.ui.custom !== 'function') {
+    if (notify) notify(FILES_NO_UI_LINE, 'info');
+    return;
+  }
+  const cwd = toolCwd(ctx);
+  let scopes;
+  try {
+    scopes = await filesScopes(cwd);
+  } catch (err) {
+    const message = (err && err.message) || String(err);
+    if (notify) {
+      notify(/not a git repository/i.test(message) ? notGitRepositoryLine(cwd) : `files: ${message}`, 'info');
+    }
+    return;
+  }
+  let helpers = {};
+  try {
+    helpers = (await filesTuiLoader()) || {};
+  } catch {
+    helpers = {};
+  }
+  let scope = scopes[0];
+  // S9: the scope step appears only when there is a choice to make.
+  if (scopes.length > 1) {
+    const scopeView = libRequire('files-scope-view.js');
+    const picked = await ctx.ui.custom(
+      (hostTui, theme, _keybindings, done) => scopeView.createFilesScopeView({
+        scopes,
+        theme,
+        helpers,
+        rowsAvailable: () => filesTerminalRows(hostTui),
+        // The step answers the ORIGINAL scope object, which is what the picker
+        // then lists: nothing is re-resolved from a label or a path.
+        onSelect: (chosen) => filesSettle(done, chosen),
+        onClose: () => filesSettle(done, null),
+        requestRender: () => filesRepaint(hostTui),
+      }),
+      FILES_SCOPE_OVERLAY,
+    );
+    if (!picked) return;
+    scope = picked;
+  }
+  await mountFilesPicker(ctx, { scope, cwd, helpers, notify });
+}
+
+// `/files` (files-picker T7): browse one checkout's files, insert the chosen
+// paths into the editor, open one in $EDITOR. A handler that threw would break the
+// host's command dispatch, so the one unexpected failure is reported as a line.
+function registerFilesCommand(pi) {
+  if (typeof pi?.registerCommand !== 'function') return;
+  pi.registerCommand('files', {
+    description: "Browse one checkout's files with a live preview: enter inserts the paths, ctrl+e opens $EDITOR",
+    handler: async (args, ctx) => {
+      try {
+        await executeFiles(args, ctx);
+      } catch (err) {
+        const notify = ctx && ctx.ui && typeof ctx.ui.notify === 'function' ? ctx.ui.notify : undefined;
+        if (typeof notify !== 'function') return;
+        const message = String((err && err.message) || err).split('\n')[0];
+        try {
+          notify(`files: the picker could not open: ${message}`, 'error');
+        } catch {
+          // A dead UI never turns a failed open into a throw.
+        }
+      }
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // `/issues` (T3 S1,S3): a full-screen issues reader over the CURRENT checkout's
 // repository issues, through this package's own migrated pieces
 // (lib/gh-issues.js for `gh`, lib/issues-view.js for the pure view).
@@ -7828,6 +8224,9 @@ export default function (pi) {
   registerIssuesSidebar(pi);
   registerWarpCommand(pi);
   registerOddCommand(pi);
+  // T7 (files-picker): the file picker is the fifth command. It mounts its own
+  // overlays, reads Git through the package's async runner and adds no tool.
+  registerFilesCommand(pi);
   registerIssuesCommand(pi);
   // S1: the fourth command is the one preference the package owns. It is
   // registered with the others and reads its mode through lib/card-bash-mode.js.
@@ -8036,4 +8435,4 @@ export default function (pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, libModule };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, libModule };

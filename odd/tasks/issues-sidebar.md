@@ -20,7 +20,10 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   synchronous. They read an in-process snapshot and return immediately: no child process, no
   `await`, no `spawnSync`. A snapshot older than the TTL (`60000` ms) schedules exactly ONE
   deferred refresh; when the refresh lands and the published object has a `requestRepaint` member,
-  it is called once. A collapsed or hidden section costs nothing.
+  it is called once. A collapsed or hidden section costs nothing. Because a frame only exists when
+  the host has a reason to produce one, the section ALSO refreshes on the session's own activity —
+  `before_agent_start` and `turn_end` — behind a 30 s floor, so a session in use is never more than
+  about half a minute behind, while an idle session still makes no network call and starts no timer.
 - **S4 — a row is an issue.** Each row reads `#<number> <title>` and its `meta` names the relation:
   `mine`, `assigned`, or `mine + assigned`. Rows are sorted by `updatedAt` descending and capped at
   20 issues fetched (`fetchMax: 20`), so the bridge's own 8-row body cap is the only clipping left
@@ -29,6 +32,8 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   one, otherwise gh's own resolution normalized to `<host>/<owner>/<repo>`, because a single-remote
   checkout has no scope identity to pin — and it never runs on the paint path (the work is deferred
   to a macrotask, exactly once per click, and a failure is swallowed into the snapshot's error).
+  The identity is the one the ROW was built from: a row still on screen across a checkout change
+  opens the repository it was read from, never the one the session moved to.
 - **S5 — every state is a row, none is a throw.** `loading…` (dim) before the first answer,
   `no open issues` (dim) for an empty result, and ONE error row for a failed read or a failed scope
   resolution. `lines()` and `meta()` never throw; a throw of an injected seam is caught.
@@ -38,7 +43,8 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   without a proven identity. A session that starts in ANOTHER checkout supersedes the previous one
   at the moment `session_start` fires — before any awaited probe in that handler — so the old
   checkout's snapshot is dropped (the section shows the loading state, never the previous
-  repository's rows) and its in-flight answer can never land.
+  repository's rows) and its in-flight answer can never land. A session that SHUTS DOWN supersedes
+  it too: no read still in flight can repaint a torn-down host.
 - **S7 — nothing else moves.** `/warp`, `/odd-list`, `/issues`, `worktree_create`, `worktree_list`,
   the `worktree-warp` renderer, the prompt blocks and every existing test behave exactly as before;
   `node --test tools/*.test.js` stays green.
@@ -66,10 +72,18 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 | T3 | S8 | parent | `AGENTS.md`, `README.md`, `docs/reference.md` | `54d9c7b` |
 | T4 | S4 (amended) | worker | `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | `54d9c7b` |
 | T5 | S1, S3, S4, S6 (verify blockers) | worker | `lib/issues-section.js`, `tools/issues-section.test.js` | `d083e38` |
-| T6 | S6 (verify round 2 blocker) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | fix commit |
+| T6 | S6 (verify round 2 blocker) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | `9a1fd95` |
+| T7 | S4, S6 (verify round 3 findings) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | fix commit |
+| T7 | S3 (live finding) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | fix commit |
+| T8 | S4 (five rows + the overflow row) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | fix commit |
 
 ## Log
 
+- **L5 (user, verbatim):** "igual muestra un maximo de 5 issues, en listado y si tiene mas en una
+  sexta linea en color mas gris dice que hay x issues mas y esta sexta linea me deja clickearla y
+  me abre el clickear panel /issues (en mine assigned muestra bien cuantas es el total)" — S4 is
+  amended to the five-row body plus a dim, clickable overflow row that opens `/issues`; the header
+  meta keeps reporting the real totals per bucket.
 - **L1 (user, verbatim):** "/home/jona/dev/projects/gentle-shell-bridge tengo ese plugin instalado,
   usando ese me gustaria agregar una sidebar que me muestre las issues relacionadas, o sea las issue
   que cree o las que me asignaron"
@@ -90,6 +104,22 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   (c) `refresh()` coalesces a new `session_start` onto an in-flight load, so after a checkout switch
   the OLD repository's rows land and nothing re-reads until the TTL (S1, S6). T5 fixes all three,
   with one test each, in a commit of its own so the fix is reviewed apart from the feature.
+- **E9 (live session finding, parent):** the section shipped and rendered in a real Gentle Shell, and
+  showed `0 mine · 0 assigned` / `no open issues` while three open issues existed. The data path was
+  proven correct (`gh.listIssues` returned `[51,50,49]` through the real client), so the snapshot was
+  simply never refreshed. The bridge's own code answers why: `lines()` DOES run every frame (via the
+  rail digest, not `render()`), but a frame only exists when something external produces one — the
+  bridge ships "no timer, no poll, no retry" — so the 60 s TTL never got a frame to fire on while the
+  session idled. It updated the moment the human sent a message. T7 therefore refreshes on the
+  session's own events (`before_agent_start`, `turn_end`) behind a 30 s floor: never stale while in
+  use, still zero calls when idle.
+- **E9 (verify round 3, against `9a1fd95`):** the supersede itself is confirmed fixed, and the
+  invalidate/repaint/gate-failure probes pass. Two lifecycle findings remain. (a) S4: a row RETAINED
+  on screen from checkout A, clicked after B's snapshot landed, opened `gh issue view 11 --web -R
+  github.com/o/B` — a different repository's issue number — because the click path reads the CURRENT
+  snapshot's identity and the module's callback captured only the number. (b) S6: a read still in
+  flight at shutdown can still call the repaint after every shutdown handler has run. T7 binds the
+  row to the identity it was built from and supersedes the section on `session_shutdown`.
 - **E8 (verify round 2, one blocker, against `d083e38`):** the token fixed the read race only
   AFTER `refresh()` is called, and the extension fires it after `await checkIssuesGate(...)`. While
   that gate waits, the previous checkout's in-flight answer still lands and paints its rows. The

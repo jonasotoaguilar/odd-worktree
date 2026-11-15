@@ -284,10 +284,15 @@ buckets it read: `<n> mine · <n> assigned`.
   host without the bridge has neither the section nor the toggle.
 - **A frame never waits on `gh`.** The host calls `lines()` and `meta()` once per
   frame and both return synchronously: they read one in-memory snapshot and only
-  ever schedule the refresh. One refresh runs at `session_start`, and a snapshot
-  older than 60 s schedules one deferred refresh while the rail is drawn. There is
-  no polling timer, so an idle session makes no network calls, and a collapsed or
-  hidden section costs nothing.
+  ever schedule the refresh. One refresh runs at `session_start`, a snapshot older
+  than 60 s schedules one deferred refresh while the rail is drawn, and each turn of
+  yours (`before_agent_start`, then `turn_end`) refreshes it again if the snapshot is
+  older than 30 s — because a frame only exists when the host has a reason to
+  produce one, so the rail can never stay stale while you are using the session.
+  There is no polling timer, so an idle session makes no network calls, and a
+  collapsed or hidden section costs nothing. A `/reload` fires no `session_start`;
+  the section re-learns its session on the next turn, so it keeps reading the
+  checkout the session runs in and not the host process's own directory.
 - **Every state is a row, none is a throw.** `loading…` (dim) before the first
   answer, `no open issues` (dim) for an empty result, and one error row naming the
   failure: a failed `gh` read, or a checkout whose own repository cannot be

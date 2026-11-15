@@ -8,8 +8,14 @@
 // - `lines()`/`meta()` are synchronous frames over an in-process snapshot: a
 //   never-settled read still answers, two stale frames schedule ONE refresh,
 //   and `onRefreshed` fires once per landed refresh;
-// - a row click defers `open(number)` off the paint path, exactly once, and a
-//   failing opener lands in the snapshot instead of escaping the caller;
+// - a row click defers `open(number, identity)` off the paint path, exactly
+//   once, and a failing opener lands in the snapshot instead of escaping the
+//   caller; the identity is the one the ROW was built from, so a row retained
+//   across a checkout change opens the repository it was read from;
+// - a read still in flight at `session_shutdown` repaints nothing and lands
+//   nowhere;
+// - `refreshIfStale(maxAgeMs)` is the activity seam: one read for an absent or
+//   aged snapshot, nothing for a fresh one, one in flight, or a disposed one;
 // - the three states are rows (`loading…`, `no open issues`, ONE error row),
 //   never a throw;
 // - the extension reaches the rail ONLY through gentle-shell-bridge's
@@ -19,7 +25,11 @@
 // - at `session_start` the section reads the checkout's own repository:
 //   `checkoutRepoScope({cwd})` then both `gh issue list` searches scoped to
 //   that pinned identity, and a failed resolution is the error row with NO
-//   `gh` call.
+//   `gh` call;
+// - the session's own activity drives the section (`before_agent_start`,
+//   `turn_end`) behind a 30 s floor, which is what recovers a `/reload` (no
+//   `session_start` fires) and what keeps an idle session free of calls;
+// - `session_shutdown` drops the snapshot and forgets the session context.
 //
 // Every child process is injected: `gh` goes through lib/gh-issues.js
 // `setGhRunner`, git through its `setGitRunner`, and the checkouts live under
@@ -436,6 +446,80 @@ test('S6: invalidate drops the snapshot and an in-flight answer never lands', as
     'invalidate after dispose changes nothing');
 });
 
+// T7 (S3 amended): the activity floor. Because a frame only exists when the
+// host has a reason to produce one, the TTL alone never fires on a session that
+// is merely in use. The caller asks for a read on its own events; the module
+// decides whether one is due.
+test('S3: refreshIfStale reads an absent or aged snapshot and nothing else', async () => {
+  let clock = 1000;
+  let loads = 0;
+  const handle = createIssuesSection({
+    load: async () => {
+      loads += 1;
+      return {
+        ok: true,
+        identity: 'github.com/myfork/project',
+        mine: [issue(5, 'Five', '2024-01-01T00:00:00Z')],
+        assigned: [],
+      };
+    },
+    open: () => {},
+    schedule: () => {},
+    now: () => clock,
+  });
+
+  // An absent snapshot: the activity trigger starts ONE read.
+  assert.equal(handle.refreshIfStale(30000), true, 'an absent snapshot starts a read');
+  await waitFor(() => handle.snapshot() !== null, 'the activity read never landed');
+  assert.equal(loads, 1);
+  assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#5 Five']);
+
+  // Fresher than the floor, and just under it: nothing starts.
+  assert.equal(handle.refreshIfStale(30000), false, 'a snapshot fresher than the floor starts nothing');
+  clock += 29999;
+  assert.equal(handle.refreshIfStale(30000), false, 'an age below the floor starts nothing');
+  assert.equal(loads, 1);
+
+  // At the floor exactly: one more read.
+  clock += 1;
+  assert.equal(handle.refreshIfStale(30000), true, 'an age at the floor starts one read');
+  await waitFor(() => loads === 2 && handle.snapshot().at === clock, 'the second activity read never landed');
+  assert.equal(handle.refreshIfStale(30000), false, 'the landed snapshot is fresh again');
+
+  // A read already in flight is never doubled.
+  let inFlightLoads = 0;
+  const inFlight = createIssuesSection({
+    load: () => {
+      inFlightLoads += 1;
+      return new Promise(() => {});
+    },
+    open: () => {},
+    schedule: () => {},
+  });
+  assert.equal(inFlight.refreshIfStale(30000), true, 'the first activity read starts');
+  assert.equal(inFlight.refreshIfStale(30000), false, 'a read already in flight is never doubled');
+  assert.equal(inFlightLoads, 1);
+
+  // After dispose() nothing starts, however stale the snapshot would be, and
+  // the seam never throws.
+  let disposedLoads = 0;
+  const disposedHandle = createIssuesSection({
+    load: async () => {
+      disposedLoads += 1;
+      return { ok: true, identity: 'github.com/myfork/project', mine: [], assigned: [] };
+    },
+    open: () => {},
+    schedule: () => {},
+    now: () => clock,
+  });
+  await disposedHandle.refresh();
+  disposedHandle.dispose();
+  clock += 600000;
+  assert.doesNotThrow(() => disposedHandle.refreshIfStale(30000), 'refreshIfStale never throws');
+  assert.equal(disposedHandle.refreshIfStale(30000), false, 'a disposed section starts nothing');
+  assert.equal(disposedLoads, 1, 'dispose stops the read, not the staleness');
+});
+
 test('S5: loading, empty and error are rows, never a throw', async () => {
   const loading = createIssuesSection({
     load: async () => ({ ok: true, identity: 'github.com/myfork/project', mine: [], assigned: [] }),
@@ -529,7 +613,7 @@ function sectionGithub({ mine = [], assigned = [], repoView = 'original/project'
   const calls = [];
   const runner = async (bin, argv, runOpts) => {
     const env = (runOpts && runOpts.env) || {};
-    calls.push({ bin, argv: argv.slice(), env: { ...env } });
+    calls.push({ bin, argv: argv.slice(), env: { ...env }, cwd: runOpts && runOpts.cwd });
     if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
     if (argv[0] === 'repo' && argv[1] === 'view') return okJson(JSON.stringify({ nameWithOwner: repoView }));
     if (argv[0] === 'issue' && argv[1] === 'list') {
@@ -546,6 +630,18 @@ function sectionGithub({ mine = [], assigned = [], repoView = 'original/project'
 
 function sessionStartHandlers(hooks) {
   return hooks.filter(([event]) => event === 'session_start').map(([, handler]) => handler);
+}
+
+function hooksFor(hooks, event) {
+  return hooks.filter(([name]) => name === event).map(([, handler]) => handler);
+}
+
+// Fire one host event's handlers in registration order, awaiting the async ones.
+async function fireHook(hooks, event, ctx) {
+  for (const handler of hooksFor(hooks, event)) {
+    const out = handler({ toolResults: [] }, ctx);
+    if (out && typeof out.then === 'function') await out;
+  }
 }
 
 async function fireSessionStart(hooks, ctx) {
@@ -878,4 +974,304 @@ test('S1/S6: a single-remote checkout reads both buckets with the identity gh re
     assert.equal(call.argv[call.argv.indexOf('--state') + 1], 'open');
     assert.equal(call.argv[call.argv.indexOf('--limit') + 1], '20', 'the fetch is capped at 20');
   }
+});
+
+// ---------------------------------------------------------------------------
+// T7 (S3 amended): the activity floor in the extension. A frame only exists
+// when the host has a reason to produce one (the bridge ships no timer), so the
+// 60 s TTL on a drawn frame never fires in a session that is merely in use: a
+// live session showed `no open issues` for minutes while three issues existed,
+// and corrected itself only when the human sent a message. The session's own
+// events (`before_agent_start`, `turn_end`) ask for a read behind a 30 s floor.
+// ---------------------------------------------------------------------------
+
+test("S3: the activity after a reload reads the session's own checkout", async () => {
+  const checkout = makeCheckout();
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub({
+    mine: [{ number: 11, title: 'Mine one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
+    assigned: [{ number: 12, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-06-01T00:00:00Z' }],
+  });
+  ghIssues.setGhRunner(gh.runner);
+
+  assert.equal(registered.length, 1);
+  const section = registered[0];
+  // The state `/reload` leaves: a section registered with no session context
+  // and no snapshot, because a reload fires no `session_start`. `meta()` never
+  // schedules, so asking it first does not create the very read under test.
+  assert.equal(section.meta({}), undefined, 'a reload leaves the section with no snapshot');
+
+  // The next activity carries the session's own context and must adopt it
+  // BEFORE it asks for a read.
+  const ctx = { cwd: checkout, ui: { notify: () => {} } };
+  await fireHook(loaded.hooks, 'before_agent_start', ctx);
+
+  const rows = await waitForRows(section, ctx);
+  assert.deepEqual(rows.map((row) => row.label), ['#12 Assigned one', '#11 Mine one'],
+    'the section shows the reloaded session\'s rows');
+
+  const lists = gh.calls.filter((call) => call.argv[0] === 'issue' && call.argv[1] === 'list');
+  assert.equal(lists.length, 2, 'one read per bucket');
+  for (const call of lists) {
+    assert.equal(call.env.GH_REPO, 'github.com/myfork/project',
+      "the read is bound to the session's own checkout, not the host process's cwd");
+    assert.equal(call.cwd, checkout, 'the read runs in the session\'s own checkout');
+  }
+  const searches = lists.map((call) => {
+    const at = call.argv.indexOf('--search');
+    return at >= 0 ? call.argv[at + 1] : null;
+  });
+  assert.deepEqual(searches.slice().sort(), [
+    'assignee:@me sort:updated-desc',
+    'author:@me sort:updated-desc',
+  ]);
+});
+
+test('S3: session_shutdown drops the ended rows and clears the session context', async () => {
+  const checkout = makeCheckout();
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  // Two different answers, so what a frame paints tells the test WHICH context
+  // its read used: the ended checkout's identity, or the one of whatever cwd
+  // the host process happens to have once the session context is gone.
+  const calls = [];
+  ghIssues.setGhRunner(async (_bin, argv, runOpts = {}) => {
+    const env = runOpts.env || {};
+    calls.push({ argv: argv.slice(), env: { ...env }, cwd: runOpts.cwd });
+    if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
+    if (argv[0] === 'repo' && argv[1] === 'view') {
+      return okJson(JSON.stringify({ nameWithOwner: 'original/project' }));
+    }
+    if (argv[0] === 'issue' && argv[1] === 'list') {
+      const at = argv.indexOf('--search');
+      const search = at >= 0 ? argv[at + 1] : '';
+      if (!/author:@me/.test(search)) return okJson('[]');
+      const mine = env.GH_REPO === 'github.com/myfork/project'
+        ? { number: 11, title: 'Mine one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }
+        : { number: 77, title: 'Host process repo', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' };
+      return okJson(JSON.stringify([mine]));
+    }
+    return okJson('');
+  });
+
+  const ctx = { cwd: checkout, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctx);
+  assert.equal(registered.length, 1);
+  const section = registered[0];
+  const rows = await waitForRows(section, ctx);
+  assert.deepEqual(rows.map((row) => row.label), ['#11 Mine one'], 'the session drew its own rows first');
+
+  await fireHook(loaded.hooks, 'session_shutdown', ctx);
+
+  assert.deepEqual(section.lines(ctx), [{ label: 'loading…', tone: 'dim' }],
+    "the ended session's rows are gone, the rail falls back to the loading row");
+
+  // A frame drawn after shutdown must not read with the ended session's cwd:
+  // the remembered context is cleared, so nothing is bound to that checkout.
+  const before = calls.length;
+  section.lines(ctx);
+  await waitFor(
+    () => !(section.lines(ctx).length === 1 && section.lines(ctx)[0].label === 'loading…'),
+    'the post-shutdown frame never settled',
+  );
+  const after = calls.slice(before);
+  assert.ok(
+    !after.some((call) => call.cwd === checkout || call.env.GH_REPO === 'github.com/myfork/project'),
+    `no read after shutdown uses the dead session's context (saw ${JSON.stringify(after.map((call) => [call.argv[0], call.cwd, call.env.GH_REPO]))})`,
+  );
+  assert.ok(
+    !section.lines(ctx).some((row) => row.label === '#11 Mine one'),
+    "the ended session's rows never paint again",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T7 (S4/S6, verify round 3): the two lifecycle findings. A row the host keeps
+// on screen outlives the checkout its snapshot belonged to, and a read that was
+// in flight when the session ended outlives the session.
+// ---------------------------------------------------------------------------
+
+test('S4: a row retained across a checkout change opens the identity it was built from', async () => {
+  const opened = [];
+  const deferred = [];
+  const sched = manualSchedule();
+  const handle = createIssuesSection({
+    load: () => new Promise((resolve) => { deferred.push(resolve); }),
+    open: (number, identity) => { opened.push({ number, identity }); },
+    schedule: sched.schedule,
+  });
+
+  // Repository A's snapshot, and the row object the rail was handed for it.
+  const aRead = handle.refresh();
+  deferred[0]({
+    ok: true,
+    identity: 'github.com/original/repo-a',
+    mine: [issue(11, 'A eleven', '2024-01-01T00:00:00Z')],
+    assigned: [],
+  });
+  await aRead;
+  const rowA = handle.section.lines({})[0];
+  assert.equal(rowA.label, '#11 A eleven');
+
+  // The session moves: the snapshot is superseded and B's read lands.
+  handle.invalidate();
+  const bRead = handle.refresh();
+  deferred[1]({
+    ok: true,
+    identity: 'github.com/original/repo-b',
+    mine: [issue(11, 'B eleven', '2024-02-01T00:00:00Z')],
+    assigned: [],
+  });
+  await bRead;
+  assert.equal(handle.snapshot().identity, 'github.com/original/repo-b');
+  assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#11 B eleven']);
+
+  // A retained frame is clicked AFTER B's rows replaced it on the rail.
+  rowA.onClick();
+  await sched.flush();
+  assert.deepEqual(
+    opened,
+    [{ number: 11, identity: 'github.com/original/repo-a' }],
+    "the retained row opens the repository it was read from, never the current snapshot's",
+  );
+
+  // An absent identity is passed through as it is: the opener, not the module,
+  // decides that nothing opens instead of guessing a repository.
+  const noIdentity = createIssuesSection({
+    load: async () => ({
+      ok: true,
+      mine: [issue(12, 'No identity', '2024-01-01T00:00:00Z')],
+      assigned: [],
+    }),
+    open: (number, identity) => { opened.push({ number, identity }); },
+    schedule: sched.schedule,
+  });
+  await noIdentity.refresh();
+  noIdentity.section.lines({})[0].onClick();
+  await sched.flush();
+  assert.deepEqual(opened[opened.length - 1], { number: 12, identity: null },
+    'an absent identity reaches the opener unchanged');
+});
+
+test('S4: a row clicked after the session moved to another checkout still opens its own repository', async () => {
+  const checkoutA = makeCheckout([
+    ['origin', 'git@github.com:myfork/project-a.git'],
+    ['upstream', 'git@github.com:original/project-a.git'],
+  ]);
+  const checkoutB = makeCheckout([
+    ['origin', 'git@github.com:myfork/project-b.git'],
+    ['upstream', 'git@github.com:original/project-b.git'],
+  ]);
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  ghIssues.setGhRunner((_bin, argv, runOpts = {}) => {
+    const env = runOpts.env || {};
+    if (argv[0] === 'api' && argv[1] === 'user') return Promise.resolve(okJson('{"login":"me"}'));
+    if (argv[0] === 'repo' && argv[1] === 'view') {
+      return Promise.resolve(okJson(JSON.stringify({ nameWithOwner: 'myfork/project-a' })));
+    }
+    if (argv[0] === 'issue' && argv[1] === 'list') {
+      const at = argv.indexOf('--search');
+      const search = at >= 0 ? argv[at + 1] : '';
+      const mine = [{
+        number: 11,
+        title: env.GH_REPO === 'github.com/myfork/project-a' ? 'A eleven' : 'B eleven',
+        state: 'OPEN',
+        updatedAt: '2024-01-01T00:00:00Z',
+      }];
+      return Promise.resolve(okJson(JSON.stringify(search.includes('author:@me') ? mine : [])));
+    }
+    return Promise.resolve(okJson(''));
+  });
+
+  const worktreeGit = require(path.join(LIB_DIR, 'worktree-git.js'));
+  const opened = [];
+  const original = worktreeGit.runArgvAsync;
+  worktreeGit.runArgvAsync = async (bin, argv, opts) => {
+    if (argv[0] === 'issue') {
+      opened.push({ bin, argv: argv.slice(), cwd: opts && opts.cwd });
+      return { status: 0, stdout: '', stderr: '', error: null };
+    }
+    return original(bin, argv, opts);
+  };
+
+  try {
+    const ctxA = { cwd: checkoutA, ui: { notify: () => {} } };
+    const ctxB = { cwd: checkoutB, ui: { notify: () => {} } };
+    await fireSessionStart(loaded.hooks, ctxA);
+    assert.equal(registered.length, 1);
+    const section = registered[0];
+    await waitForRows(section, ctxA);
+    const rowA = section.lines(ctxA)[0];
+    assert.equal(rowA.label, '#11 A eleven');
+
+    // The session moves to the second checkout, whose read lands after it.
+    await fireSessionStart(loaded.hooks, ctxB);
+    await waitFor(
+      () => section.lines(ctxB).some((row) => row.label === '#11 B eleven'),
+      "the second checkout's rows never painted",
+    );
+
+    // The host still holds A's frame, so this click happens after B's snapshot
+    // landed — the exact window the finding lived in.
+    rowA.onClick();
+    await waitFor(() => opened.length > 0, 'the retained row never reached the browser opener');
+  } finally {
+    worktreeGit.runArgvAsync = original;
+  }
+
+  assert.equal(opened.length, 1, 'one click opens one issue');
+  assert.deepEqual(opened[0].argv, ['issue', 'view', '11', '--web', '-R', 'github.com/myfork/project-a'],
+    'the retained row opens its own repository, never the checkout the session moved to');
+  assert.ok(!opened[0].argv.includes('github.com/myfork/project-b'),
+    "never the new checkout's repository");
+  assert.equal(opened[0].cwd, checkoutB,
+    'the child still runs in the current checkout; -R, not the cwd, decides the repository');
+});
+
+test('S6: a read in flight at session_shutdown never repaints the rail', async () => {
+  const checkout = makeCheckout();
+  const { registered, repaints } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+
+  // Both bucket reads are HELD, so the test decides when they settle.
+  const lists = [];
+  ghIssues.setGhRunner((_bin, argv) => {
+    if (argv[0] === 'api' && argv[1] === 'user') return Promise.resolve(okJson('{"login":"me"}'));
+    if (argv[0] === 'repo' && argv[1] === 'view') {
+      return Promise.resolve(okJson(JSON.stringify({ nameWithOwner: 'myfork/project' })));
+    }
+    if (argv[0] === 'issue' && argv[1] === 'list') {
+      const entry = { settle: null };
+      entry.answer = new Promise((resolve) => {
+        entry.settle = (payload) => resolve(okJson(JSON.stringify(payload)));
+      });
+      lists.push(entry);
+      return entry.answer;
+    }
+    return Promise.resolve(okJson(''));
+  });
+
+  const ctx = { cwd: checkout, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctx);
+  assert.equal(registered.length, 1);
+  const section = registered[0];
+  await waitFor(() => lists.length === 2, 'the first read never reached gh');
+
+  // The session ends while its read is still waiting on gh.
+  await fireHook(loaded.hooks, 'session_shutdown', ctx);
+  assert.deepEqual(section.lines(ctx), [{ label: 'loading…', tone: 'dim' }],
+    'shutdown drops the rows the ended session had');
+
+  // The read that was in flight when the session ended settles now.
+  for (const entry of lists) entry.settle([]);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(repaints, [], 'a read that outlived the session never repaints the rail');
+  assert.deepEqual(section.lines(ctx), [{ label: 'loading…', tone: 'dim' }],
+    'its answer lands nowhere: the section holds no rows');
 });

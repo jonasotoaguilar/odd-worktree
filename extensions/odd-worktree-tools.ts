@@ -6557,9 +6557,16 @@ let issuesGateOpen = null;
 
 // S2/S3/S6 (issues-sidebar): the rail section beside the `/issues` reader. The
 // bridge is read from its published slot, never imported; the section reads ONE
-// in-process snapshot per frame and refreshes on its TTL or at `session_start`.
+// in-process snapshot per frame and refreshes at `session_start`, on its TTL and
+// on the session's own activity behind the floor below.
 const ISSUES_SIDEBAR_BRIDGE_SLOT = Symbol.for("gentle-shell-bridge/api/v1");
 const ISSUES_SIDEBAR_READY_EVENT = "gentle-shell-bridge:ready";
+// S3 (activity floor): a frame only exists when the host has a reason to produce
+// one, so the TTL never fires on a session that is merely in use. The session's
+// own events ask for a read at most once per this floor: in use, the rail is
+// never more than about half a minute behind, and an idle session still makes no
+// `gh` call and starts no timer.
+const ISSUES_SIDEBAR_ACTIVITY_FLOOR_MS = 30000;
 // The most recent `session_start` context: the section's `load` and `open`
 // belong to the checkout the session runs in, not to whatever cwd this process
 // happens to have.
@@ -7125,24 +7132,25 @@ async function loadIssuesSidebar() {
 }
 
 // S4 (issues-sidebar): a click opens the issue through the SAME fixed-argv
-// opener `/issues` uses, with the identity the list was read from. The module
-// already deferred the call off the paint path, so nothing is deferred twice
-// here; the returned promise never rejects.
-function openIssuesSidebarIssue(number) {
+// opener `/issues` uses. The identity arrives as an ARGUMENT — the one the row
+// was built from — so a row the host retained across a checkout change opens
+// the repository it was read from, never the one the session moved to. This
+// function never reads the current snapshot: the checkout root is still
+// resolved here only for the child's cwd (the `-R` argument decides the
+// repository), and an absent or empty identity falls through to the opener's
+// own refusal instead of guessing one. The module already deferred the call off
+// the paint path, so nothing is deferred twice here; the returned promise never
+// rejects.
+function openIssuesSidebarIssue(number, identity) {
   const ctx = issuesSidebarCtx;
   const cwd = toolCwd(ctx);
   const hostTui = ctx && ctx.ui ? ctx.ui : null;
-  const snapshot = issuesSidebarHandle && typeof issuesSidebarHandle.snapshot === "function"
-    ? issuesSidebarHandle.snapshot()
-    : null;
-  const identity = snapshot && typeof snapshot.identity === "string" && snapshot.identity.length > 0
-    ? snapshot.identity
-    : null;
+  const pinned = typeof identity === "string" && identity.length > 0 ? identity : null;
   return Promise.resolve()
     .then(() => oddCheckoutRootAsync(cwd))
     .then((root) => {
       if (!root) return { ok: false, error: notGitRepositoryLine(cwd) };
-      return issuesOpenInBrowser(hostTui, root, number, identity);
+      return issuesOpenInBrowser(hostTui, root, number, pinned);
     })
     .catch((err) => ({ ok: false, error: issuesSidebarError(err, "cannot open the issue in the browser") }));
 }
@@ -7170,7 +7178,7 @@ function mountIssuesSidebar(pi, api) {
   try {
     handle = factory.createIssuesSection({
       load: () => loadIssuesSidebar(),
-      open: (number) => openIssuesSidebarIssue(number),
+      open: (number, identity) => openIssuesSidebarIssue(number, identity),
       onRefreshed,
     });
   } catch {
@@ -7239,8 +7247,13 @@ function invalidateIssuesSidebar() {
   }
 }
 
-// D3: one eager refresh at `session_start`, fired and forgotten. The TTL on a
-// drawn frame is the only other refresh; there is no polling timer.
+// D3: one eager refresh at `session_start`, fired and forgotten. There are two
+// other triggers and no more: the TTL on a drawn frame, and the session's own
+// activity (`before_agent_start`, `turn_end`) behind the 30 s floor. A frame
+// only exists when the host has a reason to produce one, so the TTL alone left
+// an in-use session stale for as long as it took the human to type; the activity
+// trigger is that gap, while an idle session still makes no call, starts no
+// timer and is never polled.
 function refreshIssuesSidebar() {
   const handle = issuesSidebarHandle;
   if (!handle || typeof handle.refresh !== "function") return;
@@ -7249,6 +7262,20 @@ function refreshIssuesSidebar() {
     if (pending && typeof pending.catch === "function") pending.catch(() => {});
   } catch {
     // A failed eager read never breaks startup; the TTL retries.
+  }
+}
+
+// S3 (activity floor): the session's own events ask the section for a read, and
+// the section itself decides whether it is due — a fresher snapshot, a read in
+// flight and a disposed section all start nothing. Best effort like its
+// neighbours: a throwing seam never breaks the hook that fired it.
+function refreshIssuesSidebarIfStale() {
+  const handle = issuesSidebarHandle;
+  if (!handle || typeof handle.refreshIfStale !== "function") return;
+  try {
+    handle.refreshIfStale(ISSUES_SIDEBAR_ACTIVITY_FLOOR_MS);
+  } catch {
+    // A failed activity read never breaks the session; the next one retries.
   }
 }
 
@@ -7292,10 +7319,18 @@ export default function (pi) {
     await checkIssuesGate(pi, ctx);
   });
   // A queued warp is session state: shutdown clears its record and its timer so
-  // nothing outlives the session that asked for the move.
+  // nothing outlives the session that asked for the move. S6 (issues-sidebar):
+  // a session that ends takes its rail with it. The snapshot is dropped, so a
+  // frame drawn afterwards shows the loading row instead of the ended session's
+  // rows, the latest-wins token moves on, so a read still in flight lands
+  // nowhere and never repaints a torn-down host, and the remembered context is
+  // cleared, so a frame drawn after shutdown can never read with a dead
+  // session's cwd.
   pi.on("session_shutdown", (event, ctx) => {
     forgetPendingWarp(ctx);
     forgetInFlightWarpTools();
+    invalidateIssuesSidebar();
+    issuesSidebarCtx = null;
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,
   // so startup work still in flight drops instead of writing into the session
@@ -7332,6 +7367,13 @@ export default function (pi) {
   // handler may await before that decision: `ctx.abort()` fires inside the call
   // below, in the same synchronous stretch as the host's `turn_end`.
   pi.on("turn_end", async (event, ctx) => {
+    // S3 (issues-sidebar): the session's own activity is what keeps the rail
+    // current, because the host produces no frame on an idle session. The
+    // context is remembered FIRST: `/reload` fires no `session_start`, so the
+    // next activity is what re-binds the section's reads to the checkout this
+    // session actually runs in instead of whatever cwd the host process has.
+    rememberIssuesSidebarSession(ctx);
+    refreshIssuesSidebarIfStale();
     try {
       const lib = libRequire("worktree-warp-busy.js");
       if (!lib || typeof lib.pendingWarpTurnBoundary !== "function") return;
@@ -7368,7 +7410,13 @@ export default function (pi) {
   });
   // S7: the ODD worktree rules ride the prompt options, appended after the
   // harness's own text. Sync mutation, so the host reads the final string.
-  pi.on("before_agent_start", (event) => {
+  pi.on("before_agent_start", (event, ctx) => {
+    // S3 (issues-sidebar): the same activity trigger as the turn boundary, with
+    // the same ordering — remember the context, then ask for a read behind the
+    // floor. This is the `/reload` recovery: a reload registers no session
+    // context at all, so the next activity adopts the one the session runs in.
+    rememberIssuesSidebarSession(ctx);
+    refreshIssuesSidebarIfStale();
     try {
       libRequire("odd-worktrees-prompt.js").appendOddWorktreesSection(event);
     } catch {

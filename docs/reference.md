@@ -832,8 +832,9 @@ a worktree lives and that the directory is the ODD it serves, to call
 ODD's worktree when it has one, `worktree_create` it when it has none), to carry the
 current checkout's pending changes that belong to that work with `copy_changes`, that an
 ODD is an area of work with one worktree, to delegate agents in parallel unless they
-would edit the same files, and that after the merge the branch is kept and the checkout
-removed unless a live session stands in it. Moving the session stays the human's.
+would edit the same files, and that after the merge the default branch is updated, then the
+checkout is removed and its branch kept, unless a live session stands in it. Moving the
+session stays the human's.
 
 It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other

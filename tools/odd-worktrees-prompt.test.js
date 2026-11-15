@@ -182,9 +182,9 @@ describe('the section states the worktree policy', () => {
     assert.match(text, /Delegate agents in parallel, on the same or different worktrees, unless they would edit the same files/, text);
   });
 
-  test('after the merge the branch is kept and the worktree removed, unless a session stands there', () => {
+  test('after the merge the default branch is updated, then the worktree removed and its branch kept, unless a session stands there', () => {
     const text = prose();
-    assert.match(text, /After the merge, keep the branch and remove the worktree, unless a session is standing in that checkout/, text);
+    assert.match(text, /After the merge, update the default branch, then remove the worktree and keep its branch, unless a session is standing in that checkout/, text);
     assert.doesNotMatch(text, /never remove/i);
   });
 

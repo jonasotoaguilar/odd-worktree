@@ -920,7 +920,10 @@ async function executePortedWorktreeCreate(params, ctx) {
 const worktreeCreateTool = defineTool({
   name: "worktree_create",
   label: "Worktree Create",
-  exposure: "codemode",
+  // S1: no `exposure`, so the host's `direct` stands and a bare call resolves.
+  // `codemode` put the tool behind `tools.worktree_create(...)` inside a script
+  // while its sibling `worktree_list` stayed direct, and the prompt names both
+  // bare: the asymmetry is what a bare call reported as "Tool not found".
   description: "Create a Git worktree for this clone at <repo-parent>/<repo-name>-worktrees/<odd>, starting from the base branch (main when it exists). `odd` names the ODD this worktree serves and is REQUIRED: it IS the checkout's directory name. The branch is created with the worktree when it does not exist and checked out when it is free; no command ever passes --force. `copy_changes` carries the uncommitted changes of the checkout the call was made from — not necessarily the canonical main checkout — and that source checkout keeps them.",
   parameters: Type.Object({
     odd: Type.String({ description: "The ODD this worktree serves, and the name of its directory under <repo-name>-worktrees. One path segment (letters, digits, dash, underscore, dot). It need not exist as a file." }),

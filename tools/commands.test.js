@@ -156,6 +156,21 @@ function warpCreateUi(panelAnswer) {
   return ui;
 }
 
+describe('the two agent tools', () => {
+  // S1: the prompt names them bare (`worktree_create`, `worktree_list`), so a bare
+  // call has to resolve. `codemode` exposure hides a tool behind `tools.<name>`
+  // inside a script, which is exactly the "Tool not found" a bare call hit while
+  // its sibling was declared direct.
+  test('both are declared direct, so a bare call resolves', async () => {
+    const { tools } = await loadExtensionWithModule({});
+    for (const name of ['worktree_create', 'worktree_list']) {
+      const tool = tools.get(name);
+      assert.ok(tool, `${name} is registered`);
+      assert.equal(tool.exposure === undefined || tool.exposure === 'direct', true, `${name} declares direct exposure, not ${tool.exposure}`);
+    }
+  });
+});
+
 describe('/warp', () => {
   test('refuses more than one name and says which form to use', async () => {
     notifications.length = 0;

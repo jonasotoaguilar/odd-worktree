@@ -106,10 +106,10 @@ should keep the agent from reaching it.
 
 | ID | Specs | Route | Commit |
 | --- | --- | --- | --- |
-| T1 | S1–S6, S8–S10 | inline parent: `lib/worktree-guard.js`, the pure scanner and decision | `feat(guard): refuse worktree creation and branch work outside a checkout` |
-| T2 | S1, S2, S7, S8, S9 | inline parent: the `tool_call` wiring in the extension, exercised through `tools/fixtures/load-extension.js` | same slice as T1 |
-| T3 | S7 | inline parent: AGENTS.md invariant 20, `docs/reference.md`, README bullet | `docs: state the worktree guards` |
-| T4 | S10 | parent: rule text `lib/odd-prompt/odd-worktrees.md`, the two tool descriptions in the extension, `tools/odd-worktrees-prompt.test.js`. PROPOSED, applied only after the human accepts the wording in the Log (L6) | `docs(prompt): make worktree_list the first step of every ODD` |
+| T1 | S1–S6, S8–S10 | worker `gentle-ai-worker`, parent review and fixes: `lib/worktree-guard.js`, the pure scanner and decision | 6105044 `feat(guard): refuse worktree creation and branch work outside a checkout`, then `fix(guard)` |
+| T2 | S1, S2, S7, S8, S9 | worker: the `tool_call` wiring in the extension, exercised through `tools/fixtures/load-extension.js` | 6105044 |
+| T3 | S7 | inline parent: AGENTS.md invariant 20, `docs/reference.md`, README bullet | 0341965 `docs: state the worktree guards` |
+| T4 | S10 | parent: rule text `lib/odd-prompt/odd-worktrees.md`, the two tool descriptions in the extension, `tools/odd-worktrees-prompt.test.js`. wording accepted by the human over several rounds; the final text is the one in the file, not L6's first draft | bcddd6f `docs(prompt): make worktree_list the first step of every ODD` |
 
 ## Log
 
@@ -169,3 +169,18 @@ already has a worktree is resumed, not created again."
 checked existing checkouts with `git worktree list` through `bash` instead of
 `worktree_list`, the exact behavior S9 and T4 exist to prevent. No duplicate
 resulted (the ODD had no checkout), but the order was wrong.
+
+**L8** (parent, evidence): the independent verifier could not run (its preparer
+rejects a linked worktree: `unsupported repository: ordinary single-root Git
+directory required`, exit 1, zero probes), so the parent attacked `decideBashGuard`
+with 77 command rows. Real defects found and fixed in the `fix(guard)` commit: a
+subshell `(git worktree add)`, `bash -c '…'` and `sh -c '…'` (single-quoted text was
+ignored), a `\`-newline continuation, `/usr/bin/git`, `-bx`/`-cx`, `git branch -f x`,
+`git checkout --detach` alone, `git checkout main && git checkout develop` (only the
+first switch was judged), `git checkout <ref> -- <path>` refused as a switch, and an
+extensionless existing file such as `LICENSE` refused as a ref. The verifier's own
+finding is also fixed: the branch-create refusal lacked "only when it has none"
+(S10). Accepted by L2, not defects: a script, alias or file that runs the command
+inside passes; `echo git worktree add` is refused because the text contains it.
+Risk: item 2 (guards) — independent verification was unavailable, so this
+evidence is the parent's.

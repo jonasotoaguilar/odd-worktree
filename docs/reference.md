@@ -538,9 +538,11 @@ them.
 
 - **Text only.** The guard reads the command string and nothing else: it finds the
   `git` … `worktree` … `add|list` sequence anywhere in it, also after `&&`, `||`, `;`,
-  `|`, a newline or inside `$(…)`, and tolerates git's global options (`-C <dir>`,
-  `--no-pager`). It never opens a script, an alias or a file, so a script that runs
-  `git worktree add` inside passes.
+  `|`, a newline, a subshell, a line continuation, inside `$(…)` or inside a quoted
+  `bash -c '…'`, and tolerates git's global options (`-C <dir>`, `--no-pager`) and a
+  `git` given by path. It never opens a script, an alias or a file, so a script that
+  runs `git worktree add` inside passes. A string that only prints the sequence
+  (`echo git worktree add`) is refused too: what surrounds it never matters.
 - **Principal checkout.** A linked worktree shares the principal's git common dir, so
   its root is never that dir's parent and the branch guards do nothing there. A cwd that
   is not a repository, or an identity that cannot be read, blocks nothing.
@@ -548,9 +550,10 @@ them.
   `origin/HEAD` names, else `init.defaultBranch`, once per checkout. There is no
   `main`/`master` list, and with no resolvable default a switch is not refused.
 - **`checkout <ref>`.** `git switch` never takes a path, so its argument is a ref. For
-  `git checkout`, an argument with a `/` or a `.` is a restore only when that path
-  exists in the cwd; `feat/x` and `origin/main` are refs. `git checkout -- <path>` is
-  always a restore.
+  `git checkout`, an argument is a restore only when that path exists in the cwd, which
+  is how Git settles the ambiguity; `feat/x`, `origin/main` and a bare `develop` are refs.
+  `git checkout <ref> -- <path>` and `git checkout -- <path>` are always restores. Every
+  segment of a compound command counts, so an allowed switch never hides a later one.
 - **Everything else passes**: `git status`, `git branch` alone or with an option,
   `git restore`, `git worktree remove|prune|move`, and every tool but `bash`.
 - No switch, option or variable turns them off.

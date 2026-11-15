@@ -25,7 +25,7 @@ const { loadExtension } = require('./fixtures/load-extension.js');
 // The four refusals of S10, written out: a reworded sentence fails here.
 const WORKTREE_ADD_REFUSAL = '`git worktree add` did not run: call `worktree_list` first to see whether the ODD already has a checkout, then call `worktree_create` only when it has none.';
 const WORKTREE_LIST_REFUSAL = '`git worktree list` did not run: call `worktree_list` to see whether the ODD already has a checkout, and pass `all: true` to include the worktrees Git knows outside `<repo-name>-worktrees`, then call `worktree_create` only when it has none.';
-const BRANCH_CREATE_REFUSAL = 'The branch-creating command did not run: call `worktree_list` first to see whether the ODD already has a checkout, then create the branch there with `worktree_create` and work in it, because a branch is created inside a worktree, not in the principal checkout.';
+const BRANCH_CREATE_REFUSAL = 'The branch-creating command did not run: call `worktree_list` first to see whether the ODD already has a checkout, then call `worktree_create` only when it has none and work in that checkout, because a branch is created with the worktree, not in the principal checkout.';
 const BRANCH_SWITCH_REFUSAL = 'The branch-switching command did not run: call `worktree_list` first to see whether the ODD already has a checkout, then work in that checkout, creating it with `worktree_create` only when the ODD has none, because the principal checkout stays on its default branch.';
 
 const REFUSALS = [WORKTREE_ADD_REFUSAL, WORKTREE_LIST_REFUSAL, BRANCH_CREATE_REFUSAL, BRANCH_SWITCH_REFUSAL];
@@ -41,7 +41,7 @@ const SHA_REF = '4f3a2b1c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a';
 
 // The paths a `git checkout <path>` restore may name: the seam answers for these
 // and for nothing else, so `feat/x` is a branch and `src/app.ts` a file.
-const EXISTING_PATHS = ['README.md', 'src/app.ts', './src'];
+const EXISTING_PATHS = ['README.md', 'src/app.ts', './src', 'LICENSE', '.'];
 
 // A harness over the module's one entry point: both seams are fakes, and each call
 // counts its reads, so "the default branch is resolved lazily" is observable.
@@ -290,6 +290,70 @@ describe('S4: a slash-named ref is a branch, not a path', () => {
   test('without the path seam every argument is a ref', () => {
     const { run } = harness({ paths: [] });
     assert.deepEqual(run('git checkout src/app.ts'), { block: true, reason: BRANCH_SWITCH_REFUSAL });
+  });
+});
+
+describe('S1 and S9: the sequence is found wherever the text puts it', () => {
+  test('a subshell, a quoted shell command and a line continuation still refuse', () => {
+    for (const verb of ['add ../odd-probe', 'list']) {
+      const reason = verb.startsWith('add') ? WORKTREE_ADD_REFUSAL : WORKTREE_LIST_REFUSAL;
+      for (const command of [
+        `(git worktree ${verb})`,
+        `bash -c 'git worktree ${verb}'`,
+        `sh -c "git worktree ${verb}"`,
+        `git \\\n worktree ${verb}`,
+        `/usr/bin/git worktree ${verb}`,
+        `env git worktree ${verb}`,
+        `echo x | xargs git worktree ${verb}`,
+      ]) {
+        const { run } = harness();
+        assert.deepEqual(run(command, { cwd: '/anywhere' }), { block: true, reason }, command);
+      }
+    }
+  });
+});
+
+describe('S3 and S4: attached flags, compounds and restores from a ref', () => {
+  test('an attached branch name, a forced create and a bare detach are what they are', () => {
+    for (const [command, reason] of [
+      ['git checkout -bx', BRANCH_CREATE_REFUSAL],
+      ['git checkout -Bx', BRANCH_CREATE_REFUSAL],
+      ['git switch -cx', BRANCH_CREATE_REFUSAL],
+      ['git switch --create x', BRANCH_CREATE_REFUSAL],
+      ['git branch -f x', BRANCH_CREATE_REFUSAL],
+      ['git branch --track x origin/x', BRANCH_CREATE_REFUSAL],
+      ['git checkout --detach', BRANCH_SWITCH_REFUSAL],
+    ]) {
+      const { run } = harness();
+      assert.deepEqual(run(command), { block: true, reason }, command);
+    }
+  });
+
+  test('an allowed switch never hides a later forbidden one', () => {
+    for (const command of [
+      'git checkout main && git checkout develop',
+      'git switch main; git switch feat/x',
+      'git checkout main\ngit checkout develop',
+    ]) {
+      const { run } = harness();
+      assert.deepEqual(run(command), { block: true, reason: BRANCH_SWITCH_REFUSAL }, command);
+    }
+  });
+
+  test('a restore from a ref, or of an extensionless file, switches nothing', () => {
+    for (const command of [
+      'git checkout HEAD -- .',
+      'git checkout develop -- src/app.ts',
+      'git checkout main -- README.md',
+      'git checkout LICENSE',
+      'git checkout .',
+      'git branch -c a b',
+      'git branch -m a b',
+      'git branch --set-upstream-to=origin/main',
+    ]) {
+      const { run } = harness();
+      assert.deepEqual(run(command), { block: false }, command);
+    }
   });
 });
 

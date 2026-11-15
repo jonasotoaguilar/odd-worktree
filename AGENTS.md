@@ -1,7 +1,8 @@
 # pi-odd-worktree — Agent Guide
 
 Read this before changing anything. It is the contract for this repository: one
-Pi extension, two agent tools, three panels, no configuration surface.
+Pi extension, two agent tools, three panels, one preference, no other
+configuration surface.
 
 ## Purpose
 
@@ -11,7 +12,9 @@ Pi extension, two agent tools, three panels, no configuration surface.
   start its setup) and `worktree_list` (read-only listing);
 - three panels — `/warp` (move the session between checkouts, and remove one),
   `/odd-list` (read this checkout's `odd/tasks/*.md`), `/issues` (read and, when
-  permitted, edit this checkout's GitHub issues).
+  permitted, edit this checkout's GitHub issues);
+- one preference — `/card:bash` (draw a `bash` tool call as this package's
+  activity card, the default, or leave it to the host's own drawing).
 
 Deleting a checkout and moving the session are human actions only: they happen
 through `/warp` (its `ctrl+d`, its selector, a typed name, a queued handoff), and
@@ -23,7 +26,7 @@ its presence records.
 
 | Path | Responsibility |
 | --- | --- |
-| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the three commands, the two tools, the `worktree-warp` message renderer, and the `session_start` / `session_shutdown` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
+| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the four commands, the two tools, the `worktree-warp` message renderer, and the `session_start` / `session_shutdown` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
 | `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the canonical target path `<repo-parent>/<repo-name>-worktrees/<slug>` and its helpers, and the async argv runner. |
 | `lib/worktree-registry.js` | The one ownership rule, with no file: a checkout this package created is a directory under `<repo-parent>/<repo-name>-worktrees`, so the path decides. Partitions Git's listing into ours and outside, and parses `git worktree list --porcelain` for the create path. |
 | `lib/worktree-create.js` | `worktree_create`'s core: request validation, base resolution, the ODD-named destination, the refusals sentence for sentence, plan execution and the fixed output lines. |
@@ -40,6 +43,11 @@ its presence records.
 | `lib/checkout-facts.js` | The facts one checkout row shows in the selector. |
 | `lib/worktree-card.js` | The `worktree-warp` message renderer (the moved/queued card), composed on the card substrate like the tool cards. |
 | `lib/card-style.js` | The one style reader: the live process-wide slot Gentle Shell publishes, then the strict `<home>/card-style.json`, then `float`. It reports the source and the reason it fell back, caches only the document branch, and is re-read on `session_start`. |
+| `lib/card-bash-mode.js` | The one bash-card mode reader and writer: the live process-wide slot this package's toggle sets, then the strict `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1","mode":"own"|"default"}`), then `own`. Same resolution order and reasons as `lib/card-style.js`; the writer is atomic, owner-only, document-first and never rewrites a document it cannot parse. |
+| `lib/bash-activity.js` | The classifier the bash card heads with: the one quote-aware segmenter, the eight named families and the mark and theme role each wears, and the package's own conservatism — a segment it cannot name leaves the call unnamed, which is what the generic `$ bash` heading is. |
+| `lib/bash-destructive.js` | The destructive family's evidence: the segment that names a deleting program, and the whole command whose pipe or heredoc feeds a database client its statements. Evidence only — no permission, guard or execution decision may read it. |
+| `lib/bash-card.js` | The bash activity card on the card substrate: the heading identity, the collapsed detail and its three-row output tail, the expanded whole command and whole output, the running row, the rail and the elapsed. Its slots re-read the mode on every paint. |
+| `lib/bash-card-resolver.js` | The seam: one resolver registered through the host's `registerToolRenderer`, this card for every bash call while the mode is `own`, the host's own drawing while it is `default`, and every other row forwarded exactly as the chain resolved it. |
 | `lib/shell-card.js`, `lib/worktree-cards.js` | The card substrate (rounded frame, palette, tone, elapsed) and the two tools' call/result card factory built on it. |
 | `lib/warp-*.js` | The panel: selector and extended list (`warp-selector-view.js`), create wizard (`warp-create-panel.js`, `warp-create-picker.js`), delete confirmation (`warp-delete-confirm.js`). |
 | `lib/odd-*.js` | `odd-docs.js` (document discovery and ordering), `odd-view.js` (two-pane reader), `odd-markdown.js` (the shared markdown renderer). |
@@ -81,16 +89,29 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
 2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
    invariants 18 and 19 allow.** No customize command, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
-   `herdr-gentle:` command name. CodeGraph adds no command and no model-facing tool:
-   no `/codegraph-*` command, no tool named `codegraph`, no override of another
-   extension's tool. `tools/package-surface.test.js` asserts the loaded surface, the
-   one-line registration in the extension, the closed list of `lib/codegraph-*`
-   modules and what each may do.
-3. **The shipped surface is exactly three commands and two tools.** `/warp`,
-   `/odd-list`, `/issues`; `worktree_create`, `worktree_list`. No agent surface
-   moves the session or removes a checkout: `/warp` moves the session (its
-   `ctrl+d`, the selector, a typed name, a queued handoff) and its `ctrl+d`
-   removes a checkout. Each keeps its declared name and label.
+   `herdr-gentle:` command name. The ONE preference this package owns is the bash
+   card mode (invariant 3): no other setting is read, written or offered. CodeGraph
+   adds no command and no model-facing tool: no `/codegraph-*` command, no tool
+   named `codegraph`, no override of another extension's tool.
+   `tools/package-surface.test.js` asserts the loaded surface, the one-line
+   registration in the extension, the closed list of `lib/codegraph-*` modules and
+   what each may do.
+3. **The shipped surface is exactly four commands and two tools.** `/warp`,
+   `/odd-list`, `/issues`, `/card:bash`; `worktree_create`, `worktree_list`. No
+   agent surface moves the session or removes a checkout: `/warp` moves the
+   session (its `ctrl+d`, the selector, a typed name, a queued handoff) and its
+   `ctrl+d` removes a checkout. Each keeps its declared name and label.
+
+   `/card:bash` is the ONE preference this package owns: it flips between `own`
+   (this package's activity card, the default) and `default` (the host's own bash
+   drawing), reports the new state in one line, and persists it in the strict
+   document `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1",
+   "mode":"own"|"default"}` and nothing else), written only by
+   `lib/card-bash-mode.js` — atomically, owner-only, document first and slot second,
+   and never over a document it cannot parse. `<home>` is the same one
+   `lib/card-style.js` resolves (`GENTLE_PI_CONFIG_HOME` →
+   `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`). There is no second setting and
+   no settings file.
 4. **Deletion refuses on a live session.** The only front that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
    before the pending-change question and again immediately before removal. This
@@ -320,6 +341,27 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     `worktree_create` is not involved: it already starts CodeGraph for its checkout.
     Nothing awaits an index, a daemon or the configuration on the host's path, and
     every child is a fixed argv with a bounded timeout (invariant 9).
+
+20. **The bash card only draws, and it draws what the classifier names.**
+    `lib/bash-card-resolver.js` registers exactly one resolver through the host's
+    `registerToolRenderer` hook, and chooses renderers for the `bash` tool alone:
+    every other row is handed back exactly as the chain resolved it, and a host
+    without that hook, or without a usable measurement seam, keeps drawing its own
+    bash rows. While `/card:bash` is `own` every bash call is this card's
+    (`lib/bash-card.js`), a `codegraph …` command included; while it is `default`
+    the resolver steps aside and the host draws the row. Nothing here executes,
+    spawns, guards, intercepts or shadows a tool — it is drawing only, and the
+    destructive evidence of `lib/bash-destructive.js` is presentation: no
+    permission, guard or execution decision may read it. The heading's identity is
+    the classifier's (`lib/bash-activity.js`): a named family's mark and word, or
+    the generic `$ bash` when any segment names nothing, and it is never invented
+    at paint time. The mode is read when a row is created and again on every paint
+    (the card builds its rows inside `render(width)`), so the toggle repaints rows
+    this card already drew, while a row created during `default` stays the host's
+    for its lifetime. The CodeGraph card is registered BEFORE this one on purpose
+    (invariant 19): it claims its own `codegraph …` rows with its richer body and
+    this card's slots are never asked for them; without the CLI no CodeGraph card
+    exists, so those rows are drawn here with the `codegraph` identity.
 
 ## Commits and pull requests
 

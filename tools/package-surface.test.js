@@ -63,21 +63,57 @@ describe('manifest', () => {
     // The issue reader, preview formatter and view are the migrated units (T2
     // S1,S3): the per-tab cache is still gone, but the `gh` client, the
     // formatter and the issues view `/issues` mounts are shipped, so their
-    // presence is asserted rather than forbidden.
-    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js']) {
+    // presence is asserted rather than forbidden. The three bash card modules
+    // are the shipped `/card:bash` drawing (T2/T4): a classifier, the card and
+    // its resolver, and nothing else.
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-card.js', 'bash-card-resolver.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
   });
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd-list, /issues and the two worktree tools', async () => {
+  test('registers /warp, /odd-list, /issues, /card:bash and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['issues', 'odd-list', 'warp'], 'the command list is exactly the three panels');
+    assert.deepEqual(registered, ['card:bash', 'issues', 'odd-list', 'warp'], 'the command list is exactly the three panels and the card toggle');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
+  });
+
+  // S1/S7: the toggle is the ONE preference this package owns, and it is a
+  // preference with a document in the Pi home — not a configuration surface.
+  // Everything the invariants still forbid stays forbidden.
+  test('the one preference this package writes is the bash card mode', async () => {
+    const source = stubbedSource();
+    assert.ok(source.includes('pi.registerCommand("card:bash"'), 'the toggle is the fourth command');
+    assert.ok(source.includes('function registerCardBashCommand'), 'its registration is a named step');
+    assert.ok(source.includes('libRequire("card-bash-mode.js")'), 'the mode document has one reader/writer');
+    const { commands } = await loadExtension({});
+    for (const gone of ['card-style', 'card-bash', 'customize', 'worktree-mode']) {
+      assert.equal(commands.has(gone), false, `no /${gone} command`);
+    }
+  });
+
+  test('the bash activity card registers through one host hook, next to the CodeGraph card (T4)', async () => {
+    // S2/S5: one call, one line, through the host's `registerToolRenderer`. Nothing is
+    // registered as a tool or a command: the card only chooses how a `bash` row is drawn.
+    const source = stubbedSource();
+    const calls = source
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.includes('registerBashCard('));
+    assert.deepEqual(
+      calls,
+      ['libRequire("bash-card-resolver.js").registerBashCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });'],
+      'the bash card is wired through exactly one call',
+    );
+    const { commands, tools } = await loadExtension({});
+    for (const gone of ['bash-card', 'card-bash', 'bash']) {
+      assert.equal(commands.has(gone), false, `the card adds no /${gone} command`);
+      assert.equal(tools.has(gone), false, `the card adds no ${gone} tool`);
+    }
   });
 
   test('every tool keeps its declared name and description', async () => {
@@ -330,15 +366,15 @@ describe('the extension loads its lib modules once per load', () => {
 // which one repainted and which one expanded. `ctrl+o`, the host's own
 // session-wide flag, still expands every card and is never written by a click.
 const probeMetrics = {
-  visibleWidth: (value) => [...value.replace(/\x1b\[[0-9;]*m/g, '')].length,
+  visibleWidth: (value) => [...value.replace(/\u001B\[[0-9;]*m/g, '')].length,
   truncateToWidth: (value, width, ellipsis = '') => {
-    const text = value.replace(/\x1b\[[0-9;]*m/g, '');
+    const text = value.replace(/\u001B\[[0-9;]*m/g, '');
     if (width <= 0) return '';
     if ([...text].length <= width) return value;
     return `${[...text].slice(0, Math.max(0, width - [...String(ellipsis ?? '')].length)).join('')}${String(ellipsis ?? '')}`;
   },
   wrapTextWithAnsi: (value, width) => {
-    const text = value.replace(/\x1b\[[0-9;]*m/g, '');
+    const text = value.replace(/\u001B\[[0-9;]*m/g, '');
     if (width <= 0) return [text];
     const rows = [];
     const chars = [...text];

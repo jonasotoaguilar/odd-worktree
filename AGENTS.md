@@ -44,6 +44,10 @@ its presence records.
 | `lib/worktree-card.js` | The `worktree-warp` message renderer (the moved/queued card), composed on the card substrate like the tool cards. |
 | `lib/card-style.js` | The one style reader: the live process-wide slot Gentle Shell publishes, then the strict `<home>/card-style.json`, then `float`. It reports the source and the reason it fell back, caches only the document branch, and is re-read on `session_start`. |
 | `lib/card-bash-mode.js` | The one bash-card mode reader and writer: the live process-wide slot this package's toggle sets, then the strict `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1","mode":"own"|"default"}`), then `own`. Same resolution order and reasons as `lib/card-style.js`; the writer is atomic, owner-only, document-first and never rewrites a document it cannot parse. |
+| `lib/bash-activity.js` | The classifier the bash card heads with: the one quote-aware segmenter, the eight named families and the mark and theme role each wears, and the package's own conservatism — a segment it cannot name leaves the call unnamed, which is what the generic `$ bash` heading is. |
+| `lib/bash-destructive.js` | The destructive family's evidence: the segment that names a deleting program, and the whole command whose pipe or heredoc feeds a database client its statements. Evidence only — no permission, guard or execution decision may read it. |
+| `lib/bash-card.js` | The bash activity card on the card substrate: the heading identity, the collapsed detail and its three-row output tail, the expanded whole command and whole output, the running row, the rail and the elapsed. Its slots re-read the mode on every paint. |
+| `lib/bash-card-resolver.js` | The seam: one resolver registered through the host's `registerToolRenderer`, this card for every bash call while the mode is `own`, the host's own drawing while it is `default`, and every other row forwarded exactly as the chain resolved it. |
 | `lib/shell-card.js`, `lib/worktree-cards.js` | The card substrate (rounded frame, palette, tone, elapsed) and the two tools' call/result card factory built on it. |
 | `lib/warp-*.js` | The panel: selector and extended list (`warp-selector-view.js`), create wizard (`warp-create-panel.js`, `warp-create-picker.js`), delete confirmation (`warp-delete-confirm.js`). |
 | `lib/odd-*.js` | `odd-docs.js` (document discovery and ordering), `odd-view.js` (two-pane reader), `odd-markdown.js` (the shared markdown renderer). |
@@ -337,6 +341,27 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     `worktree_create` is not involved: it already starts CodeGraph for its checkout.
     Nothing awaits an index, a daemon or the configuration on the host's path, and
     every child is a fixed argv with a bounded timeout (invariant 9).
+
+20. **The bash card only draws, and it draws what the classifier names.**
+    `lib/bash-card-resolver.js` registers exactly one resolver through the host's
+    `registerToolRenderer` hook, and chooses renderers for the `bash` tool alone:
+    every other row is handed back exactly as the chain resolved it, and a host
+    without that hook, or without a usable measurement seam, keeps drawing its own
+    bash rows. While `/card:bash` is `own` every bash call is this card's
+    (`lib/bash-card.js`), a `codegraph …` command included; while it is `default`
+    the resolver steps aside and the host draws the row. Nothing here executes,
+    spawns, guards, intercepts or shadows a tool — it is drawing only, and the
+    destructive evidence of `lib/bash-destructive.js` is presentation: no
+    permission, guard or execution decision may read it. The heading's identity is
+    the classifier's (`lib/bash-activity.js`): a named family's mark and word, or
+    the generic `$ bash` when any segment names nothing, and it is never invented
+    at paint time. The mode is read when a row is created and again on every paint
+    (the card builds its rows inside `render(width)`), so the toggle repaints rows
+    this card already drew, while a row created during `default` stays the host's
+    for its lifetime. The CodeGraph card is registered BEFORE this one on purpose
+    (invariant 19): it claims its own `codegraph …` rows with its richer body and
+    this card's slots are never asked for them; without the CLI no CodeGraph card
+    exists, so those rows are drawn here with the `codegraph` identity.
 
 ## Commits and pull requests
 

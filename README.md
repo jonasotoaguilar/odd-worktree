@@ -4,7 +4,7 @@ A Pi extension that gives an agent session worktrees, ODD documents and GitHub i
 
 ## What It Does
 
-Two agent tools and three panels, loaded from one extension entry point. Each ODD feature gets its own checkout beside the clone, and you move between checkouts and read your ODD documents and issues without leaving Pi.
+Two agent tools, three panels and one preference, loaded from one extension entry point. Each ODD feature gets its own checkout beside the clone, and you move between checkouts and read your ODD documents and issues without leaving Pi.
 
 | Surface | Kind | What it does |
 | --- | --- | --- |
@@ -13,8 +13,11 @@ Two agent tools and three panels, loaded from one extension entry point. Each OD
 | `/warp` | panel | Moves this session to another checkout, creates one, and removes one. |
 | `/odd-list` | panel | Reads this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
 | `/issues` | panel | Reads this checkout's GitHub issues and, when your role allows it, edits them. |
+| `/card:bash` | preference | Flips a `bash` tool call between this package's activity card, the default, and the host's own drawing. |
 
 Moving the session and removing a checkout are human actions: only `/warp` does either, and no agent tool can. A checkout has one identity, its ODD: the directory name is the ODD it serves, and `branch` is only the git branch.
+
+`/card:bash` is the one preference the package owns: with no argument it toggles between our activity card (`own`, the default) and the host's own drawing of `bash` (`default`), and remembers the choice. It is also the answer to "why does my bash output look like a card" — turn it off with `/card:bash`. See [the bash card](docs/reference.md#the-bash-card-and-its-toggle).
 
 ## Quick Start
 
@@ -31,7 +34,7 @@ pi install npm:pi-odd-worktree
 
 Inside a Gentle Shell session, use its launcher instead: `gentle-shell install npm:pi-odd-worktree`. From a local clone, `pi install .` installs the working copy.
 
-Expected result: `/warp`, `/odd-list` and `/issues` are available as commands, and the agent is offered `worktree_create` and `worktree_list`.
+Expected result: `/warp`, `/odd-list`, `/issues` and `/card:bash` are available as commands, and the agent is offered `worktree_create` and `worktree_list`.
 
 ## Core Workflow
 
@@ -49,9 +52,10 @@ The full rules of each step, including every refusal, are in [Create, list, move
 - **A warp is queued, never dropped.** While this session's tools, agent tasks or background jobs are still running, `/warp` keeps the request pending and moves when they finish. See [the queued warp](docs/reference.md#a-warp-waits-for-this-sessions-own-tools-agent-tasks-and-background-jobs).
 - **`/issues` pins the repository.** Every read, mutation and browser open is bound to the repository that was loaded, and capabilities fail closed. See [the repository pin](docs/reference.md#issues-pins-the-repository).
 - **Cards follow your shell.** Tool and warp cards use the card style Gentle Shell publishes, and a click expands that card only. See [card style](docs/reference.md#card-style-follows-your-shell).
+- **Bash rows are cards too, and the toggle is yours.** While `/card:bash` is `own` (the default) every `bash` call is drawn as the activity its command names, with that family's mark and word, or the generic `$ bash` when the command names nothing; `default` leaves bash to the host's own drawing. See [the bash card](docs/reference.md#the-bash-card-and-its-toggle).
 - **Two blocks in the system prompt.** `## ODD worktrees` tells the agent how worktrees and ODDs work. `## CodeGraph` tells a session that already holds a CodeGraph tool how to use it, with one text per role. Both are appended after the host's own text, and `ODD_WORKTREE_PROMPT=0` suppresses them. See [the prompt blocks](docs/reference.md#the--odd-worktrees-block-in-the-system-prompt).
 - **CodeGraph stays fresh, only when its CLI is installed.** At session start the package creates or syncs the checkout's index and warms its daemon, and makes sure your global `mcp.json` has the `codegraph` entry (it adds it or fixes only the differing fields and keeps the rest). It also syncs after a compaction, after a native `codegraph init` and after an `edit` or `write`, in the background and without ever blocking you. See [CodeGraph](docs/reference.md#codegraph-index-daemon-and-mcp-entry). Its tool rows are drawn as a card.
-- **Deliberately absent.** No customize panel, no plugin-tools toggles, no companion-app integration and no worktree-to-issue association. There is nothing to configure.
+- **Deliberately absent.** No customize panel, no plugin-tools toggles, no companion-app integration and no worktree-to-issue association. There is nothing to configure beyond the one bash-card preference.
 
 ## Documentation
 

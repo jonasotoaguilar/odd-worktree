@@ -7044,17 +7044,16 @@ function registerIssuesCommand(pi) {
 // that did not move. The save is document-first, slot-second (inside the writer),
 // so a failure never leaves the live session saying something the file does not.
 //
-// Repaint: the command itself does nothing about rows already on screen. The
-// host's row renderer is resolved ONCE, when the row's component is created
-// (`ToolExecutionComponent` keeps the resolved `toolDefinition`), and a command's
-// `ctx.ui` exposes no repaint (`ExtensionUIContext` has no `requestRender` or
-// `invalidate`; those live on the TUI handle a `ctx.ui.custom` factory receives
-// and on a render context). So there is no seam to reuse here, and inventing one —
-// routing a repaint through the session-wide tool-expansion flag, appending a fake
-// entry — would repaint rows without re-deciding how they are drawn. The mode is
-// therefore read when a row is created and on every paint of a card that asks for
-// it; rows already drawn keep the drawing they were built with, and the next bash
-// call — or the next session, which re-renders the transcript — uses the new one.
+// Repaint: the command itself asks nothing of the screen, because the card is what
+// re-decides. The host resolves the renderer once, when a row's component is created
+// (`ToolExecutionComponent` keeps the resolved `toolDefinition`), but the component a
+// renderer RETURNS has its `render(width)` called on every frame — so a card that builds
+// its rows inside that build re-reads the mode while it paints, and the toggle repaints
+// rows already on screen (lib/bash-card.js; odd/tasks/card-bash.md L8). Nothing here
+// routes a repaint through the session-wide tool-expansion flag or appends a fake entry:
+// both would repaint a row without re-deciding how it is drawn. One asymmetry is
+// deliberate: a row created while the mode was `default` stays the host's own row for
+// its lifetime, because its box must never become this package's.
 // ---------------------------------------------------------------------------
 
 /** The state as the report names it. */

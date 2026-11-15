@@ -34,14 +34,17 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   about half a minute behind, while an idle session still makes no network call and starts no timer.
   A HIDDEN section costs nothing either: no read happens before the section has been drawn at least
   once, and the activity refresh only fires when the section was drawn in the last two minutes, so
-  hiding it stops the network entirely and showing it again starts with `loading…`.
+  hiding it lets the network go quiet once that two-minute window lapses, and the retained list is drawn
+  again, stale, on the first frame after showing it, which also schedules its refresh. A COLLAPSED
+  section is not a hidden one: the bridge draws its header through `meta()`, which stamps the draw,
+  so a collapsed section still counts as drawn.
 - **S4 — a row is an issue.** Each row reads `#<number> <title>`. It carries no relation meta — with
   a single source every row would wear the same mark, and marking everything marks nothing — and the
   header's right-aligned text reports the count instead (`N assigned`). ONE marker is left, and it is
   not about the relation: when the issue already has at least one pull request referencing it — one
   or many, the marker is the same — the row's `meta` is the Nerd Font pull-request glyph `\ue726`.
-  That marker is best effort: it comes from ONE extra GraphQL read covering the issues on screen,
-  and if that read fails the rows render without it and the section stays ready — a decoration never
+  That marker travels in the SAME combined read as the list (S9: one request, no second one),
+  so a failed read fails list and markers together: S5 keeps the rows and says stale, a decoration never
   turns the list into an error row. Every issue row is drawn in
   the host's `text` tone, never an accent: a permanent accent reads as a focused row. Rows are
   sorted by `updatedAt` descending, twenty are fetched (`fetchMax: 20`), and the body shows at most
@@ -136,6 +139,22 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 
 ## Log
 
+- **E14 (what the docs pass found the code does NOT do, and what is simply still open):** writing S8
+  against the code refused five sentences of this document. Two were wrong in the spec and are
+  corrected in S3 above: hiding does not invalidate (the old list is drawn again, stale, which is the
+  better behavior) and a hidden section can still fire one activity read until the 120 s window
+  lapses. Three are not defects but work that has not happened, and they are NOT satisfied yet by
+  design: **T12** (a row click opens the panel on that issue instead of the browser) waits on the
+  panel ODD accepting `/issues <number>`; **S9's consumer half** (the panel opening from this
+  cache) waits on that ODD's T4; and the header reports what the cache HOLDS, which the 100-row cap
+  can truncate (`N+` says so). Until those land the row click is the browser open and the cache has
+  no reader.
+- **E13 (what T14 made stale in the specs above):** S4's marker paragraph used to describe a second,
+  best-effort read whose failure left the list untouched; S9 replaced it with one combined request,
+  so a failure now takes the list and its markers together and lands in S5's stale state. S6's
+  mention of `gh.listIssues` is likewise superseded: since T8 the rail reads the assigned bucket and
+  since T14 it reads all three through `listRelatedIssues`. The code is the authority; any doc that
+  still says "best effort" about the marker is wrong.
 - **E12 (T14, a name the repo had already retired):** the cache module was specified as
   `lib/issues-cache.js`, and the worker stopped because `tools/package-surface.test.js` lists that
   exact name among the modules REMOVED on purpose (its own comment: "the per-tab cache is still

@@ -23,7 +23,7 @@ its presence records.
 
 | Path | Responsibility |
 | --- | --- |
-| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the three commands, the two tools, the `worktree-warp` message renderer, the optional `ISSUES` rail section, and the `session_start` / `session_shutdown` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
+| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the three commands, the two tools, the `worktree-warp` message renderer, the optional `ISSUES` rail section with its one missing-bridge warning, and the `session_start` / `session_shutdown` / `turn_end` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
 | `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the canonical target path `<repo-parent>/<repo-name>-worktrees/<slug>` and its helpers, and the async argv runner. |
 | `lib/worktree-registry.js` | The one ownership rule, with no file: a checkout this package created is a directory under `<repo-parent>/<repo-name>-worktrees`, so the path decides. Partitions Git's listing into ours and outside, and parses `git worktree list --porcelain` for the create path. |
 | `lib/worktree-create.js` | `worktree_create`'s core: request validation, base resolution, the ODD-named destination, the refusals sentence for sentence, plan execution and the fixed output lines. |
@@ -54,7 +54,8 @@ its presence records.
 | `lib/codegraph-card.js`, `lib/codegraph-card-preview.js` | The CodeGraph tool card for the native tool, the MCP explore tool and a `bash` call that runs CodeGraph, on the card substrate. |
 | `lib/gh-issues.js` | The `gh` client: checkout repository scope, identity pinning, issue pages, details, labels, assignees, comments, close, and the `viewerPermission` → capability mapping. |
 | `lib/issues-view.js`, `lib/issue-preview.js` | The pure `/issues` view and its preview formatter. |
-| `lib/issues-section.js` | The checkout's assigned issues as a rail section: the `#<number> <title>` row, the seven-row body, its one `and N more issues` row that opens `/issues`, the one in-memory snapshot and its TTL. It schedules refreshes and never waits on a child process; only a bridge that published its API can show it. |
+| `lib/issues-section.js` | The checkout's assigned issues as a rail section: the `#<number> <title>` row and its one pull-request mark, the seven-row body, its one `and N more issues` row that sends `/issues`, the one in-memory snapshot, its TTL, and the drawn-frame stamp the session's own activity read is gated on. A failed refresh keeps the rows and marks them `stale`. It schedules refreshes and never waits on a child process; only a bridge that published its API can show it. |
+| `lib/related-issues-cache.js` | The in-process cache of the three scoped issue views (`mine`, `assigned`, `involved`) that one combined read answers, keyed by repository identity: the 100-then-20 read plan, the merge by issue number, the count invariant that forces a full re-read, and the ten-minute full re-read. Memory only, and it holds the two views no surface draws yet. |
 | `lib/tui-paint.js`, `lib/view-layout.js`, `lib/preview-scroll-keys.js`, `lib/clipboard.js`, `lib/open-external.js` | Shared presentation helpers: the one palette, window/layout maths, the one preview scroll decision, clipboard, external opener. |
 | `lib/session-auto-name.js`, `lib/session-worktree-register.js` | Session bookkeeping: naming a session after an ODD write, and the host's session-worktree registry entry. |
 | `tools/*.test.js`, `tools/fixtures/` | The Node test suites and their fixtures (`load-extension.js`, `gh-*.json`). |
@@ -102,11 +103,16 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    gate, or the one `gentle-shell-bridge:ready` announcement when the bridge
    publishes later. There is NO dependency on that package and no import of it
    anywhere in this repo. Without a bridge the section never appears at all:
-   nothing is registered, nothing is notified, and no other surface changes. A host
+   nothing is registered and no other surface changes. A host
    that HAS the bridge but draws no rail registers the section and never paints it,
    which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the bridge, not by this package (invariant 2 keeps the customize
-   surface out of it).
+   surface out of it). A host without the bridge otherwise hears nothing about it;
+   the one warning it can get is discoverability — once per process, from a primary
+   session only (`GENTLE_PI_AGENTS_CHILD` is not `1`), naming
+   `pi install npm:gentle-shell-bridge`, timed after the announcement window because
+   an empty slot at `session_start` may still be a bridge that has not loaded, and
+   immediate on a host with no event bus to announce on.
 4. **Deletion refuses on a live session.** The only front that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
    before the pending-change question and again immediately before removal. This

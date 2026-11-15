@@ -13,7 +13,7 @@ Two agent tools, three panels and one sidebar section, loaded from one extension
 | `/warp` | panel | Moves this session to another checkout, creates one, and removes one. |
 | `/odd-list` | panel | Reads this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
 | `/issues` | panel | Reads this checkout's GitHub issues and, when your role allows it, edits them. |
-| `ISSUES` rail section | sidebar section | Lists the open issues of this checkout's repository that are assigned to you; a click opens one in your browser. Needs gentle-shell-bridge. |
+| `ISSUES` rail section | sidebar section | Lists the open issues of this checkout's repository assigned to you, seven at a time plus a count of the rest; a click opens one in your browser and the overflow row opens `/issues`. Needs `gh` and gentle-shell-bridge with its rail. |
 
 Moving the session and removing a checkout are human actions: only `/warp` does either, and no agent tool can. A checkout has one identity, its ODD: the directory name is the ODD it serves, and `branch` is only the git branch.
 
@@ -25,7 +25,7 @@ Moving the session and removing a checkout are human actions: only `/warp` does 
 | Node.js >= 18 and `git` | Every repository operation is a `git` child process. |
 | `gh`, authenticated (`gh auth login`) | `/issues` and the `ISSUES` rail section. Without it the command stays registered and says what is missing, and the section shows its error row. |
 | Gentle Shell (recommended) | Supplies the session records the deletion guard reads to see other sessions. |
-| Gentle Shell with `gentle-shell-bridge` and its rail | The `ISSUES` rail section only. Without the bridge nothing is registered and no other surface changes; the package has no dependency on it. |
+| Gentle Shell with `gentle-shell-bridge` and its rail | The `ISSUES` rail section only. Without the bridge nothing is registered and no other surface changes, apart from one warning in a primary session naming `pi install npm:gentle-shell-bridge`; the package has no dependency on it. |
 
 ```bash
 pi install npm:pi-odd-worktree
@@ -33,7 +33,7 @@ pi install npm:pi-odd-worktree
 
 Inside a Gentle Shell session, use its launcher instead: `gentle-shell install npm:pi-odd-worktree`. From a local clone, `pi install .` installs the working copy.
 
-Expected result: `/warp`, `/odd-list` and `/issues` are available as commands, the agent is offered `worktree_create` and `worktree_list`, and a Gentle Shell with `gentle-shell-bridge` installed shows an `ISSUES` rail section for this checkout.
+Expected result: `/warp`, `/odd-list` and `/issues` are available as commands, the agent is offered `worktree_create` and `worktree_list`, and a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows an `ISSUES` section for this checkout.
 
 ## Core Workflow
 
@@ -50,7 +50,7 @@ The full rules of each step, including every refusal, are in [Create, list, move
 - **Deleting refuses on a live session.** The guard reads Gentle Shell's presence records, discloses what it could not resolve, and never auto-warps. Removal is `git worktree remove` and the branch is kept. See [the deletion guard](docs/reference.md#the-deletion-guard-and-its-honest-limit).
 - **A warp is queued, never dropped.** While this session's tools, agent tasks or background jobs are still running, `/warp` keeps the request pending and moves when they finish. See [the queued warp](docs/reference.md#a-warp-waits-for-this-sessions-own-tools-agent-tasks-and-background-jobs).
 - **`/issues` pins the repository.** Every read, mutation and browser open is bound to the repository that was loaded, and capabilities fail closed. See [the repository pin](docs/reference.md#issues-pins-the-repository).
-- **The issues rail is checkout-scoped and optional.** When a Gentle Shell has `gentle-shell-bridge` installed, an `ISSUES` rail section lists the open issues of this checkout's repository assigned to you — that one repository, not every issue across every repository you touch — and a click opens one in your browser. A frame never waits on `gh`, and with no bridge the section simply never appears. See [the rail section](docs/reference.md#the-issues-rail-section).
+- **The issues rail is checkout-scoped and optional.** When a Gentle Shell has `gentle-shell-bridge` installed and draws its rail, an `ISSUES` rail section lists the open issues of this checkout's repository assigned to you — that one repository, not every issue across every repository you touch — seven at a time, with `and N more issues` for the rest and a pull-request mark on the issues that already have one. A click opens the issue in your browser; the overflow row opens `/issues`. A frame never waits on `gh`: nothing is read at `session_start`, the rows refresh behind a 30 s floor while the section is being drawn, there is no polling, and a failed refresh keeps the rows and marks them `stale` rather than emptying the list. With no bridge the section simply never appears; the one thing you get is a single warning naming the install command. See [the rail section](docs/reference.md#the-issues-rail-section).
 - **Cards follow your shell.** Tool and warp cards use the card style Gentle Shell publishes, and a click expands that card only. See [card style](docs/reference.md#card-style-follows-your-shell).
 - **Two blocks in the system prompt.** `## ODD worktrees` tells the agent how worktrees and ODDs work. `## CodeGraph` tells a session that already holds a CodeGraph tool how to use it, with one text per role. Both are appended after the host's own text, and `ODD_WORKTREE_PROMPT=0` suppresses them. See [the prompt blocks](docs/reference.md#the--odd-worktrees-block-in-the-system-prompt).
 - **CodeGraph stays fresh, only when its CLI is installed.** At session start the package creates or syncs the checkout's index and warms its daemon, and makes sure your global `mcp.json` has the `codegraph` entry (it adds it or fixes only the differing fields and keeps the rest). It also syncs after a compaction, after a native `codegraph init` and after an `edit` or `write`, in the background and without ever blocking you. See [CodeGraph](docs/reference.md#codegraph-index-daemon-and-mcp-entry). Its tool rows are drawn as a card.

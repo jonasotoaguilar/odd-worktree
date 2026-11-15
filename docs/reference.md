@@ -261,49 +261,102 @@ number on screen can never be sent to another repository.
 
 When Gentle Shell draws its rail, a section titled `ISSUES` lists this checkout's
 related issues: the open issues of the checkout's repository ASSIGNED to you
-(`assignee:@me`) and nothing else. They are sorted by last update, twenty are read
-(`fetchMax: 20`), and at most seven are drawn; when more exist, an eighth and last
-row reads `and N more issues` (`N+` when the read reached its fetch bound) and
-clicking it opens the `/issues` panel. The section's own meta reports what it read:
-`<n> assigned`.
+(`assignee:@me`) and nothing else. Rows are sorted by last update, seven are
+drawn, and when the read answered with more, an eighth and last dim row reads
+`and N more issues` (`N+` when the read was truncated at its cap, because the real
+total is larger). The section's own meta reports what it holds: `<n> assigned`,
+and `<n> assigned · stale` while the rows on screen are the last good ones.
 
-- **A row is an issue.** It reads `#<number> <title>` with no right-hand meta: with
+- **One request per refresh.** A refresh is a single `gh api graphql` request with
+  three aliased searches — `author:@me`, `assignee:@me` and
+  `involves:@me -author:@me`, each open and each sorted by last update — and each
+  answers its own `issueCount` and rows. The section draws only the assigned
+  search; the other two are cached (below) for a later consumer.
+- **A row is an issue.** It reads `#<number> <title>` with no relation text: with
   one source every row would wear the same mark, and marking everything marks
-  nothing. Clicking a row opens that issue in the
-  browser with the identity `/issues` proves for a browser open:
-  `gh issue view <n> --web -R <host>/<owner>/<repo>`. The work is deferred off the
-  paint path, runs once per click, and a failure never escapes into the rail.
+  nothing. The one marker a row can carry says something else: when one of the
+  issue's cross-reference events is a pull request (the read inspects the first ten
+  of them), the row wears the Nerd Font pull-request glyph, and a terminal without
+  a Nerd Font draws a box instead. That marker arrives in the same combined request
+  as the rows, so a failed read takes the rows and their markers together and lands
+  in the stale state below.
+- **The two clicks differ.** Clicking an issue row opens that issue in the browser
+  with the identity `/issues` proves for a browser open:
+  `gh issue view <n> --web -R <host>/<owner>/<repo>` — the identity the row was
+  built from, so a row still on screen after the session moved to another checkout
+  opens the repository it was read from, never the new one. Clicking the
+  `and N more issues` row sends the `/issues` command to the host instead, and
+  reports that the command was dispatched, never that a panel opened. Both are
+  deferred off the paint path, run once per click, and a failure never escapes into
+  the rail.
 - **It reaches the host only through gentle-shell-bridge.** The section is read
   from that package's published sidebar-section API — the object in the
   `Symbol.for("gentle-shell-bridge/api/v1")` slot, after its schema and version gate
   — or from the one `gentle-shell-bridge:ready` announcement when the bridge
   publishes later. There is no dependency on that package and no import of it. With
-  no bridge the section never appears at all: nothing is registered, nothing is
-  notified, and no other surface changes. A host that has the bridge but draws no
-  rail registers the section and never paints it — that is the bridge's answer to a
-  host without a sidebar, not a failure here. Its
+  no bridge the section never appears at all: nothing is registered and no other
+  surface changes. The one thing you are told is how to get it — a single warning
+  per process, from a primary session only, naming
+  `pi install npm:gentle-shell-bridge`; an empty slot at `session_start` may still
+  be a bridge that has not loaded yet, so the warning waits out the announcement
+  window, and a host with no event bus to announce on is told at once. A host that
+  has the bridge but draws no rail registers the section and never paints it — that
+  is the bridge's answer to a host without a sidebar, not a failure here. Its
   `/gentle:customize` → `Sections` visibility toggle belongs to the bridge, so a
   host without the bridge has neither the section nor the toggle.
 - **A frame never waits on `gh`.** The host calls `lines()` and `meta()` once per
   frame and both return synchronously: they read one in-memory snapshot and only
-  ever schedule the refresh. One refresh runs at `session_start`, a snapshot older
-  than 60 s schedules one deferred refresh while the rail is drawn, and each turn of
-  yours (`before_agent_start`, then `turn_end`) refreshes it again if the snapshot is
-  older than 30 s — because a frame only exists when the host has a reason to
-  produce one, so the rail can never stay stale while you are using the session.
-  There is no polling timer, so an idle session makes no network calls, and a
-  collapsed or hidden section costs nothing. A `/reload` fires no `session_start`;
-  the section re-learns its session on the next turn, so it keeps reading the
-  checkout the session runs in and not the host process's own directory.
+  ever schedule the refresh. Nothing is read at `session_start`; a snapshot older
+  than 60 s schedules exactly one deferred refresh, and only a drawn body frame
+  schedules it at all — the header call never does. Each turn of yours
+  (`before_agent_start`, then `turn_end`) asks for a read behind a 30 s floor, but
+  only while the section was drawn within the last two minutes — because a frame
+  only exists when the host has a reason to produce one, so the rail can never
+  stay stale while you are using the session. A hidden section draws nothing, so
+  nothing stamps it afresh and it starts no timer of its own: once the two-minute
+  window lapses it makes no call at all, while a collapsed section is still drawn
+  — its header is painted, and that stamps the frame — so the activity read
+  applies to it too. There is no polling and no repeating timer; the one
+  deferral is a task scheduled off the paint path. `session_shutdown` and a session
+  that starts in another checkout drop the snapshot, so the rail falls back to
+  `loading…` instead of the previous checkout's rows, and a read still in flight
+  lands nowhere. A `/reload` fires no `session_start`; the section re-learns its
+  session on the next turn, so it keeps reading the checkout the session runs in
+  and not the host process's own directory.
+- **A failed refresh keeps the rows.** Once a list is on screen, a refresh that
+  fails does not replace it: the same rows, in the same order, with the same
+  markers, stay where they are and the header reads `<n> assigned · stale`
+  instead. A transient `gh` stall is therefore a stale list, not an empty one, and
+  the next successful read clears the mark.
 - **Every state is a row, none is a throw.** `loading…` (dim) before the first
   answer, `no open issues` (dim) for an empty result, and one error row naming the
-  failure: a failed `gh` read, or a checkout whose own repository cannot be
-  resolved. The resolution fails closed, exactly as `/issues` reads it — no `gh`
-  call is made without a proven identity.
+  failure — but only while there is nothing to show; after that, a failure is the
+  stale state above. The error row covers a failed `gh` read and a checkout whose
+  own repository cannot be resolved; the resolution fails closed, exactly as
+  `/issues` reads it, and no `gh` call is made without a proven identity. A failing
+  click is recorded instead of thrown, and it never turns the list into an error
+  row.
+- **One cache, in memory, per repository.** The three scoped views live in one
+  in-process cache keyed by the repository identity the read was proven against;
+  nothing is ever written to disk and a session shutdown clears it, so a session
+  that moves between checkouts never shows one repository's rows under another's
+  name. The first read takes up to 100 per view, later reads the newest 20, merged
+  by issue number. A merge cannot see an issue that was closed or unassigned, so
+  each view is held to one invariant: after a merge its cached count must equal the
+  `issueCount` the same answer reported, and a mismatch makes the NEXT read a full
+  one; so does an entry older than ten minutes. A view with more than 100 issues is
+  reported truncated — that is the `N+` in the overflow row — instead of being
+  looped over, and a failed read leaves the cache untouched. The section draws only
+  the assigned view; the other two are held for a later consumer, and nothing reads
+  them yet: `/issues` keeps its own four tabs.
 - **The scope is this checkout's repository, and nothing else moves.** It is the one
   repository the `/issues` reader is pinned to, not every issue across every
   repository you touch. `/issues` itself behaves exactly as before: the section
   neither changes its behavior nor shares its state.
+- **What it needs.** `gh`, authenticated (`gh auth login`); a checkout whose own
+  repository can be proven — a failed proof is the error row and makes no `gh`
+  call; and a Gentle Shell whose `gentle-shell-bridge` published its API and draws
+  a rail.
 
 ## Card style follows your shell
 

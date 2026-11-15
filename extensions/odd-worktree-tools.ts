@@ -1980,9 +1980,9 @@ async function executeWorktreeClose(params, ctx, opts) {
 const worktreeListTool = defineTool({
   name: "worktree_list",
   label: "Worktree List",
-  description: "List this clone's Git worktrees: the main worktree first, then the checkouts this package created under <repo-name>-worktrees (each row is its directory's name, which is the ODD, and its branch). Read-only; it writes nothing. Pass all:true to also show the worktrees Git knows outside that directory.",
+  description: "List this clone's Git worktrees: the main worktree first, then the checkouts this package created under <repo-name>-worktrees (each row is its directory's name, which is the ODD, and its branch). Use it to see whether an ODD already has a worktree. Read-only; it writes nothing.",
   parameters: Type.Object({
-    all: opt(Type.Boolean({ description: "Omitted lists only the checkouts this package created. true also shows the worktrees Git knows outside <repo-name>-worktrees." })),
+    all: opt(Type.Boolean({ description: "Omit it: the default lists the ODD checkouts, which is what finds an ODD's worktree. true also lists the worktrees Git knows outside <repo-name>-worktrees, which belong to no ODD; use it only to look for one of those." })),
   }),
   ...worktreeToolRenderers("worktree_list"),
   async execute(toolCallId, params, signal, onUpdate, ctx) {

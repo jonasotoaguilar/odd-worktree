@@ -1,5 +1,5 @@
 'use strict';
-// T1/T2/T8 (issues-sidebar S1-S7): the rail section and its wiring.
+// T1/T2/T8/T9/T10/T11 (issues-sidebar S1-S7): the rail section and its wiring.
 //
 // Contract under test, through the public surface only:
 // - ONE source (S1): the checkout repository's OPEN issues ASSIGNED to the
@@ -11,6 +11,16 @@
 //   body paints at most SEVEN of them (S4); a read that produced more appends
 //   ONE eighth, dim, clickable `and N more issues` row (`N+` when the read hit
 //   its fetch bound) and a click on it dispatches `/issues`;
+// - ONE extra GraphQL read marks the rows whose issue already has a pull
+//   request (T9): it covers every issue the list returned, aliased i0..iN, and
+//   every failure of it leaves the rows without the marker and the section
+//   ready;
+// - a failed refresh over an on-screen list keeps every row and reports
+//   `<n> assigned · stale` (T10), while a failed first read is still one error
+//   row;
+// - a host with no bridge gets ONE warning per process naming
+//   `pi install npm:gentle-shell-bridge` (T11), primary sessions only, after
+//   the announcement window and never once the bridge announced;
 // - `lines()`/`meta()` are synchronous frames over an in-process snapshot: a
 //   never-settled read still answers, two stale frames schedule ONE refresh,
 //   and `onRefreshed` fires once per landed refresh;
@@ -28,13 +38,16 @@
 //   published object (read from its Symbol slot, never imported): present it
 //   registers one section, absent it subscribes to the ready announcement
 //   once and registers nothing;
-// - at `session_start` the section reads the checkout's own repository ONCE:
+// - the drawn section reads the checkout's own repository ONCE:
 //   `checkoutRepoScope({cwd})` then ONE `gh issue list` search for the assigned
 //   open issues, scoped to that pinned identity, and a failed resolution is the
 //   error row with NO `gh` call;
-// - the session's own activity drives the section (`before_agent_start`,
-//   `turn_end`) behind a 30 s floor, which is what recovers a `/reload` (no
-//   `session_start` fires) and what keeps an idle session free of calls;
+// - a hidden section costs nothing (T13): `session_start` reads nothing at all,
+//   `drawnWithin(window)` is false until `lines()`/`meta()` draws (and false
+//   again after `invalidate()`/`dispose()`), and the session's own activity
+//   (`before_agent_start`, `turn_end`) reads ONLY while it is true — behind the
+//   same 30 s floor, which is what recovers a `/reload` (no `session_start`
+//   fires) and what keeps an idle session free of calls;
 // - `session_shutdown` drops the snapshot and forgets the session context.
 //
 // Every child process is injected: `gh` goes through lib/gh-issues.js
@@ -53,7 +66,20 @@ const { LIB_DIR, loadExtension } = require('./fixtures/load-extension.js');
 const { createIssuesSection } = require('../lib/issues-section.js');
 
 const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+// T11's "one warning per process" lives on a process-wide slot, so a test that
+// expects the warning must not inherit another test's.
+const WARNED_SLOT = Symbol.for('odd-worktree/issues-sidebar/install-warned');
 const IDENTITY = 'github.com/myfork/project';
+
+// The harness may ITSELF run inside an agent child (`GENTLE_PI_AGENTS_CHILD=1`),
+// which is exactly the signal the missing-bridge warning respects, so these tests
+// own it: cleared for the file, restored once at the end.
+const savedChildEnv = process.env.GENTLE_PI_AGENTS_CHILD;
+delete process.env.GENTLE_PI_AGENTS_CHILD;
+after(() => {
+  if (savedChildEnv === undefined) delete process.env.GENTLE_PI_AGENTS_CHILD;
+  else process.env.GENTLE_PI_AGENTS_CHILD = savedChildEnv;
+});
 
 // The lib instance the LAST extension load actually uses (its first libRequire
 // purges this directory once and then reuses the cache), so patching it with
@@ -69,6 +95,7 @@ after(() => {
 
 afterEach(() => {
   delete globalThis[BRIDGE_SLOT];
+  delete globalThis[WARNED_SLOT];
   if (ghIssues) {
     ghIssues.setGhRunner(null);
     ghIssues.setGitRunner(null);
@@ -242,6 +269,67 @@ test('S4: a read that reached its fetch bound writes the overflow count with a +
     'the bound was reached, so the real total is larger than the rows counted here');
   assert.equal(rows[7].tone, 'dim');
   assert.equal(handle.section.meta({}), '20 assigned', 'the header reports the count it read');
+});
+
+// T9 (S4 amended, L8): the ONE marker left on a row is not about the relation:
+// an issue that already has at least one pull request referencing it wears the
+// Nerd Font pull-request glyph, and one without a pull request wears no meta at
+// all. The fact is best effort — it arrives as `hasPullRequest` on the issue
+// entry the read answered with — so it travels through the snapshot too and a
+// decoration never changes a row's tone.
+test('S4 (T9): an issue with a pull request carries the pull-request glyph, one without carries no meta', async () => {
+  const handle = createIssuesSection({
+    load: async () => ({
+      ok: true,
+      identity: IDENTITY,
+      issues: [
+        { ...issue(4, 'Waits for a merge', '2024-02-01T00:00:00Z'), hasPullRequest: true },
+        issue(3, 'Nobody opened a PR', '2024-01-01T00:00:00Z'),
+      ],
+      truncated: false,
+    }),
+    open: () => {},
+    openAll: () => {},
+    schedule: () => {},
+  });
+  await handle.refresh();
+
+  const rows = handle.section.lines({});
+  assert.deepEqual(rows.map((row) => row.label), ['#4 Waits for a merge', '#3 Nobody opened a PR']);
+  assert.equal(rows[0].meta, '\ue726', 'the row whose issue has a pull request wears the glyph');
+  assert.equal('meta' in rows[1], false, 'the row without one carries no meta at all');
+  assert.deepEqual(rows.map((row) => row.tone), ['text', 'text'],
+    'the marker never turns a row into an accent');
+  assert.deepEqual(Object.keys(rows[0]).sort(), ['label', 'meta', 'onClick', 'tone'],
+    'the marker is the row\'s only extra field');
+
+  const snap = handle.snapshot();
+  assert.equal(snap.issues[0].hasPullRequest, true, 'the fact is observable on the snapshot');
+  assert.equal(snap.issues[1].hasPullRequest, false,
+    'an issue the decoration did not answer for reports the fact as false, never undefined');
+  assert.equal(handle.section.meta({}), '2 assigned', 'the marker never changes the count');
+});
+
+test('S4 (T9): only a literal true marks a row — an ambiguous answer marks nothing', async () => {
+  const handle = createIssuesSection({
+    load: async () => ({
+      ok: true,
+      identity: IDENTITY,
+      issues: [
+        { ...issue(6, 'Unknown', '2024-03-01T00:00:00Z'), hasPullRequest: 'yes' },
+        { ...issue(5, 'One PR', '2024-02-01T00:00:00Z'), hasPullRequest: true },
+      ],
+      truncated: false,
+    }),
+    open: () => {},
+    openAll: () => {},
+    schedule: () => {},
+  });
+  await handle.refresh();
+  const rows = handle.section.lines({});
+  assert.equal('meta' in rows[0], false, 'anything but a literal true is no marker');
+  assert.equal(rows[1].meta, '\ue726');
+  assert.equal(handle.snapshot().issues[0].hasPullRequest, false);
 });
 
 test('S3: a frame never waits, two stale frames schedule one refresh, and onRefreshed fires once per landing', async () => {
@@ -617,6 +705,114 @@ test('S3: refreshIfStale reads an absent or aged snapshot and nothing else', asy
   assert.equal(disposedLoads, 1, 'dispose stops the read, not the staleness');
 });
 
+// T10 (S5 amended, L9): a failed refresh over a list that is already on screen
+// is a transient stall (`gh` was killed by its 30 s bound, not an empty
+// repository), so the rows stay exactly as they were and the failure is
+// disclosed instead: `<n> assigned · stale`, `error` recording the reason and
+// `status` a fourth value a caller can tell from `ready`.
+test('S5 (T10): a failed refresh keeps every ready row and reports it stale', async () => {
+  let clock = 1000;
+  let answer = {
+    ok: true,
+    identity: IDENTITY,
+    issues: [
+      { ...issue(2, 'Has a pull request', '2024-02-01T00:00:00Z'), hasPullRequest: true },
+      issue(1, 'Plain', '2024-01-01T00:00:00Z'),
+    ],
+    truncated: false,
+  };
+  const sched = manualSchedule();
+  const handle = createIssuesSection({
+    load: async () => answer,
+    open: () => {},
+    openAll: () => {},
+    schedule: sched.schedule,
+    now: () => clock,
+    ttlMs: 100,
+  });
+
+  await handle.refresh();
+  const ready = handle.section.lines({});
+  const successfulAt = handle.snapshot().at;
+  assert.equal(handle.section.meta({}), '2 assigned');
+  assert.equal(ready[0].meta, '\ue726', 'the marker is part of what is on screen');
+
+  clock += 200;
+  answer = { ok: false, error: 'gh timed out after 30000ms' };
+  await handle.refresh();
+
+  const stale = handle.snapshot();
+  assert.equal(stale.status, 'stale', 'a fourth status tells the caller it is a stale list');
+  assert.equal(stale.error, 'gh timed out after 30000ms', 'the reason is recorded for a caller');
+  assert.equal(stale.at, successfulAt,
+    'the age stays the last SUCCESSFUL read, which is what keeps the TTL retrying');
+  assert.deepEqual(handle.section.lines({}), ready,
+    'the rows stay exactly as they were: same rows, same order, same markers');
+  assert.equal(handle.section.meta({}), '2 assigned · stale', 'the header discloses the stall');
+
+  // A second failure changes nothing about the rows, and a success replaces the
+  // stale list as it always did.
+  clock += 200;
+  await handle.refresh();
+  assert.equal(handle.snapshot().status, 'stale');
+  assert.deepEqual(handle.section.lines({}), ready, 'a repeated failure never drops a row');
+
+  clock += 200;
+  answer = {
+    ok: true,
+    identity: IDENTITY,
+    issues: [issue(3, 'Back again', '2024-04-01T00:00:00Z')],
+    truncated: false,
+  };
+  await handle.refresh();
+  assert.equal(handle.snapshot().status, 'ready', 'the next success clears the stale state');
+  assert.equal(handle.snapshot().error, null);
+  assert.equal(handle.snapshot().at, clock, 'a success moves the age again');
+  assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#3 Back again']);
+  assert.equal(handle.section.meta({}), '1 assigned', 'the stale suffix is gone with the stall');
+});
+
+test('S5 (T10): a failed first read is still ONE error row, and a success clears a stale list', async () => {
+  let answer = { ok: false, error: 'cannot resolve this checkout\'s own repository' };
+  const handle = createIssuesSection({
+    load: async () => answer,
+    open: () => {},
+    openAll: () => {},
+    schedule: () => {},
+  });
+
+  await handle.refresh();
+  assert.equal(handle.snapshot().status, 'error');
+  assert.deepEqual(handle.section.lines({}), [{
+    label: "cannot resolve this checkout's own repository",
+    tone: 'error',
+  }], 'nothing was ever on screen, so the failure is still the one error row');
+  assert.equal(handle.section.meta({}), undefined, 'an error row has no count and no stale suffix');
+
+  answer = {
+    ok: true,
+    identity: IDENTITY,
+    issues: [issue(8, 'Eight', '2024-05-01T00:00:00Z')],
+    truncated: false,
+  };
+  await handle.refresh();
+  assert.equal(handle.snapshot().status, 'ready');
+  assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#8 Eight']);
+
+  answer = { ok: false, error: 'gh timed out after 30000ms' };
+  await handle.refresh();
+  assert.equal(handle.snapshot().status, 'stale');
+  assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#8 Eight'],
+    'the row survives the stall that used to erase it');
+
+  answer = { ok: true, identity: IDENTITY, issues: [], truncated: false };
+  await handle.refresh();
+  assert.equal(handle.snapshot().status, 'ready');
+  assert.deepEqual(handle.section.lines({}), [{ label: 'no open issues', tone: 'dim' }],
+    'a success after the stale list draws the empty state again');
+  assert.equal(handle.section.meta({}), '0 assigned');
+});
+
 test('S5: loading, empty and error are rows, never a throw', async () => {
   const loading = createIssuesSection({
     load: readyLoad([]),
@@ -708,6 +904,14 @@ function okJson(stdout) {
   return { status: 0, stdout, stderr: '', error: null };
 }
 
+// The one query a `gh api graphql` call sends, without gh's `query=` prefix.
+function graphqlQueryOf(call) {
+  const at = call.argv.indexOf('-f');
+  if (at < 0 || at + 1 >= call.argv.length) return null;
+  const raw = call.argv[at + 1];
+  return raw.startsWith('query=') ? raw.slice('query='.length) : raw;
+}
+
 // gh's answers for the section: the identity probes plus the ONE assigned
 // search. `repoView` is what gh's OWN resolution answers for the checkout.
 function sectionGithub({ issues = [], repoView = 'original/project' } = {}) {
@@ -765,7 +969,8 @@ async function waitFor(predicate, message) {
 }
 
 // The section's synchronous frame is the only public read; poll it until the
-// eager `session_start` refresh has landed (loading stops).
+// `waitForRows` poll draws the section until its own TTL read has landed
+// (loading stops); only a drawn section reads, so the draw IS the trigger.
 async function waitForRows(section, ctx) {
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
@@ -965,6 +1170,12 @@ test("S6: a session starting in another checkout drops the previous checkout's a
   assert.equal(registered.length, 1, 'exactly one section is registered');
   const section = registered[0];
 
+  // T13 (S3 amended): `session_start` reads nothing — a hidden section costs
+  // nothing — so the checkout's first read starts when the rail DRAWS the
+  // section. This test rewrote its old `waitFor(lists.length === 1)` here for
+  // exactly that reason.
+  section.lines(ctxA);
+
   // The bridge's repaint is where the rail's next frame is observable, so what
   // it records is what the rail would have painted.
   const painted = [];
@@ -1023,6 +1234,238 @@ test("S6: a session starting in another checkout drops the previous checkout's a
     !painted.some((labels) => labels.includes('#10 A ten')),
     "the previous checkout's rows never painted a frame",
   );
+});
+
+test('S4 (T9): exactly one GraphQL read marks the rows whose issue has a pull request', async () => {
+  const checkout = makeCheckout();
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const calls = [];
+  const graphql = [];
+  ghIssues.setGhRunner(async (_bin, argv, runOpts = {}) => {
+    const env = runOpts.env || {};
+    calls.push({ argv: argv.slice(), env: { ...env }, cwd: runOpts.cwd });
+    if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
+    if (argv[0] === 'repo' && argv[1] === 'view') {
+      return okJson(JSON.stringify({ nameWithOwner: 'original/project' }));
+    }
+    if (argv[0] === 'issue' && argv[1] === 'list') {
+      return okJson(JSON.stringify([
+        { number: 11, title: 'Has a PR', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' },
+        { number: 12, title: 'No PR', state: 'OPEN', updatedAt: '2024-06-01T00:00:00Z' },
+        { number: 13, title: 'Two PRs', state: 'OPEN', updatedAt: '2024-07-01T00:00:00Z' },
+      ]));
+    }
+    if (argv[0] === 'api' && argv[1] === 'graphql') {
+      graphql.push({ argv: argv.slice(), env: { ...env } });
+      return okJson(JSON.stringify({
+        data: {
+          repository: {
+            i0: { timelineItems: { nodes: [{ source: { __typename: 'PullRequest' } }] } },
+            i1: { timelineItems: { nodes: [{ source: { __typename: 'Issue' } }] } },
+            i2: {
+              timelineItems: {
+                nodes: [
+                  { source: { __typename: 'Issue' } },
+                  { source: { __typename: 'PullRequest' } },
+                ],
+              },
+            },
+          },
+        },
+      }));
+    }
+    return okJson('');
+  });
+
+  const ctx = { cwd: checkout, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctx);
+  assert.equal(registered.length, 1);
+  const section = registered[0];
+  await waitForRows(section, ctx);
+
+  const rows = section.lines(ctx);
+  assert.deepEqual(rows.map((row) => row.label), ['#13 Two PRs', '#12 No PR', '#11 Has a PR']);
+  assert.equal(rows[0].meta, '\ue726', 'two pull requests mark the row exactly like one');
+  assert.equal('meta' in rows[1], false, 'an issue no pull request references carries no marker');
+  assert.equal(rows[2].meta, '\ue726');
+  assert.deepEqual(rows.map((row) => row.tone), ['text', 'text', 'text'],
+    'the marker never turns a row into an accent');
+  assert.equal(section.meta(ctx), '3 assigned', 'the marker never changes the count');
+
+  assert.equal(graphql.length, 1, 'exactly one GraphQL read serves every row');
+  assert.equal(listCalls(calls).length, 1, 'the marker read never re-resolves the list or the identity');
+  assert.equal(graphql[0].env.GH_REPO, 'github.com/myfork/project',
+    'the marker read carries the identity the list read already proved');
+  const query = graphqlQueryOf(graphql[0]);
+  assert.ok(query !== null, 'the read sends one query argument');
+  assert.equal(query, `query {
+  repository(owner: "myfork", name: "project") {
+    i0: issue(number: 11) {
+      timelineItems(first: 10, itemTypes: [CROSS_REFERENCED_EVENT]) {
+        nodes { ... on CrossReferencedEvent { source { __typename } } }
+      }
+    }
+    i1: issue(number: 12) {
+      timelineItems(first: 10, itemTypes: [CROSS_REFERENCED_EVENT]) {
+        nodes { ... on CrossReferencedEvent { source { __typename } } }
+      }
+    }
+    i2: issue(number: 13) {
+      timelineItems(first: 10, itemTypes: [CROSS_REFERENCED_EVENT]) {
+        nodes { ... on CrossReferencedEvent { source { __typename } } }
+      }
+    }
+  }
+}`, 'one alias per issue the list returned, in order, and nothing else');
+});
+
+test('S4 (T9): a failed marker read leaves the rows, no markers and the section ready', async () => {
+  const checkout = makeCheckout();
+  const cases = [
+    ['a rejected read', () => Promise.reject(new Error('gh exited with status 1'))],
+    ['a non-zero exit', () => ({ status: 1, stdout: '', stderr: 'HTTP 502: bad gateway', error: null })],
+    ['an unexpected shape', () => okJson(JSON.stringify({ data: { repository: { i0: { timelineItems: { nodes: 'nope' } } } } }))],
+  ];
+  for (const [name, graphqlAnswer] of cases) {
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    ghIssues.setGhRunner(async (_bin, argv) => {
+      if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
+      if (argv[0] === 'repo' && argv[1] === 'view') {
+        return okJson(JSON.stringify({ nameWithOwner: 'original/project' }));
+      }
+      if (argv[0] === 'issue' && argv[1] === 'list') {
+        return okJson(JSON.stringify([
+          { number: 11, title: 'Has a PR', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' },
+          { number: 12, title: 'No PR', state: 'OPEN', updatedAt: '2024-06-01T00:00:00Z' },
+        ]));
+      }
+      if (argv[0] === 'api' && argv[1] === 'graphql') return graphqlAnswer();
+      return okJson('');
+    });
+
+    const ctx = { cwd: checkout, ui: { notify: () => {} } };
+    await fireSessionStart(loaded.hooks, ctx);
+    assert.equal(registered.length, 1);
+    const section = registered[0];
+    const rows = await waitForRows(section, ctx);
+
+    assert.deepEqual(rows.map((row) => row.label), ['#12 No PR', '#11 Has a PR'],
+      `${name}: the rows are the list read's own`);
+    assert.ok(rows.every((row) => !('meta' in row)),
+      `${name}: the decoration is simply absent`);
+    const meta = section.meta(ctx);
+    assert.equal(meta, '2 assigned', `${name}: the section stays ready, never stale`);
+    assert.ok(!String(meta).includes('stale'), `${name}: a decoration never reports a stall`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// T11 (S2 amended, L10): a host without the bridge gets ONE warning per process,
+// primary sessions only, naming the install command. An empty slot at
+// `session_start` is "not yet" — the check waits the announcement window — while
+// a host with no bus can never announce and is warned at once.
+// ---------------------------------------------------------------------------
+
+function warningTexts(notices) {
+  return notices.filter((notice) => notice.level === 'warning').map((notice) => notice.text);
+}
+
+// The gate and the section's own read still have to answer: a T11 test fires a
+// real `session_start`, so no child may ever reach the real `gh`.
+async function bridgeWarnHarness({ events } = {}) {
+  const checkout = makeCheckout();
+  const loaded = await loadExtension(events ? { events } : {});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub({
+    issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
+  });
+  ghIssues.setGhRunner(gh.runner);
+  const notices = [];
+  const ctx = { cwd: checkout, ui: { notify: (text, level) => { notices.push({ text, level }); } } };
+  return { loaded, checkout, notices, ctx };
+}
+
+test('S2 (T11): with no bridge and no bus, ONE warning names the install command', async () => {
+  delete globalThis[BRIDGE_SLOT];
+  const { loaded, notices, ctx } = await bridgeWarnHarness();
+
+  await fireSessionStart(loaded.hooks, ctx);
+  assert.deepEqual(warningTexts(notices), [
+    'the issues rail needs the gentle-shell-bridge plugin: install it with pi install npm:gentle-shell-bridge',
+  ], 'a host that can never announce is told at once, with the command');
+
+  // One warning for the whole process: a second session start says nothing.
+  await fireSessionStart(loaded.hooks, ctx);
+  assert.equal(warningTexts(notices).length, 1, 'a second session_start never repeats the warning');
+
+  // And neither does a `/reload`, which builds a new instance of the extension:
+  // the human was already told, once, for this process.
+  const reloaded = await bridgeWarnHarness();
+  await fireSessionStart(reloaded.loaded.hooks, reloaded.ctx);
+  assert.deepEqual(warningTexts(reloaded.notices), [], 'a reloaded extension stays silent');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(warningTexts(notices).length, 1);
+});
+
+test('S2 (T11): with a bus, a silent window warns once, and a late bridge cancels it', async () => {
+  // A host whose bus stays silent: the warning only lands after the window.
+  delete globalThis[BRIDGE_SLOT];
+  const silent = await bridgeWarnHarness({ events: { on: () => () => {} } });
+  const startedAt = Date.now();
+  await fireSessionStart(silent.loaded.hooks, silent.ctx);
+  assert.deepEqual(warningTexts(silent.notices), [],
+    'an empty slot at session_start is "not yet", never "not installed"');
+  await waitFor(
+    () => warningTexts(silent.notices).length === 1,
+    'the deferred check never warned',
+  );
+  assert.ok(Date.now() - startedAt >= 1000, 'the warning waits for the announcement window');
+  assert.match(warningTexts(silent.notices)[0], /pi install npm:gentle-shell-bridge/,
+    'the warning names the install command verbatim');
+
+  // A bridge that announces inside the window cancels the warning entirely.
+  delete globalThis[BRIDGE_SLOT];
+  const subscriptions = [];
+  const latched = await bridgeWarnHarness({
+    events: { on: (event, handler) => { subscriptions.push({ event, handler }); return () => {}; } },
+  });
+  await fireSessionStart(latched.loaded.hooks, latched.ctx);
+  assert.deepEqual(warningTexts(latched.notices), [], 'nothing is said before the window closes');
+  assert.equal(subscriptions.length, 1, 'the section is subscribed to the ready announcement');
+  subscriptions[0].handler();
+  await new Promise((resolve) => setTimeout(resolve, 2300));
+  assert.deepEqual(warningTexts(latched.notices), [],
+    'a late announcement cancels the warning the window would have produced');
+});
+
+test('S2 (T11): a published bridge and a child session are never warned about', async () => {
+  // The bridge is installed: nothing is missing, so nothing is said, now or
+  // after the window.
+  const published = installBridge();
+  const withBridge = await bridgeWarnHarness();
+  await fireSessionStart(withBridge.loaded.hooks, withBridge.ctx);
+  assert.equal(published.registered.length, 1, 'the section still registers');
+  assert.deepEqual(warningTexts(withBridge.notices), [], 'an installed bridge is not a missing one');
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.deepEqual(warningTexts(withBridge.notices), []);
+
+  // A child session never speaks for the human: the prompt block's own child
+  // signal is the test, and the warning stays silent.
+  delete globalThis[BRIDGE_SLOT];
+  const child = await bridgeWarnHarness();
+  const saved = process.env.GENTLE_PI_AGENTS_CHILD;
+  process.env.GENTLE_PI_AGENTS_CHILD = '1';
+  try {
+    await fireSessionStart(child.loaded.hooks, child.ctx);
+  } finally {
+    if (saved === undefined) delete process.env.GENTLE_PI_AGENTS_CHILD;
+    else process.env.GENTLE_PI_AGENTS_CHILD = saved;
+  }
+  assert.deepEqual(warningTexts(child.notices), [], 'a subagent never warns about a missing plugin');
 });
 
 // ---------------------------------------------------------------------------
@@ -1372,7 +1815,11 @@ test('S6: a read in flight at session_shutdown never repaints the rail', async (
   await fireSessionStart(loaded.hooks, ctx);
   assert.equal(registered.length, 1);
   const section = registered[0];
-  await waitFor(() => lists.length === 1, 'the read never reached gh');
+  // T13 (S3 amended): no read happens before a frame, so the section is DRAWN
+  // here and its own TTL path is what reaches gh. This test rewrote its old
+  // "the read never reached gh" wait, which assumed the removed eager read.
+  section.lines(ctx);
+  await waitFor(() => lists.length === 1, 'the drawn section never reached gh');
 
   // The session ends while its read is still waiting on gh.
   await fireHook(loaded.hooks, 'session_shutdown', ctx);
@@ -1385,4 +1832,157 @@ test('S6: a read in flight at session_shutdown never repaints the rail', async (
   assert.deepEqual(repaints, [], 'a read that outlived the session never repaints the rail');
   assert.deepEqual(section.lines(ctx), [{ label: 'loading…', tone: 'dim' }],
     'its answer lands nowhere: the section holds no rows');
+});
+
+// ---------------------------------------------------------------------------
+// T13 (S3 amended, L11): a hidden section costs nothing — no child process, no
+// network, no timer. The module records when it was last DRAWN (`lines()` and
+// `meta()` are the drawing calls), answers `drawnWithin(window)`, and the
+// extension reads on the session's own activity ONLY while that answer is true.
+// ---------------------------------------------------------------------------
+
+test('S3 (T13): drawnWithin is false until a frame is drawn, and only inside the window', async () => {
+  let clock = 5000;
+  let loads = 0;
+  const handle = createIssuesSection({
+    load: async () => {
+      loads += 1;
+      return { ok: true, identity: IDENTITY, issues: [], truncated: false };
+    },
+    open: () => {},
+    openAll: () => {},
+    schedule: () => {},
+    now: () => clock,
+  });
+
+  assert.equal(typeof handle.drawnWithin, 'function',
+    'the caller asks the section whether it was drawn instead of guessing');
+  assert.equal(handle.drawnWithin(120000), false, 'a never-drawn section is not a drawn one');
+  assert.equal(handle.drawnWithin(0), false, 'no window makes an undrawn section drawn');
+
+  // The unchanged seam: an explicit caller may still ask for a read, drawn or
+  // not. A landed read is a read, never a draw — only a frame says the section
+  // is on screen.
+  assert.equal(handle.refreshIfStale(30000), true,
+    'refreshIfStale still reads an absent snapshot whether or not a frame was drawn');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(loads, 1, 'the explicit seam made its one read');
+  assert.equal(handle.snapshot().status, 'ready');
+  assert.equal(handle.drawnWithin(120000), false, 'a landed read is not a drawn frame');
+
+  // The collapsed header IS a drawing call: the host painted the section.
+  handle.section.meta({});
+  assert.equal(handle.drawnWithin(0), true, 'the collapsed header stamps the frame');
+
+  clock += 120000;
+  assert.equal(handle.drawnWithin(120000), true, 'the window includes its own edge');
+  clock += 1;
+  assert.equal(handle.drawnWithin(120000), false, 'a draw older than the window is outside it');
+
+  handle.section.lines({});
+  assert.equal(handle.drawnWithin(120000), true, 'the drawn body stamps it again');
+
+  handle.invalidate();
+  assert.equal(handle.drawnWithin(120000), false, 'a superseded section is not a drawn one');
+
+  handle.section.lines({});
+  assert.equal(handle.drawnWithin(120000), true, 'the next frame draws it again');
+
+  handle.dispose();
+  assert.equal(handle.drawnWithin(120000), false, 'a disposed section is never drawn');
+});
+
+test('S3 (T13): a hidden section makes no gh call, and the drawn window gates the activity hooks', async () => {
+  // The extension builds the section with the module's default clock, so the
+  // clock is offset BEFORE the extension loads (the default `now` captures the
+  // `Date.now` it is handed) and the drawn window moves without adding, removing
+  // or racing a real timer.
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const gh = sectionGithub({
+      issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
+    });
+    ghIssues.setGhRunner(gh.runner);
+    const ctx = { cwd: checkout, ui: { notify: () => {} } };
+
+    const graphqlCalls = () => gh.calls.filter((call) => call.argv[0] === 'api' && call.argv[1] === 'graphql');
+    await fireSessionStart(loaded.hooks, ctx);
+    assert.equal(registered.length, 1);
+    const section = registered[0];
+
+    // NO frame drawn: the session starts, an agent starts and a turn ends, and
+    // the section reads nothing at all.
+    await fireHook(loaded.hooks, 'before_agent_start', ctx);
+    await fireHook(loaded.hooks, 'turn_end', ctx);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(listCalls(gh.calls).length, 0, 'a hidden section makes no gh issue list call');
+    assert.equal(graphqlCalls().length, 0, 'a hidden section makes no marker read either');
+    assert.deepEqual(section.lines(ctx), [{ label: 'loading…', tone: 'dim' }],
+      'a hidden section has no rows to show, because it was never read');
+
+    // The section becomes visible: one frame is what starts its own read.
+    await waitFor(() => listCalls(gh.calls).length === 1, 'the drawn section never read its issues');
+    const drawnRows = await waitForRows(section, ctx);
+    assert.deepEqual(drawnRows.map((row) => row.label), ['#11 Assigned one'],
+      'the drawn frame paints the read it started');
+    assert.equal(listCalls(gh.calls).length, 1, 'the drawn frame started exactly one read');
+    assert.equal(graphqlCalls().length, 1, 'and the one marker read that decorates it');
+
+    // Drawn 31 s ago, inside the two-minute window: activity reads behind the
+    // unchanged 30 s floor.
+    offset = 31000;
+    await fireHook(loaded.hooks, 'turn_end', ctx);
+    await waitFor(() => listCalls(gh.calls).length === 2,
+      'a drawn section never read on the turn boundary');
+
+    // The drawn window has passed: the same hooks read nothing at all.
+    offset = 161000;
+    const quiet = gh.calls.length;
+    await fireHook(loaded.hooks, 'turn_end', ctx);
+    await fireHook(loaded.hooks, 'before_agent_start', ctx);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(gh.calls.length, quiet, 'a section outside the drawn window makes no gh call');
+    assert.equal(listCalls(gh.calls).length, 2, 'and no issue list call either');
+
+    // Drawn again, the section works again: the frame's own TTL starts the read.
+    section.lines(ctx);
+    await waitFor(() => listCalls(gh.calls).length === 3, 'the redrawn section never read again');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('S3 (T13): a session that shut down reads nothing on a later activity', async () => {
+  const checkout = makeCheckout();
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub({
+    issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
+  });
+  ghIssues.setGhRunner(gh.runner);
+  const ctx = { cwd: checkout, ui: { notify: () => {} } };
+
+  await fireSessionStart(loaded.hooks, ctx);
+  assert.equal(registered.length, 1);
+  const section = registered[0];
+  // The section is on screen and drew its rows.
+  section.lines(ctx);
+  await waitFor(() => listCalls(gh.calls).length === 1, 'the drawn section never read its issues');
+  await waitForRows(section, ctx);
+
+  // Shutdown supersedes the drawn frame: the section is showing nothing, so the
+  // next activity must not start a read.
+  await fireHook(loaded.hooks, 'session_shutdown', ctx);
+  const before = gh.calls.length;
+  await fireHook(loaded.hooks, 'turn_end', ctx);
+  await fireHook(loaded.hooks, 'before_agent_start', ctx);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(gh.calls.length, before, 'a shut-down session reads nothing on a later activity');
 });

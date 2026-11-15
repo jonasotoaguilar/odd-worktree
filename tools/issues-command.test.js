@@ -123,8 +123,18 @@ async function fireSessionStart(hooks, ctx) {
   }
 }
 
+// This file is about the `gh` gate and the panel. The missing-bridge hint is another surface
+// (tools/issues-section.test.js owns it) and it fires ONCE per process, so which test here saw it
+// first would depend on execution order: a test that counts notifications passed only because an
+// earlier one had already consumed the hint. The fixtures leave it out, so every count below means
+// the same thing alone or in the full run.
+const BRIDGE_HINT = /gentle-shell-bridge/;
+const recordNote = (notes) => (message, level) => {
+  if (!BRIDGE_HINT.test(String(message))) notes.push([message, level]);
+};
+
 function gateCtx(cwd, notes) {
-  return { cwd, ui: { notify: (message, level) => notes.push([message, level]) } };
+  return { cwd, ui: { notify: recordNote(notes) } };
 }
 
 const stubTui = {
@@ -159,7 +169,7 @@ function makeCtx({ cwd, customImpl } = {}) {
   const ctx = {
     cwd,
     ui: {
-      notify: (message, level) => notes.push([message, level]),
+      notify: recordNote(notes),
       select: async (title, options) => { selects.push([title, options]); return undefined; },
     },
   };

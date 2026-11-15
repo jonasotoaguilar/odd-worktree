@@ -6555,18 +6555,37 @@ let issuesGateNotified = false;
 // last probe failed. Registration is eager; this state gates ONLY the open.
 let issuesGateOpen = null;
 
-// S2/S3/S6 (issues-sidebar): the rail section beside the `/issues` reader. The
+// S3 (issues-sidebar): the rail section beside the `/issues` reader. The
 // bridge is read from its published slot, never imported; the section reads ONE
-// in-process snapshot per frame and refreshes at `session_start`, on its TTL and
-// on the session's own activity behind the floor below.
+// in-process snapshot per frame and refreshes on its frame TTL and on the
+// session's own activity behind the floor below — never at `session_start`, and
+// never while it is hidden (T13).
 const ISSUES_SIDEBAR_BRIDGE_SLOT = Symbol.for("gentle-shell-bridge/api/v1");
 const ISSUES_SIDEBAR_READY_EVENT = "gentle-shell-bridge:ready";
+// S2 amended (T11): the ONE hint a host without the bridge gets. It names the
+// install command verbatim, because the user's own words were "pone el comando
+// de instalacion".
+const ISSUES_SIDEBAR_INSTALL_HINT = "the issues rail needs the gentle-shell-bridge plugin: install it with pi install npm:gentle-shell-bridge";
+// The announcement window. An empty slot at `session_start` is "not yet" — the
+// bridge publishes from its own extension load — so the check waits this long
+// before it is honest to call the plugin missing.
+const ISSUES_SIDEBAR_INSTALL_WINDOW_MS = 2000;
+// "One warning per process" includes a `/reload`, which builds a NEW instance of
+// this module: the fact that the human was already told lives on a process-wide
+// slot, exactly like the bridge's own published object does.
+const ISSUES_SIDEBAR_WARN_SLOT = Symbol.for("odd-worktree/issues-sidebar/install-warned");
 // S3 (activity floor): a frame only exists when the host has a reason to produce
 // one, so the TTL never fires on a session that is merely in use. The session's
 // own events ask for a read at most once per this floor: in use, the rail is
 // never more than about half a minute behind, and an idle session still makes no
 // `gh` call and starts no timer.
 const ISSUES_SIDEBAR_ACTIVITY_FLOOR_MS = 30000;
+// S3 amended (T13, L11: "estas comprobaciones se hacen solo si la sidebar de
+// issues esta mostrada, o sea, no hidden"): the DRAWN WINDOW. The activity hooks
+// read only while the section was drawn in the last two minutes, so a section the
+// human hid stops the network entirely — no child process, no timer — and
+// showing it again starts from `loading…`.
+const ISSUES_SIDEBAR_DRAWN_WINDOW_MS = 120000;
 // The most recent `session_start` context: the section's `load` and `open`
 // belong to the checkout the session runs in, not to whatever cwd this process
 // happens to have.
@@ -6574,6 +6593,12 @@ let issuesSidebarCtx = null;
 let issuesSidebarHandle = null;
 let issuesSidebarDisposer = null;
 let issuesSidebarSubscribed = false;
+// T11: one hint per process. `Armed` keeps two session starts from arming two
+// checks; `Announced` is what a late publication sets, so the deferred check
+// never speaks over a bridge that arrived; the "already told the human" fact
+// itself lives on the process-wide slot above, so `/reload` is silent too.
+let issuesSidebarInstallArmed = false;
+let issuesSidebarInstallAnnounced = false;
 
 function issuesPageQuery(spec, rawQuery) {
   const extra = typeof rawQuery === "string" ? rawQuery.trim() : "";
@@ -7084,6 +7109,33 @@ function issuesSidebarError(err, fallback) {
   return fallback;
 }
 
+// T9 (S4 amended): the decoration read behind a row's pull-request marker. ONE
+// call answers, for every issue the list is about, whether any pull request
+// cross-references it; the identity is the one the list was read with (never
+// resolved twice) and the numbers are the ones it returned. Best effort by rule:
+// a rejection, a non-zero exit, an unparseable body or an unexpected shape all
+// mean the same thing — every entry says `hasPullRequest: false` — so the rows
+// render without the marker and the answer stays `ok: true`.
+async function markIssuesSidebarPullRequests(gh, issues, readOpts) {
+  const numbers = [];
+  for (const item of issues) {
+    if (item && Number.isInteger(item.number) && item.number > 0) numbers.push(item.number);
+  }
+  let read = null;
+  if (numbers.length > 0 && gh && typeof gh.listIssuePullRequestReferences === "function") {
+    try {
+      read = await gh.listIssuePullRequestReferences({ numbers }, readOpts);
+    } catch {
+      read = null;
+    }
+  }
+  const marks = read && read.ok === true && read.marks && typeof read.marks === "object" ? read.marks : null;
+  return issues.map((item) => ({
+    ...item,
+    hasPullRequest: marks !== null && item !== null && typeof item === "object" && marks[item.number] === true,
+  }));
+}
+
 // S1/S6 (corrected to assigned-only): ONE read — the OPEN issues ASSIGNED to the
 // viewer — for the checkout the session runs in. There is no authored bucket and
 // no merge by issue number: `/issues` keeps its own four tabs, while the rail
@@ -7092,7 +7144,8 @@ function issuesSidebarError(err, fallback) {
 // single-remote checkout has one too — and the read is bound to it; a resolution
 // failure returns the S5 error and makes no `gh` call at all. `truncated`
 // travels with the answer: the fetch bound was reached, so the real total is
-// larger than what was read and the overflow row says so.
+// larger than what was read and the overflow row says so. T9's marker read runs
+// after it, on the same identity and the numbers it returned.
 async function loadIssuesSidebar() {
   const cwd = toolCwd(issuesSidebarCtx);
   let gh;
@@ -7125,10 +7178,12 @@ async function loadIssuesSidebar() {
   if (!read || read.ok !== true) {
     return { ok: false, error: (read && read.error) || "gh issue list failed" };
   }
+  const issues = Array.isArray(read.issues) ? read.issues : [];
+  const marked = await markIssuesSidebarPullRequests(gh, issues, { cwd: checkoutRoot, scope: identity });
   return {
     ok: true,
     identity,
-    issues: Array.isArray(read.issues) ? read.issues : [],
+    issues: marked,
     truncated: read.truncated === true,
   };
 }
@@ -7234,6 +7289,9 @@ function registerIssuesSidebar(pi) {
     issuesSidebarSubscribed = true;
     try {
       events.on(ISSUES_SIDEBAR_READY_EVENT, () => {
+        // T11: a publication that arrives late makes the missing-plugin hint
+        // untrue, so it is recorded before anything else is attempted.
+        issuesSidebarInstallAnnounced = true;
         try {
           registerIssuesSidebar(pi);
         } catch {
@@ -7245,6 +7303,82 @@ function registerIssuesSidebar(pi) {
     }
   } catch {
     // The rail is optional: a broken bridge never breaks this extension.
+  }
+}
+
+// T11 (S2 amended, L10): discoverability is the ONE thing a host without the
+// bridge gets. Nothing throws today — every bridge call is guarded — so this is a
+// hint, not error handling: ONE warning per process, from a primary session only
+// (the same `GENTLE_PI_AGENTS_CHILD` signal the prompt block uses, so a subagent
+// never speaks for the human), naming the install command verbatim.
+function warnIssuesSidebarMissing(ctx) {
+  if (issuesSidebarInstallWarnedAlready()) return;
+  if (process.env.GENTLE_PI_AGENTS_CHILD === "1") return;
+  const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
+  // A host with no notice seam cannot be told anything; the flag stays clear so
+  // a later session that does have one still gets the single warning.
+  if (typeof notify !== "function") return;
+  markIssuesSidebarInstallWarned();
+  try {
+    notify(ISSUES_SIDEBAR_INSTALL_HINT, "warning");
+  } catch {
+    // A notice is best effort; it never breaks startup.
+  }
+}
+
+function issuesSidebarInstallWarnedAlready() {
+  try {
+    return globalThis[ISSUES_SIDEBAR_WARN_SLOT] === true;
+  } catch {
+    return false;
+  }
+}
+
+function markIssuesSidebarInstallWarned() {
+  try {
+    globalThis[ISSUES_SIDEBAR_WARN_SLOT] = true;
+  } catch {
+    // A frozen global still gets the warning; only the dedupe is lost.
+  }
+}
+
+// T11: the check itself, and the part that must be timed honestly. An empty slot
+// at `session_start` means "not yet": the bridge publishes from its own load, so
+// with a bus the check waits the announcement window and warns only if the slot
+// is STILL empty and no announcement arrived in between. A host with no bus can
+// never announce, so there it warns at once. The timer is unref'd: a hint never
+// holds the process open.
+function checkIssuesSidebarInstall(pi, ctx) {
+  try {
+    if (issuesSidebarInstallWarnedAlready()) return;
+    if (issuesSidebarBridge() !== null) return;
+    if (process.env.GENTLE_PI_AGENTS_CHILD === "1") return;
+    const events = pi && pi.events ? pi.events : null;
+    if (!events || typeof events.on !== "function") {
+      warnIssuesSidebarMissing(ctx);
+      return;
+    }
+    if (issuesSidebarInstallArmed) return;
+    issuesSidebarInstallArmed = true;
+    let timer;
+    try {
+      timer = setTimeout(() => {
+        issuesSidebarInstallArmed = false;
+        try {
+          if (issuesSidebarInstallAnnounced) return;
+          if (issuesSidebarBridge() !== null) return;
+          warnIssuesSidebarMissing(ctx);
+        } catch {
+          // A failed hint never breaks the session.
+        }
+      }, ISSUES_SIDEBAR_INSTALL_WINDOW_MS);
+    } catch {
+      issuesSidebarInstallArmed = false;
+      return;
+    }
+    if (timer && typeof timer.unref === "function") timer.unref();
+  } catch {
+    // The rail is optional: a failed hint never breaks startup.
   }
 }
 
@@ -7269,35 +7403,23 @@ function invalidateIssuesSidebar() {
   }
 }
 
-// D3: one eager refresh at `session_start`, fired and forgotten. There are two
-// other triggers and no more: the TTL on a drawn frame, and the session's own
-// activity (`before_agent_start`, `turn_end`) behind the 30 s floor. A frame
-// only exists when the host has a reason to produce one, so the TTL alone left
-// an in-use session stale for as long as it took the human to type; the activity
-// trigger is that gap, while an idle session still makes no call, starts no
-// timer and is never polled.
-function refreshIssuesSidebar() {
+// S3 amended (T13, L11): the session's own events ask the section for a read
+// ONLY while the section is actually shown. A hidden section must cost nothing —
+// no child process, no network, no timer — so the section is asked whether it
+// was drawn inside the window, and only then does the activity floor apply (a
+// fresher snapshot, a read in flight and a disposed section are the section's own
+// business). Best effort like its neighbours: a throwing seam never breaks the
+// hook that fired it.
+function refreshIssuesSidebarIfDrawn() {
   const handle = issuesSidebarHandle;
-  if (!handle || typeof handle.refresh !== "function") return;
+  if (!handle) return;
   try {
-    const pending = handle.refresh();
-    if (pending && typeof pending.catch === "function") pending.catch(() => {});
-  } catch {
-    // A failed eager read never breaks startup; the TTL retries.
-  }
-}
-
-// S3 (activity floor): the session's own events ask the section for a read, and
-// the section itself decides whether it is due — a fresher snapshot, a read in
-// flight and a disposed section all start nothing. Best effort like its
-// neighbours: a throwing seam never breaks the hook that fired it.
-function refreshIssuesSidebarIfStale() {
-  const handle = issuesSidebarHandle;
-  if (!handle || typeof handle.refreshIfStale !== "function") return;
-  try {
+    if (typeof handle.drawnWithin !== "function") return;
+    if (handle.drawnWithin(ISSUES_SIDEBAR_DRAWN_WINDOW_MS) !== true) return;
+    if (typeof handle.refreshIfStale !== "function") return;
     handle.refreshIfStale(ISSUES_SIDEBAR_ACTIVITY_FLOOR_MS);
   } catch {
-    // A failed activity read never breaks the session; the next one retries.
+    // A failed activity read never breaks the session; the next frame retries.
   }
 }
 
@@ -7325,19 +7447,24 @@ export default function (pi) {
   // `<home>/card-style.json` on every render too. So there is nothing to re-read at
   // `session_start` and nothing cached to invalidate.
   // The session-start `gh` check only gates whether `/issues` may open; the
-  // command itself is registered eagerly above. The same boundary is the ONE
-  // eager refresh of the issues sidebar (D3), fired and forgotten, and the
+  // command itself is registered eagerly above. The same boundary is the
   // session context the section's reads belong to.
   // S6 (issues-sidebar): the supersede of a previous checkout's read happens
-  // FIRST and synchronously — the session context is remembered, the section is
-  // invalidated and its eager refresh is fired BEFORE the `gh` gate below is
-  // awaited. `checkIssuesGate` waits on a `gh` probe, and an answer the previous
-  // checkout's read settles with during that wait must find no latest token to
-  // win and no snapshot to keep.
+  // FIRST and synchronously — the session context is remembered and the section
+  // is invalidated BEFORE the `gh` gate below is awaited. `checkIssuesGate` waits
+  // on a `gh` probe, and an answer the previous checkout's read settles with
+  // during that wait must find no latest token to win and no snapshot to keep.
+  // S3 amended (T13, L11): NO read happens here. A hidden section costs nothing,
+  // so the first DRAW is what starts the section's read: an absent snapshot is
+  // stale inside `lines()`, which schedules its own refresh. The hidden section
+  // therefore makes no child process and no network call, and starts no timer.
   pi.on("session_start", async (event, ctx) => {
     rememberIssuesSidebarSession(ctx);
     invalidateIssuesSidebar();
-    refreshIssuesSidebar();
+    // T11 (S2 amended): the missing-plugin hint. It is armed in the same
+    // boundary as the section's own state, and it says nothing yet when the
+    // host could still announce.
+    checkIssuesSidebarInstall(pi, ctx);
     await checkIssuesGate(pi, ctx);
   });
   // A queued warp is session state: shutdown clears its record and its timer so
@@ -7394,8 +7521,9 @@ export default function (pi) {
     // context is remembered FIRST: `/reload` fires no `session_start`, so the
     // next activity is what re-binds the section's reads to the checkout this
     // session actually runs in instead of whatever cwd the host process has.
+    // T13: the read itself happens only while the section is drawn.
     rememberIssuesSidebarSession(ctx);
-    refreshIssuesSidebarIfStale();
+    refreshIssuesSidebarIfDrawn();
     try {
       const lib = libRequire("worktree-warp-busy.js");
       if (!lib || typeof lib.pendingWarpTurnBoundary !== "function") return;
@@ -7437,8 +7565,9 @@ export default function (pi) {
     // the same ordering — remember the context, then ask for a read behind the
     // floor. This is the `/reload` recovery: a reload registers no session
     // context at all, so the next activity adopts the one the session runs in.
+    // T13: and like the turn boundary, it reads only while the section is drawn.
     rememberIssuesSidebarSession(ctx);
-    refreshIssuesSidebarIfStale();
+    refreshIssuesSidebarIfDrawn();
     try {
       libRequire("odd-worktrees-prompt.js").appendOddWorktreesSection(event);
     } catch {

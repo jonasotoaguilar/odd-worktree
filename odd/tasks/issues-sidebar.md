@@ -15,8 +15,15 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   gentle-shell-bridge's published API, read from `Symbol.for("gentle-shell-bridge/api/v1")` after
   the gate (schema `gentle-shell-bridge/api`, `version === 1`, `registerRows`, `registerSection`,
   `createStore` callable), otherwise subscribed to the `gentle-shell-bridge:ready` announcement.
-  `package.json` gains NO dependency and no import of the package appears anywhere. No bridge, no
-  section: nothing registered, no error, no `ui.notify`, and every other surface keeps working.
+  `package.json` gains NO dependency and no import of the package appears anywhere. With no bridge
+  the section never appears and every other surface keeps working: nothing registered, nothing
+  thrown. Discoverability is the ONE exception — a single warning per process, in a primary session
+  only, naming the install command — and it is timed honestly: an empty slot at `session_start` is
+  "not yet", so when `pi.events` exists the check waits the announcement window and warns only if
+  the slot is STILL empty; a host with no bus can never announce, so there it warns at once.
+  Verbatim: "al inicio deberia comprobar plugin si el bridge ese plugin lo tiene … asi arroja un
+  warning de que falta plugin gentle-shell-bridge y pone el comando de instalacion 'pi install
+  npm:gentle-shell-bridge'".
 - **S3 — a frame never waits.** The bridge calls `lines(ctx)`/`meta(ctx)` once per frame and they are
   synchronous. They read an in-process snapshot and return immediately: no child process, no
   `await`, no `spawnSync`. A snapshot older than the TTL (`60000` ms) schedules exactly ONE
@@ -25,15 +32,27 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   the host has a reason to produce one, the section ALSO refreshes on the session's own activity —
   `before_agent_start` and `turn_end` — behind a 30 s floor, so a session in use is never more than
   about half a minute behind, while an idle session still makes no network call and starts no timer.
-- **S4 — a row is an issue.** Each row reads `#<number> <title>` and carries NO per-row meta: with
-  a single source every row would wear the same mark, and marking everything marks nothing. The
-  header's right-aligned text reports the count instead (`N assigned`). Every issue row is drawn in
+  A HIDDEN section costs nothing either: no read happens before the section has been drawn at least
+  once, and the activity refresh only fires when the section was drawn in the last two minutes, so
+  hiding it stops the network entirely and showing it again starts with `loading…`.
+- **S4 — a row is an issue.** Each row reads `#<number> <title>`. It carries no relation meta — with
+  a single source every row would wear the same mark, and marking everything marks nothing — and the
+  header's right-aligned text reports the count instead (`N assigned`). ONE marker is left, and it is
+  not about the relation: when the issue already has at least one pull request referencing it — one
+  or many, the marker is the same — the row's `meta` is the Nerd Font pull-request glyph `\ue726`.
+  That marker is best effort: it comes from ONE extra GraphQL read covering the issues on screen,
+  and if that read fails the rows render without it and the section stays ready — a decoration never
+  turns the list into an error row. Every issue row is drawn in
   the host's `text` tone, never an accent: a permanent accent reads as a focused row. Rows are
   sorted by `updatedAt` descending, twenty are fetched (`fetchMax: 20`), and the body shows at most
   SEVEN of them. When more exist, an eighth and last row in the `dim` tone reads `and N more issues`
   — `N` being the rows beyond the seven, written `N+` when the read hit its fetch bound — and
   clicking it opens the `/issues` panel. That keeps the body at the host's 8-row maximum, so the
-  bridge's own inert `… +N more` elision never appears. A row is clickable: its `onClick` opens that issue in the browser with the identity
+  bridge's own inert `… +N more` elision never appears. Clicking an issue row does NOT open a
+  browser: it dispatches `/issues <number>`, and the panel opens on the `Assigned` view with that
+  issue selected and its detail shown. When the number is no longer in the assigned list, the panel
+  says so instead of guessing a row. Verbatim: "en al clickerla en lugar de abrir en el browser la
+  abra en panel /isuses e esa issue especifac (que seria en tab asigged)". A row is clickable: its `onClick` opens that issue in the browser with the identity
   `/issues` proves for a browser open — the checkout scope's own identity when the checkout has
   one, otherwise gh's own resolution normalized to `<host>/<owner>/<repo>`, because a single-remote
   checkout has no scope identity to pin — and it never runs on the paint path (the work is deferred
@@ -42,7 +61,11 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   opens the repository it was read from, never the one the session moved to.
 - **S5 — every state is a row, none is a throw.** `loading…` (dim) before the first answer,
   `no open issues` (dim) for an empty result, and ONE error row for a failed read or a failed scope
-  resolution. `lines()` and `meta()` never throw; a throw of an injected seam is caught.
+  resolution — but ONLY while there is nothing to show. Once a ready snapshot exists, a later failed
+  refresh never erases it: the rows stay on screen and the failure is disclosed instead, with the
+  header reading `<n> assigned · stale`, and `snapshot().error` recording the reason for a caller.
+  `lines()` and `meta()` never throw; a throw of an injected seam is caught. A transient `gh` stall
+  is therefore a stale list, not an empty one.
 - **S6 — scope is the checkout's own repository, never a guess.** The list is read exactly like
   `/issues` reads it: `checkoutRepoScope({cwd})` and `gh.listIssues({query, state: 'open'}, {cwd,
   scope, fetchMax: 20})`. A failed resolution produces the S5 error row; no `gh` call is made
@@ -51,6 +74,28 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   checkout's snapshot is dropped (the section shows the loading state, never the previous
   repository's rows) and its in-flight answer can never land. A session that SHUTS DOWN supersedes
   it too: no read still in flight can repaint a torn-down host.
+- **S9 — one request, one cache, only while the rail is shown.** The user asked: "en el caso de que
+  este activo el sidebar de issues podriamos cachear las issues, no solo busque las assigned sino que
+  la primera vez busque todas y las cache, luego busca las ultimas 20 por para cer si hay nuevas, lo
+  hace para las mias, las assigend y las involved, asi al clickerla el panel se abre instantaneo".
+  The section still DRAWS only the assigned issues, but one read now covers the three scoped views:
+  a single `gh api graphql` request with three aliased searches (`author:@me`, `assignee:@me`,
+  `involves:@me -author:@me`), each returning its `issueCount` and, per issue, the pull-request
+  cross-reference that drives the marker. That replaces today's list read plus the separate marker
+  read. Measured in this repository with the API's own `rateLimit { cost }`: 1 point at 20 per
+  bucket, 2 at 50, 3 at 100, about one second whatever the size — the time is the `gh` process and
+  TLS, not the payload, so what an incremental read saves is quota and bytes, not latency.
+  The cache lives in this process only, keyed by the proven `<host>/<owner>/<repo>`, and is never
+  written to disk. The first sync reads up to 100 per bucket; later syncs read the newest 20 and
+  merge them by issue number. A merge cannot see an issue that was closed or unassigned (it simply
+  leaves the result), so the cache is held to one invariant: after every merge each bucket's cached
+  open count must equal the `issueCount` that same response reported, and when it does not, the
+  next sync is a full re-read of the three buckets. A bucket whose `issueCount` exceeds what was
+  read is `truncated` and reports it, never looped. A cache older than ten minutes is also re-read
+  in full. All of it runs only while the section is shown (the drawn window of S3): hidden, the
+  cache is kept but nothing is read, and the first draw after showing it again syncs. Verbatim:
+  "todo esto solo si issues sidebar esta acitva, si no esta no tiene sentido porque no esta
+  mostrando nada en vivo".
 - **S7 — nothing else moves.** `/warp`, `/odd-list`, `/issues`, `worktree_create`, `worktree_list`,
   the `worktree-warp` renderer, the prompt blocks and every existing test behave exactly as before;
   `node --test tools/*.test.js` stays green.
@@ -81,10 +126,70 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 | T6 | S6 (verify round 2 blocker) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | `9a1fd95` |
 | T7 | S4, S6 (verify round 3 findings) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | fix commit |
 | T7 | S3 (live finding) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | fix commit |
-| T8 | S4 (five rows + the overflow row) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | fix commit |
+| T8 | S4 (five rows + the overflow row) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | `a968153` |
+| T9 | S4 (the PR marker) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
+| T10 | S5 (a failed refresh keeps the rows) | worker | `lib/issues-section.js`, `tools/issues-section.test.js` | pending |
+| T11 | S2 (the missing-bridge warning) | worker | `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
+| T12 | S4 (the click opens the panel) | worker | `extensions/odd-worktree-tools.ts`, `lib/issues-view.js`, `tools/issues-command.test.js` | pending |
+| T13 | S3 (a hidden section costs nothing) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
+| T14 | S9 (one combined read, the cache, the count invariant) | worker | `lib/gh-issues.js`, `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
 
 ## Log
 
+- **E11 (delivery strategy, recorded at the slice boundary):** this branch is far past one review slice
+  (over 2400 changed lines). The commits are already the boundaries, one concern each: the feature
+  (`54d9c7b`), three verification-round fixes, the activity refresh, the assigned-only reshape, and
+  the T9-T13 group. Pushing and opening pull requests stay the user's decision; when that happens
+  the branch is cut as a CHAIN along those commits, not sent as one 2400-line pull request.
+- **E10 (found while running the suite from a primary shell):** T11's missing-bridge warning fires
+  once per process by design (the dedupe survives a `/reload`), and the worker that built it ran as
+  an agent child, where the warning is suppressed, so it never saw the interaction. In
+  `tools/issues-command.test.js` the first test to load the extension consumed the hint and every
+  later notification-count test passed only because of that order: run alone, two of them failed.
+  The fixtures now leave the bridge hint out, since that file is about the `gh` gate and
+  `tools/issues-section.test.js` owns the hint; the same tests pass alone, as a file and in the
+  full suite.
+- **L12 (user, verbatim):** "en el caso de que este activo el sidebar de issues podriamos cachear las
+  issues, no solo busque las assigned sino que la primera vez busque todas y las cache, luego busca
+  las ultimas 20 por para cer si hay nuevas, lo hace para las mias, las assigend y las involved, asi
+  al clickerla el panel se abre instantaneo. Y como sacamos lo de all ya no es tan costoso como antes
+  porque ese es aparte. y como carga completa la primera vez y las siguiente solo busca las ultima
+  para ver actualizacion igual se reduce costo de update y asi issue abre mas rapido, pero como digo
+  todo esto solo si issues sidebar esta acitva, si no esta no tiene sentido porque no esta mostrando
+  nada en vivo o simulando en vivo pues la revisa realmente cada x tiempo. asi clickear la issue la
+  abre instantenea en vez de esperar que lar cargue o recargue. igual revisa los costos, rendimiento
+  para optimizarla lo maximo posible. estas trabajndo en un worktree supongo cierto?" — S9 and T14.
+  Measured before specifying (E10): one combined request costs 1/2/3 points at 20/50/100 per bucket
+  and takes about a second at any size, so the incremental read is a quota and bytes saving and the
+  instant click comes from the panel reading the cache (the panel ODD owns that half). The worktree
+  question was answered honestly: this ODD still lives in the principal checkout because the user's
+  session loads the extension from it; the panel ODD has its own worktree.
+- **L11 (user, verbatim, two messages):** "otro cambio es uqe las issues son clickeables, esta bien, pero
+  en al clickerla en lugar de abrir en el browser la abra en panel /isuses e esa issue especifac (que
+  seria en tab asigged)" and "igual claro que estas comprobaciones se hacen solo si la sidebar de
+  issues esta mostrada, o sea, no hidden". S4 is amended (T12): the row click opens the panel on that
+  issue in the Assigned view instead of the browser, and S3 is amended (T13): no read before the
+  section is drawn, and none while it stays hidden.
+- **L10 (user, verbatim):** "igual ahora que depende de gentle shell bridge, al inicio deberia comprobar
+  plugin si el bridge ese plugin lo tiene, si no lo tiene supongo que tira error la funciones de bridge
+  como sidebar issues, asi arroja un warning de que falta plugin gentle-shell-bridge y pone el comando
+  de instalacion 'pi install npm:gentle-shell-bridge'" — S2 is amended: nothing throws today
+  (every bridge call is guarded), so what T11 adds is discoverability, not error handling: one
+  warning per process, primary sessions only, after the announcement window, naming that command.
+- **L9 (user, verbatim):** "me tiro un error igual ahora es por la sesion larga? limitacion api o que?"
+  — the section showed `gh timed out after 30000ms`. Measured in the same checkout minutes later: the
+  identity read took 457 ms, the bucket read 683 ms, and the rate limit had 4964/5000 left, so it was
+  neither the session's length nor an API limit: the host's own 30 s child bound killed a hung `gh`
+  (keyring prompt after idle, or a DNS/TLS stall). The finding is not the stall but what a stall did:
+  a failed refresh replaced good rows with the S5 error row. S5 is amended (T10) so a ready list
+  survives a failed refresh and reports `· stale` instead.
+- **L8 (user, verbatim):** "igual en issues como sidebar todas son assiged no hace falta el icono en
+  lugar pon el icono de una pr si es que tiene al menos una pr ya esa issue relacionada, o sea una pr
+  la trabajo ya, una o mas da igual al menos una"; asked which glyph, the user proposed
+  `nf-dev-git_pull_request` and it was accepted. S4 is amended: the relation meta stays gone, and the
+  one marker on a row says the issue already has at least one pull request. Known limit recorded
+  with it: the glyph is Nerd Font dependent (a terminal without one draws a box) and must measure
+  one column, because a row wider than the given width drops the whole rail.
 - **L7 (user, verbatim):** "pero correciecon, hagamos que en la sidebar se vean solo las asiggned" —
   the rail drops the authored bucket and reads `assignee:@me` only; the per-row relation glyph is
   removed with it (a mark on every row marks nothing) and the header reports `N assigned`.

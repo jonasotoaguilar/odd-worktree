@@ -1765,9 +1765,15 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
 
     const first = clean(component.render(240).join('\n'));
     assert.match(first, /#22 Assigned twenty-two/, 'the number and title are on screen at once');
+    assert.match(first, /\[open\]/, 'and the state the row already carried');
     assert.match(first, /assignees: ana/, 'so are the assignees the rail cached');
+    assert.match(first, /\(no labels\)/, 'and the labels line, honest about a row that carried none');
     assert.match(first, /by me/, 'and the author');
-    assert.match(first, /loading…/, 'the read still names itself');
+    // S9: the frame opens ON the issue. The body marker still names the read,
+    // but only under those facts — never a bare `loading…` pane.
+    assert.match(first, /loading…/, 'the body read still names itself under the facts');
+    assert.match(first, /#22 Assigned twenty-two[\s\S]*loading…/,
+      'the facts come first and the read is named below them — never a bare loading pane');
     assert.ok(!first.includes('body of issue 22'),
       'the body is not invented from a row that never carried it');
 

@@ -51,6 +51,17 @@ test('an init card collapses to the one sentence the tool printed', () => {
   assert.deepEqual(codeGraphCollapsedRows('init', INIT_EXISTING, false, false), { text: '→ already initialized', rows: 1, tail: false });
 });
 
+// S4: the outcome is what the call DID, not its body, so a card of this
+// package never loses that row to the minimized level. The index facts still
+// wait for the reader's expansion, and every other operation hides as before.
+test('S4: a minimized init keeps its outcome row, and only that row', () => {
+  assert.deepEqual(codeGraphCollapsedRows('init', INIT_FRESH, false, true), { text: '→ initialized', rows: 1, tail: false });
+  assert.deepEqual(codeGraphCollapsedRows('init', INIT_EXISTING, false, true), { text: '→ already initialized', rows: 1, tail: false });
+  assert.equal(codeGraphCollapsedRows('init', INIT_FACTS, false, true), undefined, 'no outcome sentence, no row: the facts wait for the expansion');
+  assert.equal(codeGraphCollapsedRows('sync', SYNC_CHANGED, false, true), undefined, 'every other operation still hides its body at minimal');
+  assert.deepEqual(codeGraphCollapsedRows('sync', SYNC_CHANGED, false, false), { text: '→ synced 3 changed files', rows: 1, tail: false }, 'and the default level is unchanged');
+});
+
 test('an init without a concluding sentence previews the facts it reported', () => {
   assert.deepEqual(codeGraphCollapsedRows('init', INIT_FACTS, false, false), {
     text: '◆  Indexed 2 files\n●  5 nodes, 7 edges in 239ms',
@@ -198,6 +209,23 @@ test('S6: the explored project is a last path segment, and only when it is not t
   assert.equal(projectPathSegment('', '/work/repo'), undefined);
   assert.equal(projectPathSegment('   ', '/work/repo'), undefined);
   assert.equal(projectPathSegment(checkout, undefined), 'gentle-shell', 'a seam that cannot answer still names the explicit argument');
+});
+
+// S6 (T14): `.` and `..` are resolved LEXICALLY before the cwd comparison, so a
+// path that climbs and returns names no other checkout. No filesystem read: the
+// same strings answer the same on a path that does not exist.
+test('S6: `.` and `..` are resolved lexically before the cwd comparison', () => {
+  const cwd = '/work/repo';
+  assert.equal(projectPathSegment('/work/repo/../repo', cwd), undefined, 'a path that climbs and comes back is the same checkout');
+  assert.equal(projectPathSegment('/work/repo/.', cwd), undefined, 'a trailing `/.` is the same checkout');
+  assert.equal(projectPathSegment('../repo', cwd), undefined, 'a relative path is read against the cwd, exactly like the shell');
+  assert.equal(projectPathSegment('.', cwd), undefined, 'the cwd itself names no other checkout');
+  assert.equal(projectPathSegment('./repo', cwd), 'repo', 'a `./` child really is another checkout');
+  assert.equal(projectPathSegment('/work/repo/../other', cwd), 'other', 'a resolved sibling still names its last segment');
+  assert.equal(projectPathSegment('../gentle-shell', cwd), 'gentle-shell', 'the segment is the RESOLVED checkout\'s own');
+  assert.equal(projectPathSegment('/work/repo/..', cwd), 'work', 'the parent is named by its own segment, never by the literal `..`');
+  assert.equal(projectPathSegment('C:\\work\\repo\\..\\repo', 'C:\\work\\repo'), undefined, 'either separator, resolved');
+  assert.equal(projectPathSegment('/does/not/exist/../exist', '/does/not/exist'), undefined, 'the answer never depends on the path existing');
 });
 
 test('a command that merely mentions codegraph is not a CodeGraph call', () => {

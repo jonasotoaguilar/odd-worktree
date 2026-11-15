@@ -144,6 +144,13 @@ toggle · ctrl+s apply · esc back` for assignees, and `enter newline · ctrl+s 
 the sub-mode — apply, `esc back` or `esc discard` — restores the reading legend.
 The search box keeps its own footer row, unchanged.
 
+The two nested sub-modes follow the same rule: naming a new label carries `enter
+add · esc cancel` on that row and the comment-discard ask carries `y discard ·
+n/esc keep editing`, while their body says only what is happening (`new: …`,
+`Discard this draft?`). While the labels or assignees list is still being read,
+the handlers accept the exit and nothing else, so the footer offers `esc back`
+alone; the editor's own keys arrive with the list.
+
 Creating a **new** label is a separate capability inside the labels editor and
 needs `write`, so a triage-only viewer opens the editor normally and sees
 neither a create row nor its `n` keybinding. Commenting is deliberately ungated:
@@ -982,7 +989,11 @@ input after its program word (`codegraph status .` reads `· status .`), on one 
 collapsed and whole when expanded, with no operation label. The MCP explore card's
 heading is `codegraph · explore <query>` and continues ` · <last path segment>` only
 when its `projectPath` names a checkout other than the session's cwd; the full path
-never appears, and an absent, empty or same-checkout argument adds nothing. It is
+never appears, and an absent, empty or same-checkout argument adds nothing. The
+comparison resolves `.` and `..` lexically and reads a relative argument against the
+session cwd, so `/work/repo/../repo`, `/work/repo/.` and `../repo` from `/work/repo`
+are all that same checkout and add no segment, while a resolved sibling still names
+its own last segment. No filesystem is read to decide it. It is
 registered through the host's tool-renderer hook, adds no tool or command, and
 hands every other tool back exactly as the host resolved it; a `bash` command that is not
 CodeGraph's is forwarded to the host's own renderer. A host without that hook draws nothing of
@@ -990,7 +1001,10 @@ ours. Every card in this package, the two worktree tools and the CodeGraph rows 
 count); `ctrl+o` expands it to the whole output, except an `init`, which expands to
 its `→ initialized`/`→ already initialized` row plus the index facts it printed and
 never the CLI's `Use "codegraph index" …` advisory. The Gentle Shell card content
-level (`minimal`) hides the result body while a failure still says why. A `codegraph …`
+level (`minimal`) hides the result body while a failure still says why — except an
+init's one outcome row (`→ initialized` / `→ already initialized`), which is what
+the call did rather than its body and is drawn at BOTH levels; a minimized init
+keeps that row alone and its index facts wait for the expansion. A `codegraph …`
 `bash` call is that card's only while the CLI is installed; without it [the bash
 card](#the-bash-card-and-its-preference) draws the same command with the classifier's
 `codegraph` identity.

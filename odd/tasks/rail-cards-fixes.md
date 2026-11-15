@@ -38,10 +38,13 @@ persistencia entre sesiones y el fallo."
 
 **S4 — A `codegraph init` result carries no plugin prose.** After a successful native
 `codegraph init` the tool result gains no `pi-odd-worktree:` sentence and no second paragraph:
-the tool's own content is the whole result. The card for that call decides the outcome: collapsed
-it draws one row, `→ already initialized` or `→ initialized`; expanded it draws that same row plus
-at most the index facts, never the CLI's advisory line (`Use "codegraph index" …`). A failed
-init keeps its own error and nothing else. User: "esta demas el plugin basta on decir que codegraph
+the tool's own content is the whole result. The one honest exception is a post-init sync that
+did not complete (queued, failed, unavailable, read-only): that appends ONE short line naming
+it, with no prefix and no second paragraph. The card for that call decides the outcome: collapsed
+it draws one row, `→ already initialized` or `→ initialized`, at BOTH content levels (a card of
+this package never loses its outcome row to `minimal`); expanded it draws that same row plus at
+most the index facts, never the CLI's advisory line (`Use "codegraph index" …`). A failed init
+keeps its own error and nothing else. User: "esta demas el plugin basta on decir que codegraph
 se sincronize o actualizo/update. o si es posible cambiar todo el output que ve el agente y se
 pinta por algo simple de codegraph inicializado y actualizado (pues con el hook siempre hace init
 y sync). [Image#7] en collapse y expanded."
@@ -78,13 +81,16 @@ como esta que abre la issue clickear auqnue hay que repararlo claro."
 
 **S9 — A rail click opens the panel on that issue, loaded.** Clicking a row dispatches
 `/issues <number>` and the panel opens focused on that issue, its body on screen: no `loading…`
-placeholder while the row's already-known facts are shown, and no silent refusal. Every refusal a
-click can hit is visible to the user (one notice), never swallowed. The click does not prove the
-repository a second time: the panel proves its own identity, as the section's own contract says. A
-number that is in `assigned` lands on `Assigned`; one that is only in `mine` lands on `My issues`.
-User: "issue aparece como clickeable pero no funciona, no hace nada, y deberia abrirme el panel de
-issue posicionado en esa issue, con esa issue cargada la descripcion/cuerpo … que no salga como
-cargando…"
+placeholder while the row's already-known facts are shown, and no silent refusal. The first frame
+carries what the rail already knows — number, title, state, labels, assignees, author — and the
+body follows when its read lands; the pane is never a bare `loading…` with no issue in it. Every
+refusal a click can hit is visible to the user (one notice), never swallowed. The click does not
+prove the repository a second time: the panel proves its own identity, as the section's own
+contract says, so a row retained across a checkout change opens that checkout's same-numbered
+issue. A number that is in `assigned` lands on `Assigned`; one that is only in `mine` lands on
+`My issues`. User: "issue aparece como clickeable pero no funciona, no hace nada, y deberia
+abrirme el panel de issue posicionado en esa issue, con esa issue cargada la descripcion/cuerpo …
+que no salga como cargando…"
 
 **S10 — A sub-mode's keys are in the footer, and only there.** The labels, assignees and comment
 editors carry no `(space toggle · n new · ctrl+s apply · esc back)` in their title: the title is the
@@ -124,6 +130,7 @@ gris y pon que 'not a git repository … mas breve'."
 | T11 | S12 | worker | `fix(issues): report a missing repository in gray` |
 | T12 | S10 | worker | `feat(issues): move a sub-mode's keys to the footer` |
 | T13 | S11 | worker | `feat(issues): offer only the keys that work` |
+| T14 | S4, S6, S9, S10, S11 | worker | `fix(rail-cards): close the gaps verification found` |
 
 ## Log
 
@@ -191,3 +198,21 @@ L4 (decisiones tomadas al planificar, evidencia en el repo):
   valores; el host fuerza `applyOnMove: false` y el plugin conserva la persistencia.
 - El número de PR no viene en la respuesta: la query pide `source { __typename }` y nada más.
 - Una fila del bridge tiene un solo `onClick`: dos objetivos clickeables en una línea no existen hoy.
+
+L5 (verificación independiente de las cinco slices, hallazgos que se corrigen en T14):
+- `package.json` todavía anunciaba `/card:bash` en su descripción: un comando eliminado no puede quedar
+  en el texto que se publica.
+- S4: el resultado de un init exitoso seguido de un sync que NO completó seguía ganando prosa del
+  plugin, y el nivel `minimal` escondía la fila de resultado del init. La excepción quedó escrita en
+  la spec y la fila se dibuja en los dos niveles.
+- S6: la comparación del `projectPath` normalizaba separadores pero no `.`/`..`, así que
+  `/work/repo/../repo` contra el cwd `/work/repo` mostraba un checkout que no era otro.
+- S10: los sub-modos anidados (crear una label, descartar un comentario) seguían con su lista de
+  teclas entre paréntesis en el cuerpo, contra la regla "las acciones van al footer".
+- S11: con el editor de labels/assignees todavía cargando, el footer ofrecía toggle/apply que los
+  handlers no aceptan: ahí solo funciona `esc back`.
+- Límites aceptados, no defectos: con la preferencia en `default` y un host stock cuyo row de bash no
+  se enmarca a sí mismo, la fila `codegraph …` la dibuja el host (nuestra tarjeta se aparta antes de
+  reclamarla); el `meta` de una fila es gris (`muted`) en reposo y `warning` bajo el hover, porque el
+  rol lo decide el bridge; y una fila retenida tras un cambio de checkout abre la issue del mismo
+  número del checkout nuevo, que es la consecuencia directa de S9.

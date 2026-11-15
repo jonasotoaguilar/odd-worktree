@@ -475,6 +475,32 @@ test('S4: an expanded init draws its outcome row and the index facts, never the 
   assert.doesNotMatch(bash.slice(0, -1).map(bodyText).join('\n'), /Use "codegraph index"/);
 });
 
+test('S4: the collapsed init outcome row is drawn at both content levels', () => {
+  const resolver = cardFor();
+  for (const [text, expected] of [[INIT_FRESH, '→ initialized'], [INIT_EXISTING, '→ already initialized']]) {
+    withContent(CARD_CONTENT.MINIMAL, () => {
+      const rows = resultRows(resolver, CODEGRAPH_TOOL, textResult(text), { isPartial: false }, plainTheme, { args: { operation: 'init' } }, 80);
+      assert.deepEqual(rows.slice(0, -1).map(bodyText), [expected], 'a card of this package never loses its outcome row to minimal');
+      assertFramed(rows, 80);
+    });
+    const atDefault = resultRows(resolver, CODEGRAPH_TOOL, textResult(text), { isPartial: false }, plainTheme, { args: { operation: 'init' } }, 80);
+    assert.deepEqual(atDefault.slice(0, -1).map(bodyText), [expected], 'the default level draws the same row');
+  }
+
+  withContent(CARD_CONTENT.MINIMAL, () => {
+    const rows = resultRows(resolver, CODEGRAPH_TOOL, textResult(INIT_FRESH), { isPartial: false }, plainTheme, { args: { operation: 'init' } }, 80);
+    assert.equal(rows.slice(0, -1).map(bodyText).join('\n').includes('Indexed 1 files'), false,
+      'minimal keeps the outcome alone; the index facts wait for the expansion');
+
+    // Preserved: minimal hides every other operation's body...
+    const sync = resultRows(resolver, 'bash', textResult(SYNC_CHANGED), { isPartial: false }, plainTheme, { args: { command: 'codegraph sync' } }, 80);
+    assert.deepEqual(sync.slice(0, -1).map(bodyText), [], 'a minimized sync still draws the call alone');
+    // ...and a failure still says why, at either level.
+    const failed = resultRows(resolver, CODEGRAPH_TOOL, textResult(INIT_FAILED, true), { isPartial: false }, plainTheme, { args: { operation: 'init' } }, 80);
+    assert.match(failed.slice(0, -1).map(bodyText).join('\n'), /Failed: EACCES/, 'a minimized failure still says why');
+  });
+});
+
 test('a card body row is painted in the output role, the preview in muted, a failure in error', () => {
   const resolver = cardFor();
   assert.match(

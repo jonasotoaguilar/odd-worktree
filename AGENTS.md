@@ -1,7 +1,7 @@
 # pi-odd-worktree — Agent Guide
 
 Read this before changing anything. It is the contract for this repository: one
-Pi extension, two agent tools, three panels, one preference, no other
+Pi extension, two agent tools, four panels, one preference, no other
 configuration surface.
 
 ## Purpose
@@ -10,9 +10,10 @@ configuration surface.
 
 - two agent tools — `worktree_create` (create a checkout beside the clone and
   start its setup) and `worktree_list` (read-only listing);
-- three panels — `/warp` (move the session between checkouts, and remove one),
-  `/odd-list` (read this checkout's `odd/tasks/*.md`), `/issues` (read and, when
-  permitted, edit this checkout's GitHub issues);
+- four panels — `/warp` (move the session between checkouts, and remove one),
+  `/odd-list` (read this checkout's `odd/tasks/*.md`), `/files` (browse one
+  checkout's files, insert the chosen paths, open one in the editor), `/issues`
+  (read and, when permitted, edit this checkout's GitHub issues);
 - one preference — `/card:bash` (draw a `bash` tool call as this package's
   activity card, the default, or leave it to the host's own drawing).
 
@@ -26,7 +27,7 @@ its presence records.
 
 | Path | Responsibility |
 | --- | --- |
-| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the four commands, the two tools, the `worktree-warp` message renderer, the optional `ISSUES` rail section with its one missing-bridge warning, and the `session_start` / `session_shutdown` / `turn_end` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
+| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the five commands, the two tools, the `worktree-warp` message renderer, the optional `ISSUES` rail section with its one missing-bridge warning, and the `session_start` / `session_shutdown` / `turn_end` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
 | `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the canonical target path `<repo-parent>/<repo-name>-worktrees/<slug>` and its helpers, and the async argv runner. |
 | `lib/worktree-registry.js` | The one ownership rule, with no file: a checkout this package created is a directory under `<repo-parent>/<repo-name>-worktrees`, so the path decides. Partitions Git's listing into ours and outside, and parses `git worktree list --porcelain` for the create path. |
 | `lib/worktree-create.js` | `worktree_create`'s core: request validation, base resolution, the ODD-named destination, the refusals sentence for sentence, plan execution and the fixed output lines. |
@@ -67,6 +68,13 @@ its presence records.
 | `lib/issues-view.js`, `lib/issue-preview.js` | The pure `/issues` view and its preview formatter. |
 | `lib/issues-section.js` | The checkout's assigned issues as a rail section: the `#<number> <title>` row and its one pull-request mark, the seven-row body, its one `and N more issues` row that sends `/issues`, the one in-memory snapshot, its TTL, and the drawn-frame stamp the session's own activity read is gated on. A failed refresh keeps the rows and marks them `stale`. It schedules refreshes and never waits on a child process; only a bridge that published its API can show it. |
 | `lib/related-issues-cache.js` | The in-process cache of the three scoped issue views (`mine`, `assigned`, `involved`) that one combined read answers, keyed by repository identity: the 100-then-20 read plan, the merge by issue number, the count invariant that forces a full re-read, and the ten-minute bound measured from the last FULL read, so a stream of deltas cannot postpone it. Memory only; the rail owns the entry, and `/issues` only reads one to seed its first frame. |
+| `lib/files-index.js` | The picker's Git reads: `git ls-files` for the tracked and untracked-but-not-ignored listing, `git status --porcelain` for the change state (`new`/`updated`/`clean`), the mtime age, and the one bounded preview read (byte, line and width budget, the binary notice, the truncation). |
+| `lib/files-insert.js` | The insertion form alone: `@` plus the path from the session cwd for a file below it, the real absolute path for anything else, space-separated and deduplicated. |
+| `lib/files-orders.js` | The pure row builder for the three orders (`modified`, `path`, `ext`) and their foldable trees, plus the per-order fold helpers; it paints nothing and mutates nothing it is given. |
+| `lib/files-preview.js` | The pure preview pane: its own box with `line/total` on the top border, the dim numbered gutter, a wrap instead of an ellipsis, and the injected highlighter's cells. |
+| `lib/files-scope-detail.js` | The scope step's data: the `main`-first order, the `±`/`↑`/`↓` line above the footer, and the one `rev-list` read; a field that is zero or absent is not painted. |
+| `lib/files-scope-view.js` | The scope step's card: one row per checkout with its `±n files`, the focused scope's detail line, the footer and the selection. |
+| `lib/files-picker-view.js` | The picker's composition: chrome, the always-active search row, the two panes, the keys and the mouse, the badges and ages, the Tab selection, and the insert/open/close outcomes it reports to the command. |
 | `lib/tui-paint.js`, `lib/view-layout.js`, `lib/preview-scroll-keys.js`, `lib/clipboard.js`, `lib/open-external.js` | Shared presentation helpers: the one palette, window/layout maths, the one preview scroll decision, clipboard, external opener. |
 | `lib/session-auto-name.js`, `lib/session-worktree-register.js` | Session bookkeeping: naming a session after an ODD write, and the host's session-worktree registry entry. |
 | `tools/*.test.js`, `tools/fixtures/` | The Node test suites and their fixtures (`load-extension.js`, `gh-*.json`). |
@@ -101,14 +109,22 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
-3. **The shipped surface is exactly four commands, two tools and one sidebar
-   section.** `/warp`, `/odd-list`, `/issues`, `/card:bash`; `worktree_create`,
-   `worktree_list`; and the one fourth kind of surface, a sidebar section
-   (`lib/issues-section.js`) that is neither a command nor a tool and therefore
-   registers no name the host or the agent can call. No agent surface moves the
-   session or removes a checkout: `/warp` moves the session (its `ctrl+d`, the
-   selector, a typed name, a queued handoff) and its `ctrl+d` removes a checkout.
-   Each command and tool keeps its declared name and label.
+3. **The shipped surface is exactly five commands, two tools and one sidebar
+   section.** `/warp`, `/odd-list`, `/files`, `/issues`, `/card:bash`;
+   `worktree_create`, `worktree_list`; and the one fourth kind of surface, a
+   sidebar section (`lib/issues-section.js`) that is neither a command nor a tool
+   and therefore registers no name the host or the agent can call. No agent
+   surface moves the session or removes a checkout: `/warp` moves the session
+   (its `ctrl+d`, the selector, a typed name, a queued handoff) and its `ctrl+d`
+   removes a checkout. Each command and tool keeps its declared name and label.
+
+   `/files` is a panel and nothing else: it mounts its OWN overlay through
+   `ctx.ui.custom` (the scope step's small card, then the picker), and a host with
+   no such seam gets one honest line — `files: the file picker needs an
+   interactive session with overlay support` — and no second surface in its
+   place: no transcript dump, no sub-command, nothing written. It is
+   bridge-independent: it opens from the command palette and needs no other
+   package to draw.
 
    **The section reaches the host only through gentle-shell-bridge.** It is
    published through that package's sidebar-section API alone: the object read from

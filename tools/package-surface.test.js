@@ -1,6 +1,6 @@
 'use strict';
-// S2/S4 surface: the standalone package always registers /warp, /odd-list and
-// /issues plus the TWO agent worktree tools (S3/S4: `worktree_delete` and
+// S2/S4 surface: the standalone package always registers /warp, /odd-list,
+// /files, /issues and /card:bash plus the TWO agent worktree tools (S3/S4: `worktree_delete` and
 // `worktree_warp` are not registered, so `/warp` is the only front that moves
 // the session and the panel's ctrl+d the only one that removes a checkout),
 // loads in plain Pi with git as its only external dependency, and ships none of
@@ -73,11 +73,11 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd-list, /issues, /card:bash and the two worktree tools', async () => {
+  test('registers /warp, /odd-list, /files, /issues, /card:bash and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['card:bash', 'issues', 'odd-list', 'warp'], 'the command list is exactly the three panels and the card toggle');
+    assert.deepEqual(registered, ['card:bash', 'files', 'issues', 'odd-list', 'warp'], 'the command list is exactly the four panels and the card toggle');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
@@ -87,7 +87,7 @@ describe('registration', () => {
   // Everything the invariants still forbid stays forbidden.
   test('the one preference this package writes is the bash card mode', async () => {
     const source = stubbedSource();
-    assert.ok(source.includes('pi.registerCommand("card:bash"'), 'the toggle is the fourth command');
+    assert.ok(source.includes('pi.registerCommand("card:bash"'), 'the toggle is the fifth command');
     assert.ok(source.includes('function registerCardBashCommand'), 'its registration is a named step');
     assert.ok(source.includes('libRequire("card-bash-mode.js")'), 'the mode document has one reader/writer');
     const { commands } = await loadExtension({});

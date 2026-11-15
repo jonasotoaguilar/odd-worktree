@@ -4,7 +4,7 @@ A Pi extension that gives an agent session worktrees, ODD documents and GitHub i
 
 ## What It Does
 
-Two agent tools, three panels, one sidebar section and one preference, loaded from one extension entry point. Each ODD feature gets its own checkout beside the clone, and you move between checkouts and read your ODD documents and issues without leaving Pi.
+Two agent tools, four panels, one sidebar section and one preference, loaded from one extension entry point. Each ODD feature gets its own checkout beside the clone, and you move between checkouts and read your ODD documents, files and issues without leaving Pi.
 
 | Surface | Kind | What it does |
 | --- | --- | --- |
@@ -12,6 +12,7 @@ Two agent tools, three panels, one sidebar section and one preference, loaded fr
 | `worktree_list` | tool | Read-only list of the checkouts this package created, each by its ODD and branch. |
 | `/warp` | panel | Moves this session to another checkout, creates one, and removes one. |
 | `/odd-list` | panel | Reads this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
+| `/files` | panel | Browses one checkout's files with a live, language-coloured preview: `enter` pastes the chosen paths into your prompt, `ctrl+e` opens the file in `$EDITOR`. |
 | `/issues` | panel | Reads this checkout's GitHub issues — the three scoped tabs on open, every open issue behind `g` — and, when your role allows it, edits them. |
 | `ISSUES` rail section | sidebar section | Lists the open issues of this checkout's repository assigned to you, seven at a time plus a count of the rest; a click opens that issue in `/issues` on `Assigned` and the overflow row opens `/issues`. Needs `gh` and gentle-shell-bridge with its rail. |
 | `/card:bash` | preference | Flips a `bash` tool call between this package's activity card, the default, and the host's own drawing. |
@@ -36,7 +37,7 @@ pi install npm:pi-odd-worktree
 
 Inside a Gentle Shell session, use its launcher instead: `gentle-shell install npm:pi-odd-worktree`. From a local clone, `pi install .` installs the working copy.
 
-Expected result: `/warp`, `/odd-list`, `/issues` and `/card:bash` are available as commands, the agent is offered `worktree_create` and `worktree_list`, and a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows an `ISSUES` section for this checkout.
+Expected result: `/warp`, `/odd-list`, `/files`, `/issues` and `/card:bash` are available as commands, the agent is offered `worktree_create` and `worktree_list`, and a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows an `ISSUES` section for this checkout.
 
 ## Core Workflow
 
@@ -52,6 +53,7 @@ The full rules of each step, including every refusal, are in [Create, list, move
 - **A create is instant and writes no state.** The directory is the whole record; there is no list file and no lock file.
 - **Deleting refuses on a live session.** The guard reads Gentle Shell's presence records, discloses what it could not resolve, and never auto-warps. Removal is `git worktree remove` and the branch is kept. See [the deletion guard](docs/reference.md#the-deletion-guard-and-its-honest-limit).
 - **A warp is queued, never dropped.** While this session's tools, agent tasks or background jobs are still running, `/warp` keeps the request pending and moves when they finish. See [the queued warp](docs/reference.md#a-warp-waits-for-this-sessions-own-tools-agent-tasks-and-background-jobs).
+- **`/files` lists one checkout's files and pastes them.** When the clone has more than its principal checkout it asks for a scope first (`main`, then the checkouts this package created, most recently modified first); `ctrl+o` cycles `modified`, `path` and `ext`, and the preview is read-only, bounded and coloured from your active theme. `enter` inserts `@`-prefixed paths — a file of another checkout travels as its absolute path instead, because `@` would resolve against the wrong directory — and `ctrl+e` opens the highlighted file in `$VISUAL`/`$EDITOR`. See [the file picker](docs/reference.md#files-the-picker-its-scopes-and-its-orders).
 - **`/issues` opens on three tabs, not four.** The bar is `My issues`, `Assigned` and `Involved`; `All` is the `g` shortcut's own view, read the first time you enter it and reused after that, with the footer saying `g all issues` outside it and `g related issues` inside. A typed filter spans the three tabs and travels with you into `All`, which then reads a capped search and says so instead of claiming an exact total. See [the tabs, the shortcut and the filter](docs/reference.md#issues-three-tabs-one-shortcut-one-filter).
 - **`/issues` can open on one issue.** `/issues 42` (or `/issues #42`) opens the panel on `Assigned` with that issue selected, and a number that tab cannot find says so instead of guessing a row.
 - **`/issues` pins the repository.** Every read, mutation and browser open is bound to the repository that was loaded, and capabilities fail closed. See [the repository pin](docs/reference.md#issues-pins-the-repository).

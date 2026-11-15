@@ -86,6 +86,21 @@ open the document in `$VISUAL`/`$EDITOR`, `s` toggles the order between `recent`
 and `name`, `r` reload, `esc` close. `←`/`→` and `[`/`]` scroll the list; the
 document pane pages with `ctrl+j`/`ctrl+k`.
 
+`/files` — one option per key. The scope step, when it appears, is `↑`/`↓`,
+`enter` and `esc`.
+
+| Key | Action |
+| --- | --- |
+| `↑`/`↓` | Move the selection |
+| `tab` | Select or unselect the highlighted file |
+| `ctrl+j`/`ctrl+k` | Scroll the preview one line |
+| `ctrl+o` | Cycle the order: `modified`, `path`, `ext` |
+| `space` | Fold or unfold the focused group |
+| `ctrl+u` | Clear the query |
+| `ctrl+e` | Open the highlighted file in `$VISUAL`/`$EDITOR` |
+| `enter` | Insert the selected files plus the highlighted one, and close |
+| `esc`, `ctrl+c` | Close the panel |
+
 `/issues` — the tab bar reads `My issues (<n>)`, `Assigned (<n>)` and
 `Involved (<n>)`; `All` is not a tab, it is the `g` shortcut's own view, and there
 the bar reads only `All (<n>)`.
@@ -462,6 +477,83 @@ and `<n> assigned · stale` while the rows on screen are the last good ones.
   repository can be proven — a failed proof is the error row and makes no `gh`
   call; and a Gentle Shell whose `gentle-shell-bridge` published its API and draws
   a rail.
+
+## `/files`: the picker, its scopes and its orders
+
+`/files` browses one checkout's files: the list on the left, a live preview on
+the right, and a search row that is always active directly under the title.
+Typing filters immediately — there is no mode to enter and no "type to search"
+hint — so navigation and scrolling use modifier combinations, and a query that
+matches nothing paints `No files match "<query>"`. The list is Git's own
+(`git ls-files --cached --others --exclude-standard`), so tracked files and
+untracked-but-not-ignored files appear and `.gitignore` is respected. A file
+changed in the working tree sorts above the unchanged ones, wears this package's
+own badge — `M` for a tracked file with an uncommitted change, `U` for an
+untracked one — and its age in `s`/`h`/`d` at the right; the ages are computed
+when the panel opens and never refreshed live.
+
+**A scope step, only when there is a choice.** When this clone has more than its
+principal checkout, `/files` first asks which one to browse: `main` first, then
+every other checkout this package created, most recently modified first, each row
+reading `<odd> · <branch>` and its `±n files` (`±1 file`). Above that card's
+footer sits the focused scope's detail line: the last commit subject, then
+`±n files`, the age of the last modification, and `↑n main` / `↓n main` — the
+`main` row compares with `origin/main`, every other checkout with the local
+`main` — and a field that is zero or absent is not painted at all. With no other
+checkout the step never appears and the picker opens on the principal checkout.
+
+**One option per key.** The footer names one binding per action even when several
+work, and both keys stay live. The compatibility bindings it never names all
+work: `home`/`end` (first and last file), `ctrl+home`/`ctrl+end` (the preview's
+first and last line), `ctrl+shift+j`/`ctrl+shift+k` and `ctrl+c`.
+
+**The three orders.** `ctrl+o` cycles `modified` (the default: one flat list,
+most recently modified first), `path` (an IDE-style folder tree — inside a folder
+its subfolders come first and then its own files, so at the top level every
+folder group paints before the files at the repository root) and `ext` (one group
+per extension named with its dot, alphabetical by path inside, the extensionless
+group last). The active order is painted at the right of the footer. `path` and
+`ext` are foldable: groups start expanded, the fold state is kept per order while
+the panel is open, `space` toggles the focused group and `enter` on a group does
+the same while `enter` on a file still inserts. A non-empty query forces every
+group open, and the fold keys do nothing until it is cleared. In `modified` and
+`ext` a file row paints its parent directory at the right; in `path` it does not,
+because the tree already places the file under that folder.
+
+**What `enter` inserts.** Every file selected with `tab` plus the highlighted
+one, each once, in list order, space-separated — and nothing is sent: the panel
+closes, focus stays in the input and the message still waits for you. A file
+below the session's cwd is inserted as `@` plus its path from that cwd
+(`@AGENTS.md`, `@lib/view-layout.js`); any other file — one of another checkout,
+or one outside the cwd — is inserted as its real absolute path, because `@`
+resolves against the current directory and would name the wrong file.
+
+**The preview is bounded.** It is one `open`/`read` of at most 64 KiB, at most
+200 lines and at most 400 columns per line, so no file can stall a paint: a file
+the read cut short ends with `… preview truncated.`, and a binary file paints
+`Binary file — preview not available.` instead of its bytes. The pane sits in its
+own rounded box, with the top visible line as `line/total` on that box's top
+border and a dim gutter numbering each line once; a line wider than the pane
+wraps onto continuation rows aligned under the same text column instead of being
+cut with an ellipsis, and when the body is too short for the box plus one content
+row the preview paints unbordered rather than squeezing its content.
+
+**Coloured, from your theme.** The preview paints the file's syntax through the
+host's own `highlightCode` / `getLanguageFromPath`, so the colours are the active
+theme's and never a foreign palette; the gutter keeps its dim tone and is never
+highlighted. An unknown language, a grammar the host has not loaded, an absent
+highlighter and a highlighter that throws all degrade to plain text — never
+blank, never an error, never a partial line — and highlighting runs once per
+preview load, never per repaint.
+
+**Read-only, and with no shortcut yet.** The panel reads and paints: it writes
+nothing, stages nothing and opens no network, and every child is a fixed argv
+with a bounded timeout — `git` through this package's async runner, plus the one
+`$VISUAL`/`$EDITOR` `ctrl+e` starts (a missing variable is reported in its own
+sentence). It opens from the command palette: `/files` has no key of its own yet.
+It mounts its own overlay, so a host without `ctx.ui.custom` gets one line saying
+the picker needs an interactive session with overlay support, and no second
+surface in its place.
 
 ## Card style follows your shell
 
@@ -926,12 +1018,13 @@ card](#the-bash-card-and-its-toggle) draws the same command with the classifier'
 
 ## Deliberately absent
 
-This package is the worktree / ODD / issues surface only: two agent tools, three
-panels, one optional rail section and the one bash-card preference, no customize panel, no plugin-tools
+This package is the worktree / ODD / files / issues surface only: two agent
+tools, four panels, one optional rail section and the one bash-card preference,
+no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. There is nothing to
-configure beyond `/card:bash`, and `/warp`, `/odd-list` and `/issues` are always
-on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
+configure beyond `/card:bash`, and `/warp`, `/odd-list`, `/files` and `/issues`
+are always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 
 ## Tests

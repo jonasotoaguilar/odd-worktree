@@ -223,3 +223,75 @@ test('apply never throws and a failed answer leaves the cached entry untouched',
     'a failed answer never mutates the cache');
   assert.deepEqual(cache.plan(ID), { full: false, first: 20 });
 });
+
+// T15 (S9, verify round 3 defect 3): the ten-minute bound is measured from the
+// last FULL read, never from the last delta. A steady stream of deltas used to
+// renew the timestamp `plan` compared against, so the full re-read slid forever.
+test('T15: every delta moves syncedAt but only a full read moves the ten-minute bound', () => {
+  let clock = 1000;
+  const cache = createIssuesCache({ now: () => clock, fullTtlMs: 600000 });
+  cache.apply(ID, response({ assigned: [issue(1, '2024-01-01T00:00:00Z')] }), { full: true });
+  const fullReadAt = cache.get(ID).syncedAt;
+  assert.equal(fullReadAt, clock);
+
+  // One delta a minute, for nine minutes: each one lands and stamps `syncedAt`,
+  // and every one of them still plans the next read as a delta.
+  for (let minute = 1; minute <= 9; minute += 1) {
+    clock = fullReadAt + minute * 60000;
+    cache.apply(ID, response({ assigned: [issue(1, '2024-01-01T00:00:00Z')] }), { full: false });
+    assert.equal(cache.get(ID).syncedAt, clock, `delta at minute ${minute} stamped syncedAt`);
+    assert.deepEqual(cache.plan(ID), { full: false, first: 20 },
+      `the cache is inside its window at minute ${minute}`);
+  }
+
+  // 600001 ms after the FULL read, however many deltas landed since, the ten
+  // minutes are up: a delta never postponed the full re-read.
+  clock = fullReadAt + 600001;
+  assert.deepEqual(cache.plan(ID), { full: true, first: 100 },
+    'the ten-minute bound is measured from the full read, not from the last delta');
+  assert.equal(cache.get(ID).syncedAt, fullReadAt + 9 * 60000,
+    'syncedAt still reports the last apply, not the full read');
+
+  // A full read starts the window over.
+  cache.apply(ID, response({ assigned: [issue(1, '2024-01-01T00:00:00Z')] }), { full: true });
+  assert.deepEqual(cache.plan(ID), { full: false, first: 20 },
+    'a full apply renews the ten-minute bound');
+});
+
+// T15 (S9, verify round 3 defect 5): the wiring numbers a read when it STARTS.
+// An answer whose number is older than the last one applied for that identity is
+// ignored, so a full read that finishes after a newer one can never overwrite it.
+test('T15: an answer older than the last applied sequence is ignored', () => {
+  let clock = 2000;
+  const cache = createIssuesCache({ now: () => clock, fullTtlMs: 600000 });
+
+  // Read A starts first (sequence 1); read B starts next (sequence 2) and its
+  // full answer lands first.
+  cache.apply(ID, response({ assigned: [issue(22, '2024-02-01T00:00:00Z')] }), { full: true, sequence: 2 });
+
+  // A answers afterwards. It is older by start order, so it changes nothing.
+  clock = 3000;
+  const late = cache.apply(ID, response({ assigned: [issue(11, '2024-01-01T00:00:00Z')] }), { full: true, sequence: 1 });
+  assert.equal(late.consistent, false, 'the older answer reports it was not applied');
+  assert.deepEqual(numbers(cache.get(ID).buckets.assigned), [22], 'the newer full read survives');
+  assert.equal(cache.get(ID).syncedAt, 2000, 'the ignored answer did not stamp the entry');
+
+  // A delta that started after B merges on top of B; the older full answer
+  // arriving still later cannot replace that merge either.
+  clock = 4000;
+  cache.apply(ID, response({
+    assigned: [issue(23, '2024-03-01T00:00:00Z')],
+    counts: { assigned: 2 },
+  }), { full: false, sequence: 3 });
+  assert.deepEqual(numbers(cache.get(ID).buckets.assigned), [23, 22]);
+  clock = 5000;
+  cache.apply(ID, response({ assigned: [issue(11, '2024-01-01T00:00:00Z')] }), { full: true, sequence: 1 });
+  assert.deepEqual(numbers(cache.get(ID).buckets.assigned), [23, 22],
+    'the older full answer never overwrites a newer delta');
+
+  // The ten-minute bound is still the newer full read's: had the older full
+  // answer been applied at 3000 or 5000, it would have moved it.
+  clock = 2000 + 600001;
+  assert.deepEqual(cache.plan(ID), { full: true, first: 100 },
+    'the bound counts from the applied full read, never from the ignored older one');
+});

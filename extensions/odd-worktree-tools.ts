@@ -6598,6 +6598,16 @@ let issuesSidebarSubscribed = false;
 // identity and never written to disk; the extension owns its lifetime so a
 // session's shutdown clears it beside the section's snapshot.
 let issuesSidebarCache = null;
+// T15 (S9, defect 4): the cache wiring's generation. Every read captures it when
+// it STARTS and may write its answer only while it is still current; a shutdown
+// clear (or a rebinding) moves it on, so a read that outlived its session can
+// never repopulate the cache it just cleared. A discarded answer still returns
+// its rows to the section, whose own token decides whether they paint.
+let issuesSidebarCacheGeneration = 0;
+// T15 (S9, defect 5): every read is numbered when it STARTS (before any await), so
+// the cache can ignore an answer that is older than the last one applied for the
+// same identity — a full read that finishes late never overwrites a newer one.
+let issuesSidebarReadSequence = 0;
 // T11: one hint per process. `Armed` keeps two session starts from arming two
 // checks; `Announced` is what a late publication sets, so the deferred check
 // never speaks over a bridge that arrived; the "already told the human" fact
@@ -7131,6 +7141,9 @@ function issuesSidebarRelatedCache() {
 }
 
 function clearIssuesSidebarCache() {
+  // T15 (defect 4): the bump comes FIRST, so a read still holding the previous
+  // generation can never write the entry this clear is about to remove.
+  issuesSidebarCacheGeneration += 1;
   if (issuesSidebarCache === null) return;
   try {
     issuesSidebarCache.clear();
@@ -7153,7 +7166,18 @@ function clearIssuesSidebarCache() {
 // T10 stale handling keeps working unchanged. `truncated` travels with the
 // answer: the assigned bucket's `issueCount` exceeded the cache cap, so the real
 // total is larger than what is stored and the overflow row says so.
+//
+// T15 (S6/S9): the read is numbered and generation-stamped BEFORE its first
+// await, so its place in the order is the START, not the answer. A read with no
+// bound session context reads nothing at all, and one whose generation moved on
+// (shutdown, rebinding) never writes the cache — though it still returns the
+// rows it read, for the section's own token to accept or discard.
 async function loadIssuesSidebar() {
+  const sequence = (issuesSidebarReadSequence += 1);
+  const cacheGeneration = issuesSidebarCacheGeneration;
+  if (issuesSidebarCtx === null) {
+    return { ok: false, error: "cannot read issues: the session has ended" };
+  }
   const cwd = toolCwd(issuesSidebarCtx);
   let gh;
   try {
@@ -7184,14 +7208,18 @@ async function loadIssuesSidebar() {
   if (!read || read.ok !== true) {
     return { ok: false, error: (read && read.error) || "GitHub query failed" };
   }
-  if (cache !== null) {
+  // T15 (defects 4 and 5): only an answer from the current generation, and only
+  // one the cache has not already superseded, may write. The rows are returned
+  // either way.
+  const canWriteCache = cache !== null && issuesSidebarCacheGeneration === cacheGeneration;
+  if (canWriteCache) {
     try {
-      cache.apply(identity, read, { full: plan.full === true });
+      cache.apply(identity, read, { full: plan.full === true, sequence });
     } catch {
       // A cache that refuses the answer is no reason to lose the read itself.
     }
   }
-  const cached = cache !== null ? cache.get(identity) : null;
+  const cached = canWriteCache ? cache.get(identity) : null;
   const fallback = read.buckets && read.buckets.assigned ? read.buckets.assigned : null;
   const issues = cached !== null && cached.buckets && Array.isArray(cached.buckets.assigned)
     ? cached.buckets.assigned
@@ -7260,6 +7288,10 @@ function mountIssuesSidebar(pi, api) {
     return;
   }
   if (!factory || typeof factory.createIssuesSection !== "function") return;
+  // T15 (S9, defect 4): binding the section to the bridge is a rebinding of this
+  // cache wiring, like `/reload`; an answer a previous binding still holds must
+  // not land in the new section's cache.
+  issuesSidebarCacheGeneration += 1;
   const onRefreshed = typeof api.requestRepaint === "function"
     ? () => {
       try {

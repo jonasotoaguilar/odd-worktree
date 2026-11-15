@@ -136,9 +136,26 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 | T12 | S4 (the click opens the panel) | worker | `extensions/odd-worktree-tools.ts`, `lib/issues-view.js`, `tools/issues-command.test.js` | pending |
 | T13 | S3 (a hidden section costs nothing) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
 | T14 | S9 (one combined read, the cache, the count invariant) | worker | `lib/gh-issues.js`, `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
+| T15 | S3, S6, S8, S9 (round 3 defects: the floor counts attempts, a queued refresh dies with its section, the cache TTL is absolute, cache writes are generation-guarded) | worker | `lib/issues-section.js`, `lib/related-issues-cache.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js`, `tools/related-issues-cache.test.js` | pending |
 
 ## Log
 
+- **L13 (the human authorizes delivery, verbatim):** "cuando termiens pr y merge y deja principal en main
+  actualizado". That authorizes pushing the branches, opening the pull requests, merging them with
+  merge commits and leaving `main` up to date. It does not authorize a squash: this repo's convention
+  is merge commits, and the commits are the review boundaries. Order: the panel branch first (it is
+  independent, and T12/T4 cannot exist without it), then this branch, which takes the panel by merging
+  `main` into it and only then implements T12 (a row click opens the panel on that issue) and T4 (the
+  panel opens from this cache).
+- **E15 (verify round 3 on e2f113a, five reproduced defects, one cause):** the section's snapshot is
+  guarded against out-of-order answers, but the deferred refresh and the cache that feeds it were not.
+  (1) the 30 s activity floor measures the last SUCCESS, so a failing `gh` is retried at the same instant
+  (`lib/issues-section.js` floor check); (2) a refresh already queued survives `invalidate()` and shutdown
+  and then reads with a null context; (3) the cache's ten-minute bound slides, because every delta renews
+  `syncedAt` (`lib/related-issues-cache.js`), so a steady stream of deltas postpones the full re-read
+  forever; (4) a read in flight at `session_shutdown` repopulates the cache that shutdown just cleared;
+  (5) an older FULL answer applied after a newer one overwrites it in the cache. The verifier's own
+  regression file was lost with its scratch directory, so T15 writes one RED test per defect itself.
 - **E14 (what the docs pass found the code does NOT do, and what is simply still open):** writing S8
   against the code refused five sentences of this document. Two were wrong in the spec and are
   corrected in S3 above: hiding does not invalidate (the old list is drawn again, stale, which is the

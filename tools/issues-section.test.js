@@ -2277,3 +2277,226 @@ test('S9 (T14): session_shutdown clears the cache, so the next session reads in 
   assert.equal((query.match(/first: 100/g) || []).length, 3,
     'a cleared cache reads every bucket in full again');
 });
+
+// ---------------------------------------------------------------------------
+// T15 (S3, S6, S9; verify round 3): the deferred refresh and the cache that
+// feeds it are now held to the same latest-wins discipline the snapshot already
+// had. One RED test per reproduced defect, through the public surface only.
+// ---------------------------------------------------------------------------
+
+test('S3 (T15): a failed refresh starts the activity floor, so the same instant starts nothing', async () => {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const calls = [];
+    let fail = false;
+    ghIssues.setGhRunner(async (_bin, argv, runOpts = {}) => {
+      calls.push({ argv: argv.slice(), env: { ...(runOpts.env || {}) }, cwd: runOpts && runOpts.cwd });
+      if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
+      if (argv[0] === 'repo' && argv[1] === 'view') {
+        return okJson(JSON.stringify({ nameWithOwner: 'myfork/project' }));
+      }
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        if (fail) return { status: 1, stdout: '', stderr: 'HTTP 502: bad gateway', error: null };
+        return okJson(JSON.stringify(relatedAnswer({
+          assigned: [{ number: 11, title: 'Eleven', updatedAt: '2024-01-01T00:00:00Z' }],
+        })));
+      }
+      return okJson('');
+    });
+
+    const ctx = { cwd: checkout, ui: { notify: () => {} } };
+    await fireSessionStart(loaded.hooks, ctx);
+    const section = registered[0];
+    await waitForRows(section, ctx);
+    assert.equal(graphqlCalls(calls).length, 1, 'the drawn frame made its one read');
+
+    // 30 s after that success the floor allows the activity refresh, and THIS
+    // attempt fails.
+    fail = true;
+    offset = 30000;
+    await fireHook(loaded.hooks, 'turn_end', ctx);
+    await waitFor(() => graphqlCalls(calls).length === 2, 'the failing activity refresh never ran');
+    await waitFor(() => String(section.meta(ctx)).includes('· stale'), 'the failure never reported stale');
+
+    // The failed ATTEMPT is what starts the floor: at this same instant nothing
+    // may start another read.
+    const before = graphqlCalls(calls).length;
+    await fireHook(loaded.hooks, 'turn_end', ctx);
+    await fireHook(loaded.hooks, 'before_agent_start', ctx);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(graphqlCalls(calls).length, before,
+      'a failed attempt starts the floor, so no activity retries the same instant');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('S3 (T15): after a failed refresh the frame TTL is measured from the attempt, not the last success', async () => {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const calls = [];
+    let fail = false;
+    ghIssues.setGhRunner(async (_bin, argv, runOpts = {}) => {
+      calls.push({ argv: argv.slice(), env: { ...(runOpts.env || {}) }, cwd: runOpts && runOpts.cwd });
+      if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
+      if (argv[0] === 'repo' && argv[1] === 'view') {
+        return okJson(JSON.stringify({ nameWithOwner: 'myfork/project' }));
+      }
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        if (fail) return { status: 1, stdout: '', stderr: 'HTTP 502: bad gateway', error: null };
+        return okJson(JSON.stringify(relatedAnswer({
+          assigned: [{ number: 11, title: 'Eleven', updatedAt: '2024-01-01T00:00:00Z' }],
+        })));
+      }
+      return okJson('');
+    });
+
+    const ctx = { cwd: checkout, ui: { notify: () => {} } };
+    await fireSessionStart(loaded.hooks, ctx);
+    const section = registered[0];
+    await waitForRows(section, ctx);
+    assert.equal(graphqlCalls(calls).length, 1, 'the first read succeeded');
+
+    // One minute after the success the frame TTL starts a refresh that fails.
+    fail = true;
+    offset = 61000;
+    section.lines(ctx);
+    await waitFor(() => graphqlCalls(calls).length === 2, 'the failed TTL refresh never ran');
+    await waitFor(() => String(section.meta(ctx)).includes('· stale'), 'the failure never reported stale');
+
+    // A frame at that same instant must not queue a retry: the TTL runs from the
+    // failed attempt, not from the success that preceded it.
+    const before = graphqlCalls(calls).length;
+    section.lines(ctx);
+    section.lines(ctx);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(graphqlCalls(calls).length, before,
+      'the frame TTL waits for the ten-minute-style window from the attempt, never a tight retry');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('S3 (T15): a refresh queued before invalidate() or dispose() never reads', async () => {
+  let loads = 0;
+  const sched = manualSchedule();
+  const handle = createIssuesSection({
+    load: async () => {
+      loads += 1;
+      return { ok: true, identity: IDENTITY, issues: [], truncated: false };
+    },
+    open: () => {},
+    openAll: () => {},
+    schedule: sched.schedule,
+  });
+
+  // The drawn frame queues the section's own refresh on the injected scheduler.
+  handle.section.lines({});
+  assert.equal(sched.pending(), 1, 'the stale frame queued one refresh');
+  handle.invalidate();
+  await sched.flush();
+  assert.equal(loads, 0, 'a callback queued before invalidate() started no read');
+
+  // The same holds for a callback queued before dispose().
+  handle.section.lines({});
+  assert.equal(sched.pending(), 1, 'the new frame queued its own refresh');
+  handle.dispose();
+  await sched.flush();
+  assert.equal(loads, 0, 'a callback queued before dispose() started no read');
+});
+
+test('S3 (T15): a refresh queued before session_shutdown reads nothing and repaints nothing', async () => {
+  const checkout = makeCheckout();
+  const { registered, repaints } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub({
+    issues: [{ number: 11, title: 'Eleven', state: 'OPEN', updatedAt: '2024-01-01T00:00:00Z' }],
+  });
+  ghIssues.setGhRunner(gh.runner);
+
+  const ctx = { cwd: checkout, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctx);
+  const section = registered[0];
+
+  // The frame queues its refresh on the host's macrotask scheduler; the session
+  // ends synchronously, before that callback can run.
+  section.lines(ctx);
+  await fireHook(loaded.hooks, 'session_shutdown', ctx);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  assert.equal(graphqlCalls(gh.calls).length, 0, 'the queued callback never starts a read');
+  assert.deepEqual(repaints, [], 'and it never repaints a torn-down host');
+});
+
+test('S9 (T15): a read in flight at session_shutdown never repopulates the cache', async () => {
+  const checkout = makeCheckout();
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+
+  // Every combined read is HELD, so the test decides when each one answers.
+  const lists = [];
+  ghIssues.setGhRunner((_bin, argv, runOpts = {}) => {
+    const env = runOpts.env || {};
+    if (argv[0] === 'api' && argv[1] === 'user') return Promise.resolve(okJson('{"login":"me"}'));
+    if (argv[0] === 'repo' && argv[1] === 'view') {
+      return Promise.resolve(okJson(JSON.stringify({ nameWithOwner: 'original/project' })));
+    }
+    if (argv[0] === 'api' && argv[1] === 'graphql') {
+      const entry = { repo: env.GH_REPO, query: graphqlQueryOf({ argv }), settle: null };
+      entry.answer = new Promise((resolve) => {
+        entry.settle = (payload) => resolve(okJson(JSON.stringify(payload)));
+      });
+      lists.push(entry);
+      return entry.answer;
+    }
+    return Promise.resolve(okJson(''));
+  });
+
+  const ctx = { cwd: checkout, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctx);
+  const section = registered[0];
+  section.lines(ctx);
+  await waitFor(() => lists.length === 1, 'the drawn section never read its issues');
+
+  // The session ends while its read is still in flight.
+  await fireHook(loaded.hooks, 'session_shutdown', ctx);
+
+  // The read that outlived the session answers NOW: it must not write the cache
+  // shutdown just cleared.
+  lists[0].settle(relatedAnswer({
+    assigned: [{ number: 11, title: 'Gone eleven', updatedAt: '2024-01-01T00:00:00Z' }],
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  // A new session on the same checkout draws: an emptied cache means its first
+  // read is the full one.
+  await fireSessionStart(loaded.hooks, ctx);
+  section.lines(ctx);
+  await waitFor(() => lists.length === 2, 'the new session never read its issues');
+  assert.equal((lists[1].query.match(/first: 100/g) || []).length, 3,
+    'the shut-down read never repopulated the cache, so the next refresh is a full read');
+
+  lists[1].settle(relatedAnswer({
+    assigned: [{ number: 22, title: 'New twenty-two', updatedAt: '2024-02-01T00:00:00Z' }],
+  }));
+  await waitFor(
+    () => section.lines(ctx).some((row) => row.label === '#22 New twenty-two'),
+    'the new session never painted its own rows',
+  );
+  assert.ok(!section.lines(ctx).some((row) => row.label === '#11 Gone eleven'),
+    "the ended session's answer never became cached rows");
+});

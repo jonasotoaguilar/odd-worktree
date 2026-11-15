@@ -82,6 +82,9 @@ after(() => {
 
 afterEach(() => {
   ghIssues.setGhRunner(null);
+  // S8 (T4): the rail's published bridge is process-wide, so no test may leave
+  // one behind for the next.
+  delete globalThis[Symbol.for('gentle-shell-bridge/api/v1')];
 });
 
 const FIXTURES = path.join(__dirname, 'fixtures');
@@ -123,8 +126,18 @@ async function fireSessionStart(hooks, ctx) {
   }
 }
 
+// This file is about the `gh` gate and the panel. The missing-bridge hint is another surface
+// (tools/issues-section.test.js owns it) and it fires ONCE per process, so which test here saw it
+// first would depend on execution order: a test that counts notifications passed only because an
+// earlier one had already consumed the hint. The fixtures leave it out, so every count below means
+// the same thing alone or in the full run.
+const BRIDGE_HINT = /gentle-shell-bridge/;
+const recordNote = (notes) => (message, level) => {
+  if (!BRIDGE_HINT.test(String(message))) notes.push([message, level]);
+};
+
 function gateCtx(cwd, notes) {
-  return { cwd, ui: { notify: (message, level) => notes.push([message, level]) } };
+  return { cwd, ui: { notify: recordNote(notes) } };
 }
 
 const stubTui = {
@@ -159,7 +172,7 @@ function makeCtx({ cwd, customImpl } = {}) {
   const ctx = {
     cwd,
     ui: {
-      notify: (message, level) => notes.push([message, level]),
+      notify: recordNote(notes),
       select: async (title, options) => { selects.push([title, options]); return undefined; },
     },
   };
@@ -1465,5 +1478,395 @@ describe('/issues <number> opens the panel on one issue (S7)', () => {
     const frame = clean(component.render(200).join('\n'));
     assert.match(frame, /▸ My issues/, 'a plain open still starts on My issues');
     assert.ok(!frame.includes('is not in'), 'and paints no initial-issue note');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S8 (the panel ODD's T4; the sidebar ODD's S9 consumer half): the rail's
+// process cache is what makes the first frame instant. The cache is filled by
+// the section's ONE combined read — through the published bridge — and the
+// panel READS it, keyed by the identity the panel itself just proved.
+//
+// The contract under test, through the public surface only:
+// - with an entry for the proved identity, the three scoped pages are seeded
+//   from it, so the first frame paints rows instead of `loading…`;
+// - the seeded open STILL reads: the visible bucket's page read is issued at
+//   mount and its answer replaces the seeded rows, and every other seeded tab
+//   is read the first time it is activated — nothing is seeded forever;
+// - with NO entry the panel behaves exactly as before (the same notes, the same
+//   three scoped reads and the same first frame);
+// - a bucket the cache reported TRUNCATED never renders an exact total (`N+`);
+// - the panel never writes the cache: a second open paints the same seeded rows.
+// ---------------------------------------------------------------------------
+
+describe('/issues opens from the rail cache (S8/T4)', () => {
+  const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+  // The identity both halves prove for the fixture checkout: one remote would
+  // have no scope identity, and `makeRepo` has none at all, so gh's own answer
+  // (`tools/fixtures/gh-repo-view.json`) is normalized host-qualified.
+  const IDENTITY = 'github.com/jonasotoaguilar/herdr-gentle-shell';
+
+  function installBridge() {
+    const registered = [];
+    globalThis[BRIDGE_SLOT] = {
+      schema: 'gentle-shell-bridge/api',
+      version: 1,
+      registerRows: () => {},
+      registerSection: (section) => { registered.push(section); return () => {}; },
+      createStore: () => ({}),
+      requestRepaint: () => {},
+    };
+    return registered;
+  }
+
+  // One issue node in the shape the rail's combined read asks for.
+  function relatedNode(row) {
+    const stamp = row.updatedAt || '2026-02-01T00:00:00Z';
+    return {
+      number: row.number,
+      title: row.title,
+      state: 'OPEN',
+      stateReason: '',
+      url: `https://example.test/issues/${row.number}`,
+      createdAt: stamp,
+      updatedAt: stamp,
+      author: { login: 'me' },
+      labels: { nodes: [] },
+      comments: { totalCount: 0 },
+      reactionGroups: [],
+      timelineItems: { nodes: [] },
+    };
+  }
+
+  // The rail's ONE combined answer: three aliased buckets, each with its exact
+  // `issueCount`. `counts` overrides a count, which is how a bucket past the
+  // cache's cap becomes `truncated`.
+  function relatedAnswer({ mine = [], assigned = [], involved = [], counts = {} } = {}) {
+    const bucket = (key, rows) => ({
+      issueCount: Number.isInteger(counts[key]) ? counts[key] : rows.length,
+      nodes: rows.map(relatedNode),
+    });
+    return {
+      data: {
+        mine: bucket('mine', mine),
+        assigned: bucket('assigned', assigned),
+        involved: bucket('involved', involved),
+      },
+    };
+  }
+
+  function issueRow(number, title) {
+    return {
+      number,
+      title,
+      state: 'OPEN',
+      createdAt: '2026-02-01T00:00:00Z',
+      updatedAt: '2026-02-01T00:00:00Z',
+      url: `https://example.test/issues/${number}`,
+    };
+  }
+
+  // A runner over the shared fixture runner: the rail's combined read answers
+  // from `related`, and the panel's page reads can be HELD so the seeded first
+  // frame is observable before any answer lands.
+  function cacheRunner({ related, holdPages = false }) {
+    const base = makeIssuesRunner();
+    const calls = [];
+    const held = [];
+    const runner = async (bin, argv, opts) => {
+      calls.push({ bin, argv: argv.slice(), env: { ...((opts && opts.env) || {}) }, cwd: opts ? opts.cwd : undefined });
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        const query = graphqlField(argv, 'query', '-f') || '';
+        if (query.includes('mine: search(')) {
+          return { status: 0, stdout: JSON.stringify(related), stderr: '', error: null };
+        }
+        if (holdPages && query.includes('type: ISSUE')) {
+          const entry = { argv: argv.slice(), release: null };
+          entry.answer = new Promise((resolve) => {
+            entry.release = (rows) => resolve({
+              status: 0, stdout: graphqlSearchPage(argv, rows), stderr: '', error: null,
+            });
+          });
+          held.push(entry);
+          return entry.answer;
+        }
+      }
+      return base.runner(bin, argv, opts);
+    };
+    return { runner, calls, held };
+  }
+
+  // Mount `/issues` over an already-loaded extension. The component is the real
+  // view, against the real (injected) client.
+  async function mountIssues(loaded, root, { args = '' } = {}) {
+    loaded.mod.setIssuesTuiLoader(async () => stubTui);
+    let factory = null;
+    const { ctx, notes } = makeCtx({ cwd: root });
+    ctx.ui.custom = async (captured) => { factory = captured; return null; };
+    await loaded.commands.get('issues').handler(args, ctx);
+    assert.ok(factory, 'the overlay opens');
+    const { component } = openComponent(factory, makeHostTui(24));
+    return { component, notes };
+  }
+
+  // The rail fills the cache exactly as it does in a live session: the bridge is
+  // published BEFORE the extension loads (that is when the section is
+  // registered), `session_start` binds the checkout, and ONE drawn frame starts
+  // the section's read.
+  async function warmRail(root, related) {
+    const registered = installBridge();
+    const loaded = await loadExtension();
+    const gh = cacheRunner({ related, holdPages: true });
+    ghIssues.setGhRunner(gh.runner);
+    await fireSessionStart(loaded.hooks, gateCtx(root, []));
+    assert.equal(registered.length, 1, 'the rail section is registered through the bridge');
+    const section = registered[0];
+    const ctx = { cwd: root, ui: { notify: () => {} } };
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      const rows = section.lines(ctx);
+      if (!(rows.length === 1 && rows[0].label === 'loading…')) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const labels = section.lines(ctx).map((row) => row.label);
+    assert.ok(labels.length > 0 && labels[0] !== 'loading…',
+      `the rail never filled the cache (saw ${JSON.stringify(labels)})`);
+    return { loaded, gh, section, labels };
+  }
+
+  test('a warmed cache paints the cached rows on the first frame and still reads', async () => {
+    const root = makeRepo({ tag: 'issues-cache-warm' });
+    const related = relatedAnswer({
+      mine: [{ number: 12, title: 'Newer twelve', updatedAt: '2026-02-02T00:00:00Z' },
+        { number: 11, title: 'Older eleven', updatedAt: '2026-02-01T00:00:00Z' }],
+      assigned: [{ number: 21, title: 'Assigned twenty-one', updatedAt: '2026-02-03T00:00:00Z' }],
+      involved: [{ number: 31, title: 'Involved thirty-one', updatedAt: '2026-02-04T00:00:00Z' }],
+    });
+    const warmed = await warmRail(root, related);
+    const { loaded, gh } = warmed;
+    assert.deepEqual(warmed.labels, ['#21 Assigned twenty-one'],
+      'the rail drew the assigned bucket it caches');
+    const railRead = gh.calls.filter((call) => call.argv[0] === 'api' && call.argv[1] === 'graphql')[0];
+    assert.equal(railRead.env.GH_REPO, IDENTITY,
+      'the cache entry is keyed by the identity the rail proved for this checkout');
+
+    const { component } = await mountIssues(loaded, root);
+    const first = clean(component.render(200).join('\n'));
+    // The list row is the title alone (the number lives in the preview beside
+    // it), and the seeded frames are what is on screen before any page read
+    // answers — which is exactly what the cache is for.
+    assert.match(first, /Newer twelve/, 'the cached row is painted before any page read answers');
+    assert.match(first, /Older eleven/);
+    assert.match(first, /▸ My issues \(2\)/, 'and the seeded bucket reports the rows it holds');
+    assert.match(first, /Assigned \(1\)/);
+    assert.match(first, /Involved \(1\)/);
+
+    // The seeded open STILL reads: the visible bucket (My issues) asks for its
+    // own page at mount, so the seeded rows are replaced by a real answer.
+    await waitFor(() => gh.held.length === 1, 'opening never started the visible bucket\'s own read');
+    assert.deepEqual(searchQueries(gh.held), ['author:@me sort:updated-desc'],
+      'the held read is the visible bucket\'s scoped search');
+
+    gh.held[0].release([issueRow(40, 'Fresh forty')]);
+    await waitFor(() => clean(component.render(200).join('\n')).includes('Fresh forty'));
+    const afterAnswer = clean(component.render(200).join('\n'));
+    assert.ok(!afterAnswer.includes('Newer twelve'),
+      'the real answer replaced the seeded row instead of sitting beside it');
+
+    // A seeded tab that mount did not read is read on its FIRST activation: the
+    // seed is never the tab's only data.
+    component.handleInput('tab');
+    await waitFor(() => gh.held.length === 2, 'the activated seeded tab never read its own page');
+    assert.deepEqual(searchQueries([gh.held[1]]), ['assignee:@me sort:updated-desc'],
+      'the Assigned tab reads its own bucket the first time it is entered');
+
+    // The panel never writes the cache: a second open still paints the SAME
+    // seeded rows, not the answer the first open read — and it backs them with
+    // its own read again.
+    const second = await mountIssues(loaded, root);
+    const secondFrame = clean(second.component.render(200).join('\n'));
+    assert.match(secondFrame, /Newer twelve/, 'the cache still holds the rail\'s rows');
+    await waitFor(() => gh.held.length === 3, 'the second open never read its own page');
+    assert.deepEqual(searchQueries([gh.held[2]]), ['author:@me sort:updated-desc'],
+      'the second open reads the visible bucket again');
+  });
+
+  test('with no cache the panel opens exactly as before', async () => {
+    const root = makeRepo({ tag: 'issues-cache-empty' });
+    const base = makeIssuesRunner();
+    const calls = [];
+    const held = [];
+    // No bridge at all: no rail, no draw, so no entry for this identity.
+    const loaded = await loadExtension();
+    ghIssues.setGhRunner(async (bin, argv, opts) => {
+      calls.push({ bin, argv: argv.slice(), cwd: opts ? opts.cwd : undefined });
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        const query = graphqlField(argv, 'query', '-f') || '';
+        if (query.includes('type: ISSUE')) {
+          const entry = { argv: argv.slice(), release: null };
+          entry.answer = new Promise((resolve) => {
+            entry.release = (rows) => resolve({
+              status: 0, stdout: graphqlSearchPage(argv, rows), stderr: '', error: null,
+            });
+          });
+          held.push(entry);
+          return entry.answer;
+        }
+      }
+      return base.runner(bin, argv, opts);
+    });
+    const scratch = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-gate-')));
+    await fireSessionStart(loaded.hooks, gateCtx(scratch, []));
+
+    const { component, notes } = await mountIssues(loaded, root);
+    await waitFor(() => held.length === 3, 'the open never read the three scoped buckets');
+    assert.deepEqual(notes, [], 'an empty cache produces no note');
+    assert.deepEqual(searchQueries(calls), [
+      'author:@me sort:updated-desc',
+      'assignee:@me sort:updated-desc',
+      'involves:@me -author:@me sort:updated-desc',
+    ], 'the open reads the three scoped buckets exactly as before');
+    assert.equal(connectionReads(calls).length, 0, 'and never the All connection');
+    // `render(100)` produces the full-screen frame the host paints. Runs of box
+    // drawing and padding are collapsed so the assertion states the frame's
+    // CONTENT — the box, the search row, the loading line and the footer, with
+    // today's blank body rows. A seeded frame would carry rows here instead.
+    const frame = clean(component.render(100).join('\n'));
+    const shape = frame.split('\n').map((line) => line
+      .trimEnd()
+      .replace(/─{2,}/g, '─…')
+      .replace(/ {2,}/g, ' '));
+    assert.deepEqual(shape, [
+      '╭─ ◈ Issues ─…╮',
+      '│ › Search │',
+      '│ loading issues… │',
+      ...new Array(19).fill('│ │'),
+      '│ ↑↓ move · ctrl+j/k scroll · ←→ bucket · c comment · o web · t search · g all issues · esc close │',
+      '╰─…╯',
+    ], 'the first frame is today\'s loading frame, byte for byte');
+  });
+
+  test('a truncated cached bucket never claims an exact total', async () => {
+    const root = makeRepo({ tag: 'issues-cache-truncated' });
+    const assigned = Array.from({ length: 105 }, (_, at) => ({
+      number: 100 + at,
+      title: `assigned ${100 + at}`,
+      updatedAt: '2026-02-01T00:00:00Z',
+    }));
+    const related = relatedAnswer({
+      mine: [{ number: 12, title: 'Mine twelve', updatedAt: '2026-02-02T00:00:00Z' }],
+      assigned,
+      counts: { assigned: 105 },
+    });
+    const { loaded } = await warmRail(root, related);
+
+    const { component } = await mountIssues(loaded, root);
+    const first = clean(component.render(240).join('\n'));
+    assert.match(first, /Assigned \(100\+\)/, 'a bucket the cache truncated is painted as inexact');
+    assert.ok(!/Assigned \(100\)/.test(first), 'and never with an exact total it does not have');
+    assert.ok(!/Assigned \(105\)/.test(first), 'nor with a count no surface read');
+  });
+
+  // T17 (E17b): the rail refuses to trust an entry whose cached rows no longer
+  // match the `issueCount` the response reported (its next sync is a full
+  // re-read), so a total derived from those rows is exactly the number the rail
+  // itself refuses to claim. The panel must paint it inexact too.
+  // E18 (S4, verify round 5 blocker b): a seeded page is rows on screen before its
+  // own read answers, and the verifier's exact scenario is `/issues 22` over a
+  // seeded `Assigned` of `[21, 22]` with that page still in flight: the initial
+  // selection landed on 21, and `c` then `ctrl+s` posted a comment on 21 while the
+  // human asked for 22. A mutation on an issue nobody chose is the one thing the
+  // identity work exists to prevent.
+  //
+  // The property: with `Assigned` seeded and `/issues <n>` where `n` is the second
+  // seeded row, no mutation of any kind — comment, labels, assignees, close — can
+  // reach any row other than `n`.
+  test('a seeded Assigned page never lends a mutation to another issue (E18)', async () => {
+    const root = makeRepo({ tag: 'issues-seed-mutation' });
+    const related = relatedAnswer({
+      assigned: [
+        { number: 21, title: 'Assigned twenty-one', updatedAt: '2026-02-03T00:00:00Z' },
+        { number: 22, title: 'Assigned twenty-two', updatedAt: '2026-02-02T00:00:00Z' },
+      ],
+    });
+    const warmed = await warmRail(root, related);
+    const { loaded, gh } = warmed;
+    const { component } = await mountIssues(loaded, root, { args: '22' });
+    const frame = () => clean(component.render(240).join('\n'));
+    const writes = () => gh.calls.filter((call) => call.argv[0] === 'issue'
+      && ['comment', 'edit', 'close'].includes(call.argv[1]));
+
+    assert.ok(await waitFor(() => gh.held.length >= 1), 'the numbered open issued its own Assigned read');
+    assert.deepEqual(searchQueries([gh.held[0]]), ['assignee:@me sort:updated-desc'],
+      'the held read is the bucket the panel was opened on');
+
+    // The verifier's exact scenario: `c`, then `ctrl+s`, in that window.
+    component.handleInput('c');
+    for (const ch of 'looks right') component.handleInput(ch);
+    component.handleInput('ctrl+s');
+    assert.ok(await waitFor(() => writes().length > 0), 'the comment reached gh');
+    assert.deepEqual(writes().map((call) => call.argv.slice(0, 3)), [['issue', 'comment', '22']],
+      'the comment names the issue the human asked for, never the seeded #21');
+
+    // The page's own answer lands. The correct issue is still the only one any
+    // mutation can reach.
+    gh.held[0].release([
+      issueRow(21, 'Assigned twenty-one'),
+      issueRow(22, 'Assigned twenty-two'),
+    ]);
+    assert.ok(await waitFor(() => frame().includes('l labels')),
+      'the answer is on screen and the detail confirmed the role');
+
+    component.handleInput('l');
+    await tick();
+    component.handleInput('down');
+    component.handleInput('space');
+    component.handleInput('ctrl+s');
+    assert.ok(await waitFor(() => writes().some((call) => call.argv[1] === 'edit'
+      && call.argv.includes('--add-label'))), 'the label save reached gh');
+    assert.ok(await waitFor(() => component.state.mode === 'list'), 'the label save closed the editor');
+    // A successful write re-reads the detail, and the editor keys are only
+    // offered once that answer confirms the repository role again.
+    const roleBack = await waitFor(() => frame().includes('l labels'));
+    if (!roleBack) console.log('DEBUG2>>>\n' + frame().split('\n').filter((line) => !line.trim().startsWith('│') || line.includes('Assigned twenty') || line.includes('·')).join('\n') + '\n<<<DEBUG2');
+    assert.ok(roleBack, 'the refreshed detail confirms the role');
+
+    component.handleInput('a');
+    assert.ok(await waitFor(() => frame().includes('Assignees (space toggle')), 'the assignee editor opened');
+    assert.ok(await waitFor(() => !frame().includes('loading assignees')), 'the assignable users answered');
+    component.handleInput('space');
+    component.handleInput('ctrl+s');
+    const assigneeWrite = (call) => call.argv[1] === 'edit'
+      && (call.argv.includes('--add-assignee') || call.argv.includes('--remove-assignee'));
+    assert.ok(await waitFor(() => writes().some(assigneeWrite)), 'the assignee save reached gh');
+    assert.ok(await waitFor(() => component.state.mode === 'list'), 'the assignee save closed the editor');
+    assert.ok(await waitFor(() => frame().includes('x close')), 'the refreshed detail confirms the role again');
+
+    component.handleInput('x');
+    component.handleInput('enter');
+    assert.ok(await waitFor(() => writes().some((call) => call.argv[1] === 'close')), 'the close reached gh');
+
+    assert.deepEqual(writes().map((call) => call.argv[2]), ['22', '22', '22', '22'],
+      'every mutation this panel ran named #22, the issue the human asked for');
+    assert.equal(writes().some((call) => call.argv[2] === '21'), false,
+      'and not one of them ever named the seeded #21');
+  });
+
+  test('an inconsistent cached entry never claims an exact total', async () => {
+    const root = makeRepo({ tag: 'issues-cache-inconsistent' });
+    // ONE read whose assigned `issueCount` (2) outruns the nodes it returned
+    // (1): the count invariant breaks on the very first apply, which is exactly
+    // the state a departed issue leaves behind between two rail reads.
+    const related = relatedAnswer({
+      mine: [{ number: 12, title: 'Mine twelve', updatedAt: '2026-02-02T00:00:00Z' }],
+      assigned: [{ number: 21, title: 'Assigned twenty-one', updatedAt: '2026-02-03T00:00:00Z' }],
+      counts: { assigned: 2 },
+    });
+    const { loaded } = await warmRail(root, related);
+
+    const { component } = await mountIssues(loaded, root);
+    const first = clean(component.render(240).join('\n'));
+    assert.match(first, /Assigned \(1\+\)/, 'an entry the rail calls inconsistent is seeded inexact');
+    assert.ok(!/Assigned \(1\)(?!\+)/.test(first), 'and never with the exact total it cannot prove');
   });
 });

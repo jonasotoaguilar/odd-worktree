@@ -274,7 +274,11 @@ All three sources are read **best effort**, and none is ever guessed:
 Opening the panel reads the three scoped buckets only — `My issues`
 (`author:@me`), `Assigned` (`assignee:@me`) and `Involved`
 (`involves:@me -author:@me`) — one cursor page each, open issues, newest update
-first. `All` costs nothing until you ask for it, which is the point of the split:
+first. When the `ISSUES` rail section has already read this checkout's repository,
+the first frame is painted from that cache instead and ONE tab is read at mount —
+the other two read the first time you open them; [the rail
+section](#the-issues-rail-section) describes the cache and what it changes. `All`
+costs nothing until you ask for it, which is the point of the split:
 the common case is your own issues, and reading every open issue of the
 repository to paint three tabs was work nobody asked for.
 
@@ -318,6 +322,146 @@ the checkout's remote moves while the reader is open, mutations refuse with
 `the checkout's repository changed since this issue list loaded (now … instead of
 …); reopen /issues`, and the reads keep the displayed repository. An issue
 number on screen can never be sent to another repository.
+
+## The `ISSUES` rail section
+
+When Gentle Shell draws its rail, a section titled `ISSUES` lists this checkout's
+related issues: the open issues of the checkout's repository ASSIGNED to you
+(`assignee:@me`) and nothing else. Rows are sorted by last update, seven are
+drawn, and when the read answered with more, an eighth and last dim row reads
+`and N more issues` (`N+` when the read was truncated at its cap, because the real
+total is larger). The section's own meta reports what it holds: `<n> assigned`,
+and `<n> assigned · stale` while the rows on screen are the last good ones.
+
+- **One request per refresh.** A refresh is a single `gh api graphql` request with
+  three aliased searches — `author:@me`, `assignee:@me` and
+  `involves:@me -author:@me`, each open and each sorted by last update — and each
+  answers its own `issueCount` and rows. The section draws only the assigned
+  search; the other two are cached (below), and `/issues` paints its first frame
+  from that cache.
+- **A row is an issue.** It reads `#<number> <title>` with no relation text: with
+  one source every row would wear the same mark, and marking everything marks
+  nothing. The one marker a row can carry says something else: when one of the
+  issue's cross-reference events is a pull request (the read inspects the first ten
+  of them), the row wears the Nerd Font pull-request glyph, and a terminal without
+  a Nerd Font draws a box instead. That marker arrives in the same combined request
+  as the rows, so a failed read takes the rows and their markers together and lands
+  in the stale state below.
+- **A row click opens the panel; the overflow row opens it with no number.**
+  Clicking an issue row sends `/issues <n>` to the host, so the panel opens on
+  `Assigned` with that issue selected and its detail loaded — not in a browser.
+  `/issues`' own `o` key is still the browser open,
+  `gh issue view <n> --web -R <host>/<owner>/<repo>`. Nothing is sent until the
+  click proves this checkout's repository is the one the row was read from,
+  because a row stays on screen across a checkout change: a row from another
+  checkout, or a checkout whose own repository cannot be proven, dispatches
+  nothing and the panel does not open. The proof is pinned to the session it was
+  made in: if `session_start` moves the session to another checkout while the
+  proof is still running, the click dispatches nothing either, because the number
+  was proven against the checkout you left. That refusal is recorded on the section's
+  snapshot instead of thrown, and the list on screen stays exactly as it was —
+  the rail paints no click error of its own, so what you see is that nothing
+  opened. The `and N more issues` row names no issue, so it sends plain `/issues`.
+  Both are deferred off the paint path, run once per click, and a failure never
+  escapes into the rail; a dispatch reports that the command was sent, never that
+  a panel opened.
+- **It reaches the host only through gentle-shell-bridge.** The section is read
+  from that package's published sidebar-section API — the object in the
+  `Symbol.for("gentle-shell-bridge/api/v1")` slot, after its schema and version gate
+  — or from the one `gentle-shell-bridge:ready` announcement when the bridge
+  publishes later. There is no dependency on that package and no import of it. With
+  no bridge the section never appears at all: nothing is registered and no other
+  surface changes. The one thing you are told is how to get it — a single warning
+  per process, from a primary session only, naming
+  `pi install npm:gentle-shell-bridge`; an empty slot at `session_start` may still
+  be a bridge that has not loaded yet, so the warning waits out the announcement
+  window, and a host with no event bus to announce on is told at once. A host that
+  has the bridge but draws no rail registers the section and never paints it — that
+  is the bridge's answer to a host without a sidebar, not a failure here. Its
+  `/gentle:customize` → `Sections` visibility toggle belongs to the bridge, so a
+  host without the bridge has neither the section nor the toggle.
+- **A frame never waits on `gh`.** The host calls `lines()` and `meta()` once per
+  frame and both return synchronously: they read one in-memory snapshot and only
+  ever schedule the refresh. Nothing is read at `session_start`; a snapshot older
+  than 60 s schedules exactly one deferred refresh, and only a drawn body frame
+  schedules it at all — the header call never does. Each turn of yours
+  (`before_agent_start`, then `turn_end`) asks for a read behind a 30 s floor
+  measured on the last ATTEMPT: a failed read starts the floor too, so a `gh`
+  that keeps failing is not retried every turn, and the in-frame TTL counts from
+  the attempt rather than from the last success. It asks only while the section
+  was drawn within the last two minutes — because a frame only exists when the
+  host has a reason to produce one — so while frames keep coming and reads keep
+  succeeding the rail does not stay stale. A hidden section draws nothing, so
+  nothing stamps it afresh and it starts no timer of its own: once the two-minute
+  window lapses it makes no call at all, while a collapsed section is still drawn
+  — its header is painted, and that stamps the frame — so the activity read
+  applies to it too. There is no polling and no repeating timer; the one
+  deferral is a task scheduled off the paint path. `session_shutdown` and a session
+  that starts in another checkout drop the snapshot, so the rail falls back to
+  `loading…` instead of the previous checkout's rows; a read still in flight at
+  that boundary paints nothing and writes nothing to the cache, and a refresh
+  still queued dies with the generation it was queued under instead of reading
+  with no context. A `/reload` fires no `session_start`; the section re-learns its
+  session on the next turn, so it keeps reading the checkout the session runs in
+  and not the host process's own directory.
+- **A failed refresh keeps the rows.** Once a list is on screen, a refresh that
+  fails does not replace it: the same rows, in the same order, with the same
+  markers, stay where they are and the header reads `<n> assigned · stale`
+  instead. A transient `gh` stall is therefore a stale list, not an empty one, and
+  the next successful read clears the mark.
+- **Every state is a row, none is a throw.** `loading…` (dim) before the first
+  answer, `no open issues` (dim) for an empty result, and one error row naming the
+  failure — but only while there is nothing to show; after that, a failure is the
+  stale state above. The error row covers a failed `gh` read and a checkout whose
+  own repository cannot be resolved; the resolution fails closed, exactly as
+  `/issues` reads it, and no `gh` call is made without a proven identity. A failing
+  click is recorded instead of thrown, and it never turns the list into an error
+  row.
+- **One cache, in memory, per repository.** The three scoped views live in one
+  in-process cache keyed by the repository identity the read was proven against;
+  nothing is ever written to disk and a session shutdown clears it, so a session
+  that moves between checkouts never shows one repository's rows under another's
+  name. The first read takes up to 100 per view, later reads the newest 20, merged
+  by issue number. A merge cannot see an issue that was closed or unassigned, so
+  each view is held to one invariant: after a merge its cached count must equal the
+  `issueCount` the same answer reported, and a mismatch makes the NEXT read a full
+  one; so does an entry whose last FULL read is older than ten minutes, since a
+  delta renews only the sync time and never that bound. A view with more than 100 issues is
+  reported truncated — that is the `N+` in the overflow row — instead of being
+  looped over, and a failed read leaves the cache untouched. Clearing it is durable:
+  a read in flight when the session shuts down cannot repopulate it, and an answer
+  older than one already applied is ignored rather than written over it.
+- **`/issues` opens from this cache, and owns none of it.** When the rail has
+  filled an entry for the repository the panel itself proves, `/issues` paints its
+  first frame from it and reads ONE tab at mount instead of three: the tab on
+  screen is read at mount, the other two are seeded and read the first time you
+  open them, and every answer replaces the rows it seeded. With no entry for that
+  repository the open is exactly the one it always was: three scoped reads at
+  mount. The panel is a reader only — the rail keeps the entry's ownership (its
+  read, its merge, the count invariant above, its clear at shutdown), and nothing
+  the panel does adds, shrinks or rewrites it. `All` is never seeded: the cache
+  holds the three scoped views only, so that view still costs its own read the
+  first time you enter it. A seeded row is not an answer: it carries the query it
+  actually answered (the empty one), so typing a filter stops painting it and its
+  count becomes `–` until the filtered read answers, exactly as a freshly loaded
+  page behaves. And a numbered open that has not yet proven its number refuses
+  every one-row action — labels, assignees, comment, close and the browser — with a
+  line naming the number, keeping your draft, so a click can never act on a row
+  other than the one you asked for while the page is still loading. An entry the
+  rail calls inconsistent, and a view it
+  reports truncated, are seeded inexact — the tab's count wears a `+` — because a
+  total derived from rows the rail itself does not trust is a number it refuses to
+  report.
+- **The scope is this checkout's repository, and nothing else moves.** It is the one
+  repository the `/issues` reader is pinned to, not every issue across every
+  repository you touch. `/issues` keeps its own four tabs, its own repository pin
+  and its own reads; the only thing it takes from the section is the cache entry
+  above, which it reads and never changes, so the section neither grows a second
+  reader nor hands its state over.
+- **What it needs.** `gh`, authenticated (`gh auth login`); a checkout whose own
+  repository can be proven — a failed proof is the error row and makes no `gh`
+  call; and a Gentle Shell whose `gentle-shell-bridge` published its API and draws
+  a rail.
 
 ## Card style follows your shell
 
@@ -783,7 +927,7 @@ card](#the-bash-card-and-its-toggle) draws the same command with the classifier'
 ## Deliberately absent
 
 This package is the worktree / ODD / issues surface only: two agent tools, three
-panels and the one bash-card preference, no customize panel, no plugin-tools
+panels, one optional rail section and the one bash-card preference, no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. There is nothing to
 configure beyond `/card:bash`, and `/warp`, `/odd-list` and `/issues` are always

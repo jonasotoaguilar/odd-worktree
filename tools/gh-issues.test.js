@@ -1500,3 +1500,198 @@ describe('fork scope (S5)', () => {
       'every call carries the enterprise host');
   });
 });
+
+// ---------------------------------------------------------------------------
+// S9 (issues-sidebar, T14): ONE combined read of the three scoped views.
+//
+// `listRelatedIssues` replaces the assigned-only `gh issue list` read and the
+// separate pull-request marker read (T9's `listIssuePullRequestReferences`). It
+// is one `gh api graphql` request with three aliased searches, each in the same
+// `repo:<owner>/<name> is:issue is:open` scope, and every row is normalized like
+// a panel row. The marker fact rides the same node selection, so it costs no
+// extra call, and every failure shape is `{ ok: false }`.
+// ---------------------------------------------------------------------------
+describe('listRelatedIssues: one combined read of the three scoped views', () => {
+  const IDENTITY = 'github.com/myfork/project';
+
+  function issueNode(number, extra = {}) {
+    return {
+      number,
+      title: `Issue ${number}`,
+      state: 'OPEN',
+      stateReason: null,
+      url: `https://github.com/myfork/project/issues/${number}`,
+      createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-02-01T00:00:00Z',
+      author: { login: 'octocat' },
+      labels: { nodes: [] },
+      comments: { totalCount: 0 },
+      reactionGroups: [],
+      timelineItems: { nodes: [] },
+      ...extra,
+    };
+  }
+
+  function relatedJson({ mine = [], assigned = [], involved = [], counts = {} } = {}) {
+    const bucket = (key, rows) => ({
+      issueCount: Number.isInteger(counts[key]) ? counts[key] : rows.length,
+      nodes: rows,
+    });
+    return JSON.stringify({
+      data: {
+        mine: bucket('mine', mine),
+        assigned: bucket('assigned', assigned),
+        involved: bucket('involved', involved),
+      },
+    });
+  }
+
+  function queryOf(call) {
+    const at = call.argv.indexOf('-f');
+    assert.ok(at >= 0 && at + 1 < call.argv.length, 'the read sends one query argument');
+    const raw = call.argv[at + 1];
+    return raw.startsWith('query=') ? raw.slice('query='.length) : raw;
+  }
+
+  test('sends exactly ONE gh api graphql call carrying the three aliased searches', async () => {
+    const calls = [];
+    ghIssues.setGhRunner(async (bin, argv, runOpts = {}) => {
+      calls.push({ bin, argv: argv.slice(), env: { ...(runOpts.env || {}) } });
+      return okJson(relatedJson({
+        mine: [issueNode(1)],
+        assigned: [issueNode(2)],
+        involved: [issueNode(3)],
+        counts: { mine: 1, assigned: 5, involved: 2 },
+      }));
+    });
+
+    const result = await ghIssues.listRelatedIssues({ first: 37 }, { scope: IDENTITY });
+
+    assert.equal(result.ok, true);
+    assert.equal(calls.length, 1, 'one child serves every bucket');
+    assert.deepEqual(calls[0].argv.slice(0, 3), ['api', 'graphql', '-f'], 'fixed argv, never a shell string');
+    assert.equal(calls[0].env.GH_REPO, IDENTITY, 'the read carries the proven identity');
+
+    const query = queryOf(calls[0]);
+    assert.equal(/rateLimit/.test(query), false, 'the measured cost field is not asked for');
+    assert.equal((query.match(/first: 37/g) || []).length, 3, 'the requested first reaches every alias');
+    assert.ok(query.includes('mine: search'), 'the mine alias is present');
+    assert.ok(query.includes('assigned: search'), 'the assigned alias is present');
+    assert.ok(query.includes('involved: search'), 'the involved alias is present');
+    for (const qualifier of ['author:@me', 'assignee:@me', 'involves:@me -author:@me']) {
+      assert.ok(
+        query.includes(`repo:myfork/project is:issue is:open ${qualifier} sort:updated-desc`),
+        `the ${qualifier} search is scoped, open, sorted and typed`,
+      );
+    }
+    assert.equal((query.match(/type: ISSUE/g) || []).length, 3);
+    assert.ok(query.includes('issueCount'), 'each alias reports its exact count');
+    assert.ok(query.includes('timelineItems(first: 10, itemTypes: [CROSS_REFERENCED_EVENT])'),
+      'the pull-request marker rides the same node selection');
+
+    assert.deepEqual(Object.keys(result.buckets).sort(), ['assigned', 'involved', 'mine']);
+    assert.equal(result.buckets.mine.issueCount, 1);
+    assert.equal(result.buckets.assigned.issueCount, 5);
+    assert.equal(result.buckets.involved.issueCount, 2);
+    assert.deepEqual(result.buckets.assigned.issues.map((row) => row.number), [2]);
+  });
+
+  test('normalizes every row exactly like a panel row', async () => {
+    ghIssues.setGhRunner(async () => okJson(relatedJson({
+      mine: [issueNode(7, {
+        title: 'A real title',
+        state: 'OPEN',
+        labels: { nodes: [{ name: 'bug', color: 'ff0000', description: 'Broken' }] },
+        comments: { totalCount: 4 },
+        author: { login: 'someone' },
+        reactionGroups: [
+          { content: 'THUMBS_UP', users: { totalCount: 2 } },
+          { content: 'HEART', users: { totalCount: 1 } },
+        ],
+      })],
+    })));
+
+    const result = await ghIssues.listRelatedIssues({ first: 20 }, { scope: IDENTITY });
+    assert.equal(result.ok, true);
+    const row = result.buckets.mine.issues[0];
+    assert.equal(row.number, 7);
+    assert.equal(row.title, 'A real title');
+    assert.equal(row.state, 'open', 'the panel row lowercases the GraphQL state');
+    assert.equal(row.author, 'someone');
+    assert.equal(row.commentsCount, 4);
+    assert.deepEqual(row.labels, [{ name: 'bug', color: 'ff0000', description: 'Broken' }]);
+    assert.deepEqual(row.reactions, { total: 3, plusOne: 2 });
+    assert.equal(row.body, '');
+    assert.equal(row.isPullRequest, false);
+  });
+
+  test('derives hasPullRequest from PullRequest sources only', async () => {
+    ghIssues.setGhRunner(async () => okJson(relatedJson({
+      assigned: [
+        issueNode(11, { timelineItems: { nodes: [{ source: { __typename: 'PullRequest' } }] } }),
+        issueNode(12, {
+          timelineItems: {
+            nodes: [
+              { source: { __typename: 'Issue' } },
+              { source: { __typename: 'PullRequest' } },
+            ],
+          },
+        }),
+        issueNode(13, { timelineItems: { nodes: [{ source: { __typename: 'Issue' } }] } }),
+        issueNode(14, { timelineItems: { nodes: [] } }),
+      ],
+    })));
+
+    const result = await ghIssues.listRelatedIssues({ first: 20 }, { scope: IDENTITY });
+    assert.equal(result.ok, true);
+    assert.deepEqual(
+      result.buckets.assigned.issues.map((row) => row.hasPullRequest),
+      [true, true, false, false],
+      'one or many pull requests are the same true, and an Issue source is false',
+    );
+  });
+
+  test('every failure shape is { ok: false } and never a throw', async () => {
+    const cases = [
+      ['a rejected child', () => { throw new Error('spawn gh ENOENT'); }],
+      ['a non-zero exit', () => ({ status: 1, stdout: '', stderr: 'HTTP 502: bad gateway', error: null })],
+      ['a GraphQL errors array', () => okJson(JSON.stringify({ errors: [{ message: 'bad query' }], data: {} }))],
+      ['an unparseable body', () => okJson('not json')],
+      ['a missing alias', () => okJson(JSON.stringify({
+        data: {
+          mine: { issueCount: 0, nodes: [] },
+          assigned: { issueCount: 0, nodes: [] },
+        },
+      }))],
+      ['non-array nodes', () => okJson(JSON.stringify({
+        data: {
+          mine: { issueCount: 0, nodes: 'nope' },
+          assigned: { issueCount: 0, nodes: [] },
+          involved: { issueCount: 0, nodes: [] },
+        },
+      }))],
+      ['an issue without a number', () => okJson(relatedJson({ mine: [{ title: 'no number' }] }))],
+    ];
+    for (const [name, answer] of cases) {
+      ghIssues.setGhRunner(async () => answer());
+      const result = await ghIssues.listRelatedIssues({ first: 20 }, { scope: IDENTITY });
+      assert.equal(result.ok, false, `${name}: fails closed`);
+      assert.equal(typeof result.error, 'string', `${name}: an error names the failure`);
+    }
+  });
+
+  test('an invalid first is refused without a child', async () => {
+    const calls = [];
+    ghIssues.setGhRunner(async (bin, argv) => {
+      calls.push({ bin, argv: argv.slice() });
+      return okJson(relatedJson());
+    });
+
+    for (const first of [0, 101, -1, 20.5, '20', null, undefined]) {
+      const result = await ghIssues.listRelatedIssues({ first }, { scope: IDENTITY });
+      assert.equal(result.ok, false, `first=${JSON.stringify(first)} is refused`);
+      assert.match(result.error, /invalid first/);
+    }
+    assert.equal(calls.length, 0, 'validation runs before any child process');
+  });
+});

@@ -5054,3 +5054,217 @@ describe('issues view opens on one issue (S7)', () => {
     assert.ok(!bodyOf(view, 160).includes('is not in'), 'no initial-issue note appears');
   });
 });
+
+// E18 (issues-sidebar S4, verify round 5 blocker b): a SEEDED page puts rows on
+// screen before its own answer arrives. A numbered open (`/issues 22`, which the
+// rail's row click dispatches) must therefore select #22 from the SEEDED rows —
+// the first frame is the one a `c`, `ctrl+s` can act on — and while the asked
+// number is neither found nor excluded, no mutation may reach any other row.
+//
+// E18 (blocker c): a seeded page was never stamped with the query it answers, so
+// it kept painting itself (and its exact counts) under a filter it had never
+// been read for. Its rows answer the EMPTY query, exactly like a freshly loaded
+// page's do, and stop painting the moment a filter is typed.
+describe('a seeded bucket never lends its rows to the wrong issue (E18)', () => {
+  // The page seam: every request is answered by the test, so "still in flight"
+  // is exactly the window the findings lived in.
+  function heldReads() {
+    const requests = [];
+    const byBucket = new Map();
+    return {
+      requests,
+      loadIssuePage(request) {
+        const entry = deferred();
+        requests.push({ ...request, entry });
+        if (!byBucket.has(request.bucketId)) byBucket.set(request.bucketId, []);
+        byBucket.get(request.bucketId).push(entry);
+        return entry.promise;
+      },
+      latest(bucketId) {
+        const list = byBucket.get(bucketId) || [];
+        return list.length > 0 ? list[list.length - 1] : null;
+      },
+      count(bucketId) {
+        return (byBucket.get(bucketId) || []).length;
+      },
+    };
+  }
+
+  // The three scoped buckets the panel mounts with, `assigned` seeded exactly as
+  // the rail's cache hands it over: rows, no read behind them yet.
+  function seededPages(assignedRows, mineRows = [issue(11), issue(12)]) {
+    return [
+      { id: 'mine', label: 'My issues', issues: mineRows, total: mineRows.length },
+      { id: 'assigned', label: 'Assigned', issues: assignedRows, total: assignedRows.length },
+      { id: 'involved', label: 'Involved', issues: [], total: 0 },
+    ];
+  }
+
+  test('a numbered open selects the asked issue FROM the seeded rows, so c then ctrl+s names it', async () => {
+    const reads = heldReads();
+    const details = [];
+    const comments = [];
+    const view = createIssuesView({
+      helpers,
+      rowsAvailable: () => 24,
+      requestRender: () => {},
+      done: () => {},
+      pages: seededPages([issue(21), issue(22)]),
+      loadIssuePage: reads.loadIssuePage,
+      loadIssue: (number) => {
+        details.push(number);
+        return { ok: true, issue: issue(number, { permissions: EDITABLE }), comments: [] };
+      },
+      actions: {
+        postComment: (number, text) => { comments.push([number, text]); return { ok: true }; },
+      },
+      initialBucket: 'assigned',
+      initialIssue: 22,
+    });
+    await tick();
+
+    // No answer has arrived: the seeded rows are the whole screen.
+    assert.equal(reads.count('assigned'), 1, 'the numbered open issued its own Assigned read');
+    assert.match(leftColumn(view, 160), /▸ issue title 22/,
+      'the seeded row the number names is the focused one, before any answer');
+    assert.deepEqual(details, [22], 'and the detail read is that issue');
+
+    // The verifier's exact scenario: `c`, then `ctrl+s`, inside that window.
+    view.handleInput('c');
+    for (const ch of 'lgtm') view.handleInput(ch);
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.deepEqual(comments, [[22, 'lgtm']],
+      'the mutation names the issue the human asked for, never the seeded row beside it');
+  });
+
+  test('a number the seeded rows do not hold lets no mutation run until its own answer decides', async () => {
+    const reads = heldReads();
+    const comments = [];
+    const view = createIssuesView({
+      helpers,
+      rowsAvailable: () => 24,
+      requestRender: () => {},
+      done: () => {},
+      pages: seededPages([issue(21)]),
+      loadIssuePage: reads.loadIssuePage,
+      loadIssue: (number) => ({ ok: true, issue: issue(number, { permissions: EDITABLE }), comments: [] }),
+      actions: {
+        postComment: (number, text) => { comments.push([number, text]); return { ok: true }; },
+      },
+      initialBucket: 'assigned',
+      initialIssue: 22,
+    });
+    await tick();
+    assert.match(leftColumn(view, 160), /▸ issue title 21/, 'the seeded first row is what is on screen');
+
+    view.handleInput('c');
+    for (const ch of 'lgtm') view.handleInput(ch);
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.deepEqual(comments, [], 'nothing is written while #22 is neither found nor excluded');
+    assert.match(bodyOf(view, 160), /#22 has not been found in Assigned yet/,
+      'the refusal says so instead of changing another issue');
+    assert.equal(view.state.mode, 'comment', 'and the draft is kept for when the answer arrives');
+
+    // The answer lands holding #22: the selection moves to it, and the same
+    // draft now reaches exactly that issue.
+    reads.latest('assigned').resolve(pageResult([issue(21), issue(22)]));
+    await tick();
+    assert.match(leftColumn(view, 160), /▸ issue title 22/,
+      'the answer moves the selection to the issue that was asked for');
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.deepEqual(comments, [[22, 'lgtm']], 'and from then on the mutation reaches #22 only');
+  });
+
+  test('a movement the reader makes before the answer still allows a mutation on the row it shows afterwards', async () => {
+    // Preserve: the SAME rule for a plain (unnumbered) seeded open. No number
+    // is asked for, so no proof exists and every mutation reaches the row the
+    // reader is looking at, exactly as before.
+    const reads = heldReads();
+    const comments = [];
+    const opened = [];
+    const view = createIssuesView({
+      helpers,
+      rowsAvailable: () => 24,
+      requestRender: () => {},
+      done: () => {},
+      pages: seededPages([issue(21), issue(22)]),
+      loadIssuePage: reads.loadIssuePage,
+      loadIssue: (number) => ({ ok: true, issue: issue(number, { permissions: EDITABLE }), comments: [] }),
+      actions: {
+        postComment: (number, text) => { comments.push([number, text]); return { ok: true }; },
+        openBrowser: (number) => { opened.push(number); return { ok: true }; },
+      },
+    });
+    await tick();
+    assert.match(leftColumn(view, 160), /▸ issue title 11/, 'the seeded first row is selected as always');
+
+    view.handleInput('c');
+    for (const ch of 'ok') view.handleInput(ch);
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.deepEqual(comments, [[11, 'ok']], 'a plain open writes on the row it shows');
+    view.handleInput('o');
+    assert.deepEqual(opened, [11], 'and `o web` opens that same row');
+  });
+
+  test('seeded rows stop painting under a filter they were never read for, and the answer paints', async () => {
+    const scheduler = manualScheduler();
+    const reads = heldReads();
+    const view = createIssuesView({
+      helpers,
+      rowsAvailable: () => 24,
+      requestRender: () => {},
+      done: () => {},
+      pages: seededPages([issue(21), issue(22)]),
+      loadIssuePage: reads.loadIssuePage,
+      loadIssue: (number) => ({ ok: true, issue: issue(number), comments: [] }),
+      initialBucket: 'assigned',
+      scheduleQuery: scheduler.schedule,
+      cancelSchedule: scheduler.cancel,
+    });
+    await tick();
+    assert.match(leftColumn(view, 160), /issue title 21/, 'the seeded rows paint while the query is the empty one');
+    assert.match(bodyOf(view, 160), /Assigned \(2\)/, 'and their count is the count they hold');
+
+    // A filter the seeded rows were never read for.
+    view.handleInput('t');
+    for (const ch of 'label:bug') view.handleInput(ch);
+    scheduler.fire();
+    await tick();
+    assert.ok(!leftColumn(view, 160).includes('issue title 21'),
+      'the seeded rows stop painting under a filter they never answered');
+    assert.ok(!leftColumn(view, 160).includes('issue title 22'));
+    assert.match(bodyOf(view, 160), /Assigned \(–\)/,
+      'and the count is unknown until the filtered answer arrives, exactly like a freshly loaded page');
+
+    reads.latest('assigned').resolve(pageResult([issue(30)]));
+    await tick();
+    assert.match(leftColumn(view, 160), /issue title 30/, 'the filtered answer paints');
+    assert.ok(!leftColumn(view, 160).includes('issue title 21'), 'and the seeded rows never come back');
+    assert.match(bodyOf(view, 160), /Assigned \(1\)/, 'the count follows the answer');
+  });
+
+  test('the same seeded page with no filter keeps painting instantly', async () => {
+    // Preserve: stamping the seeded rows with the query they answer must not
+    // cost the instant first frame the cache exists for.
+    const reads = heldReads();
+    const view = createIssuesView({
+      helpers,
+      rowsAvailable: () => 24,
+      requestRender: () => {},
+      done: () => {},
+      pages: seededPages([issue(21), issue(22)]),
+      loadIssuePage: reads.loadIssuePage,
+      loadIssue: (number) => ({ ok: true, issue: issue(number), comments: [] }),
+      initialBucket: 'assigned',
+    });
+    await tick();
+    assert.equal(reads.count('assigned'), 1, 'the mount read the visible bucket, and it is still in flight');
+    assert.match(leftColumn(view, 160), /issue title 21/, 'the seeded rows paint before any answer');
+    assert.match(leftColumn(view, 160), /issue title 22/);
+    assert.match(bodyOf(view, 160), /Assigned \(2\)/, 'with the count they hold');
+  });
+});

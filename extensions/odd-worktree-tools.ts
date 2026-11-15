@@ -6664,6 +6664,66 @@ let issuesGateNotified = false;
 // last probe failed. Registration is eager; this state gates ONLY the open.
 let issuesGateOpen = null;
 
+// S3 (issues-sidebar): the rail section beside the `/issues` reader. The
+// bridge is read from its published slot, never imported; the section reads ONE
+// in-process snapshot per frame and refreshes on its frame TTL and on the
+// session's own activity behind the floor below — never at `session_start`, and
+// never while it is hidden (T13).
+const ISSUES_SIDEBAR_BRIDGE_SLOT = Symbol.for("gentle-shell-bridge/api/v1");
+const ISSUES_SIDEBAR_READY_EVENT = "gentle-shell-bridge:ready";
+// S2 amended (T11): the ONE hint a host without the bridge gets. It names the
+// install command verbatim, because the user's own words were "pone el comando
+// de instalacion".
+const ISSUES_SIDEBAR_INSTALL_HINT = "the issues rail needs the gentle-shell-bridge plugin: install it with pi install npm:gentle-shell-bridge";
+// The announcement window. An empty slot at `session_start` is "not yet" — the
+// bridge publishes from its own extension load — so the check waits this long
+// before it is honest to call the plugin missing.
+const ISSUES_SIDEBAR_INSTALL_WINDOW_MS = 2000;
+// "One warning per process" includes a `/reload`, which builds a NEW instance of
+// this module: the fact that the human was already told lives on a process-wide
+// slot, exactly like the bridge's own published object does.
+const ISSUES_SIDEBAR_WARN_SLOT = Symbol.for("odd-worktree/issues-sidebar/install-warned");
+// S3 (activity floor): a frame only exists when the host has a reason to produce
+// one, so the TTL never fires on a session that is merely in use. The session's
+// own events ask for a read at most once per this floor: in use, the rail is
+// never more than about half a minute behind, and an idle session still makes no
+// `gh` call and starts no timer.
+const ISSUES_SIDEBAR_ACTIVITY_FLOOR_MS = 30000;
+// S3 amended (T13, L11: "estas comprobaciones se hacen solo si la sidebar de
+// issues esta mostrada, o sea, no hidden"): the DRAWN WINDOW. The activity hooks
+// read only while the section was drawn in the last two minutes, so a section the
+// human hid stops the network entirely — no child process, no timer — and
+// showing it again starts from `loading…`.
+const ISSUES_SIDEBAR_DRAWN_WINDOW_MS = 120000;
+// The most recent `session_start` context: the section's `load` and `open`
+// belong to the checkout the session runs in, not to whatever cwd this process
+// happens to have.
+let issuesSidebarCtx = null;
+let issuesSidebarHandle = null;
+let issuesSidebarDisposer = null;
+let issuesSidebarSubscribed = false;
+// S9 (issues-sidebar T14): the process-local cache of the three scoped issue
+// views. It is pure (`lib/related-issues-cache.js`), keyed by the PROVEN repository
+// identity and never written to disk; the extension owns its lifetime so a
+// session's shutdown clears it beside the section's snapshot.
+let issuesSidebarCache = null;
+// T15 (S9, defect 4): the cache wiring's generation. Every read captures it when
+// it STARTS and may write its answer only while it is still current; a shutdown
+// clear (or a rebinding) moves it on, so a read that outlived its session can
+// never repopulate the cache it just cleared. A discarded answer still returns
+// its rows to the section, whose own token decides whether they paint.
+let issuesSidebarCacheGeneration = 0;
+// T15 (S9, defect 5): every read is numbered when it STARTS (before any await), so
+// the cache can ignore an answer that is older than the last one applied for the
+// same identity — a full read that finishes late never overwrites a newer one.
+let issuesSidebarReadSequence = 0;
+// T11: one hint per process. `Armed` keeps two session starts from arming two
+// checks; `Announced` is what a late publication sets, so the deferred check
+// never speaks over a bridge that arrived; the "already told the human" fact
+// itself lives on the process-wide slot above, so `/reload` is silent too.
+let issuesSidebarInstallArmed = false;
+let issuesSidebarInstallAnnounced = false;
+
 function issuesPageQuery(spec, rawQuery) {
   const extra = typeof rawQuery === "string" ? rawQuery.trim() : "";
   return extra === "" ? spec.query : `${spec.query} ${extra}`;
@@ -6795,6 +6855,60 @@ async function issuesFetchPages(gh, cwd, state, scope) {
   return { ok: true, pages, loadError: firstError ? firstError.error : null };
 }
 
+// The ONE identity a browser open is bound to, proven in one order and one
+// place: `/issues` pins it when its list loads (S5 of the issues reader) and the
+// related-issues section reads and opens with it (issues-sidebar S4/S6), so the
+// list and the row click always name the same repository. A non-empty GH_REPO is
+// the caller's own scope and is normalized as given; otherwise the checkout's own
+// scope decides, and a checkout with ONE remote has no scope identity to pin
+// (nothing to disambiguate), so gh's own resolution is normalized instead. Every
+// answer is one HOST-QUALIFIED `<host>/<owner>/<repo>` string — the form gh
+// accepts for both GH_REPO and `-R` — and the host is part of it, because the
+// same owner/name on a fork's server and on an enterprise server are different
+// repositories.
+async function issuesBrowserRepoIdentity(gh, checkoutRoot, fresh) {
+  const envRepo = typeof process.env.GH_REPO === "string" && process.env.GH_REPO.trim() !== ""
+    ? process.env.GH_REPO.trim()
+    : null;
+  if (envRepo !== null) {
+    const normalized = gh.normalizeScopeIdentity(envRepo, process.env);
+    if (!normalized || normalized.ok !== true) {
+      return { ok: false, error: (normalized && normalized.error) || "cannot normalize the GH_REPO identity" };
+    }
+    return { ok: true, identity: normalized.identity };
+  }
+  let scope = null;
+  try {
+    scope = await gh.checkoutRepoScope({ cwd: checkoutRoot, fresh: fresh === true });
+  } catch {
+    scope = null;
+  }
+  if (!scope || scope.ok !== true) {
+    return { ok: false, error: (scope && scope.error) || "cannot resolve this checkout's own repository" };
+  }
+  if (typeof scope.identity === "string" && scope.identity.length > 0) {
+    return { ok: true, identity: scope.identity };
+  }
+  // A checkout with one remote has nothing to disambiguate, so gh resolves it;
+  // the answer is qualified with the host gh itself would use (GH_HOST, else
+  // github.com), never left as a host-less name.
+  let reported = null;
+  try {
+    reported = await gh.reportedRepoName({ cwd: checkoutRoot, scope: null });
+  } catch {
+    reported = null;
+  }
+  if (!reported || reported.ok !== true
+    || typeof reported.nameWithOwner !== "string" || reported.nameWithOwner.length === 0) {
+    return { ok: false, error: (reported && reported.error) || "cannot resolve this checkout's repository" };
+  }
+  const normalized = gh.normalizeScopeIdentity(reported.nameWithOwner, process.env);
+  if (!normalized || normalized.ok !== true) {
+    return { ok: false, error: (normalized && normalized.error) || "cannot normalize the repository identity" };
+  }
+  return { ok: true, identity: normalized.identity };
+}
+
 async function executeIssues(rawArgs, ctx) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
@@ -6831,52 +6945,10 @@ async function executeIssues(rawArgs, ctx) {
   }
   // The repository identity is PINNED when the list loads, as ONE
   // HOST-QUALIFIED string (`<host>/<owner>/<repo>`, the form gh accepts for
-  // GH_REPO and `-R`). The host is part of the identity: the same owner/name on
-  // a fork's server and on an enterprise server are different repositories.
+  // GH_REPO and `-R`). The proof itself is the shared helper, so the sidebar
+  // section opens the same repository this reader does.
   // Every later read, every action and the `o` opener bind exactly that string.
-  const ghRepoEnv = () => (typeof process.env.GH_REPO === "string" && process.env.GH_REPO.trim() !== ""
-    ? process.env.GH_REPO.trim()
-    : null);
-  const effectiveRepo = async (fresh) => {
-    const envRepo = ghRepoEnv();
-    if (envRepo !== null) {
-      const normalized = gh.normalizeScopeIdentity(envRepo, process.env);
-      if (!normalized || normalized.ok !== true) {
-        return { ok: false, error: (normalized && normalized.error) || "cannot normalize the GH_REPO identity" };
-      }
-      return { ok: true, identity: normalized.identity };
-    }
-    let scope = null;
-    try {
-      scope = await gh.checkoutRepoScope({ cwd: checkoutRoot, fresh: fresh === true });
-    } catch {
-      scope = null;
-    }
-    if (!scope || scope.ok !== true) {
-      return { ok: false, error: (scope && scope.error) || "cannot resolve this checkout's own repository" };
-    }
-    if (typeof scope.identity === "string" && scope.identity.length > 0) {
-      return { ok: true, identity: scope.identity };
-    }
-    // A checkout with one remote has nothing to disambiguate, so gh resolves
-    // it; the answer is qualified with the host gh itself would use (GH_HOST,
-    // else github.com), never left as a host-less name.
-    let reported = null;
-    try {
-      reported = await gh.reportedRepoName({ cwd: checkoutRoot, scope: null });
-    } catch {
-      reported = null;
-    }
-    if (!reported || reported.ok !== true
-      || typeof reported.nameWithOwner !== "string" || reported.nameWithOwner.length === 0) {
-      return { ok: false, error: (reported && reported.error) || "cannot resolve this checkout's repository" };
-    }
-    const normalized = gh.normalizeScopeIdentity(reported.nameWithOwner, process.env);
-    if (!normalized || normalized.ok !== true) {
-      return { ok: false, error: (normalized && normalized.error) || "cannot normalize the repository identity" };
-    }
-    return { ok: true, identity: normalized.identity };
-  };
+  const effectiveRepo = async (fresh) => issuesBrowserRepoIdentity(gh, checkoutRoot, fresh);
   let pinnedRepo;
   let pinnedPromise = null;
   const pinRepo = async () => {
@@ -7034,6 +7106,13 @@ async function executeIssues(rawArgs, ctx) {
       return issuesOpenInBrowser(hostTuiRef, checkoutRoot, number, pinnedRepo.identity);
     },
   };
+  // S8 (T4): the identity the panel just proved is the ONLY key that may seed
+  // the first frame. Read ONCE, here, so every page of this mount comes from the
+  // same entry; a cache entry for another repository (or no entry at all) seeds
+  // nothing and this open is exactly the one this command always performed.
+  const seededPages = pinnedRepo && pinnedRepo.ok === true
+    ? issuesSidebarCachedPages(pinnedRepo.identity)
+    : null;
   try {
     await ctx.ui.custom(
       (hostTui, theme, _keybindings, done) => {
@@ -7044,12 +7123,27 @@ async function executeIssues(rawArgs, ctx) {
           // scoped tabs are prefetched once at open, so none sits at a false
           // zero; `All` is marked lazy there, so the prefetch skips it and it is
           // read the first time the reader's shortcut key enters it (S1/S2).
-          pages: ISSUES_INTERACTIVE_BUCKETS.map((spec) => ({
-            id: spec.id,
-            label: spec.label,
-            issues: null,
-            lazy: spec.lazy === true,
-          })),
+          //
+          // S8 (T4): a page the RAIL's cache answered is seeded instead, so the
+          // first frame paints those rows. The seed is never the last word: the
+          // mount always reads the visible bucket, every other seeded page
+          // carries no `loaded` stamp, so the first activation reads it, and `r`
+          // re-reads the bucket on screen — every seeded row is replaced by a
+          // real answer.
+          pages: ISSUES_INTERACTIVE_BUCKETS.map((spec) => {
+            const seeded = seededPages === null ? null : seededPages.get(spec.id);
+            if (seeded === null || seeded === undefined) {
+              return { id: spec.id, label: spec.label, issues: null, lazy: spec.lazy === true };
+            }
+            return {
+              id: spec.id,
+              label: spec.label,
+              issues: seeded.issues,
+              lazy: spec.lazy === true,
+              total: seeded.total,
+              truncated: seeded.truncated,
+            };
+          }),
           loadIssuePage,
           // S7: a numbered open starts on `Assigned` with that issue selected
           // (the command already refused anything that is not a positive
@@ -7162,6 +7256,485 @@ function registerIssuesCommand(pi) {
   });
 }
 
+// S2 (issues-sidebar): the published bridge object, read from its Symbol slot
+// after its own gate. Absent or malformed is `null` — never an import, never a
+// dependency.
+function issuesSidebarBridge() {
+  try {
+    const api = globalThis[ISSUES_SIDEBAR_BRIDGE_SLOT];
+    if (!api || api.schema !== "gentle-shell-bridge/api" || api.version !== 1) return null;
+    if (typeof api.registerRows !== "function") return null;
+    if (typeof api.registerSection !== "function") return null;
+    if (typeof api.createStore !== "function") return null;
+    return api;
+  } catch {
+    return null;
+  }
+}
+
+function issuesSidebarError(err, fallback) {
+  if (err && typeof err.message === "string" && err.message.length > 0) return err.message;
+  if (typeof err === "string" && err.length > 0) return err;
+  return fallback;
+}
+
+// S9 (issues-sidebar T14): ONE cache per extension instance, built lazily so a
+// host that never draws the rail never pays for it. A missing cache module is
+// not fatal: the read then answers the assigned bucket straight from the
+// response instead of storing it.
+function issuesSidebarRelatedCache() {
+  if (issuesSidebarCache !== null) return issuesSidebarCache;
+  try {
+    const factory = libRequire("related-issues-cache.js");
+    if (!factory || typeof factory.createIssuesCache !== "function") return null;
+    issuesSidebarCache = factory.createIssuesCache();
+  } catch {
+    issuesSidebarCache = null;
+  }
+  return issuesSidebarCache;
+}
+
+function clearIssuesSidebarCache() {
+  // T15 (defect 4): the bump comes FIRST, so a read still holding the previous
+  // generation can never write the entry this clear is about to remove.
+  issuesSidebarCacheGeneration += 1;
+  if (issuesSidebarCache === null) return;
+  try {
+    issuesSidebarCache.clear();
+  } catch {
+    // The cache is optional: a failed clear never breaks the end of a session.
+  }
+}
+
+// S9 consumer half (issues-sidebar) / S8 (issues panel, T4): the panel READS the
+// rail's cache so its first frame paints rows instead of waiting for `gh`. It is
+// a READER only — the rail owns that entry (its one combined read, its merge, its
+// count invariant and its invalidation) — and nothing here clears, shrinks or
+// rewrites it.
+//
+// The key is the identity the panel just PROVED for this checkout, so an entry
+// belonging to another repository is never used: no path may serve one
+// repository's rows under another's name. No entry means `null`, which is what
+// leaves every page exactly as it was before this cache existed (the mount reads
+// the three scoped buckets as it always did). `get` answers deep-enough copies,
+// so nothing the view does can reach the cached rows.
+//
+// A bucket the cache reported TRUNCATED (its `issueCount` exceeded what it can
+// hold) cannot report an exact total: it is seeded with `truncated: true`, so the
+// view paints `N+` and never claims a count it does not have. E17b: the SAME
+// holds for an entry the cache calls INCONSISTENT — its cached rows no longer
+// match the `issueCount` the response reported (which is why the rail's next sync
+// is a full re-read), so a total derived from those rows is exactly the number
+// the rail itself refuses to trust.
+function issuesSidebarCachedPages(identity) {
+  if (issuesSidebarCache === null) return null;
+  if (typeof identity !== "string" || identity.length === 0) return null;
+  let cached = null;
+  try {
+    cached = issuesSidebarCache.get(identity);
+  } catch {
+    cached = null;
+  }
+  if (!cached || !cached.buckets || typeof cached.buckets !== "object") return null;
+  const inexact = cached.inconsistent === true;
+  const pages = new Map();
+  for (const spec of ISSUES_PAGE_QUERIES) {
+    const rows = cached.buckets[spec.id];
+    if (!Array.isArray(rows)) continue;
+    const truncated = inexact || !!(cached.truncated && cached.truncated[spec.id] === true);
+    pages.set(spec.id, { issues: rows, total: rows.length, truncated });
+  }
+  return pages.size === 0 ? null : pages;
+}
+
+// S1/S6 (corrected to assigned-only) + S9: ONE read — a single `gh api graphql`
+// request with the three scoped views (`mine`, `assigned`, `involved`) — for the
+// checkout the session runs in. `/issues` keeps its own four tabs and the rail
+// still DRAWS only the assigned bucket; what changed is that the same read now
+// fills the process cache, so a later consumer can open instantly. The identity
+// is resolved FIRST — through the SAME composition `/issues` proves a browser
+// open with, so a single-remote checkout has one too — and the read is bound to
+// it; a resolution failure returns the S5 error and makes no `gh` call at all.
+// The cache decides the size: 100 per bucket with no (or an aged, or an
+// inconsistent) entry, the newest 20 afterwards, merged by issue number. A
+// failed read never touches the cache and returns the S5 error, so the section's
+// T10 stale handling keeps working unchanged. `truncated` travels with the
+// answer: the assigned bucket's `issueCount` exceeded the cache cap, so the real
+// total is larger than what is stored and the overflow row says so.
+//
+// T15 (S6/S9): the read is numbered and generation-stamped BEFORE its first
+// await, so its place in the order is the START, not the answer. A read with no
+// bound session context reads nothing at all, and one whose generation moved on
+// (shutdown, rebinding) never writes the cache — though it still returns the
+// rows it read, for the section's own token to accept or discard.
+async function loadIssuesSidebar() {
+  const sequence = (issuesSidebarReadSequence += 1);
+  const cacheGeneration = issuesSidebarCacheGeneration;
+  if (issuesSidebarCtx === null) {
+    return { ok: false, error: "cannot read issues: the session has ended" };
+  }
+  const cwd = toolCwd(issuesSidebarCtx);
+  let gh;
+  try {
+    gh = libRequire("gh-issues.js");
+  } catch (err) {
+    return { ok: false, error: `issues: cannot load the gh client: ${issuesSidebarError(err, "unknown error")}` };
+  }
+  const checkoutRoot = await oddCheckoutRootAsync(cwd);
+  if (!checkoutRoot) return { ok: false, error: notGitRepositoryLine(cwd) };
+  let resolved = null;
+  try {
+    resolved = await issuesBrowserRepoIdentity(gh, checkoutRoot);
+  } catch (err) {
+    resolved = { ok: false, error: issuesSidebarError(err, "cannot resolve this checkout's own repository") };
+  }
+  if (!resolved || resolved.ok !== true) {
+    return { ok: false, error: (resolved && resolved.error) || "cannot resolve this checkout's own repository" };
+  }
+  const identity = resolved.identity;
+  const cache = issuesSidebarRelatedCache();
+  const plan = cache !== null ? cache.plan(identity) : { full: true, first: 20 };
+  let read;
+  try {
+    read = await gh.listRelatedIssues({ first: plan.first }, { cwd: checkoutRoot, scope: identity });
+  } catch (err) {
+    return { ok: false, error: issuesSidebarError(err, "GitHub query failed") };
+  }
+  if (!read || read.ok !== true) {
+    return { ok: false, error: (read && read.error) || "GitHub query failed" };
+  }
+  // T15 (defects 4 and 5): only an answer from the current generation, and only
+  // one the cache has not already superseded, may write. The rows are returned
+  // either way.
+  const canWriteCache = cache !== null && issuesSidebarCacheGeneration === cacheGeneration;
+  if (canWriteCache) {
+    try {
+      cache.apply(identity, read, { full: plan.full === true, sequence });
+    } catch {
+      // A cache that refuses the answer is no reason to lose the read itself.
+    }
+  }
+  const cached = canWriteCache ? cache.get(identity) : null;
+  const fallback = read.buckets && read.buckets.assigned ? read.buckets.assigned : null;
+  const issues = cached !== null && cached.buckets && Array.isArray(cached.buckets.assigned)
+    ? cached.buckets.assigned
+    : (fallback && Array.isArray(fallback.issues) ? fallback.issues : []);
+  const truncated = cached !== null && cached.truncated
+    ? cached.truncated.assigned === true
+    : Boolean(fallback && Number.isInteger(fallback.issueCount) && fallback.issueCount > issues.length);
+  return {
+    ok: true,
+    identity,
+    issues,
+    truncated,
+  };
+}
+
+// S4 (issues-sidebar, L11/T12): a row click opens the PANEL on that issue
+// instead of the browser. It reaches it through the SAME host route the overflow
+// row uses — `pi.sendUserMessage("/issues <n>", { expandPromptTemplates: true })`
+// — so the panel opens on `Assigned` with that issue selected and its detail
+// shown, and the panel says so itself when the number is not in that view.
+//
+// T17 (E17a, S4): the NUMBER alone travels — `/issues` still proves its own
+// identity when it opens — but a number is only dispatched after THIS checkout
+// proves it is the one the row was read from. A row retained on screen across a
+// checkout change (the section keeps its rows while the new checkout's read is in
+// flight, and a stale read can keep the old identity) would otherwise dispatch
+// checkout A's #11 into checkout B, and if B has an #11 the panel would silently
+// open the wrong issue. The proof is the SAME composition the panel and the rail
+// already use (`issuesBrowserRepoIdentity`), run ONCE per click — a click is not
+// a paint — and it neither reads nor writes the cache.
+//
+// S4 (the overflow row) keeps dispatching `/issues` with no number: it names no
+// issue, so there is no number whose repository could be wrong. `pi.sendUserMessage`
+// returns void by contract, so this reports that the command was dispatched,
+// never that a panel opened. A host without the route, or one that throws
+// synchronously, refuses here with nothing dispatched. Never throws (it is async,
+// so it cannot reject either): the module defers the call off the paint path, and
+// its own recorded-error path classifies the `{ ok, error }` answered here.
+const ISSUES_SIDEBAR_OTHER_CHECKOUT = "the issue list on screen belongs to another checkout";
+
+// The identity the CURRENT checkout proves, resolved once per click. The proof is
+// FRESH, exactly like the panel's own pin when it opens: a remote that moved since
+// the last read must not answer with the identity it used to have. No checkout
+// root and a failed proof are both "unprovable" — which is not the same thing as
+// a match, so neither may dispatch.
+async function issuesCurrentCheckoutIdentity() {
+  if (issuesSidebarCtx === null) {
+    return { ok: false, error: "this session has no checkout to prove" };
+  }
+  const cwd = toolCwd(issuesSidebarCtx);
+  const checkoutRoot = await oddCheckoutRootAsync(cwd);
+  if (!checkoutRoot) return { ok: false, error: notGitRepositoryLine(cwd) };
+  let gh;
+  try {
+    gh = libRequire("gh-issues.js");
+  } catch (err) {
+    return { ok: false, error: `issues: cannot load the gh client: ${issuesSidebarError(err, "unknown error")}` };
+  }
+  try {
+    const proof = await issuesBrowserRepoIdentity(gh, checkoutRoot, true);
+    if (!proof || proof.ok !== true) {
+      return { ok: false, error: (proof && proof.error) || "cannot resolve this checkout's own repository" };
+    }
+    return { ok: true, identity: proof.identity };
+  } catch (err) {
+    return { ok: false, error: issuesSidebarError(err, "cannot resolve this checkout's own repository") };
+  }
+}
+
+async function dispatchIssuesPanel(pi, number, identity) {
+  const asked = Number(number);
+  const namesIssue = Number.isInteger(asked) && asked > 0;
+  const command = namesIssue ? `/issues ${asked}` : "/issues";
+  if (!pi || typeof pi.sendUserMessage !== "function") {
+    return { ok: false, error: "the host cannot dispatch the /issues command here" };
+  }
+  // A row that carries no identity (the fresh-row case) has nothing to compare
+  // against, so it dispatches exactly as the click always did: the panel's own
+  // proof still binds whatever it opens. Only a row that NAMES a repository can
+  // contradict the one this checkout proves.
+  const rowIdentity = typeof identity === "string" && identity.length > 0 ? identity : null;
+  if (namesIssue && rowIdentity !== null) {
+    // E18 (S4): the proof below waits on git (and, on a single-remote checkout,
+    // on `gh`), and the session can move to another checkout while it does:
+    // `session_start` bumps this generation BEFORE anything it awaits, and so do
+    // `session_shutdown` and a bridge rebinding. A proof that STARTED under one
+    // session says nothing about the next one — A's #11 proved, then delivered as
+    // B's `/issues 11`, would open B's own #11, which is the silent wrong issue
+    // the identity proof exists to prevent. So the click dispatches only while
+    // the generation it started under is still the current one.
+    const generation = issuesSidebarCacheGeneration;
+    const proof = await issuesCurrentCheckoutIdentity();
+    if (proof.ok !== true) {
+      return {
+        ok: false,
+        error: `${ISSUES_SIDEBAR_OTHER_CHECKOUT} and this checkout's repository could not be proven (${proof.error}); the /issues panel was not opened`,
+      };
+    }
+    if (issuesSidebarCacheGeneration !== generation) {
+      return {
+        ok: false,
+        error: "the session moved to another checkout while this click was being proved; the /issues panel was not opened",
+      };
+    }
+    if (proof.identity !== rowIdentity) {
+      return {
+        ok: false,
+        error: `${ISSUES_SIDEBAR_OTHER_CHECKOUT} (${rowIdentity}, not ${proof.identity}); the /issues panel was not opened`,
+      };
+    }
+  }
+  try {
+    pi.sendUserMessage(command, { expandPromptTemplates: true });
+  } catch (err) {
+    return { ok: false, error: `the /issues command could not be dispatched: ${issuesSidebarError(err, "unknown error")}` };
+  }
+  return { ok: true };
+}
+
+// S3 (issues-sidebar): the repaint the bridge offers is the only thing the
+// refresh reports; a host that paints by other means gets nothing extra.
+function mountIssuesSidebar(pi, api) {
+  let factory;
+  try {
+    factory = libRequire("issues-section.js");
+  } catch {
+    return;
+  }
+  if (!factory || typeof factory.createIssuesSection !== "function") return;
+  // T15 (S9, defect 4): binding the section to the bridge is a rebinding of this
+  // cache wiring, like `/reload`; an answer a previous binding still holds must
+  // not land in the new section's cache.
+  issuesSidebarCacheGeneration += 1;
+  const onRefreshed = typeof api.requestRepaint === "function"
+    ? () => {
+      try {
+        api.requestRepaint();
+      } catch {
+        // A repaint failure never breaks the section.
+      }
+    }
+    : undefined;
+  let handle;
+  try {
+    handle = factory.createIssuesSection({
+      load: () => loadIssuesSidebar(),
+      // T12/T17: a row click and the overflow row dispatch the panel command; the
+      // row's number AND the identity it was built from ride the seam, so the
+      // dispatch can prove the number belongs to THIS checkout before it opens
+      // anything. `openIssuesSidebarIssue` (the browser opener this seam used to
+      // run) is gone with its only caller — `issuesOpenInBrowser` survives for
+      // `/issues`' own `o` key.
+      open: (number, identity) => dispatchIssuesPanel(pi, number, identity),
+      openAll: () => dispatchIssuesPanel(pi),
+      onRefreshed,
+    });
+  } catch {
+    return;
+  }
+  if (!handle || !handle.section) return;
+  let disposer;
+  try {
+    disposer = api.registerSection(handle.section);
+  } catch {
+    return;
+  }
+  issuesSidebarHandle = handle;
+  issuesSidebarDisposer = typeof disposer === "function" ? disposer : null;
+}
+
+// S2 (issues-sidebar): the section reaches the rail ONLY through the bridge's
+// published object. A host without it is subscribed to the ready announcement
+// ONCE and nothing else happens: no notify, no throw, no other surface touched.
+function registerIssuesSidebar(pi) {
+  try {
+    if (issuesSidebarHandle !== null) return;
+    const api = issuesSidebarBridge();
+    if (api !== null) {
+      mountIssuesSidebar(pi, api);
+      return;
+    }
+    if (issuesSidebarSubscribed) return;
+    const events = pi && pi.events ? pi.events : null;
+    if (!events || typeof events.on !== "function") return;
+    issuesSidebarSubscribed = true;
+    try {
+      events.on(ISSUES_SIDEBAR_READY_EVENT, () => {
+        // T11: a publication that arrives late makes the missing-plugin hint
+        // untrue, so it is recorded before anything else is attempted.
+        issuesSidebarInstallAnnounced = true;
+        try {
+          registerIssuesSidebar(pi);
+        } catch {
+          // The rail stays absent; every other surface keeps working.
+        }
+      });
+    } catch {
+      issuesSidebarSubscribed = false;
+    }
+  } catch {
+    // The rail is optional: a broken bridge never breaks this extension.
+  }
+}
+
+// T11 (S2 amended, L10): discoverability is the ONE thing a host without the
+// bridge gets. Nothing throws today — every bridge call is guarded — so this is a
+// hint, not error handling: ONE warning per process, from a primary session only
+// (the same `GENTLE_PI_AGENTS_CHILD` signal the prompt block uses, so a subagent
+// never speaks for the human), naming the install command verbatim.
+function warnIssuesSidebarMissing(ctx) {
+  if (issuesSidebarInstallWarnedAlready()) return;
+  if (process.env.GENTLE_PI_AGENTS_CHILD === "1") return;
+  const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
+  // A host with no notice seam cannot be told anything; the flag stays clear so
+  // a later session that does have one still gets the single warning.
+  if (typeof notify !== "function") return;
+  markIssuesSidebarInstallWarned();
+  try {
+    notify(ISSUES_SIDEBAR_INSTALL_HINT, "warning");
+  } catch {
+    // A notice is best effort; it never breaks startup.
+  }
+}
+
+function issuesSidebarInstallWarnedAlready() {
+  try {
+    return globalThis[ISSUES_SIDEBAR_WARN_SLOT] === true;
+  } catch {
+    return false;
+  }
+}
+
+function markIssuesSidebarInstallWarned() {
+  try {
+    globalThis[ISSUES_SIDEBAR_WARN_SLOT] = true;
+  } catch {
+    // A frozen global still gets the warning; only the dedupe is lost.
+  }
+}
+
+// T11: the check itself, and the part that must be timed honestly. An empty slot
+// at `session_start` means "not yet": the bridge publishes from its own load, so
+// with a bus the check waits the announcement window and warns only if the slot
+// is STILL empty and no announcement arrived in between. A host with no bus can
+// never announce, so there it warns at once. The timer is unref'd: a hint never
+// holds the process open.
+function checkIssuesSidebarInstall(pi, ctx) {
+  try {
+    if (issuesSidebarInstallWarnedAlready()) return;
+    if (issuesSidebarBridge() !== null) return;
+    if (process.env.GENTLE_PI_AGENTS_CHILD === "1") return;
+    const events = pi && pi.events ? pi.events : null;
+    if (!events || typeof events.on !== "function") {
+      warnIssuesSidebarMissing(ctx);
+      return;
+    }
+    if (issuesSidebarInstallArmed) return;
+    issuesSidebarInstallArmed = true;
+    let timer;
+    try {
+      timer = setTimeout(() => {
+        issuesSidebarInstallArmed = false;
+        try {
+          if (issuesSidebarInstallAnnounced) return;
+          if (issuesSidebarBridge() !== null) return;
+          warnIssuesSidebarMissing(ctx);
+        } catch {
+          // A failed hint never breaks the session.
+        }
+      }, ISSUES_SIDEBAR_INSTALL_WINDOW_MS);
+    } catch {
+      issuesSidebarInstallArmed = false;
+      return;
+    }
+    if (timer && typeof timer.unref === "function") timer.unref();
+  } catch {
+    // The rail is optional: a failed hint never breaks startup.
+  }
+}
+
+function rememberIssuesSidebarSession(ctx) {
+  if (!ctx || typeof ctx !== "object") return;
+  issuesSidebarCtx = ctx;
+}
+
+// S6 (issues-sidebar): a session that starts in ANOTHER checkout supersedes the
+// previous one HERE, synchronously, before any awaited probe in the handler
+// below. The section drops its snapshot (the rail shows the loading row) and
+// moves its latest-wins token on, so an answer the previous checkout's read is
+// still holding lands nowhere instead of painting the repository the session
+// left. A throwing seam never breaks session start.
+function invalidateIssuesSidebar() {
+  const handle = issuesSidebarHandle;
+  if (!handle || typeof handle.invalidate !== "function") return;
+  try {
+    handle.invalidate();
+  } catch {
+    // The rail is optional: a failed supersede never breaks startup.
+  }
+}
+
+// S3 amended (T13, L11): the session's own events ask the section for a read
+// ONLY while the section is actually shown. A hidden section must cost nothing —
+// no child process, no network, no timer — so the section is asked whether it
+// was drawn inside the window, and only then does the activity floor apply (a
+// fresher snapshot, a read in flight and a disposed section are the section's own
+// business). Best effort like its neighbours: a throwing seam never breaks the
+// hook that fired it.
+function refreshIssuesSidebarIfDrawn() {
+  const handle = issuesSidebarHandle;
+  if (!handle) return;
+  try {
+    if (typeof handle.drawnWithin !== "function") return;
+    if (handle.drawnWithin(ISSUES_SIDEBAR_DRAWN_WINDOW_MS) !== true) return;
+    if (typeof handle.refreshIfStale !== "function") return;
+    handle.refreshIfStale(ISSUES_SIDEBAR_ACTIVITY_FLOOR_MS);
+  } catch {
+    // A failed activity read never breaks the session; the next frame retries.
+  }
+}
 // ---------------------------------------------------------------------------
 // `/card:bash` (T1 S1,S6,S7): the ONE preference this package owns. It flips
 // between the two ways a `bash` tool call can be drawn — this package's activity
@@ -7250,6 +7823,9 @@ export default function (pi) {
   // renderer for its own entry type, exactly like Pi's `restored N messages`
   // line. A host without the seam simply never shows the fallback.
   registerWarpQueueEntryRenderer(pi);
+  // S2 (issues-sidebar): the rail section, only when gentle-shell-bridge
+  // published its API; otherwise one ready-announcement subscription.
+  registerIssuesSidebar(pi);
   registerWarpCommand(pi);
   registerOddCommand(pi);
   registerIssuesCommand(pi);
@@ -7265,15 +7841,47 @@ export default function (pi) {
   // `<home>/card-style.json` on every render too. So there is nothing to re-read at
   // `session_start` and nothing cached to invalidate.
   // The session-start `gh` check only gates whether `/issues` may open; the
-  // command itself is registered eagerly above.
+  // command itself is registered eagerly above. The same boundary is the
+  // session context the section's reads belong to.
+  // S6 (issues-sidebar): the supersede of a previous checkout's read happens
+  // FIRST and synchronously — the session context is remembered and the section
+  // is invalidated BEFORE the `gh` gate below is awaited. `checkIssuesGate` waits
+  // on a `gh` probe, and an answer the previous checkout's read settles with
+  // during that wait must find no latest token to win and no snapshot to keep.
+  // S3 amended (T13, L11): NO read happens here. A hidden section costs nothing,
+  // so the first DRAW is what starts the section's read: an absent snapshot is
+  // stale inside `lines()`, which schedules its own refresh. The hidden section
+  // therefore makes no child process and no network call, and starts no timer.
   pi.on("session_start", async (event, ctx) => {
+    rememberIssuesSidebarSession(ctx);
+    // T16 (S6/S9): a session that starts in another checkout also cuts the CACHE
+    // write path, not just the section's snapshot. The identity — not the checkout
+    // — keys the cache, so two checkouts of one repository share an entry: an
+    // answer the previous checkout's read still holds must not seed the repository
+    // the session moved to, or the moved session starts from rows it discarded and
+    // its first read would be a delta instead of a full one.
+    issuesSidebarCacheGeneration += 1;
+    invalidateIssuesSidebar();
+    // T11 (S2 amended): the missing-plugin hint. It is armed in the same
+    // boundary as the section's own state, and it says nothing yet when the
+    // host could still announce.
+    checkIssuesSidebarInstall(pi, ctx);
     await checkIssuesGate(pi, ctx);
   });
   // A queued warp is session state: shutdown clears its record and its timer so
-  // nothing outlives the session that asked for the move.
+  // nothing outlives the session that asked for the move. S6 (issues-sidebar):
+  // a session that ends takes its rail with it. The snapshot is dropped, so a
+  // frame drawn afterwards shows the loading row instead of the ended session's
+  // rows, the latest-wins token moves on, so a read still in flight lands
+  // nowhere and never repaints a torn-down host, and the remembered context is
+  // cleared, so a frame drawn after shutdown can never read with a dead
+  // session's cwd.
   pi.on("session_shutdown", (event, ctx) => {
     forgetPendingWarp(ctx);
     forgetInFlightWarpTools();
+    invalidateIssuesSidebar();
+    clearIssuesSidebarCache();
+    issuesSidebarCtx = null;
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,
   // so startup work still in flight drops instead of writing into the session
@@ -7315,6 +7923,14 @@ export default function (pi) {
   // handler may await before that decision: `ctx.abort()` fires inside the call
   // below, in the same synchronous stretch as the host's `turn_end`.
   pi.on("turn_end", async (event, ctx) => {
+    // S3 (issues-sidebar): the session's own activity is what keeps the rail
+    // current, because the host produces no frame on an idle session. The
+    // context is remembered FIRST: `/reload` fires no `session_start`, so the
+    // next activity is what re-binds the section's reads to the checkout this
+    // session actually runs in instead of whatever cwd the host process has.
+    // T13: the read itself happens only while the section is drawn.
+    rememberIssuesSidebarSession(ctx);
+    refreshIssuesSidebarIfDrawn();
     try {
       const lib = libRequire("worktree-warp-busy.js");
       if (!lib || typeof lib.pendingWarpTurnBoundary !== "function") return;
@@ -7351,7 +7967,14 @@ export default function (pi) {
   });
   // S7: the ODD worktree rules ride the prompt options, appended after the
   // harness's own text. Sync mutation, so the host reads the final string.
-  pi.on("before_agent_start", (event) => {
+  pi.on("before_agent_start", (event, ctx) => {
+    // S3 (issues-sidebar): the same activity trigger as the turn boundary, with
+    // the same ordering — remember the context, then ask for a read behind the
+    // floor. This is the `/reload` recovery: a reload registers no session
+    // context at all, so the next activity adopts the one the session runs in.
+    // T13: and like the turn boundary, it reads only while the section is drawn.
+    rememberIssuesSidebarSession(ctx);
+    refreshIssuesSidebarIfDrawn();
     try {
       libRequire("odd-worktrees-prompt.js").appendOddWorktreesSection(event);
     } catch {
@@ -7413,4 +8036,4 @@ export default function (pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, libModule };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, libModule };

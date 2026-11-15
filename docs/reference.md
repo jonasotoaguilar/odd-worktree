@@ -749,7 +749,7 @@ undecorated, so it reads the same on every run:
 ```text
 project: repo
 path: /code/repo
-main: main 1a2b3c4
+main: 1a2b3c4
 1 worktree-tools feat/worktree-tools
 2 billing feat/billing
 ```

@@ -398,14 +398,72 @@ child a generic one. A `review-*` agent and a session without a CodeGraph tool g
 nothing.
 
 It is appended the same way as the worktrees block, after whatever the host put
-there, and skipped when its heading is already present. The package never runs,
-syncs or checks CodeGraph; it only advises. `ODD_WORKTREE_PROMPT=0` suppresses
-both blocks.
+there, and skipped when its heading is already present. The prompt section only
+advises and runs nothing; what the package does with CodeGraph itself is in
+[CodeGraph: index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry).
+`ODD_WORKTREE_PROMPT=0` suppresses both blocks.
+
+## CodeGraph: index, daemon and MCP entry
+
+Everything here applies **only when the `codegraph` CLI is installed**. The CLI is probed
+once per process, so installing it after a session started needs a restart. Without it the
+package registers nothing for CodeGraph. Everything runs in the background behind bounded
+children, and none of it can fail or wait for the host.
+
+| When | What happens |
+| --- | --- |
+| Session start (new, resume, fork; not `/reload`, not a subagent child) | The global MCP entry is ensured once per process. Then the checkout's index is created (`init`) or synced, and its daemon is warmed. A linked worktree without an index is seeded from the main checkout's index and synced once; it never shares it. |
+| A subagent child in its own linked worktree | The same seed or init for that worktree; any other child leaves the parent's index alone. |
+| After a compaction | One background sync of an existing index, never an `init`. |
+| After a successful native `codegraph init` | One coordinated sync, and its honest outcome appended to the tool's result. A failed init keeps its error and starts no sync. |
+| After a successful `edit` or `write` | A debounced sync of the checkout of the edited file (its git toplevel), unless a live daemon already watches that checkout. |
+
+**Coordination.** Every index write goes through one init lock and one per-project sync lease,
+so two sessions never write the same index together. A request that cannot run now is
+recorded and served later; a queued, coalesced or failed run is never reported as synced.
+
+**Read-only roles.** Verify and the judges (a command tool and no file-writing tool) never
+start an index write.
+
+**The MCP entry.** In a primary session, once per process, the package makes sure
+`mcpServers.codegraph` of `<agent dir>/mcp.json` (`~/.pi/agent` unless `PI_CODING_AGENT_DIR`
+names another) has these fields:
+
+```json
+{
+  "command": "codegraph",
+  "args": ["serve", "--mcp"],
+  "toolExposure": { "codegraph_explore": "direct" }
+}
+```
+
+It adds the entry when it is missing, fixes only the fields that differ, and keeps every
+other server and field. The file is rewritten only when something changed, atomically and
+with its permission bits; the formatting is not preserved beyond its indentation. An
+invalid file is left untouched and reported. After a change Pi must be reloaded for the MCP
+tool to appear. A project-level MCP file is never edited.
+
+**Daemon.** The daemon is resolved per checkout from CodeGraph's own registry
+(`~/.codegraph/daemons`), a live one is reused before warming one through `codegraph serve
+--mcp`, and a registered MCP entry is never taken as proof that a daemon is reachable. The
+package never stops a daemon it did not start.
+
+## The CodeGraph card
+
+With the CLI installed the package also draws CodeGraph's tool rows as a card on the same card
+substrate as the worktree tools: the native `codegraph` tool, the MCP `codegraph_explore` tool
+(bare or `mcp__codegraph__codegraph_explore`) and a `bash` call whose command is a CodeGraph
+command. It is registered through the host's tool-renderer hook, adds no tool or command, and
+hands every other tool back exactly as the host resolved it; a `bash` command that is not
+CodeGraph's is forwarded to the host's own renderer. A host without that hook draws nothing of
+ours. The collapsed card is one factual row per operation (an init, a sync, a query or explore
+count); `ctrl+o` expands it to the whole output, and the Gentle Shell card content level
+(`minimal`) hides the result body while a failure still says why.
 
 ## Deliberately absent
 
 This package is the worktree / ODD / issues surface only: two agent tools, three
-panels, no customize panel, no plugin-tools toggles, no CodeGraph work (only the
+panels, no customize panel, no plugin-tools toggles, no CodeGraph command or tool (only the
 prompt advice above), no
 companion-app integration, and no worktree↔issue association. There is nothing to
 configure, and `/warp`, `/odd-list` and `/issues` are always on. Paths, branches

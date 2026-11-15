@@ -7143,6 +7143,14 @@ export default function (pi) {
       // The prompt block is best effort.
     }
   });
+  // CodeGraph, only with its CLI installed: the global MCP entry, create-or-sync at session
+  // start, the compaction sync, the observed native init and the edit/write sync. Every
+  // piece runs in the background and none can fail the host.
+  try {
+    libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
+  } catch {
+    // CodeGraph is best effort.
+  }
   // Register every live checkout the registry does not own yet. Dispatched here
   // and awaited by the barrier below: the host runs session_start handlers one
   // at a time, so awaiting the scan inside this handler would put the session's

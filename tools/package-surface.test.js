@@ -123,7 +123,7 @@ describe('removed surface', () => {
     const mentions = source.split('\n').filter((line) => /codegraph/i.test(line.replace(/\/\/.*$/, '')));
     assert.deepEqual(
       mentions.map((line) => line.trim()),
-      ['libRequire("codegraph-rules.js").appendCodegraphSection(event);'],
+      ['libRequire("codegraph-rules.js").appendCodegraphSection(event);', 'libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });'],
       'the only CodeGraph references in the extension are the prompt section and the one registration',
     );
     const { commands, tools } = await loadExtension({});

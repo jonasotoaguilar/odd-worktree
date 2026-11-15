@@ -71,13 +71,27 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd-list, /issues and the two worktree tools', async () => {
+  test('registers /warp, /odd-list, /issues, /card:bash and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['issues', 'odd-list', 'warp'], 'the command list is exactly the three panels');
+    assert.deepEqual(registered, ['card:bash', 'issues', 'odd-list', 'warp'], 'the command list is exactly the three panels and the card toggle');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
+  });
+
+  // S1/S7: the toggle is the ONE preference this package owns, and it is a
+  // preference with a document in the Pi home — not a configuration surface.
+  // Everything the invariants still forbid stays forbidden.
+  test('the one preference this package writes is the bash card mode', async () => {
+    const source = stubbedSource();
+    assert.ok(source.includes('pi.registerCommand("card:bash"'), 'the toggle is the fourth command');
+    assert.ok(source.includes('function registerCardBashCommand'), 'its registration is a named step');
+    assert.ok(source.includes('libRequire("card-bash-mode.js")'), 'the mode document has one reader/writer');
+    const { commands } = await loadExtension({});
+    for (const gone of ['card-style', 'card-bash', 'customize', 'worktree-mode']) {
+      assert.equal(commands.has(gone), false, `no /${gone} command`);
+    }
   });
 
   test('every tool keeps its declared name and description', async () => {

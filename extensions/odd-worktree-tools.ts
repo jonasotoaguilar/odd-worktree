@@ -6697,9 +6697,20 @@ async function issuesFetchPages(gh, cwd, state, scope) {
 async function executeIssues(rawArgs, ctx) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
+  // S7: `/issues <number>` (also `#<number>`) opens the same panel on one
+  // issue. ONLY a bare positive integer is accepted; every other argument keeps
+  // this command's original refusal, so `/issues`, a typo and a second argument
+  // behave exactly as before. The number adds nothing before the gate, the
+  // checkout resolution or the identity pin — they all run as for a plain open.
+  let initialIssue = null;
   if (raw !== "") {
-    if (typeof notify === "function") notify(`Unknown option "${raw}". Use /issues.`, "error");
-    return;
+    const match = /^#?(\d+)$/.exec(raw);
+    const number = match ? Number(match[1]) : NaN;
+    if (!match || !Number.isInteger(number) || number <= 0) {
+      if (typeof notify === "function") notify(`Unknown option "${raw}". Use /issues.`, "error");
+      return;
+    }
+    initialIssue = number;
   }
   const cwd = toolCwd(ctx);
   // The reader belongs to the checkout the session runs in: inside a worktree
@@ -6939,6 +6950,11 @@ async function executeIssues(rawArgs, ctx) {
             lazy: spec.lazy === true,
           })),
           loadIssuePage,
+          // S7: a numbered open starts on `Assigned` with that issue selected
+          // (the command already refused anything that is not a positive
+          // integer); a plain open passes neither option, so its mount is
+          // exactly the previous one.
+          ...(initialIssue === null ? {} : { initialBucket: "assigned", initialIssue }),
           loadLabels,
           loadAssignees,
           checkoutName,

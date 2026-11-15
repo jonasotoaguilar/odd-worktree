@@ -4753,3 +4753,140 @@ describe('issues preview renders styled markdown (S12)', () => {
     assert.equal(readerPanes(100).right, pane.right);
   });
 });
+
+// S7 (issues-all-toggle): the panel can open on ONE issue. `/issues <n>` mounts
+// the same reader with an initial bucket (`assigned`) and an initial issue, so
+// the view opens on that tab, selects the matching row and shows its detail —
+// or says honestly that the number is not in that view. The selection is ONE
+// shot: later filters, refreshes and paging never move the reader back to it.
+describe('issues view opens on one issue (S7)', () => {
+  // A cursor-paged server seam over one ordered row list per bucket: the cursor
+  // is the last row's position, so the next request continues after it exactly
+  // like the real `loadIssuePage` contract. `pagesRead` lets a test count how
+  // many requests a bucket cost.
+  function pagedView(rowsByBucket, extra = {}) {
+    const requests = [];
+    const details = [];
+    const view = createIssuesView({
+      helpers,
+      prefetchBuckets: true,
+      rowsAvailable: () => 24,
+      requestRender: () => {},
+      done: () => {},
+      loadIssuePage: (request) => {
+        requests.push({ ...request });
+        const rows = rowsByBucket[request.bucketId] || [];
+        const start = request.cursor == null ? 0 : Number(String(request.cursor).replace(/^r/, '')) + 1;
+        const asked = Number(request.limit);
+        const first = Number.isFinite(asked) ? asked : rows.length;
+        const page = rows.slice(start, start + first);
+        return {
+          ok: true,
+          issues: page.map((number, at) => ({ ...issue(number), cursor: `r${start + at}` })),
+          total: rows.length,
+          hasNextPage: start + page.length < rows.length,
+        };
+      },
+      loadIssue: (number) => {
+        details.push(number);
+        return { ok: true, issue: issue(number), comments: [] };
+      },
+      ...extra,
+    });
+    return { view, requests, details };
+  }
+
+  const assignedReads = (requests) => requests.filter((request) => request.bucketId === 'assigned');
+
+  test('opens on Assigned with that row selected and its detail requested', async () => {
+    const { view, requests, details } = pagedView({ mine: [1], assigned: [51, 52], involved: [3] }, {
+      initialBucket: 'assigned',
+      initialIssue: 51,
+    });
+    await tick();
+    assert.equal(requests[0].bucketId, 'assigned', 'the panel opens on the Assigned bucket');
+    const bar = bodyOf(view, 160).split('\n').find((line) => line.includes('My issues')) ?? '';
+    assert.match(bar, /▸ Assigned/, 'the Assigned tab is the one painted as active');
+    assert.match(leftColumn(view, 160), /▸ issue title 51/, 'the matching row is the focused one');
+    assert.deepEqual(details, [51], 'the requested issue is the one whose detail is read');
+    assert.match(rightRows(view, 160).join('\n'), /#51/, 'the detail pane shows the requested issue');
+  });
+
+  test('an issue on a later page is found by paging and selected', async () => {
+    const assigned = [...Array.from({ length: 18 }, (_, at) => at + 1), 51];
+    const { view, requests, details } = pagedView({ assigned }, {
+      initialBucket: 'assigned',
+      initialIssue: 51,
+    });
+    await tick();
+    const reads = assignedReads(requests);
+    assert.deepEqual(reads.map((request) => request.cursor), [null, 'r17'],
+      'the first page is read, then the one after it');
+    assert.match(leftColumn(view, 160), /▸ issue title 51/, 'the found row is selected');
+    assert.equal(details.at(-1), 51, 'and its detail is what gets read last');
+  });
+
+  test('a number nowhere in Assigned leaves the first row and says so', async () => {
+    const { view, requests, details } = pagedView({ assigned: [1, 2] }, {
+      initialBucket: 'assigned',
+      initialIssue: 51,
+    });
+    await tick();
+    assert.equal(assignedReads(requests).length, 1, 'an exhausted bucket is read once');
+    assert.match(leftColumn(view, 160), /▸ issue title 1/, 'the first row stays selected');
+    assert.deepEqual(details, [1], 'as a plain open would, its detail is read');
+    assert.match(bodyOf(view, 160), /#51 is not in Assigned/, 'the note row says so');
+  });
+
+  test('paging for a missing number stops at five pages', async () => {
+    const assigned = Array.from({ length: 200 }, (_, at) => at + 1);
+    const { view, requests } = pagedView({ assigned }, {
+      initialBucket: 'assigned',
+      initialIssue: 999,
+    });
+    await tick();
+    assert.equal(assignedReads(requests).length, 5, 'the bound is five Assigned pages in total');
+    assert.match(bodyOf(view, 160), /#999 is not in Assigned/, 'and the panel discloses it');
+    assert.match(leftColumn(view, 160), /▸ issue title 1/, 'the first row stays selected');
+  });
+
+  test('the selection is not re-applied after a refresh, a filter or paging', async () => {
+    const scheduler = manualScheduler();
+    const { view, details } = pagedView({ mine: [51], assigned: [1, 51, 2], involved: [] }, {
+      initialBucket: 'assigned',
+      initialIssue: 51,
+      scheduleQuery: scheduler.schedule,
+      cancelSchedule: scheduler.cancel,
+    });
+    await tick();
+    assert.match(leftColumn(view, 160), /▸ issue title 51/, 'the opening selection landed');
+    view.handleInput('home');
+    view.render(160);
+    assert.match(leftColumn(view, 160), /▸ issue title 1/, 'the reader moved away from it');
+    const beforeRefresh = details.length;
+    view.handleInput('r');
+    await tick();
+    view.render(160);
+    assert.match(leftColumn(view, 160), /▸ issue title 1/, 'a refresh keeps the reader’s own selection');
+    assert.ok(!details.slice(beforeRefresh).includes(51), 'and never reads #51 on its own again');
+    view.handleInput('t');
+    for (const ch of 'issue') view.handleInput(ch);
+    scheduler.fire();
+    await tick();
+    view.handleInput('enter');
+    await tick();
+    view.render(160);
+    assert.ok(!leftColumn(view, 160).includes('▸ issue title 51'), 'a filter change never re-selects the opening issue');
+  });
+
+  test('a plain open still starts on My issues with nothing selected by number', async () => {
+    const { view, requests, details } = pagedView({ mine: [1, 2], assigned: [51], involved: [] });
+    await tick();
+    assert.equal(requests[0].bucketId, 'mine', 'a plain open reads My issues first');
+    const bar = bodyOf(view, 160).split('\n').find((line) => line.includes('Assigned')) ?? '';
+    assert.match(bar, /▸ My issues/, 'My issues is the active tab');
+    assert.match(leftColumn(view, 160), /▸ issue title 1/, 'the first row is selected');
+    assert.deepEqual(details, [1], 'and only its detail is read');
+    assert.ok(!bodyOf(view, 160).includes('is not in'), 'no initial-issue note appears');
+  });
+});

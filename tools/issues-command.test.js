@@ -367,7 +367,7 @@ function registryFile(root) {
 // Gate the extension through session_start with a scratch cwd (so the
 // unrelated worktree discovery never touches the fixture repo), then run the
 // command handler against the fixture checkout.
-async function openIssues(root, { runner, rows = 24, prepare } = {}) {
+async function openIssues(root, { runner, rows = 24, prepare, args = '' } = {}) {
   const loaded = await loadExtension();
   // `prepare` receives the load that is about to run the command, so a test's fake
   // lands on the instance the command actually mounts.
@@ -384,7 +384,7 @@ async function openIssues(root, { runner, rows = 24, prepare } = {}) {
     cwd: root,
     customImpl: async (captured) => { factory = captured; return null; },
   });
-  await def.handler('', ctx);
+  await def.handler(args, ctx);
   assert.ok(factory, 'the overlay opens');
   const { component, done } = openComponent(factory, host);
   await tick();
@@ -411,7 +411,7 @@ async function capturedIssuesOptions(root, options = {}) {
       factory(host.tui, {}, {}, () => {});
       return null;
     };
-    await loaded.commands.get('issues').handler('', ctx);
+    await loaded.commands.get('issues').handler(options.args || '', ctx);
     await tick();
     assert.ok(capture.holder.options, 'the command mounts the view');
     return {
@@ -1301,5 +1301,138 @@ describe('/issues registration survives a reused module', () => {
     reloaded.clear();
     factory(api);
     assert.ok(reloaded.has('issues'), 'a rebuilt registry on the same API must also regain the command');
+  });
+});
+
+// S7 (issues-all-toggle): `/issues <number>` opens the same panel on `Assigned`
+// with that issue selected and its detail shown, exactly as if the reader had
+// moved to Assigned and arrowed down to it. Anything that is not a bare
+// positive integer (optionally `#`-prefixed) keeps the command's original
+// refusal. S8 (the sidebar's cache) is another task and is not exercised here.
+describe('/issues <number> opens the panel on one issue (S7)', () => {
+  const assignedSearches = (calls) => searchQueries(calls).filter((query) => query.startsWith('assignee:@me'));
+
+  function syntheticRow(number, title = `assigned issue ${number}`) {
+    return {
+      number,
+      title,
+      state: 'OPEN',
+      createdAt: '2026-02-01T00:00:00Z',
+      updatedAt: '2026-02-01T00:00:00Z',
+      url: `https://example.test/issues/${number}`,
+    };
+  }
+
+  // A runner that answers the scoped SEARCH reads from per-bucket row lists,
+  // and everything else from the shared fixture runner, so the mounted view's
+  // own cursor paging is exercised through the real client seam.
+  function pagedSearchRunner(rowsByBucket) {
+    const base = makeIssuesRunner();
+    const calls = [];
+    const runner = async (bin, argv, opts) => {
+      calls.push({ bin, argv: argv.slice(), cwd: opts ? opts.cwd : undefined });
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        const query = graphqlField(argv, 'query', '-f') || '';
+        if (query.includes('type: ISSUE')) {
+          const search = graphqlField(argv, 'search') || '';
+          const rows = search.includes('assignee:@me') ? rowsByBucket.assigned
+            : search.includes('involves:@me') ? rowsByBucket.involved
+              : rowsByBucket.mine;
+          return { status: 0, stdout: graphqlSearchPage(argv, rows || []), stderr: '', error: null };
+        }
+      }
+      return base.runner(bin, argv, opts);
+    };
+    return { runner, calls };
+  }
+
+  test('a bare number opens on Assigned with that row selected and its detail shown', async () => {
+    const root = makeRepo({ tag: 'issues-one-number' });
+    const { runner, calls } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner, args: '76' });
+    await tick();
+    const frame = clean(component.render(200).join('\n'));
+    assert.match(frame, /▸ Assigned/, 'the panel opens on the Assigned tab');
+    assert.match(frame, /▸ chore: update/, 'the matching row is the selected one');
+    assert.ok(calls.some((call) => call.argv[0] === 'issue' && call.argv[1] === 'view'
+      && call.argv.includes('76') && call.argv.includes('--json')),
+    'the requested issue detail was read through gh');
+    assert.equal(searchQueries(calls).length, 3, 'opening still reads exactly the three scoped buckets');
+    assert.equal(connectionReads(calls).length, 0, 'and never the All connection (S2)');
+  });
+
+  test('the #-prefixed form opens the same panel on the same issue', async () => {
+    const root = makeRepo({ tag: 'issues-one-hash' });
+    const { runner } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner, args: '#76' });
+    await tick();
+    const frame = clean(component.render(200).join('\n'));
+    assert.match(frame, /▸ Assigned/);
+    assert.match(frame, /▸ chore: update/);
+  });
+
+  test('anything else keeps the exact old refusal and opens nothing', async () => {
+    const root = makeRepo({ tag: 'issues-one-refused' });
+    const { commands, mod, hooks } = await loadExtension();
+    ghIssues.setGhRunner(makeIssuesRunner().runner);
+    const scratch = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-gate-')));
+    await fireSessionStart(hooks, gateCtx(scratch, []));
+    mod.setIssuesTuiLoader(async () => stubTui);
+    for (const arg of ['0', '-3', '12abc', 'all', '5 6', '#', '#0']) {
+      const { ctx, customs, notes } = makeCtx({ cwd: root, customImpl: async () => null });
+      await commands.get('issues').handler(arg, ctx);
+      assert.equal(customs.length, 0, `${arg}: no overlay is opened`);
+      assert.deepEqual(notes, [[`Unknown option "${arg}". Use /issues.`, 'error']], `${arg}: the old refusal is unchanged`);
+    }
+  });
+
+  test('a number that is not in Assigned says so and keeps the first row', async () => {
+    const root = makeRepo({ tag: 'issues-one-missing' });
+    const { runner } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner, args: '51' });
+    assert.ok(await waitFor(() => clean(component.render(200).join('\n')).includes('#51 is not in Assigned')));
+    const frame = clean(component.render(200).join('\n'));
+    assert.match(frame, /#51 is not in Assigned/, 'the note row names the miss');
+    assert.match(frame, /▸ chore: update/, 'the first row is still the selection');
+  });
+
+  test('a number on a later Assigned page is found by paging and selected', async () => {
+    const root = makeRepo({ tag: 'issues-one-page2' });
+    const rows = Array.from({ length: 18 }, (_, at) => syntheticRow(at + 1));
+    const { runner, calls } = pagedSearchRunner({ mine: [], assigned: [...rows, syntheticRow(51)], involved: [] });
+    const { component } = await openIssues(root, { runner, args: '51' });
+    await tick();
+    const frame = clean(component.render(200).join('\n'));
+    assert.match(frame, /▸ assigned issue 51/, 'the second-page match is selected');
+    assert.equal(assignedSearches(calls).length, 2, 'exactly one more page was read to find it');
+  });
+
+  test('paging for a missing number stops at five Assigned pages', async () => {
+    const root = makeRepo({ tag: 'issues-one-bound' });
+    const rows = Array.from({ length: 200 }, (_, at) => syntheticRow(at + 1));
+    const { runner, calls } = pagedSearchRunner({ mine: [], assigned: rows, involved: [] });
+    const { component } = await openIssues(root, { runner, args: '999' });
+    assert.ok(await waitFor(() => assignedSearches(calls).length >= 5));
+    await tick();
+    assert.equal(assignedSearches(calls).length, 5, 'the bound is five Assigned pages in total');
+    const frame = clean(component.render(200).join('\n'));
+    assert.match(frame, /#999 is not in Assigned/, 'the panel discloses the miss');
+    assert.match(frame, /▸ assigned issue 1/, 'the first row stays selected');
+  });
+
+  test('plain /issues still opens on My issues and is handed no initial issue', async () => {
+    const root = makeRepo({ tag: 'issues-one-plain' });
+    const run = await capturedIssuesOptions(root);
+    try {
+      assert.equal('initialBucket' in run.options, false, 'a plain open passes no initial bucket');
+      assert.equal('initialIssue' in run.options, false, 'and no initial issue');
+    } finally {
+      run.restore();
+    }
+    const { runner } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner });
+    const frame = clean(component.render(200).join('\n'));
+    assert.match(frame, /▸ My issues/, 'a plain open still starts on My issues');
+    assert.ok(!frame.includes('is not in'), 'and paints no initial-issue note');
   });
 });

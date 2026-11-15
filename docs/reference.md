@@ -257,6 +257,45 @@ the checkout's remote moves while the reader is open, mutations refuse with
 …); reopen /issues`, and the reads keep the displayed repository. An issue
 number on screen can never be sent to another repository.
 
+## The `ISSUES` rail section
+
+When Gentle Shell draws its rail, a section titled `ISSUES` lists this checkout's
+related issues: the open issues of the checkout's repository that you authored
+(`author:@me`) and the ones assigned to you (`assignee:@me`), merged by issue
+number — an issue in both appears once — sorted by last update and capped at 20
+rows, each bucket read with `fetchMax: 20`. The section's own meta reports the
+buckets it read: `<n> mine · <n> assigned`.
+
+- **A row is an issue.** It reads `#<number> <title>`, and its right-hand meta is
+  `mine`, `assigned` or `mine + assigned`. Clicking a row opens that issue in the
+  browser with the identity `/issues` proves for a browser open:
+  `gh issue view <n> --web -R <host>/<owner>/<repo>`. The work is deferred off the
+  paint path, runs once per click, and a failure never escapes into the rail.
+- **It reaches the host only through gentle-shell-bridge.** The section is read
+  from that package's published sidebar-section API — the object in the
+  `Symbol.for("gentle-shell-bridge/api/v1")` slot, after its schema and version gate
+  — or from the one `gentle-shell-bridge:ready` announcement when the bridge
+  publishes later. There is no dependency on that package and no import of it. With
+  no bridge (or on a host with no rail) the section simply never appears: nothing is
+  registered, nothing is notified, and no other surface changes. Its
+  `/gentle:customize` → `Sections` visibility toggle belongs to the bridge, so a
+  host without the bridge has neither the section nor the toggle.
+- **A frame never waits on `gh`.** The host calls `lines()` and `meta()` once per
+  frame and both return synchronously: they read one in-memory snapshot and only
+  ever schedule the refresh. One refresh runs at `session_start`, and a snapshot
+  older than 60 s schedules one deferred refresh while the rail is drawn. There is
+  no polling timer, so an idle session makes no network calls, and a collapsed or
+  hidden section costs nothing.
+- **Every state is a row, none is a throw.** `loading…` (dim) before the first
+  answer, `no open issues` (dim) for an empty result, and one error row naming the
+  failure: a failed `gh` read, or a checkout whose own repository cannot be
+  resolved. The resolution fails closed, exactly as `/issues` reads it — no `gh`
+  call is made without a proven identity.
+- **The scope is this checkout's repository, and nothing else moves.** It is the one
+  repository the `/issues` reader is pinned to, not every issue across every
+  repository you touch. `/issues` itself behaves exactly as before: the section
+  neither changes its behavior nor shares its state.
+
 ## Card style follows your shell
 
 The worktree tool cards follow the card style chosen in Gentle Shell — the
@@ -463,7 +502,7 @@ count); `ctrl+o` expands it to the whole output, and the Gentle Shell card conte
 ## Deliberately absent
 
 This package is the worktree / ODD / issues surface only: two agent tools, three
-panels, no customize panel, no plugin-tools toggles, no CodeGraph command or tool (only the
+panels, one optional rail section, no customize panel, no plugin-tools toggles, no CodeGraph command or tool (only the
 prompt advice above), no
 companion-app integration, and no worktree↔issue association. There is nothing to
 configure, and `/warp`, `/odd-list` and `/issues` are always on. Paths, branches

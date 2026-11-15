@@ -6555,6 +6555,19 @@ let issuesGateNotified = false;
 // last probe failed. Registration is eager; this state gates ONLY the open.
 let issuesGateOpen = null;
 
+// S2/S3/S6 (issues-sidebar): the rail section beside the `/issues` reader. The
+// bridge is read from its published slot, never imported; the section reads ONE
+// in-process snapshot per frame and refreshes on its TTL or at `session_start`.
+const ISSUES_SIDEBAR_BRIDGE_SLOT = Symbol.for("gentle-shell-bridge/api/v1");
+const ISSUES_SIDEBAR_READY_EVENT = "gentle-shell-bridge:ready";
+// The most recent `session_start` context: the section's `load` and `open`
+// belong to the checkout the session runs in, not to whatever cwd this process
+// happens to have.
+let issuesSidebarCtx = null;
+let issuesSidebarHandle = null;
+let issuesSidebarDisposer = null;
+let issuesSidebarSubscribed = false;
+
 function issuesPageQuery(spec, rawQuery) {
   const extra = typeof rawQuery === "string" ? rawQuery.trim() : "";
   return extra === "" ? spec.query : `${spec.query} ${extra}`;
@@ -6686,6 +6699,60 @@ async function issuesFetchPages(gh, cwd, state, scope) {
   return { ok: true, pages, loadError: firstError ? firstError.error : null };
 }
 
+// The ONE identity a browser open is bound to, proven in one order and one
+// place: `/issues` pins it when its list loads (S5 of the issues reader) and the
+// related-issues section reads and opens with it (issues-sidebar S4/S6), so the
+// list and the row click always name the same repository. A non-empty GH_REPO is
+// the caller's own scope and is normalized as given; otherwise the checkout's own
+// scope decides, and a checkout with ONE remote has no scope identity to pin
+// (nothing to disambiguate), so gh's own resolution is normalized instead. Every
+// answer is one HOST-QUALIFIED `<host>/<owner>/<repo>` string — the form gh
+// accepts for both GH_REPO and `-R` — and the host is part of it, because the
+// same owner/name on a fork's server and on an enterprise server are different
+// repositories.
+async function issuesBrowserRepoIdentity(gh, checkoutRoot, fresh) {
+  const envRepo = typeof process.env.GH_REPO === "string" && process.env.GH_REPO.trim() !== ""
+    ? process.env.GH_REPO.trim()
+    : null;
+  if (envRepo !== null) {
+    const normalized = gh.normalizeScopeIdentity(envRepo, process.env);
+    if (!normalized || normalized.ok !== true) {
+      return { ok: false, error: (normalized && normalized.error) || "cannot normalize the GH_REPO identity" };
+    }
+    return { ok: true, identity: normalized.identity };
+  }
+  let scope = null;
+  try {
+    scope = await gh.checkoutRepoScope({ cwd: checkoutRoot, fresh: fresh === true });
+  } catch {
+    scope = null;
+  }
+  if (!scope || scope.ok !== true) {
+    return { ok: false, error: (scope && scope.error) || "cannot resolve this checkout's own repository" };
+  }
+  if (typeof scope.identity === "string" && scope.identity.length > 0) {
+    return { ok: true, identity: scope.identity };
+  }
+  // A checkout with one remote has nothing to disambiguate, so gh resolves it;
+  // the answer is qualified with the host gh itself would use (GH_HOST, else
+  // github.com), never left as a host-less name.
+  let reported = null;
+  try {
+    reported = await gh.reportedRepoName({ cwd: checkoutRoot, scope: null });
+  } catch {
+    reported = null;
+  }
+  if (!reported || reported.ok !== true
+    || typeof reported.nameWithOwner !== "string" || reported.nameWithOwner.length === 0) {
+    return { ok: false, error: (reported && reported.error) || "cannot resolve this checkout's repository" };
+  }
+  const normalized = gh.normalizeScopeIdentity(reported.nameWithOwner, process.env);
+  if (!normalized || normalized.ok !== true) {
+    return { ok: false, error: (normalized && normalized.error) || "cannot normalize the repository identity" };
+  }
+  return { ok: true, identity: normalized.identity };
+}
+
 async function executeIssues(rawArgs, ctx) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
@@ -6711,52 +6778,10 @@ async function executeIssues(rawArgs, ctx) {
   }
   // The repository identity is PINNED when the list loads, as ONE
   // HOST-QUALIFIED string (`<host>/<owner>/<repo>`, the form gh accepts for
-  // GH_REPO and `-R`). The host is part of the identity: the same owner/name on
-  // a fork's server and on an enterprise server are different repositories.
+  // GH_REPO and `-R`). The proof itself is the shared helper, so the sidebar
+  // section opens the same repository this reader does.
   // Every later read, every action and the `o` opener bind exactly that string.
-  const ghRepoEnv = () => (typeof process.env.GH_REPO === "string" && process.env.GH_REPO.trim() !== ""
-    ? process.env.GH_REPO.trim()
-    : null);
-  const effectiveRepo = async (fresh) => {
-    const envRepo = ghRepoEnv();
-    if (envRepo !== null) {
-      const normalized = gh.normalizeScopeIdentity(envRepo, process.env);
-      if (!normalized || normalized.ok !== true) {
-        return { ok: false, error: (normalized && normalized.error) || "cannot normalize the GH_REPO identity" };
-      }
-      return { ok: true, identity: normalized.identity };
-    }
-    let scope = null;
-    try {
-      scope = await gh.checkoutRepoScope({ cwd: checkoutRoot, fresh: fresh === true });
-    } catch {
-      scope = null;
-    }
-    if (!scope || scope.ok !== true) {
-      return { ok: false, error: (scope && scope.error) || "cannot resolve this checkout's own repository" };
-    }
-    if (typeof scope.identity === "string" && scope.identity.length > 0) {
-      return { ok: true, identity: scope.identity };
-    }
-    // A checkout with one remote has nothing to disambiguate, so gh resolves
-    // it; the answer is qualified with the host gh itself would use (GH_HOST,
-    // else github.com), never left as a host-less name.
-    let reported = null;
-    try {
-      reported = await gh.reportedRepoName({ cwd: checkoutRoot, scope: null });
-    } catch {
-      reported = null;
-    }
-    if (!reported || reported.ok !== true
-      || typeof reported.nameWithOwner !== "string" || reported.nameWithOwner.length === 0) {
-      return { ok: false, error: (reported && reported.error) || "cannot resolve this checkout's repository" };
-    }
-    const normalized = gh.normalizeScopeIdentity(reported.nameWithOwner, process.env);
-    if (!normalized || normalized.ok !== true) {
-      return { ok: false, error: (normalized && normalized.error) || "cannot normalize the repository identity" };
-    }
-    return { ok: true, identity: normalized.identity };
-  };
+  const effectiveRepo = async (fresh) => issuesBrowserRepoIdentity(gh, checkoutRoot, fresh);
   let pinnedRepo;
   let pinnedPromise = null;
   const pinRepo = async () => {
@@ -7030,6 +7055,187 @@ function registerIssuesCommand(pi) {
   });
 }
 
+// S2 (issues-sidebar): the published bridge object, read from its Symbol slot
+// after its own gate. Absent or malformed is `null` — never an import, never a
+// dependency.
+function issuesSidebarBridge() {
+  try {
+    const api = globalThis[ISSUES_SIDEBAR_BRIDGE_SLOT];
+    if (!api || api.schema !== "gentle-shell-bridge/api" || api.version !== 1) return null;
+    if (typeof api.registerRows !== "function") return null;
+    if (typeof api.registerSection !== "function") return null;
+    if (typeof api.createStore !== "function") return null;
+    return api;
+  } catch {
+    return null;
+  }
+}
+
+function issuesSidebarError(err, fallback) {
+  if (err && typeof err.message === "string" && err.message.length > 0) return err.message;
+  if (typeof err === "string" && err.length > 0) return err;
+  return fallback;
+}
+
+// S1/S6: the two buckets `/issues` already reads, for the checkout the session
+// runs in. The identity is resolved FIRST — through the SAME composition
+// `/issues` proves a browser open with, so a single-remote checkout has one too
+// — and every read is bound to it; a resolution failure returns the S5 error and
+// makes no `gh` call at all.
+async function loadIssuesSidebar() {
+  const cwd = toolCwd(issuesSidebarCtx);
+  let gh;
+  try {
+    gh = libRequire("gh-issues.js");
+  } catch (err) {
+    return { ok: false, error: `issues: cannot load the gh client: ${issuesSidebarError(err, "unknown error")}` };
+  }
+  const checkoutRoot = await oddCheckoutRootAsync(cwd);
+  if (!checkoutRoot) return { ok: false, error: notGitRepositoryLine(cwd) };
+  let resolved = null;
+  try {
+    resolved = await issuesBrowserRepoIdentity(gh, checkoutRoot);
+  } catch (err) {
+    resolved = { ok: false, error: issuesSidebarError(err, "cannot resolve this checkout's own repository") };
+  }
+  if (!resolved || resolved.ok !== true) {
+    return { ok: false, error: (resolved && resolved.error) || "cannot resolve this checkout's own repository" };
+  }
+  const identity = resolved.identity;
+  const readArgs = { cwd: checkoutRoot, scope: identity, fetchMax: 20 };
+  let results;
+  try {
+    results = await Promise.all([
+      gh.listIssues({ query: "author:@me sort:updated-desc", state: "open" }, readArgs),
+      gh.listIssues({ query: "assignee:@me sort:updated-desc", state: "open" }, readArgs),
+    ]);
+  } catch (err) {
+    return { ok: false, error: issuesSidebarError(err, "gh issue list failed") };
+  }
+  const mine = results[0];
+  const assigned = results[1];
+  if (!mine || mine.ok !== true) return { ok: false, error: (mine && mine.error) || "gh issue list failed" };
+  if (!assigned || assigned.ok !== true) return { ok: false, error: (assigned && assigned.error) || "gh issue list failed" };
+  return {
+    ok: true,
+    identity,
+    mine: Array.isArray(mine.issues) ? mine.issues : [],
+    assigned: Array.isArray(assigned.issues) ? assigned.issues : [],
+  };
+}
+
+// S4 (issues-sidebar): a click opens the issue through the SAME fixed-argv
+// opener `/issues` uses, with the identity the list was read from. The module
+// already deferred the call off the paint path, so nothing is deferred twice
+// here; the returned promise never rejects.
+function openIssuesSidebarIssue(number) {
+  const ctx = issuesSidebarCtx;
+  const cwd = toolCwd(ctx);
+  const hostTui = ctx && ctx.ui ? ctx.ui : null;
+  const snapshot = issuesSidebarHandle && typeof issuesSidebarHandle.snapshot === "function"
+    ? issuesSidebarHandle.snapshot()
+    : null;
+  const identity = snapshot && typeof snapshot.identity === "string" && snapshot.identity.length > 0
+    ? snapshot.identity
+    : null;
+  return Promise.resolve()
+    .then(() => oddCheckoutRootAsync(cwd))
+    .then((root) => {
+      if (!root) return { ok: false, error: notGitRepositoryLine(cwd) };
+      return issuesOpenInBrowser(hostTui, root, number, identity);
+    })
+    .catch((err) => ({ ok: false, error: issuesSidebarError(err, "cannot open the issue in the browser") }));
+}
+
+// S3 (issues-sidebar): the repaint the bridge offers is the only thing the
+// refresh reports; a host that paints by other means gets nothing extra.
+function mountIssuesSidebar(pi, api) {
+  let factory;
+  try {
+    factory = libRequire("issues-section.js");
+  } catch {
+    return;
+  }
+  if (!factory || typeof factory.createIssuesSection !== "function") return;
+  const onRefreshed = typeof api.requestRepaint === "function"
+    ? () => {
+      try {
+        api.requestRepaint();
+      } catch {
+        // A repaint failure never breaks the section.
+      }
+    }
+    : undefined;
+  let handle;
+  try {
+    handle = factory.createIssuesSection({
+      load: () => loadIssuesSidebar(),
+      open: (number) => openIssuesSidebarIssue(number),
+      onRefreshed,
+    });
+  } catch {
+    return;
+  }
+  if (!handle || !handle.section) return;
+  let disposer;
+  try {
+    disposer = api.registerSection(handle.section);
+  } catch {
+    return;
+  }
+  issuesSidebarHandle = handle;
+  issuesSidebarDisposer = typeof disposer === "function" ? disposer : null;
+}
+
+// S2 (issues-sidebar): the section reaches the rail ONLY through the bridge's
+// published object. A host without it is subscribed to the ready announcement
+// ONCE and nothing else happens: no notify, no throw, no other surface touched.
+function registerIssuesSidebar(pi) {
+  try {
+    if (issuesSidebarHandle !== null) return;
+    const api = issuesSidebarBridge();
+    if (api !== null) {
+      mountIssuesSidebar(pi, api);
+      return;
+    }
+    if (issuesSidebarSubscribed) return;
+    const events = pi && pi.events ? pi.events : null;
+    if (!events || typeof events.on !== "function") return;
+    issuesSidebarSubscribed = true;
+    try {
+      events.on(ISSUES_SIDEBAR_READY_EVENT, () => {
+        try {
+          registerIssuesSidebar(pi);
+        } catch {
+          // The rail stays absent; every other surface keeps working.
+        }
+      });
+    } catch {
+      issuesSidebarSubscribed = false;
+    }
+  } catch {
+    // The rail is optional: a broken bridge never breaks this extension.
+  }
+}
+
+function rememberIssuesSidebarSession(ctx) {
+  if (!ctx || typeof ctx !== "object") return;
+  issuesSidebarCtx = ctx;
+}
+
+// D3: one eager refresh at `session_start`, fired and forgotten. The TTL on a
+// drawn frame is the only other refresh; there is no polling timer.
+function refreshIssuesSidebar() {
+  const handle = issuesSidebarHandle;
+  if (!handle || typeof handle.refresh !== "function") return;
+  try {
+    const pending = handle.refresh();
+    if (pending && typeof pending.catch === "function") pending.catch(() => {});
+  } catch {
+    // A failed eager read never breaks startup; the TTL retries.
+  }
+}
+
 export default function (pi) {
   // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
   // moves the session, so the command is where a handoff waits and lands.
@@ -7039,6 +7245,9 @@ export default function (pi) {
   // renderer for its own entry type, exactly like Pi's `restored N messages`
   // line. A host without the seam simply never shows the fallback.
   registerWarpQueueEntryRenderer(pi);
+  // S2 (issues-sidebar): the rail section, only when gentle-shell-bridge
+  // published its API; otherwise one ready-announcement subscription.
+  registerIssuesSidebar(pi);
   registerWarpCommand(pi);
   registerOddCommand(pi);
   registerIssuesCommand(pi);
@@ -7051,9 +7260,13 @@ export default function (pi) {
   // `<home>/card-style.json` on every render too. So there is nothing to re-read at
   // `session_start` and nothing cached to invalidate.
   // The session-start `gh` check only gates whether `/issues` may open; the
-  // command itself is registered eagerly above.
+  // command itself is registered eagerly above. The same boundary is the ONE
+  // eager refresh of the issues sidebar (D3), fired and forgotten, and the
+  // session context the section's reads belong to.
   pi.on("session_start", async (event, ctx) => {
+    rememberIssuesSidebarSession(ctx);
     await checkIssuesGate(pi, ctx);
+    refreshIssuesSidebar();
   });
   // A queued warp is session state: shutdown clears its record and its timer so
   // nothing outlives the session that asked for the move.

@@ -23,7 +23,7 @@ its presence records.
 
 | Path | Responsibility |
 | --- | --- |
-| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the three commands, the two tools, the `worktree-warp` message renderer, and the `session_start` / `session_shutdown` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
+| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the three commands, the two tools, the `worktree-warp` message renderer, the optional `ISSUES` rail section, and the `session_start` / `session_shutdown` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
 | `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the canonical target path `<repo-parent>/<repo-name>-worktrees/<slug>` and its helpers, and the async argv runner. |
 | `lib/worktree-registry.js` | The one ownership rule, with no file: a checkout this package created is a directory under `<repo-parent>/<repo-name>-worktrees`, so the path decides. Partitions Git's listing into ours and outside, and parses `git worktree list --porcelain` for the create path. |
 | `lib/worktree-create.js` | `worktree_create`'s core: request validation, base resolution, the ODD-named destination, the refusals sentence for sentence, plan execution and the fixed output lines. |
@@ -54,6 +54,7 @@ its presence records.
 | `lib/codegraph-card.js`, `lib/codegraph-card-preview.js` | The CodeGraph tool card for the native tool, the MCP explore tool and a `bash` call that runs CodeGraph, on the card substrate. |
 | `lib/gh-issues.js` | The `gh` client: checkout repository scope, identity pinning, issue pages, details, labels, assignees, comments, close, and the `viewerPermission` → capability mapping. |
 | `lib/issues-view.js`, `lib/issue-preview.js` | The pure `/issues` view and its preview formatter. |
+| `lib/issues-section.js` | The checkout's related issues as a rail section: the two buckets merged by issue number, the `#<number> <title>` row and its `mine` / `assigned` meta, the one in-memory snapshot and its TTL. It schedules refreshes and never waits on a child process; only a bridge that published its API can show it. |
 | `lib/tui-paint.js`, `lib/view-layout.js`, `lib/preview-scroll-keys.js`, `lib/clipboard.js`, `lib/open-external.js` | Shared presentation helpers: the one palette, window/layout maths, the one preview scroll decision, clipboard, external opener. |
 | `lib/session-auto-name.js`, `lib/session-worktree-register.js` | Session bookkeeping: naming a session after an ODD write, and the host's session-worktree registry entry. |
 | `tools/*.test.js`, `tools/fixtures/` | The Node test suites and their fixtures (`load-extension.js`, `gh-*.json`). |
@@ -86,11 +87,25 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    extension's tool. `tools/package-surface.test.js` asserts the loaded surface, the
    one-line registration in the extension, the closed list of `lib/codegraph-*`
    modules and what each may do.
-3. **The shipped surface is exactly three commands and two tools.** `/warp`,
-   `/odd-list`, `/issues`; `worktree_create`, `worktree_list`. No agent surface
-   moves the session or removes a checkout: `/warp` moves the session (its
-   `ctrl+d`, the selector, a typed name, a queued handoff) and its `ctrl+d`
-   removes a checkout. Each keeps its declared name and label.
+3. **The shipped surface is exactly three commands, two tools and one sidebar
+   section.** `/warp`, `/odd-list`, `/issues`; `worktree_create`, `worktree_list`;
+   and the one fourth kind of surface, a sidebar section (`lib/issues-section.js`)
+   that is neither a command nor a tool and therefore registers no name the host or
+   the agent can call. No agent surface moves the session or removes a checkout:
+   `/warp` moves the session (its `ctrl+d`, the selector, a typed name, a queued
+   handoff) and its `ctrl+d` removes a checkout. Each command and tool keeps its
+   declared name and label.
+
+   **The section reaches the host only through gentle-shell-bridge.** It is
+   published through that package's sidebar-section API alone: the object read from
+   its `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
+   gate, or the one `gentle-shell-bridge:ready` announcement when the bridge
+   publishes later. There is NO dependency on that package and no import of it
+   anywhere in this repo. Without a bridge — or on a host with no rail — the
+   section simply never appears: nothing is registered, nothing is notified, and no
+   other surface changes. Its `/gentle:customize` → `Sections` visibility toggle is
+   contributed by the bridge, not by this package (invariant 2 keeps the customize
+   surface out of it).
 4. **Deletion refuses on a live session.** The only front that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
    before the pending-change question and again immediately before removal. This

@@ -153,6 +153,33 @@ test('a delta after an issue left the set breaks the invariant and the next plan
   assert.deepEqual(cache.plan(ID), { full: false, first: 20 });
 });
 
+// T17 (E17b): the inconsistency `plan` acts on is the same fact a CONSUMER needs:
+// a bucket of such an entry cannot report an exact total, because the entry no
+// longer knows how many open issues it holds. `get` reports it; a clean full
+// read clears it.
+test('T17: get reports the entry inconsistency plan acts on', () => {
+  const cache = createIssuesCache();
+  cache.apply(ID, response({
+    assigned: [issue(1, '2024-01-01T00:00:00Z'), issue(2, '2024-02-01T00:00:00Z')],
+  }), { full: true });
+  assert.equal(cache.get(ID).inconsistent, false, 'a clean full read is consistent');
+
+  // Issue 1 was closed, so the delta (the newest 20) cannot see it: the cached
+  // rows still hold two issues while the response reports one.
+  cache.apply(ID, response({
+    assigned: [issue(2, '2024-03-01T00:00:00Z')],
+  }), { full: false });
+  assert.equal(cache.get(ID).inconsistent, true, 'get exposes the mismatch it detected');
+  assert.deepEqual(cache.plan(ID), { full: true, first: 100 },
+    'and it is the same fact the next sync acts on');
+
+  cache.apply(ID, response({
+    assigned: [issue(2, '2024-03-01T00:00:00Z')],
+  }), { full: true });
+  assert.equal(cache.get(ID).inconsistent, false, 'a clean full read clears it');
+  assert.deepEqual(cache.plan(ID), { full: false, first: 20 });
+});
+
 test('a truncated bucket skips the count invariant on a delta too', () => {
   const cache = createIssuesCache({ bucketCap: 2 });
   const first = cache.apply(ID, response({

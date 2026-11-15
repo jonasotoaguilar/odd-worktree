@@ -138,6 +138,7 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 | T14 | S9 (one combined read, the cache, the count invariant) | worker | `lib/gh-issues.js`, `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
 | T15 | S3, S6, S8, S9 (round 3 defects: the floor counts attempts, a queued refresh dies with its section, the cache TTL is absolute, cache writes are generation-guarded) | worker | `lib/issues-section.js`, `lib/related-issues-cache.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js`, `tools/related-issues-cache.test.js` | pending |
 | T16 | S6, S9 (a checkout switch must also cut the cache write path) | worker | `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
+| T17 | S4, S9 (a click never opens a number it cannot prove belongs to the current checkout; an inconsistent cache entry never claims an exact total) | worker | `extensions/odd-worktree-tools.ts`, `lib/related-issues-cache.js`, `tools/issues-section.test.js`, `tools/issues-command.test.js`, `tools/related-issues-cache.test.js` | pending |
 
 ## Log
 
@@ -148,6 +149,14 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   independent, and T12/T4 cannot exist without it), then this branch, which takes the panel by merging
   `main` into it and only then implements T12 (a row click opens the panel on that issue) and T4 (the
   panel opens from this cache).
+- **E17 (two corrections the T12/T4 worker's own report exposed):** (a) with the click dispatching only a
+  number, a row RETAINED across a checkout change would dispatch that number against the session's current
+  checkout; if the new repository happens to have an issue with the same number, the panel opens the wrong
+  issue silently. The row's identity must be compared with the identity the current checkout proves before
+  anything is dispatched, and a mismatch must be a recorded failure, never a guess. (b) the cache's `get`
+  does not expose `inconsistent`, so a bucket of an entry whose count no longer matches its `issueCount` was
+  seeded with a total derived from held rows and no `+` — an exact-looking number the rail itself refuses to
+  trust. Seeding must treat such an entry as inexact.
 - **E16 (verify round 4, one defect left at the checkout boundary):** the generation that guards cache writes
   is bumped by `session_shutdown` and by a bridge rebinding, but NOT by `session_start`'s `invalidate()`.
   So a read started in checkout A that is still in flight when the session moves to checkout B writes the

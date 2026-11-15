@@ -7106,6 +7106,13 @@ async function executeIssues(rawArgs, ctx) {
       return issuesOpenInBrowser(hostTuiRef, checkoutRoot, number, pinnedRepo.identity);
     },
   };
+  // S8 (T4): the identity the panel just proved is the ONLY key that may seed
+  // the first frame. Read ONCE, here, so every page of this mount comes from the
+  // same entry; a cache entry for another repository (or no entry at all) seeds
+  // nothing and this open is exactly the one this command always performed.
+  const seededPages = pinnedRepo && pinnedRepo.ok === true
+    ? issuesSidebarCachedPages(pinnedRepo.identity)
+    : null;
   try {
     await ctx.ui.custom(
       (hostTui, theme, _keybindings, done) => {
@@ -7116,12 +7123,27 @@ async function executeIssues(rawArgs, ctx) {
           // scoped tabs are prefetched once at open, so none sits at a false
           // zero; `All` is marked lazy there, so the prefetch skips it and it is
           // read the first time the reader's shortcut key enters it (S1/S2).
-          pages: ISSUES_INTERACTIVE_BUCKETS.map((spec) => ({
-            id: spec.id,
-            label: spec.label,
-            issues: null,
-            lazy: spec.lazy === true,
-          })),
+          //
+          // S8 (T4): a page the RAIL's cache answered is seeded instead, so the
+          // first frame paints those rows. The seed is never the last word: the
+          // mount always reads the visible bucket, every other seeded page
+          // carries no `loaded` stamp, so the first activation reads it, and `r`
+          // re-reads the bucket on screen — every seeded row is replaced by a
+          // real answer.
+          pages: ISSUES_INTERACTIVE_BUCKETS.map((spec) => {
+            const seeded = seededPages === null ? null : seededPages.get(spec.id);
+            if (seeded === null || seeded === undefined) {
+              return { id: spec.id, label: spec.label, issues: null, lazy: spec.lazy === true };
+            }
+            return {
+              id: spec.id,
+              label: spec.label,
+              issues: seeded.issues,
+              lazy: spec.lazy === true,
+              total: seeded.total,
+              truncated: seeded.truncated,
+            };
+          }),
           loadIssuePage,
           // S7: a numbered open starts on `Assigned` with that issue selected
           // (the command already refused anything that is not a positive
@@ -7284,6 +7306,47 @@ function clearIssuesSidebarCache() {
   }
 }
 
+// S9 consumer half (issues-sidebar) / S8 (issues panel, T4): the panel READS the
+// rail's cache so its first frame paints rows instead of waiting for `gh`. It is
+// a READER only — the rail owns that entry (its one combined read, its merge, its
+// count invariant and its invalidation) — and nothing here clears, shrinks or
+// rewrites it.
+//
+// The key is the identity the panel just PROVED for this checkout, so an entry
+// belonging to another repository is never used: no path may serve one
+// repository's rows under another's name. No entry means `null`, which is what
+// leaves every page exactly as it was before this cache existed (the mount reads
+// the three scoped buckets as it always did). `get` answers deep-enough copies,
+// so nothing the view does can reach the cached rows.
+//
+// A bucket the cache reported TRUNCATED (its `issueCount` exceeded what it can
+// hold) cannot report an exact total: it is seeded with `truncated: true`, so the
+// view paints `N+` and never claims a count it does not have. E17b: the SAME
+// holds for an entry the cache calls INCONSISTENT — its cached rows no longer
+// match the `issueCount` the response reported (which is why the rail's next sync
+// is a full re-read), so a total derived from those rows is exactly the number
+// the rail itself refuses to trust.
+function issuesSidebarCachedPages(identity) {
+  if (issuesSidebarCache === null) return null;
+  if (typeof identity !== "string" || identity.length === 0) return null;
+  let cached = null;
+  try {
+    cached = issuesSidebarCache.get(identity);
+  } catch {
+    cached = null;
+  }
+  if (!cached || !cached.buckets || typeof cached.buckets !== "object") return null;
+  const inexact = cached.inconsistent === true;
+  const pages = new Map();
+  for (const spec of ISSUES_PAGE_QUERIES) {
+    const rows = cached.buckets[spec.id];
+    if (!Array.isArray(rows)) continue;
+    const truncated = inexact || !!(cached.truncated && cached.truncated[spec.id] === true);
+    pages.set(spec.id, { issues: rows, total: rows.length, truncated });
+  }
+  return pages.size === 0 ? null : pages;
+}
+
 // S1/S6 (corrected to assigned-only) + S9: ONE read — a single `gh api graphql`
 // request with the three scoped views (`mine`, `assigned`, `involved`) — for the
 // checkout the session runs in. `/issues` keeps its own four tabs and the rail
@@ -7367,43 +7430,89 @@ async function loadIssuesSidebar() {
   };
 }
 
-// S4 (issues-sidebar): a click opens the issue through the SAME fixed-argv
-// opener `/issues` uses. The identity arrives as an ARGUMENT — the one the row
-// was built from — so a row the host retained across a checkout change opens
-// the repository it was read from, never the one the session moved to. This
-// function never reads the current snapshot: the checkout root is still
-// resolved here only for the child's cwd (the `-R` argument decides the
-// repository), and an absent or empty identity falls through to the opener's
-// own refusal instead of guessing one. The module already deferred the call off
-// the paint path, so nothing is deferred twice here; the returned promise never
-// rejects.
-function openIssuesSidebarIssue(number, identity) {
-  const ctx = issuesSidebarCtx;
-  const cwd = toolCwd(ctx);
-  const hostTui = ctx && ctx.ui ? ctx.ui : null;
-  const pinned = typeof identity === "string" && identity.length > 0 ? identity : null;
-  return Promise.resolve()
-    .then(() => oddCheckoutRootAsync(cwd))
-    .then((root) => {
-      if (!root) return { ok: false, error: notGitRepositoryLine(cwd) };
-      return issuesOpenInBrowser(hostTui, root, number, pinned);
-    })
-    .catch((err) => ({ ok: false, error: issuesSidebarError(err, "cannot open the issue in the browser") }));
+// S4 (issues-sidebar, L11/T12): a row click opens the PANEL on that issue
+// instead of the browser. It reaches it through the SAME host route the overflow
+// row uses — `pi.sendUserMessage("/issues <n>", { expandPromptTemplates: true })`
+// — so the panel opens on `Assigned` with that issue selected and its detail
+// shown, and the panel says so itself when the number is not in that view.
+//
+// T17 (E17a, S4): the NUMBER alone travels — `/issues` still proves its own
+// identity when it opens — but a number is only dispatched after THIS checkout
+// proves it is the one the row was read from. A row retained on screen across a
+// checkout change (the section keeps its rows while the new checkout's read is in
+// flight, and a stale read can keep the old identity) would otherwise dispatch
+// checkout A's #11 into checkout B, and if B has an #11 the panel would silently
+// open the wrong issue. The proof is the SAME composition the panel and the rail
+// already use (`issuesBrowserRepoIdentity`), run ONCE per click — a click is not
+// a paint — and it neither reads nor writes the cache.
+//
+// S4 (the overflow row) keeps dispatching `/issues` with no number: it names no
+// issue, so there is no number whose repository could be wrong. `pi.sendUserMessage`
+// returns void by contract, so this reports that the command was dispatched,
+// never that a panel opened. A host without the route, or one that throws
+// synchronously, refuses here with nothing dispatched. Never throws (it is async,
+// so it cannot reject either): the module defers the call off the paint path, and
+// its own recorded-error path classifies the `{ ok, error }` answered here.
+const ISSUES_SIDEBAR_OTHER_CHECKOUT = "the issue list on screen belongs to another checkout";
+
+// The identity the CURRENT checkout proves, resolved once per click. The proof is
+// FRESH, exactly like the panel's own pin when it opens: a remote that moved since
+// the last read must not answer with the identity it used to have. No checkout
+// root and a failed proof are both "unprovable" — which is not the same thing as
+// a match, so neither may dispatch.
+async function issuesCurrentCheckoutIdentity() {
+  if (issuesSidebarCtx === null) {
+    return { ok: false, error: "this session has no checkout to prove" };
+  }
+  const cwd = toolCwd(issuesSidebarCtx);
+  const checkoutRoot = await oddCheckoutRootAsync(cwd);
+  if (!checkoutRoot) return { ok: false, error: notGitRepositoryLine(cwd) };
+  let gh;
+  try {
+    gh = libRequire("gh-issues.js");
+  } catch (err) {
+    return { ok: false, error: `issues: cannot load the gh client: ${issuesSidebarError(err, "unknown error")}` };
+  }
+  try {
+    const proof = await issuesBrowserRepoIdentity(gh, checkoutRoot, true);
+    if (!proof || proof.ok !== true) {
+      return { ok: false, error: (proof && proof.error) || "cannot resolve this checkout's own repository" };
+    }
+    return { ok: true, identity: proof.identity };
+  } catch (err) {
+    return { ok: false, error: issuesSidebarError(err, "cannot resolve this checkout's own repository") };
+  }
 }
 
-// S4 (issues-sidebar): the overflow row opens the `/issues` panel through the
-// SAME host route `dispatchWarpHandoff` uses — one command line, the prompt
-// templates expanded — and returns the `{ ok, error }` shape the section
-// classifies. `pi.sendUserMessage` returns void by contract, so this reports
-// that the command was dispatched, never that a panel opened. A host without the
-// route, or one that throws synchronously, refuses here with nothing dispatched.
-// Never throws; the module defers the call off the paint path.
-function dispatchIssuesPanel(pi) {
+async function dispatchIssuesPanel(pi, number, identity) {
+  const asked = Number(number);
+  const namesIssue = Number.isInteger(asked) && asked > 0;
+  const command = namesIssue ? `/issues ${asked}` : "/issues";
   if (!pi || typeof pi.sendUserMessage !== "function") {
     return { ok: false, error: "the host cannot dispatch the /issues command here" };
   }
+  // A row that carries no identity (the fresh-row case) has nothing to compare
+  // against, so it dispatches exactly as the click always did: the panel's own
+  // proof still binds whatever it opens. Only a row that NAMES a repository can
+  // contradict the one this checkout proves.
+  const rowIdentity = typeof identity === "string" && identity.length > 0 ? identity : null;
+  if (namesIssue && rowIdentity !== null) {
+    const proof = await issuesCurrentCheckoutIdentity();
+    if (proof.ok !== true) {
+      return {
+        ok: false,
+        error: `${ISSUES_SIDEBAR_OTHER_CHECKOUT} and this checkout's repository could not be proven (${proof.error}); the /issues panel was not opened`,
+      };
+    }
+    if (proof.identity !== rowIdentity) {
+      return {
+        ok: false,
+        error: `${ISSUES_SIDEBAR_OTHER_CHECKOUT} (${rowIdentity}, not ${proof.identity}); the /issues panel was not opened`,
+      };
+    }
+  }
   try {
-    pi.sendUserMessage("/issues", { expandPromptTemplates: true });
+    pi.sendUserMessage(command, { expandPromptTemplates: true });
   } catch (err) {
     return { ok: false, error: `the /issues command could not be dispatched: ${issuesSidebarError(err, "unknown error")}` };
   }
@@ -7437,7 +7546,13 @@ function mountIssuesSidebar(pi, api) {
   try {
     handle = factory.createIssuesSection({
       load: () => loadIssuesSidebar(),
-      open: (number, identity) => openIssuesSidebarIssue(number, identity),
+      // T12/T17: a row click and the overflow row dispatch the panel command; the
+      // row's number AND the identity it was built from ride the seam, so the
+      // dispatch can prove the number belongs to THIS checkout before it opens
+      // anything. `openIssuesSidebarIssue` (the browser opener this seam used to
+      // run) is gone with its only caller — `issuesOpenInBrowser` survives for
+      // `/issues`' own `o` key.
+      open: (number, identity) => dispatchIssuesPanel(pi, number, identity),
       openAll: () => dispatchIssuesPanel(pi),
       onRefreshed,
     });
@@ -7906,4 +8021,4 @@ export default function (pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, libModule };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, libModule };

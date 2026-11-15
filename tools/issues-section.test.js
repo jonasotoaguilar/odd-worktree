@@ -63,7 +63,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { LIB_DIR, loadExtension } = require('./fixtures/load-extension.js');
+const { LIB_DIR, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
+const { pathToFileURL } = require('node:url');
 const { createIssuesSection } = require('../lib/issues-section.js');
 
 const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
@@ -1492,12 +1493,21 @@ test('S2 (T11): a published bridge and a child session are never warned about', 
 // itself resolves, normalized host-qualified exactly as `/issues` does.
 // ---------------------------------------------------------------------------
 
-test('S4: a single-remote checkout opens the row with the identity gh resolves', async () => {
-  // ONE remote: `checkoutRepoScope()` answers `identity: null`, so the opener
-  // must reach the repository gh resolves instead of refusing.
+// T12 rewrote this test: its old assertion was the browser argv the row click
+// used to reach (`issue view 11 --web -R github.com/myfork/project`). A row click
+// now dispatches `/issues 11` instead — the panel proves its own identity when it
+// opens — so the browser argv it pinned is impossible to keep. What is still this
+// test's subject is the READ: a single-remote checkout has no scope identity to
+// pin, so the read must carry the identity gh itself resolves.
+test('S4 (T4/T12): a single-remote checkout lists its issues, and a row click opens the panel on that issue', async () => {
+  // ONE remote: `checkoutRepoScope()` answers `identity: null`, so the identity
+  // the read (and, before T12, the opener) uses is the one gh itself resolves.
   const checkout = makeCheckout([['origin', 'git@github.com:myfork/project.git']]);
   const { registered } = installBridge();
-  const loaded = await loadExtension({});
+  const sent = [];
+  const loaded = await loadExtension({
+    sendUserMessage: (text, opts) => { sent.push({ text, opts }); },
+  });
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub({
     repoView: 'myfork/project',
@@ -1523,13 +1533,56 @@ test('S4: a single-remote checkout opens the row with the identity gh resolves',
     assert.deepEqual(rows.map((row) => row.label), ['#11 Assigned one'],
       'the single-remote checkout still lists its issues');
     rows[0].onClick();
-    await waitFor(() => opened.length > 0, 'the click never reached the browser opener');
+    await waitFor(() => sent.length > 0, 'the click never dispatched /issues');
   } finally {
     worktreeGit.runArgvAsync = original;
   }
-  assert.equal(opened.length, 1, 'one click opens one issue');
-  assert.deepEqual(opened[0].argv, ['issue', 'view', '11', '--web', '-R', 'github.com/myfork/project'],
-    'the row opens the identity gh resolved for this checkout, host-qualified');
+  assert.deepEqual(sent, [{ text: '/issues 11', opts: { expandPromptTemplates: true } }],
+    'the row click dispatches the panel command for that issue, exactly once');
+  assert.deepEqual(opened, [], 'the click no longer opens a browser');
+  const reads = graphqlCalls(gh.calls);
+  assert.equal(reads[0].env.GH_REPO, 'github.com/myfork/project',
+    'the read carries the identity gh resolved for this checkout, host-qualified');
+});
+
+// T12: the deferred click contract is unchanged — off the paint path, a recorded
+// `{ ok, error }`, never a throw — and a host with no dispatch route refuses with
+// NOTHING dispatched. No browser open runs and the ready list is never lost.
+test('S4 (T12): a host with no sendUserMessage refuses the click and dispatches nothing', async () => {
+  const checkout = makeCheckout();
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub({
+    issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
+  });
+  ghIssues.setGhRunner(gh.runner);
+  const worktreeGit = require(path.join(LIB_DIR, 'worktree-git.js'));
+  const opened = [];
+  const original = worktreeGit.runArgvAsync;
+  worktreeGit.runArgvAsync = async (bin, argv, opts) => {
+    if (argv[0] === 'issue') {
+      opened.push({ bin, argv: argv.slice(), cwd: opts && opts.cwd });
+      return { status: 0, stdout: '', stderr: '', error: null };
+    }
+    return original(bin, argv, opts);
+  };
+  try {
+    const ctx = { cwd: checkout, ui: { notify: () => {} } };
+    await fireSessionStart(loaded.hooks, ctx);
+    const section = registered[0];
+    const rows = await waitForRows(section, ctx);
+    assert.equal(rows[0].label, '#11 Assigned one');
+    // The click returns immediately and never throws; the refusal is recorded.
+    assert.equal(rows[0].onClick(), undefined, 'the deferred click never throws at the caller');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(opened, [], 'no browser open runs when the host cannot dispatch');
+    assert.deepEqual(section.lines(ctx).map((row) => row.label), ['#11 Assigned one'],
+      'the recorded refusal never turns the ready list into an error row');
+    assert.equal(section.meta(ctx), '1 assigned', 'and the header still counts the list it has');
+  } finally {
+    worktreeGit.runArgvAsync = original;
+  }
 });
 
 test('S1/S6: a single-remote checkout reads only the assigned issues with the identity gh resolves', async () => {
@@ -1733,7 +1786,16 @@ test('S4: a row retained across a checkout change opens the identity it was buil
     'an absent identity reaches the opener unchanged');
 });
 
-test('S4: a row clicked after the session moved to another checkout still opens its own repository', async () => {
+// T12 wrote this test to assert that a row retained across a checkout change
+// dispatched `/issues 11` — the number alone, so the panel proved its own
+// repository. T17 (E17a) found what that silently did: checkout B has an issue
+// #11 too, so the panel opened B's #11 while the human had clicked A's. The
+// row's identity is now compared with the identity THIS checkout proves before
+// anything is dispatched, so the retained click dispatches NOTHING and the
+// current checkout's list survives it. The old assertion (a dispatch, no
+// browser, no repository on the command line) is impossible to keep: E17 makes
+// the dispatch itself the defect.
+test('S4 (T17): a retained row from another checkout dispatches nothing', async () => {
   const checkoutA = makeCheckout([
     ['origin', 'git@github.com:myfork/project-a.git'],
     ['upstream', 'git@github.com:original/project-a.git'],
@@ -1743,7 +1805,10 @@ test('S4: a row clicked after the session moved to another checkout still opens 
     ['upstream', 'git@github.com:original/project-b.git'],
   ]);
   const { registered } = installBridge();
-  const loaded = await loadExtension({});
+  const sent = [];
+  const loaded = await loadExtension({
+    sendUserMessage: (text, opts) => { sent.push({ text, opts }); },
+  });
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   ghIssues.setGhRunner((_bin, argv, runOpts = {}) => {
     const env = runOpts.env || {};
@@ -1794,18 +1859,108 @@ test('S4: a row clicked after the session moved to another checkout still opens 
     // The host still holds A's frame, so this click happens after B's snapshot
     // landed — the exact window the finding lived in.
     rowA.onClick();
-    await waitFor(() => opened.length > 0, 'the retained row never reached the browser opener');
+    // Nothing observable completes a refused click, so the proof gets a turn of
+    // its own before the assertion.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    assert.deepEqual(sent, [], 'a row built from another checkout opens nothing');
+    assert.deepEqual(opened, [], 'and opens no browser');
+    assert.ok(section.lines(ctxB).some((row) => row.label === '#11 B eleven'),
+      'the refusal never grows the list the current checkout is showing');
+    assert.equal(section.meta(ctxB), '1 assigned', 'and the header still counts it');
   } finally {
     worktreeGit.runArgvAsync = original;
   }
+});
 
-  assert.equal(opened.length, 1, 'one click opens one issue');
-  assert.deepEqual(opened[0].argv, ['issue', 'view', '11', '--web', '-R', 'github.com/myfork/project-a'],
-    'the retained row opens its own repository, never the checkout the session moved to');
-  assert.ok(!opened[0].argv.includes('github.com/myfork/project-b'),
-    "never the new checkout's repository");
-  assert.equal(opened[0].cwd, checkoutB,
-    'the child still runs in the current checkout; -R, not the cwd, decides the repository');
+// T17 (E17a): the seam's answer, and the two cases a row cannot produce through
+// this extension. The seam is exported for exactly this contract (like the
+// other test seams in the extension): the extension's own loader ALWAYS answers
+// a proven identity, so the fresh-row case (a click that carries none) and the
+// unprovable one have no other public route. Both load the extension the way the
+// host does, with a stub `pi`.
+async function loadSeam(pi = {}) {
+  process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
+  const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-seam-')));
+  const copy = path.join(dir, 'odd-worktree-tools.mjs');
+  fs.writeFileSync(copy, stubbedSource());
+  const hooks = [];
+  const host = {
+    registerCommand: () => {},
+    registerTool: () => {},
+    registerMessageRenderer: () => {},
+    on: (event, handler) => { hooks.push([event, handler]); return () => {}; },
+    ...pi,
+  };
+  const mod = await import(pathToFileURL(copy).href);
+  mod.default(host);
+  return { mod, hooks };
+}
+
+test('S4 (T17): a click whose row names another checkout dispatches nothing and says why', async () => {
+  const checkout = makeCheckout();
+  const sent = [];
+  const dispatch = { sendUserMessage: (text, opts) => { sent.push({ text, opts }); } };
+  const { mod, hooks } = await loadSeam(dispatch);
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub({});
+  ghIssues.setGhRunner(gh.runner);
+
+  const ctx = { cwd: checkout, ui: { notify: () => {} } };
+  await fireSessionStart(hooks, ctx);
+
+  // This checkout proves `github.com/myfork/project`; the row says it came from
+  // another one.
+  const outcome = await mod.dispatchIssuesPanel(dispatch, 11, 'github.com/other/project');
+  assert.equal(outcome.ok, false, 'a number from another checkout is refused');
+  assert.match(outcome.error, /belongs to another checkout/,
+    'the refusal says whose list the click came from');
+  assert.match(outcome.error, /the \/issues panel was not opened/,
+    'and says nothing was opened');
+  assert.deepEqual(sent, [], 'nothing is dispatched for a number this checkout cannot prove');
+
+  // The same seam with the identity this checkout DOES prove opens the panel the
+  // way it always did: the comparison is the only new step.
+  const matched = await mod.dispatchIssuesPanel(dispatch, 11, 'github.com/myfork/project');
+  assert.deepEqual(matched, { ok: true });
+  assert.deepEqual(sent, [{ text: '/issues 11', opts: { expandPromptTemplates: true } }],
+    'a row of this checkout dispatches the panel command for that issue');
+});
+
+test('S4 (T17): a click that cannot prove the current checkout dispatches nothing', async () => {
+  const checkout = makeCheckout();
+  const sent = [];
+  const dispatch = { sendUserMessage: (text, opts) => { sent.push({ text, opts }); } };
+  const { mod, hooks } = await loadSeam(dispatch);
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub({});
+  ghIssues.setGhRunner(gh.runner);
+
+  // The session moves to a directory no git checkout backs, so there is no
+  // identity to compare against — which is not the same thing as a match.
+  const elsewhere = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-not-git-')));
+  await fireSessionStart(hooks, { cwd: checkout, ui: { notify: () => {} } });
+  await fireSessionStart(hooks, { cwd: elsewhere, ui: { notify: () => {} } });
+
+  const outcome = await mod.dispatchIssuesPanel(dispatch, 11, 'github.com/myfork/project');
+  assert.equal(outcome.ok, false, 'an unprovable checkout refuses the click');
+  assert.match(outcome.error, /belongs to another checkout/);
+  assert.match(outcome.error, /the \/issues panel was not opened/);
+  assert.deepEqual(sent, [], 'nothing is dispatched when the proof fails');
+});
+
+test('S4 (T17): a row that carries no identity still opens its issue', async () => {
+  const sent = [];
+  const dispatch = { sendUserMessage: (text, opts) => { sent.push({ text, opts }); } };
+  const { mod } = await loadSeam(dispatch);
+
+  // A caller with nothing to compare is the fresh-row path: no proof runs, so it
+  // works with no session context and no checkout at all, and behaves exactly as
+  // the click did before E17.
+  const outcome = await mod.dispatchIssuesPanel(dispatch, 11, undefined);
+  assert.deepEqual(outcome, { ok: true });
+  assert.deepEqual(sent, [{ text: '/issues 11', opts: { expandPromptTemplates: true } }],
+    'a row without an identity is dispatched as the click always was');
 });
 
 test('S6: a read in flight at session_shutdown never repaints the rail', async () => {

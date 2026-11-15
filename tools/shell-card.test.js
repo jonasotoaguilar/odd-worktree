@@ -20,6 +20,7 @@ const {
 	CARD_GLYPH,
 	CARD_STYLE,
 	CARD_TONE,
+	TONE_OWNS_BOX,
 	cardAwaitingResult,
 	cardBodyRows,
 	cardBottom,
@@ -558,6 +559,69 @@ test('the float style draws the accent rail, the tone background and the two pad
 	assert.match(visible[5], /^ ▎ +1\.2s +$/, 'the closing row right-aligns the elapsed time');
 	for (const row of visible) assert.doesNotMatch(row, /[╭╮╰╯─│]/, 'the float style draws no box');
 	assert.deepEqual(theme.roles.bg, ['toolPendingBg'], 'the warning tone paints its own background role');
+});
+
+// ---- the rail role: one card, one role for its whole closed box ----
+
+// The reference's `Card.railRole` (lib/shell-card.ts `frameRole`): a card with
+// nothing left to report may name the role of its whole box — corners, rules, sides
+// and rail — so the box reads as part of the label it belongs to. A tone that owns
+// the box (a call still running, a call that failed) keeps its own frame role, and
+// a card that names nothing keeps today's drawing byte for byte.
+const RAIL_CARD = { title: 'codegraph', subtitle: 'init', body: ['→ initialized'], tone: CARD_TONE.INFO, glyph: '◎', titleRole: 'mdCode', railRole: 'mdCode' };
+
+/** The card's rows with the fake theme taken out, so a width can be measured. */
+const untag = (value) => stripAnsi(value).replace(/<[^>]*>/g, '');
+
+function railParts(theme, value = RAIL_CARD) {
+	return (width) => ({
+		head: [cardTop(value, theme, width, undefined, metrics)],
+		body: cardBodyRows(value.body, value.tone, theme, width, { expanded: true }, metrics),
+		bottom: cardBottom(value.tone, theme, width, '1.2s', metrics),
+	});
+}
+
+test('a card that names a rail role paints its whole box there, and a status tone still owns it', () => {
+	// The reference's own table, which decides between the two: only a call still
+	// running or one that failed speaks for its box.
+	assert.deepEqual(TONE_OWNS_BOX, { info: false, success: false, warning: true, error: true });
+	const top = cardTop(RAIL_CARD, taggedTheme, 60, undefined, metrics);
+	assert.match(top, /^<mdCode>╭<\/mdCode><mdCode>─ <\/mdCode><mdCode>◎ codegraph<\/mdCode> <muted>·<\/muted> <muted>init<\/muted><mdCode> /, 'the corners and the lead carry the card role');
+	assert.match(top, /<mdCode> ─+<\/mdCode><mdCode>╮<\/mdCode>$/, 'and so do the rule and the closing corner');
+	assert.equal(top.includes('<border>'), false, 'no cell of the box keeps the tone role');
+
+	// A card that names no rail role is drawn exactly as before: the tone owns the box.
+	const described = cardTop({ ...RAIL_CARD, railRole: undefined }, taggedTheme, 60, undefined, metrics);
+	assert.match(described, /^<border>╭<\/border><border>─ <\/border>/);
+	assert.equal(described.includes('<mdCode>╭'), false);
+
+	// An active state speaks for the call: a running card keeps the warning role and a
+	// failed one the error role, whatever identity the card named.
+	assert.match(cardTop({ ...RAIL_CARD, tone: CARD_TONE.WARNING }, taggedTheme, 60, undefined, metrics), /^<warning>╭<\/warning>/);
+	assert.match(cardTop({ ...RAIL_CARD, tone: CARD_TONE.ERROR }, taggedTheme, 60, undefined, metrics), /^<error>╭<\/error>/);
+});
+
+test('the float style paints the rail, the padding rows and the closing rule in the card role', () => {
+	const theme = floatTheme();
+	const rows = withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.INFO, theme, 40, railParts(theme), 'mdCode'));
+	assert.equal(rows.length, 5, 'padding row, heading, padding row, one body row and the closing row');
+	for (const row of rows) {
+		assert.ok(row.includes('<mdCode>▎</mdCode>'), `"${row}" does not paint its rail in the card role`);
+		assert.equal(metrics.visibleWidth(untag(row)), 40, 'every row is the width the host asked for');
+	}
+	assert.equal(rows.join('\n').includes('<border>'), false, 'no cell of the band keeps the tone role');
+	assert.deepEqual(theme.roles.bg, ['toolSuccessBg'], 'the tone still decides the band the rail rides on');
+
+	// Without a rail role the float card is unchanged: the tone paints its rail.
+	const byTone = withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.INFO, theme, 40, railParts(theme)));
+	assert.ok(byTone.join('\n').includes('<border>▎</border>'));
+
+	// A running card keeps its own tone on the rail, and a failed one its error role.
+	const running = withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.WARNING, theme, 40, railParts(theme, { ...RAIL_CARD, tone: CARD_TONE.WARNING }), 'mdCode'));
+	assert.ok(running.join('\n').includes('<warning>▎</warning>'));
+	assert.equal(running.join('\n').includes('<mdCode>▎</mdCode>'), false);
+	const failed = withStyle(CARD_STYLE.FLOAT, () => floatRows(CARD_TONE.ERROR, theme, 40, railParts(theme, { ...RAIL_CARD, tone: CARD_TONE.ERROR }), 'mdCode'));
+	assert.ok(failed.join('\n').includes('<error>▎</error>'));
 });
 
 test('the float rail and the label take the tone role, and INFO its accent, never a colour of their own', () => {

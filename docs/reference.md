@@ -456,7 +456,7 @@ substrate as the worktree tools: the native `codegraph` tool, the MCP `codegraph
 command. It is registered through the host's tool-renderer hook, adds no tool or command, and
 hands every other tool back exactly as the host resolved it; a `bash` command that is not
 CodeGraph's is forwarded to the host's own renderer. A host without that hook draws nothing of
-ours. The collapsed card is one factual row per operation (an init, a sync, a query or explore
+ours. Every card in this package, the two worktree tools and the CodeGraph rows alike, declares `renderShell: "self"`: it frames itself in float or neon, and the host's own filled box is never drawn under it. The collapsed card is one factual row per operation (an init, a sync, a query or explore
 count); `ctrl+o` expands it to the whole output, and the Gentle Shell card content level
 (`minimal`) hides the result body while a failure still says why.
 

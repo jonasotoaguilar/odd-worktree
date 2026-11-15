@@ -180,6 +180,7 @@ function cardFor(options) {
 
 /** A host that draws bash itself: its renderers draw nothing here, which is all a forwarded row needs to be. */
 const HOST_BASH = {
+  renderShell: 'self',
   renderCall: () => ({ render: () => [], invalidate() {} }),
   renderResult: () => ({ render: () => [], invalidate() {} }),
 };
@@ -470,6 +471,7 @@ test('every tool the card does not own is handed back exactly as the chain resol
   // A bash call that is not CodeGraph forwards to the host's own drawing, with its own arguments.
   const calls = [];
   const host = {
+    renderShell: 'self',
     renderCall(...args) {
       calls.push(['call', ...args]);
       return { render: () => ['host bash call'], invalidate() {} };
@@ -553,6 +555,7 @@ test('a renderer that throws draws nothing and never breaks the transcript', () 
 
   // The host's own renderer throws while drawing a bash row that is not CodeGraph's.
   const throwing = resolver('bash', () => ({
+    renderShell: 'self',
     renderCall() {
       throw new Error('host renderer exploded');
     },
@@ -574,15 +577,24 @@ test('a renderer that throws draws nothing and never breaks the transcript', () 
   }).renderCall({ operation: 'init' }, plainTheme, { isPartial: false }).render(60));
 });
 
-// ---- the host's own bash row keeps its shell ----
+// ---- the host's shell: this card frames itself, so the host must not frame it too ----
 
-test('a bash row the host draws itself keeps its shell mode, and no other tool ever carries one', () => {
+test('the native and MCP CodeGraph tools declare a self shell, or the host draws its own filled box under the card', () => {
+  const resolver = cardFor();
+  assert.equal(resolver(CODEGRAPH_TOOL, () => undefined).renderShell, 'self');
+  assert.equal(resolver(MCP_PREFIXED_TOOL, () => undefined).renderShell, 'self');
+  assert.equal(resolver(CODEGRAPH_MCP_TOOL, () => undefined).renderShell, 'self');
+});
+
+test('a bash row is drawn by this card only on a host whose bash row already frames itself', () => {
   const resolver = cardFor();
   const self = { renderShell: 'self', renderCall: () => 'host-call', renderResult: () => 'host-result' };
-  assert.equal(resolver('bash', () => self).renderShell, 'self', 'the shell frame around a bash command is still the shell\'s');
-  assert.equal(resolver('bash', () => ({ ...self, renderShell: undefined })).renderShell, undefined);
-  assert.equal('renderShell' in resolver(CODEGRAPH_TOOL, () => self), false, 'the native tool never takes the shell mode');
-  assert.equal('renderShell' in resolver(MCP_PREFIXED_TOOL, () => self), false);
+  const drawn = resolver('bash', () => self);
+  assert.equal(drawn.renderShell, 'self', 'the card keeps the shell the host row already had');
+  assert.notEqual(drawn.renderCall, self.renderCall, 'and draws a CodeGraph command itself');
+  // A host row inside the default filled box: this card would be drawn on top of the box, which is two designs at once.
+  const boxed = { renderCall: () => 'host-call', renderResult: () => 'host-result' };
+  assert.equal(resolver('bash', () => boxed), boxed, 'the host row is returned untouched');
 });
 
 test('a host with no bash renderer of its own keeps drawing every bash row itself', () => {

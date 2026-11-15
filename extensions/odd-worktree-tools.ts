@@ -7223,6 +7223,22 @@ function rememberIssuesSidebarSession(ctx) {
   issuesSidebarCtx = ctx;
 }
 
+// S6 (issues-sidebar): a session that starts in ANOTHER checkout supersedes the
+// previous one HERE, synchronously, before any awaited probe in the handler
+// below. The section drops its snapshot (the rail shows the loading row) and
+// moves its latest-wins token on, so an answer the previous checkout's read is
+// still holding lands nowhere instead of painting the repository the session
+// left. A throwing seam never breaks session start.
+function invalidateIssuesSidebar() {
+  const handle = issuesSidebarHandle;
+  if (!handle || typeof handle.invalidate !== "function") return;
+  try {
+    handle.invalidate();
+  } catch {
+    // The rail is optional: a failed supersede never breaks startup.
+  }
+}
+
 // D3: one eager refresh at `session_start`, fired and forgotten. The TTL on a
 // drawn frame is the only other refresh; there is no polling timer.
 function refreshIssuesSidebar() {
@@ -7263,10 +7279,17 @@ export default function (pi) {
   // command itself is registered eagerly above. The same boundary is the ONE
   // eager refresh of the issues sidebar (D3), fired and forgotten, and the
   // session context the section's reads belong to.
+  // S6 (issues-sidebar): the supersede of a previous checkout's read happens
+  // FIRST and synchronously — the session context is remembered, the section is
+  // invalidated and its eager refresh is fired BEFORE the `gh` gate below is
+  // awaited. `checkIssuesGate` waits on a `gh` probe, and an answer the previous
+  // checkout's read settles with during that wait must find no latest token to
+  // win and no snapshot to keep.
   pi.on("session_start", async (event, ctx) => {
     rememberIssuesSidebarSession(ctx);
-    await checkIssuesGate(pi, ctx);
+    invalidateIssuesSidebar();
     refreshIssuesSidebar();
+    await checkIssuesGate(pi, ctx);
   });
   // A queued warp is session state: shutdown clears its record and its timer so
   // nothing outlives the session that asked for the move.

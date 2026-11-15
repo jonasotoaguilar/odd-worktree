@@ -35,7 +35,10 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 - **S6 — scope is the checkout's own repository, never a guess.** The list is read exactly like
   `/issues` reads it: `checkoutRepoScope({cwd})` and `gh.listIssues({query, state: 'open'}, {cwd,
   scope, fetchMax: 20})`. A failed resolution produces the S5 error row; no `gh` call is made
-  without a proven identity.
+  without a proven identity. A session that starts in ANOTHER checkout supersedes the previous one
+  at the moment `session_start` fires — before any awaited probe in that handler — so the old
+  checkout's snapshot is dropped (the section shows the loading state, never the previous
+  repository's rows) and its in-flight answer can never land.
 - **S7 — nothing else moves.** `/warp`, `/odd-list`, `/issues`, `worktree_create`, `worktree_list`,
   the `worktree-warp` renderer, the prompt blocks and every existing test behave exactly as before;
   `node --test tools/*.test.js` stays green.
@@ -62,7 +65,8 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 | T2 | S2, S6, S7 | worker | `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | `54d9c7b` |
 | T3 | S8 | parent | `AGENTS.md`, `README.md`, `docs/reference.md` | `54d9c7b` |
 | T4 | S4 (amended) | worker | `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | `54d9c7b` |
-| T5 | S1, S3, S4, S6 (verify blockers) | worker | `lib/issues-section.js`, `tools/issues-section.test.js` | fix commit |
+| T5 | S1, S3, S4, S6 (verify blockers) | worker | `lib/issues-section.js`, `tools/issues-section.test.js` | `d083e38` |
+| T6 | S6 (verify round 2 blocker) | worker | `lib/issues-section.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | fix commit |
 
 ## Log
 
@@ -86,6 +90,12 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   (c) `refresh()` coalesces a new `session_start` onto an in-flight load, so after a checkout switch
   the OLD repository's rows land and nothing re-reads until the TTL (S1, S6). T5 fixes all three,
   with one test each, in a commit of its own so the fix is reviewed apart from the feature.
+- **E8 (verify round 2, one blocker, against `d083e38`):** the token fixed the read race only
+  AFTER `refresh()` is called, and the extension fires it after `await checkIssuesGate(...)`. While
+  that gate waits, the previous checkout's in-flight answer still lands and paints its rows. The
+  other five findings of round 1 are confirmed fixed, and S2/S3/S4/S5/S7/S8 are satisfied. T6 makes
+  the supersede synchronous and explicit: `invalidate()` on the section (snapshot dropped, token
+  bumped) called the moment `session_start` runs, before any awaited probe.
 - **E7 (T5 outcome):** all three fixed in `lib/issues-section.js` — the opener's resolved
   `{ ok: false, error }` now records through `recordOpenError`, `meta()` never schedules (only
   `lines()` does), and `refresh()` is latest-wins behind a run token so a newer checkout's read can

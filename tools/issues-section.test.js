@@ -329,6 +329,113 @@ test('S1/S6: an explicit refresh never coalesces, and an older answer never over
     'the metadata is the newer repository\'s too');
 });
 
+test('S6: invalidate drops the snapshot and an in-flight answer never lands', async () => {
+  // The supersede the session boundary performs: the current snapshot is gone
+  // (the rail shows its loading row), the queued TTL refresh no longer counts
+  // as scheduled, and nothing is read or repainted by the drop itself.
+  let clock = 1000;
+  let loads = 0;
+  let landed = 0;
+  const sched = manualSchedule();
+  const handle = createIssuesSection({
+    load: async () => {
+      loads += 1;
+      return {
+        ok: true,
+        identity: 'github.com/myfork/repo-a',
+        mine: [issue(10, 'A issue', '2024-01-01T00:00:00Z')],
+        assigned: [],
+      };
+    },
+    open: () => {},
+    schedule: sched.schedule,
+    now: () => clock,
+    ttlMs: 100,
+    onRefreshed: () => { landed += 1; },
+  });
+
+  handle.section.lines({});
+  await sched.flush();
+  assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#10 A issue']);
+  assert.equal(landed, 1);
+
+  // A stale frame queues the one TTL refresh it is allowed to queue.
+  clock += 200;
+  handle.section.lines({});
+  assert.equal(sched.pending(), 1, 'a stale frame queues one refresh');
+
+  handle.invalidate();
+
+  assert.equal(handle.snapshot(), null, 'invalidate drops the snapshot');
+  assert.deepEqual(handle.section.lines({}), [{ label: 'loading…', tone: 'dim' }],
+    'the rail falls back to the loading row, never the previous repository\'s rows');
+  assert.equal(handle.section.meta({}), undefined, 'the heading counts nothing after a supersede');
+  assert.equal(sched.pending(), 2,
+    'invalidate clears the scheduled flag, so the next frame queues its own refresh');
+  assert.equal(loads, 1, 'invalidate starts no read of its own');
+  assert.equal(landed, 1, 'invalidate never repaints');
+
+  // The read that was in flight when the session switched settles afterwards:
+  // its answer is discarded by the bumped token instead of being applied.
+  const late = [];
+  let lateLoads = 0;
+  let lateLanded = 0;
+  const inflightHandle = createIssuesSection({
+    load: () => {
+      lateLoads += 1;
+      return new Promise((resolve) => { late.push(resolve); });
+    },
+    open: () => {},
+    schedule: () => {},
+    onRefreshed: () => { lateLanded += 1; },
+  });
+  const ready = inflightHandle.refresh();
+  late[0]({
+    ok: true,
+    identity: 'github.com/myfork/repo-a',
+    mine: [issue(30, 'A thirty', '2024-01-01T00:00:00Z')],
+    assigned: [],
+  });
+  await ready;
+  assert.deepEqual(inflightHandle.section.lines({}).map((row) => row.label), ['#30 A thirty']);
+  assert.equal(lateLanded, 1);
+
+  const inFlight = inflightHandle.refresh();
+  inflightHandle.invalidate();
+  assert.deepEqual(inflightHandle.section.lines({}), [{ label: 'loading…', tone: 'dim' }]);
+
+  late[1]({
+    ok: true,
+    identity: 'github.com/myfork/repo-a',
+    mine: [issue(31, 'A thirty-one', '2024-01-01T00:00:00Z')],
+    assigned: [],
+  });
+  await inFlight;
+  assert.equal(inflightHandle.snapshot(), null, 'the in-flight answer never lands after invalidate');
+  assert.deepEqual(inflightHandle.section.lines({}), [{ label: 'loading…', tone: 'dim' }],
+    'the previous repository\'s late rows never paint');
+  assert.equal(lateLanded, 1, 'a discarded answer never repaints');
+  assert.equal(lateLoads, 2, 'invalidate itself read nothing');
+
+  // After `dispose()` the drop is a no-op: the disposed module keeps answering
+  // the snapshot it was left with, and nothing throws.
+  const disposedHandle = createIssuesSection({
+    load: async () => ({
+      ok: true,
+      identity: 'github.com/myfork/repo-a',
+      mine: [issue(40, 'Ready', '2024-01-01T00:00:00Z')],
+      assigned: [],
+    }),
+    open: () => {},
+    schedule: () => {},
+  });
+  await disposedHandle.refresh();
+  disposedHandle.dispose();
+  assert.doesNotThrow(() => disposedHandle.invalidate(), 'invalidate never throws');
+  assert.deepEqual(disposedHandle.section.lines({}).map((row) => row.label), ['#40 Ready'],
+    'invalidate after dispose changes nothing');
+});
+
 test('S5: loading, empty and error are rows, never a throw', async () => {
   const loading = createIssuesSection({
     load: async () => ({ ok: true, identity: 'github.com/myfork/project', mine: [], assigned: [] }),
@@ -573,6 +680,121 @@ test("S6: a failed scope resolution is one error row and makes no gh call", asyn
   assert.match(rows[0].label, /cannot read this checkout's git configuration/);
   assert.equal(section.meta(ctx), undefined);
   assert.equal(gh.calls.length, 0, 'no gh call runs without a proven identity');
+});
+
+// S6: the supersede is synchronous. A session that starts in ANOTHER checkout
+// drops the previous checkout's snapshot and stops trusting its in-flight read
+// BEFORE the handler awaits the `gh` gate, so an answer that settles during that
+// await is discarded instead of painting the previous repository's rows.
+test("S6: a session starting in another checkout drops the previous checkout's answer", async () => {
+  const checkoutA = makeCheckout([
+    ['origin', 'git@github.com:myfork/project-a.git'],
+    ['upstream', 'git@github.com:original/project-a.git'],
+  ]);
+  const checkoutB = makeCheckout([
+    ['origin', 'git@github.com:myfork/project-b.git'],
+    ['upstream', 'git@github.com:original/project-b.git'],
+  ]);
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+
+  // Every `gh issue list` call is HELD, so the test decides when each bucket
+  // answers; the second checkout's gate probe (`gh api user`) is held too.
+  const lists = [];
+  const gates = [];
+  ghIssues.setGhRunner((_bin, argv, runOpts = {}) => {
+    const cwd = runOpts.cwd;
+    const env = runOpts.env || {};
+    if (argv[0] === 'api' && argv[1] === 'user') {
+      if (cwd === checkoutB) return new Promise((resolve) => { gates.push(resolve); });
+      return Promise.resolve(okJson('{"login":"me"}'));
+    }
+    if (argv[0] === 'repo' && argv[1] === 'view') {
+      return Promise.resolve(okJson(JSON.stringify({ nameWithOwner: 'myfork/ignored' })));
+    }
+    if (argv[0] === 'issue' && argv[1] === 'list') {
+      const at = argv.indexOf('--search');
+      const entry = { cwd, search: at >= 0 ? argv[at + 1] : null, repo: env.GH_REPO, settle: null };
+      const answer = new Promise((resolve) => {
+        entry.settle = (payload) => resolve(okJson(JSON.stringify(payload)));
+      });
+      lists.push(entry);
+      return answer;
+    }
+    return Promise.resolve(okJson(''));
+  });
+
+  const ctxA = { cwd: checkoutA, ui: { notify: () => {} } };
+  const ctxB = { cwd: checkoutB, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctxA);
+  assert.equal(registered.length, 1, 'exactly one section is registered');
+  const section = registered[0];
+
+  // The bridge's repaint is where the rail's next frame is observable, so what
+  // it records is what the rail would have painted.
+  const painted = [];
+  globalThis[BRIDGE_SLOT].requestRepaint = () => {
+    painted.push(section.lines(ctxB).map((row) => row.label));
+  };
+
+  await waitFor(() => lists.length === 2, 'the first checkout never read its buckets');
+  assert.deepEqual(lists.map((entry) => entry.repo), [
+    'github.com/myfork/project-a',
+    'github.com/myfork/project-a',
+  ], 'the first session reads its own checkout');
+
+  // The session moves to the second checkout. Its handler is fired without
+  // awaiting: it holds on the `gh` gate, which is the window the defect lived in.
+  const bPending = [];
+  for (const handler of sessionStartHandlers(loaded.hooks)) {
+    try {
+      bPending.push(Promise.resolve(handler({}, ctxB)));
+    } catch (err) {
+      bPending.push(Promise.reject(err));
+    }
+  }
+  await waitFor(() => gates.length === 1, 'the second session never reached its gh gate');
+
+  // The first checkout's two answers settle NOW — before the second session's
+  // gate has answered. They belong to a superseded session and are dropped.
+  lists.find((entry) => entry.repo === 'github.com/myfork/project-a' && /author:@me/.test(entry.search))
+    .settle([{ number: 10, title: 'A mine', state: 'OPEN', updatedAt: '2024-01-01T00:00:00Z' }]);
+  lists.find((entry) => entry.repo === 'github.com/myfork/project-a' && /assignee:@me/.test(entry.search))
+    .settle([{ number: 11, title: 'A assigned', state: 'OPEN', updatedAt: '2024-02-01T00:00:00Z' }]);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(gates.length, 1, 'the second session is still waiting on its gh gate');
+  assert.deepEqual(painted, [], 'nothing from the previous checkout ever repaints the rail');
+  const during = section.lines(ctxB).map((row) => row.label);
+  assert.ok(
+    !during.some((label) => label.includes('A mine') || label.includes('A assigned')),
+    `the previous checkout's rows never paint (saw ${JSON.stringify(during)})`,
+  );
+
+  // Only now does the gate answer, and the second session reads its own buckets.
+  gates[0](okJson('{"login":"me"}'));
+  await Promise.all(bPending);
+  await waitFor(() => lists.length === 4, "the second checkout's owns reads never ran");
+  const bLists = lists.slice(2);
+  assert.deepEqual(bLists.map((entry) => entry.repo), [
+    'github.com/myfork/project-b',
+    'github.com/myfork/project-b',
+  ], "the second session's reads carry its own pinned identity");
+
+  bLists.find((entry) => /author:@me/.test(entry.search))
+    .settle([{ number: 21, title: 'B mine', state: 'OPEN', updatedAt: '2024-03-01T00:00:00Z' }]);
+  bLists.find((entry) => /assignee:@me/.test(entry.search)).settle([]);
+  await waitFor(
+    () => section.lines(ctxB).some((row) => row.label === '#21 B mine'),
+    "the second checkout's rows never painted",
+  );
+  assert.ok(painted.some((labels) => labels.includes('#21 B mine')), 'the landed read repaints the rail');
+  assert.equal(lists.length, 4, 'no extra read ran');
+  assert.ok(
+    !painted.some((labels) => labels.includes('#10 A mine') || labels.includes('#11 A assigned')),
+    "the previous checkout's rows never painted a frame",
+  );
 });
 
 // ---------------------------------------------------------------------------

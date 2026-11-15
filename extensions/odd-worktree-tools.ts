@@ -2,13 +2,15 @@
 // odd-worktree-tools.ts — the standalone odd-worktree Pi extension.
 //
 // One package, one surface: the two agent worktree tools (create, list) and
-// the three read/inspect panels.
+// the three read/inspect panels, plus the one preference this package owns.
 //
-// Registers three commands:
+// Registers four commands:
 //   /warp      move this session to another checkout of the project
 //   /odd-list  read this checkout's odd/ documents
 //   /issues    read this checkout's GitHub issues, with label/assignee,
 //              comment and close actions when the repository permits them
+//   /card:bash flip the bash tool card between this package's activity card and
+//              the host's own drawing, and remember the choice
 //
 // and two tools: worktree_create and worktree_list. Create prompts for approval
 // when the host offers dialog UI; list never mutates anything; `/warp` is the
@@ -7030,6 +7032,85 @@ function registerIssuesCommand(pi) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// `/card:bash` (T1 S1,S6,S7): the ONE preference this package owns. It flips
+// between the two ways a `bash` tool call can be drawn — this package's activity
+// card (`own`, the default) and the host's own bash drawing (`default`) — and
+// remembers the choice in `<home>/card-bash.json` (lib/card-bash-mode.js is the
+// only reader and the only writer of that document).
+//
+// One line, in the package's voice, naming the state the session is now in; a
+// failed save is an error line naming what could not be written and the state
+// that did not move. The save is document-first, slot-second (inside the writer),
+// so a failure never leaves the live session saying something the file does not.
+//
+// Repaint: the command itself asks nothing of the screen, because the card is what
+// re-decides. The host resolves the renderer once, when a row's component is created
+// (`ToolExecutionComponent` keeps the resolved `toolDefinition`), but the component a
+// renderer RETURNS has its `render(width)` called on every frame — so a card that builds
+// its rows inside that build re-reads the mode while it paints, and the toggle repaints
+// rows already on screen (lib/bash-card.js; odd/tasks/card-bash.md L8). Nothing here
+// routes a repaint through the session-wide tool-expansion flag or appends a fake entry:
+// both would repaint a row without re-deciding how it is drawn. One asymmetry is
+// deliberate: a row created while the mode was `default` stays the host's own row for
+// its lifetime, because its box must never become this package's.
+// ---------------------------------------------------------------------------
+
+/** The state as the report names it. */
+function cardBashStateLabel(mode) {
+  return mode === "own" ? "own (activity)" : "gentle default";
+}
+
+/** Why a save was refused, in prose the human can act on. */
+function cardBashSaveReason(result) {
+  const reason = result && result.reason;
+  if (reason === "malformed_file") return "the existing file is malformed";
+  if (reason === "unreadable_file") return "the existing file is unreadable";
+  if (reason === "no_home") return "no Pi home resolves for the document";
+  if (typeof result?.error === "string" && result.error.length > 0) return result.error;
+  return "the write failed";
+}
+
+/** The one failure line: what could not be saved, and the state that did not move. */
+function cardBashSaveFailureLine(result, unchangedMode) {
+  const file = typeof result?.file === "string" && result.file.length > 0 ? ` ${result.file}` : " the preference";
+  return `bash cards: could not save${file} (${cardBashSaveReason(result)}); still ${cardBashStateLabel(unchangedMode)}`;
+}
+
+function registerCardBashCommand(pi) {
+  if (typeof pi?.registerCommand !== "function") return;
+  pi.registerCommand("card:bash", {
+    description: "Toggle the bash tool card: this package's activity card, or the host's own drawing",
+    handler: async (args, ctx) => {
+      // A dead UI never turns the toggle into a throw, and a host without one still
+      // gets the save: only the report has nowhere to go.
+      const notify = ctx && ctx.ui && typeof ctx.ui.notify === "function"
+        ? (text, level) => { try { ctx.ui.notify(text, level); } catch { /* a dead UI never fails the toggle */ } }
+        : null;
+      try {
+        const raw = String(args ?? "").trim();
+        // The toggle takes no argument. Saying so is the neighbouring commands'
+        // voice, and it keeps a mistyped option from flipping the mode by surprise.
+        if (raw !== "") {
+          if (notify) notify(`Unknown option "${raw}". Use /card:bash with no argument to flip the bash card.`, "error");
+          return;
+        }
+        const modes = libRequire("card-bash-mode.js");
+        const current = modes.resolveCardBashMode();
+        const next = current.mode === modes.CARD_BASH_MODE.OWN ? modes.CARD_BASH_MODE.DEFAULT : modes.CARD_BASH_MODE.OWN;
+        const saved = modes.writeCardBashMode(next);
+        if (!notify) return;
+        if (saved && saved.ok === true) notify(`bash cards: ${cardBashStateLabel(next)}`, "info");
+        else notify(cardBashSaveFailureLine(saved, current.mode), "error");
+      } catch {
+        // Nothing about the card mode may break the host: a read or write that threw
+        // is reported as a state that did not move.
+        if (notify) notify("bash cards: could not read or save the preference; the card mode is unchanged.", "error");
+      }
+    },
+  });
+}
+
 export default function (pi) {
   // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
   // moves the session, so the command is where a handoff waits and lands.
@@ -7042,6 +7123,9 @@ export default function (pi) {
   registerWarpCommand(pi);
   registerOddCommand(pi);
   registerIssuesCommand(pi);
+  // S1: the fourth command is the one preference the package owns. It is
+  // registered with the others and reads its mode through lib/card-bash-mode.js.
+  registerCardBashCommand(pi);
   pi.registerTool(worktreeCreateTool);
   pi.registerTool(worktreeListTool);
   if (typeof pi?.on !== "function") return;
@@ -7153,6 +7237,16 @@ export default function (pi) {
     libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
   } catch {
     // CodeGraph is best effort.
+  }
+  // S2 (T4): the bash activity card, through the same host hook and in the same shape as the
+  // card above — one call, one line. It composes with that card at paint time: a `codegraph …`
+  // command keeps the CodeGraph identity, every other bash call wears this package's activity
+  // card while `/card:bash` is `own` and the host's own drawing while it is `default`. A host
+  // without `pi.registerToolRenderer` registers nothing and keeps drawing every bash row itself.
+  try {
+    libRequire("bash-card-resolver.js").registerBashCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
+  } catch {
+    // The card is cosmetic.
   }
   // Register every live checkout the registry does not own yet. Dispatched here
   // and awaited by the barrier below: the host runs session_start handlers one

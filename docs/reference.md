@@ -2,7 +2,7 @@
 
 Detail behind the [README](../README.md): how each surface behaves, its keys, its limits and
 how the package is tested and released. The repository invariants live in
-[`AGENTS.md`](../AGENTS.md).
+[`codebase/invariants.md`](codebase/invariants.md).
 
 ## Create, list, move and delete, in detail
 
@@ -1012,15 +1012,34 @@ never as a shell string.
 ## Tests
 
 ```bash
-node --test tools/*.test.js        # package.json `test`
+node --test tools/*.test.js                # the whole suite (package.json `test`)
+node --test tools/issues-command.test.js   # one suite while iterating
 ```
 
-The suite uses Node builtins only — no install step, no lockfile, no network.
-Every temporary repository, stub binary and extension copy lives under the
-system temp directory and is removed on exit. `tools/fixtures/load-extension.js`
-copies the extension to a scratch `.mjs` with the two Pi imports stubbed and
-loads it against a fake host, which is how the registered commands, tools and
-manifest are asserted from the outside.
+The suite uses Node builtins only — no install step, no lockfile, no network —
+and adding a dependency so a test passes is not an option. Node 18 is the floor
+`engines` declares; CI additionally runs 20, 22 and 24. Keep it green at the
+whole-suite level: run the focused file while iterating, then the full command.
+
+- **Test the public surface.** Assert what a caller observes: the registered
+  commands/tools, the manifest, the command handlers' results, the view's
+  rendered lines, the files on disk. Do not read module-internal state.
+- **Inject the runners.** Every child process sits behind a seam (`runAsync`, an
+  injected `runner`, `hasBinary`, the TUI loader). Tests pass fakes; they never
+  spawn real `gh`, a package manager, or anything that reaches the network.
+  `tools/fixtures/load-extension.js` copies `extensions/odd-worktree-tools.ts` to
+  a scratch `.mjs` with the two Pi imports stubbed, loads it against a fake host,
+  and points it at this package's `lib/` through `GENTLE_WORKTREE_LIB_DIR` — which
+  is how the registered commands, tools and manifest are asserted from the
+  outside.
+- **No network, no live tools.** GitHub responses come from
+  `tools/fixtures/gh-*.json` through the injected runner.
+- **Temporary state lives outside the worktree.** Every temporary repository,
+  stub binary and extension copy lives under the system temp directory and is
+  removed on exit: use `fs.mkdtempSync(path.join(os.tmpdir(), …))`, remove it in
+  teardown/`after()`, and never point `TMPDIR` or a cache directory into the
+  repository. A test that must write inside the repository removes the path
+  before it ends.
 
 ## CI and releases
 
@@ -1028,26 +1047,60 @@ manifest are asserted from the outside.
 | --- | --- | --- |
 | `ci.yml` | push to `main`, every pull request | `node --test tools/*.test.js` on Node 18, 20, 22 and 24 — the range `engines` declares, 18 as its floor |
 | `pr-check.yml` | pull request opened, edited, reopened or synchronized | the PR title and every non-merge commit subject must follow [Conventional Commits](https://www.conventionalcommits.org/), plus one suite run on Node 22 |
-| `release.yml` | tag `v*` push, or a manual dispatch naming an existing tag | tag/`package.json` version parity, the suite, the GitHub Release, then `npm publish`, then verification |
+| `release.yml` | tag `v*` push (a `v*-*` tag is excluded), or a manual dispatch naming an existing tag | tag/`package.json` version parity, the suite, the GitHub Release, then `npm publish`, then verification |
 
 The npm package is `pi-odd-worktree`. A release is the tag `v` plus the exact
 `package.json` version — version 2.1.0 is `v2.1.0` — and preflight stops the run
 when the two disagree. Publication uses
 [Trusted Publishing](https://docs.npmjs.com/trusted-publishers): `id-token:
-write` is granted to the `release` job and nowhere else, and no npm credential
-exists in the workflow or in the protected environment. A version npm already
-serves is reported and left alone; a published version is immutable.
+write` is the only such grant in the repository and belongs to the `release` job,
+which also holds `contents: write`; no npm credential exists in the workflow or
+in the protected environment. A version npm already serves is reported and left
+alone; a published version is immutable, so fix the cause and cut the next patch
+tag.
 
-The `release` environment is where a release pauses for approval when reviewers
-are attached to it, and the trusted publisher binds to this workflow file plus
-that environment name. Publication therefore needs the trusted publisher bound
-to this repository, this workflow file and the `release` environment, and the
-provenance attestation binds to the public `repository` `package.json` names,
-case-sensitively.
+The `release` environment must exist in the repository: it is where a release
+waits for approval, so attach reviewers there if a release should pause. The
+trusted publisher binds to this workflow file plus that environment name.
+Publication therefore needs the trusted publisher bound to this repository,
+`release.yml` and the `release` environment, and the provenance attestation binds
+to the public `repository` `package.json` names, case-sensitively.
+`npm pack --dry-run` is the check that `files[]` still lists every shipped
+surface.
 
 Release notes are generated when the GitHub Release is created and curated
-afterwards by editing the published release (`gh release edit`); no notes file is
-committed.
+afterwards by editing the published release
+(`gh release edit v1.0.0 --title … --notes-file …`); no notes file is committed.
 
-Cutting a release, contributor rules and the repository invariants are in
-[`AGENTS.md`](../AGENTS.md).
+### Commits and pull requests
+
+`pr-check.yml` enforces Conventional Commits on the PR title (which becomes the
+squash subject) and on every non-merge commit subject:
+
+```
+<type>(<optional-scope>): <subject>
+feat(warp): keep the current checkout out of the selector
+fix(issues)!: refuse a mutation after the remote moves
+```
+
+Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `build`,
+`ci`, `style`, `revert`. Scopes are optional and lowercase. The subject is one
+line and has no trailing period. Merge commits are exempt. A failing check means
+rewrite the commits locally and force-push the branch. Name the invariant you are
+honouring or changing when a commit or a PR explains itself by one; the numbers
+in [`codebase/invariants.md`](codebase/invariants.md) are how this repository
+refers to them.
+
+### Cut a release
+
+1. Bump `version` in `package.json`, commit, and tag the exact commit:
+   `git tag -a v1.0.0 -m v1.0.0 && git push origin v1.0.0`.
+2. Preflight requires the tag to be `v` plus the `package.json` version and
+   stops the run otherwise; then the suite runs.
+3. The `release` job creates the GitHub Release, then publishes to npm with
+   provenance over OIDC Trusted Publishing, and `verify` reads the registry from
+   outside and confirms the release is published for the tag.
+
+The repository invariants are in [`codebase/invariants.md`](codebase/invariants.md),
+and the boundaries they defend are in
+[`codebase/mental-model.md`](codebase/mental-model.md).

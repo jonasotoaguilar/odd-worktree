@@ -1,0 +1,56 @@
+# Code Map
+
+The question this page answers: which file owns a responsibility before you open code?
+
+| Path | Responsibility |
+| --- | --- |
+| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the three commands, the two tools, the `worktree-warp` message renderer, the optional `ISSUES` rail section and the one `Card tool` customize row group (each with gentle-shell-bridge and its one missing-bridge warning), and the `session_start` / `session_shutdown` / `turn_end` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
+| `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the canonical target path `<repo-parent>/<repo-name>-worktrees/<slug>` and its helpers, and the async argv runner. |
+| `lib/worktree-registry.js` | The one ownership rule, with no file: a checkout this package created is a directory under `<repo-parent>/<repo-name>-worktrees`, so the path decides. Partitions Git's listing into ours and outside, and parses `git worktree list --porcelain` for the create path. |
+| `lib/worktree-create.js` | `worktree_create`'s core: request validation, base resolution, the ODD-named destination, the refusals sentence for sentence, plan execution and the fixed output lines. |
+| `lib/worktree-list.js` | `worktree_list`'s rendering: rows, order, detail lines and footers, from one structured row list. It writes nothing. |
+| `lib/worktree-guard.js` | The `bash` guards' decision: a pure function over the command text and injected seams; it spawns nothing and reads no file. |
+| `lib/worktree-hooks.js` | The preparation chain of a create: submodules, local inputs, `copy_changes`, build-cache and asset links, the setup slot, and the clone-local `gentle-ai/worktree-hooks.json` that extends the lists. |
+| `lib/worktree-setup.js` | The setup chain: the closed command table one lockfile selects, the plan, and the two notice sentences. |
+| `lib/worktree-setup-runner.js` | The tracked background task of a create: runs the planned commands one child at a time, sends their output to its own log under the system temp directory, and reports one notice built from the child process outcome. No state is persisted. |
+| `lib/worktree-remove.js` | Git-only removal: `git worktree remove <absolute path>`, branch kept. |
+| `lib/worktree-symlinks.js` | Symlink policy for a checkout. |
+| `lib/worktree-changes.js` | Pending-change snapshot and transfer (the panel's `changes` selection, and a typed warp's copy). |
+| `lib/worktree-session-guard.js` | The active-session guard the panel's `ctrl+d` runs, with the caveats it discloses. |
+| `lib/worktree-warp-busy.js` | This session's busy evidence for a warp: the in-flight tool counter, agent-task counters, its `job_list` jobs, the one pending handoff, and the persistent row that handoff shows. |
+| `lib/worktree-warp-sessions.js` | Warp/fork bookkeeping in the session files the host owns. |
+| `lib/checkout-facts.js` | The facts one checkout row shows in the selector. |
+| `lib/worktree-card.js` | The `worktree-warp` message renderer (the moved/queued card), composed on the card substrate like the tool cards. |
+| `lib/card-style.js` | The one style reader: the live process-wide slot Gentle Shell publishes, then the strict `<home>/card-style.json`, then `float`. It reports the source and the reason it fell back, caches only the document branch, and is re-read on `session_start`. |
+| `lib/card-content.js` | The one reader of the card content level Gentle Shell publishes (`default` or `minimal`), read at paint time; `/warp` and the CodeGraph card honor it, while the two worktree tool cards keep their three info rows in both levels (S2). |
+| `lib/card-bash-mode.js` | The one bash-card mode reader and writer: the live process-wide slot a customize click sets, then the strict `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1","mode":"own"|"default"}`), then `own`. Same resolution order and reasons as `lib/card-style.js`; the writer is atomic, owner-only, document-first and never rewrites a document it cannot parse. No legacy spelling exists. |
+| `lib/card-bash-customize.js` | The preference's one control surface: the `Card tool` row group (`default` | `activity`) registered through gentle-shell-bridge's published `registerRows` API into `/gentle:customize` → `Cards`, idempotent per process, with a disposer, each row's `current()` read from `lib/card-bash-mode.js` and its action a write through `writeCardBashMode`. The mode module's only caller. It imports no bridge and registers nothing when the API is absent. |
+| `lib/bash-activity.js` | The classifier the bash card heads with: the one quote-aware segmenter, the eight named families and the mark and theme role each wears, and the package's own conservatism — a segment it cannot name leaves the call unnamed, which is what the generic `$ bash` heading is. |
+| `lib/bash-destructive.js` | The destructive family's evidence: the segment that names a deleting program, and the whole command whose pipe or heredoc feeds a database client its statements. Evidence only — no permission, guard or execution decision may read it. |
+| `lib/bash-card.js` | The bash activity card on the card substrate: the heading identity, the collapsed detail and its three-row output tail, the expanded whole command and whole output, the running row, the rail and the elapsed. Its slots re-read the mode on every paint. |
+| `lib/bash-card-resolver.js` | The seam: one resolver registered through the host's `registerToolRenderer`, this card for every bash call while the mode is `own`, the host's own drawing while it is `default`, and every other row forwarded exactly as the chain resolved it. |
+| `lib/shell-card.js`, `lib/worktree-cards.js` | The card substrate (rounded frame, palette, tone, elapsed) and the two tools' call/result card factory built on it. |
+| `lib/warp-*.js` | The panel: selector and extended list (`warp-selector-view.js`), create wizard (`warp-create-panel.js`, `warp-create-picker.js`), delete confirmation (`warp-delete-confirm.js`). |
+| `lib/odd-*.js` | `odd-docs.js` (document discovery and ordering), `odd-view.js` (two-pane reader), `odd-markdown.js` (the shared markdown renderer). |
+| `lib/odd-prompt/odd-worktrees.md` | The `## ODD worktrees` prompt prose: one text, no variants. |
+| `lib/odd-worktrees-prompt.js` | The append-only injection helper that reads that file. |
+| `lib/codegraph-prompt/*.md` | The `## CodeGraph` prose: one approved text per role (orchestrator, explore, verify, worker, fix, judge, generic). |
+| `lib/codegraph-rules.js` | Selects a role's text from the session's own facts and appends it. Runs and probes nothing. |
+| `lib/codegraph-guard.js`, `lib/codegraph-guard-target.js` | The two reminders (invariant 21): the decision core with its once-per-key state, and the checkout a `grep`/`find`/`ls`/`read`/`bash` call went to. They append one text part to a finished result and run nothing else. |
+| `lib/codegraph-session.js` | The single CodeGraph wiring point (invariant 19): session start, compaction, the observed native init, the edit/write sync, the two reminders and shutdown, only with the CLI installed. |
+| `lib/codegraph-index.js`, `lib/codegraph-lock.js`, `lib/codegraph-compaction.js` | Create-or-sync, worktree seeding, the CLI probe and the notices; the one init lock and the per-project sync lease; the compaction sync. |
+| `lib/codegraph-edit-sync.js`, `lib/codegraph-role.js` | The debounced edit/write sync; the index role that keeps verify and the judges read-only. |
+| `lib/codegraph-daemon.js`, `lib/codegraph-warmup.js`, `lib/codegraph-mcp.js`, `lib/codegraph-mcp-config.js`, `lib/codegraph-paths.js` | The per-checkout daemon registry and client; the warm-up through CodeGraph's own proxy; the MCP exposure warnings; the one `mcp.json` entry writer; root identity and the argv to start `codegraph`. |
+| `lib/codegraph-card.js`, `lib/codegraph-card-preview.js` | The CodeGraph tool card for the native tool, the MCP explore tool and a `bash` call that runs CodeGraph, on the card substrate. |
+| `lib/gh-issues.js` | The `gh` client: checkout repository scope, identity pinning, issue pages, details, labels, assignees, comments, close, and the `viewerPermission` → capability mapping. |
+| `lib/issues-view.js`, `lib/issue-preview.js` | The pure `/issues` view and its preview formatter. |
+| `lib/issues-section.js` | The checkout's authored (`mine`) and assigned issues as ONE merged rail section (S7, the `assigned` row winning a collision, each row keeping its bucket): the `#<number> <title>` row and its one right-hand `#<pull request number>` mark, the seven-row body, its one `and N more issues` row that sends `/issues`, the merged count as the bare header (`8`, `8 · stale`), the one in-memory snapshot, its TTL, and the drawn-frame stamp the session's own activity read is gated on. A failed refresh keeps the rows and marks them `stale`; a cwd outside a repository is one short `dim` line (`not a git repository`, never `error`). It schedules refreshes and never waits on a child process; only a bridge that published its API can show it. |
+| `lib/related-issues-cache.js` | The in-process cache of the three scoped issue views (`mine`, `assigned`, `involved`) that one combined read answers, keyed by repository identity: the 100-then-20 read plan, the merge by issue number, the count invariant that forces a full re-read, and the ten-minute bound measured from the last FULL read, so a stream of deltas cannot postpone it. Memory only; the rail owns the entry, and `/issues` only reads one to seed its first frame. |
+| `lib/tui-paint.js`, `lib/view-layout.js`, `lib/preview-scroll-keys.js`, `lib/clipboard.js`, `lib/open-external.js` | Shared presentation helpers: the one palette, window/layout maths, the one preview scroll decision, clipboard, external opener. |
+| `lib/session-auto-name.js`, `lib/session-worktree-register.js` | Session bookkeeping: naming a session after an ODD write, and the host's session-worktree registry entry. |
+| `tools/*.test.js`, `tools/fixtures/` | The Node test suites and their fixtures (`load-extension.js`, `gh-*.json`). |
+
+`package.json` ships `extensions`, `lib`, `tools` and `README.md`, and declares
+`pi.extensions: ["./extensions/odd-worktree-tools.ts"]`. There are no runtime
+`dependencies`; the three `@earendil-works/*` packages are peer dependencies the
+host provides.

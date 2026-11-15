@@ -334,6 +334,145 @@ the elapsed time are identical in both; only the chrome differs.
   cannot paint the background role, draws the `neon` outline instead of a
   half-drawn float card.
 
+## The bash card, and its toggle
+
+`/card:bash` is this package's fourth command and its one preference. With no
+argument it flips between the two ways a `bash` tool call can be drawn — `own`,
+this package's activity card, which is the default, and `default`, the host's own
+drawing — reports the state in one line (`bash cards: own (activity)` or
+`bash cards: gentle default`) and remembers it. An argument is refused with
+`Unknown option "<what you typed>". Use /card:bash with no argument to flip the
+bash card.`, so a mistyped option never flips the mode by surprise.
+
+The choice lives in `<home>/card-bash.json`, and that document is strict: exactly
+two keys, this package's schema string and one of the two modes.
+
+```json
+{ "schema": "gentle-pi.card-bash/v1", "mode": "own" }
+```
+
+- `<home>` is the one `card-style.json` resolves: `GENTLE_PI_CONFIG_HOME` →
+  `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`.
+- **The mode is read live.** The process-wide slot the toggle sets answers first,
+  then the document read fresh on every call, then `own`; there is no cache, so
+  no paint can answer with a mode the file no longer states. A missing,
+  unreadable, malformed or wrong-schema document reads as `own`, and the reader
+  reports which of those it was.
+- **The write is atomic and owner-only.** A temporary file beside the document is
+  written with `0o600` bits and renamed into place, so a reader sees the old
+  document or the new one and never half of either. The document goes first and
+  the live slot second, so a failure leaves both on the old mode and there is
+  nothing to roll back.
+- **A document this package cannot parse is never overwritten.** The toggle
+  reports `bash cards: could not save <file> (the existing file is malformed);
+  still own (activity)` and the state does not move.
+
+**The heading names the activity, never a guess.** `lib/bash-activity.js` reads
+the command alone and answers one family or nothing; `lib/bash-card.js` dresses
+that answer and restates no family of its own, so a family added to the classifier
+is drawn with no second table to keep in step.
+
+| Mark | Heading | The commands it names |
+| --- | --- | --- |
+| `⚠` | destructive | A segment that deletes something irreversible: `rm`, `shred`, `truncate`, `dd` to a file or a device, `git reset --hard` / `clean -f` / a path checkout, a `docker` or `kubectl` removal or prune, a shell body or `eval` that does one, and the SQL a pipe or a heredoc feeds `psql`, `mysql`, `mariadb` or `sqlite3`. |
+| `✓` | checking | The verification runners: `pnpm test`, `node --test`, `vitest`, `pytest`, `go test`, `cargo check`, `tsc`, `eslint`; a formatter told to report (`black --check`, `gofmt -l`); a listed `make` recipe or package-manager script; and a check behind `timeout`. |
+| `≋` | formatting | A formatter or lint fixer that rewrites what it reads: `prettier --write`, `black`, `cargo fmt`, `go fmt`, `gofmt -w`, `ruff check --fix`, `deno fmt`. |
+| `⚒ ` | preparing | Installing, scaffolding and storing configuration: `pnpm install`, `pip install`, `uv sync`, `brew install`, `cargo install`, `git init` / `clone`, `mkdir` / `touch` / `cp` / `ln`, `git config <key> <value>`, `pnpm config set`. |
+| `↑` | publishing | Remote writes: `git push`, and the `gh` verbs that create, edit, close, merge or review a pull request, issue, label, release, repository or stack. |
+| `⎇` | versioning | Local history: `git add`, `commit` (and `--amend`), `rebase`, `cherry-pick`, and a stack's local `gh stack init` / `add`. |
+| `󰆼` | codegraph | A `codegraph …` command in the command position, read exactly as the CodeGraph card reads it. |
+| `⌕` | exploring | Read-only inspection: `git status` / `log` / `diff` / `show`, `ls`, `cat`, `grep`, `head`, `find`, `gh pr view`, and `--help` on any program the classifier knows. |
+
+Preparing's mark carries one trailing space of its own: U+2692 is painted two
+cells wide by an emoji-fallback font while the host counts it as one, so the
+heading's counted width matches what the terminal paints.
+
+Among the segments of one command a deletion wins first, then CodeGraph: a call that
+runs the program is its card whatever else it does, because the card's detail is the
+command itself. Among the rest the strongest wins: a check, a remote write, a history
+change, a rewrite, a build-up, and plain inspection last.
+
+**The generic `$ bash` heading is what declining looks like.** A command no family
+names keeps the shell tool's own mark, word and theme role — never a family's mark
+with a generic word, because a reader must be able to tell a named activity from a
+declined one at a glance. It declines rather than half-naming when any single
+segment carries no reliable signal: an unknown program, a chain that mixes
+`pnpm test` with `./scripts/deploy.sh`, a command hidden in a substitution the
+segmenter does not follow (a backtick or `<(`), a redirect that puts the output in
+a file, a family whose own flags say it is not the thing it looks like, or a
+deletion it cannot prove. `lib/bash-destructive.js` is evidence, not a verdict: a
+deletion whose evidence is not provable is not called destructive, and a help
+request, a dry run or a recovery keeps the identity the call really has. Its
+header states the rule the package keeps: no permission, guard or execution
+decision may read it, because "would a reader want to see what this deletes?" is
+a different question from "may this run?".
+
+**Collapsed**, the card is one heading row with the command as its detail:
+
+- A leading `cd X &&` chain is folded, because it is setup rather than the work;
+  lines beyond the first are stated as `… +N lines` instead of swallowing the
+  card; and a command still too wide for the rule ends in `…`. Expanding the call
+  draws the complete command, so nothing is lost behind the ellipsis.
+- The body is what the command printed, plus nothing else: no label, no summary
+  and no invented line. Collapsed it is the last three rows — the end of an output
+  is where a summary, a count or a failure is written — painted in the theme's
+  `toolOutput` role, or in the `error` role when the call failed. An output with
+  no text draws no body row at all.
+- A call still running says `running…` in the muted role, is painted in the
+  warning tone and closes its own frame; the result that follows closes it in the
+  info tone (or the error tone) and carries the elapsed time bottom-right on the
+  closing rule, in the form the other cards use (`61ms`, `1.2s`). A streamed
+  result draws its rows and no closing rule: the rule and its time belong to the
+  final one.
+
+**Expanded**, the card draws the whole command on the rows below the heading and
+the whole output, row for row. Expansion is the host's own: the card offers the
+host's expand key hint on a settled call, and the host's `expanded` flag
+(`ctrl+o`) decides what is drawn.
+
+**The toggle repaints what is on screen.** The mode is read twice. When a row is
+created the resolver asks it, so a row created while the mode was `default` is the
+host's own row and stays the host's for its lifetime — its shell must never become
+ours. And a card already on screen reads it again on every paint: the card builds
+its rows inside the component's `render(width)`, which the host calls on every
+frame, so flipping `/card:bash` repaints the bash rows this card drew. There is no
+repaint hook to ask `ctx.ui` for, and the toggle does not pretend to have one: it
+writes the mode, and the next frame decides.
+
+**Composition with the CodeGraph card is load order.** `own` means every bash call
+is ours, a `codegraph …` command included, and the CodeGraph card is registered
+BEFORE this one, on purpose. With the `codegraph` CLI installed that card receives
+these slots as the chain's `next()`, reads `codegraph …` as its own and claims the
+row with its richer body, so this card's slots are never asked; without the CLI no
+CodeGraph card is registered at all (invariant 19), so the same command is drawn
+here with the `codegraph` identity. The two readers agree on which commands those
+are (`lib/codegraph-card-preview.js` and `lib/bash-activity.js`; a test states
+it), so no row falls between them, and there is no second copy of the rule to keep
+in step. Both cards declare `renderShell: "self"`, so the host never draws its own
+filled box under either of them.
+
+**What this is not.**
+
+- It only draws. The resolver chooses renderers for the `bash` tool and hands
+  every other row back exactly as the chain resolved it; nothing is registered,
+  spawned, guarded, intercepted or shadowed, and the command runs exactly as it
+  would have.
+- A host without the tool-renderer hook, or without a usable measurement seam,
+  keeps drawing its own bash rows: the card is cosmetic and announces nothing.
+- The gentle-shell reference's per-row reveal meter is dropped, not deferred: a
+  collapsed card already states whether its input was folded (`…` on the row and a
+  `… +N lines` suffix), so a measurement deciding whether to OFFER the expand key
+  answers a question the drawing already answers. Its `activity|output` sub-modes are
+  not ported either. The toggle here is ours-versus-the-host's, and the body is the
+  output.
+- A collapsed body states the last three output lines and does **not** announce the
+  cut, so a two-line output and a two-hundred-line one draw the same body. Expansion
+  is how a reader sees the rest; the count was left out on purpose, because the four
+  limits above are about what the card refuses to claim and this one is about what it
+  declines to add.
+- `default` is a drawing preference, not a guard: it never makes anything run or
+  stop running.
+
 ## The list
 
 `worktree_list` prints the main checkout first and unnumbered, then one numbered
@@ -373,7 +512,14 @@ can never disagree about a stored row.
 Session names derived from an ODD write, and the warp's fork/resume bookkeeping,
 travel in the Pi session files the host already owns. The setup logs live under
 the system temp directory (`odd-worktree-setup-*`), one directory per create.
-Nothing is written to user configuration.
+
+One document holds a preference rather than worktrees: `<home>/card-bash.json`,
+the bash card mode `/card:bash` flips. Its format, reader and writer are in [the
+bash card, and its toggle](#the-bash-card-and-its-toggle). Nothing else in user
+configuration is written by this package, except — with the `codegraph` CLI
+installed — the one `codegraph` entry of `<agent dir>/mcp.json` (see [CodeGraph:
+index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry)); Gentle
+Shell's own `card-style.json` is read here, never written.
 
 ## The `## ODD worktrees` block in the system prompt
 
@@ -412,6 +558,61 @@ there, and skipped when its heading is already present. The prompt section only
 advises and runs nothing; what the package does with CodeGraph itself is in
 [CodeGraph: index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry).
 `ODD_WORKTREE_PROMPT=0` suppresses both blocks.
+
+## The two CodeGraph reminders
+
+A session that already holds a CodeGraph tool also gets two short reminders, appended as one extra
+text part to the result of a finished tool call. They are advice in the same words the prompt block
+uses: they never block a call, never replace a result, never arrive as a separate message, and add no
+tool or command. Both are gated exactly like the prompt block — only with the `codegraph` CLI installed
+and only when the session already holds a CodeGraph tool. They cite the CodeGraph rule, so
+`ODD_WORKTREE_PROMPT=0` silences them together with it.
+
+They cover `grep`, `find`, `ls`, `read` and `bash`, because those are the calls the rule asks the agent
+to replace with a `codegraph` `query` or an `explore`. `read` counts only for code: `.md`, `.json`,
+`.yml`, `.yaml`, `.toml` and `.txt` are the docs and configs the rule exempts. `bash` counts only when
+the command searches or reads (a `grep`, `rg`, `find`, `fd`, `ls`, `cat`, `sed`, `head`, `tail`, `awk`
+or `tree` segment); a command that merely mentions a checkout — `git -C`, `curl`, `echo` — is not a
+search. A verb right after a single pipe only filters the output of the command before it, so
+`curl … | head` and `ps aux | grep node` are not searches, while `cat src/a.ts | head` still is: the
+`cat` is the read.
+
+**Guard 1, another checkout.** The primary session, once per other checkout per session:
+
+```text
+This call went to <path>, another checkout. Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` with `projectPath` set to <path> first.
+```
+
+`<path>` is the checkout's real git toplevel, so the reminder names the path the MCP call takes. It
+fires for the same project's other worktree and for another repository alike, and never in a subagent
+child. It stays silent, using up no slot, for a checkout this session already explored with
+`projectPath` since the last compaction.
+
+**Guard 2, the session's own checkout.** The primary session and every child except the `review-*`
+agents, once per the checkout the session is in:
+
+```text
+Follow the CodeGraph rule: run `codegraph` `query` or `explore` first, if it applies.
+```
+
+for the primary session and the explore agent (the native wording only when that role holds the
+native tool), and
+
+```text
+Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first, if it applies.
+```
+
+for every other role. It is keyed by the checkout, so a `/warp` re-arms it, and it stays silent once
+the session used `codegraph` or the MCP tool.
+
+**What is "another checkout".** A different git toplevel (`git -C <dir> rev-parse --show-toplevel`),
+read once per directory and cached for the session. It comes from a tool's own path, or from a `cd`
+target or an absolute path argument of a shell command. A path outside every git checkout (tmp, `/etc`,
+your home) triggers nothing.
+
+**What forgets a reminder.** A compaction forgets both guards and what the session already used, and so
+does a new session in the same process (a new, resumed or forked session; a `/reload` keeps the current
+one). A reminder that does not fire uses up no slot.
 
 ## CodeGraph: index, daemon and MCP entry
 
@@ -472,16 +673,20 @@ hands every other tool back exactly as the host resolved it; a `bash` command th
 CodeGraph's is forwarded to the host's own renderer. A host without that hook draws nothing of
 ours. Every card in this package, the two worktree tools and the CodeGraph rows alike, declares `renderShell: "self"`: it frames itself in float or neon, and the host's own filled box is never drawn under it. The collapsed card is one factual row per operation (an init, a sync, a query or explore
 count); `ctrl+o` expands it to the whole output, and the Gentle Shell card content level
-(`minimal`) hides the result body while a failure still says why.
+(`minimal`) hides the result body while a failure still says why. A `codegraph …`
+`bash` call is that card's only while the CLI is installed; without it [the bash
+card](#the-bash-card-and-its-toggle) draws the same command with the classifier's
+`codegraph` identity.
 
 ## Deliberately absent
 
 This package is the worktree / ODD / issues surface only: two agent tools, three
-panels, no customize panel, no plugin-tools toggles, no CodeGraph command or tool (only the
-prompt advice above), no
+panels and the one bash-card preference, no customize panel, no plugin-tools
+toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. There is nothing to
-configure, and `/warp`, `/odd-list` and `/issues` are always on. Paths, branches
-and arguments reach `git` and `gh` as fixed argv arrays, never as a shell string.
+configure beyond `/card:bash`, and `/warp`, `/odd-list` and `/issues` are always
+on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
+never as a shell string.
 
 ## Tests
 

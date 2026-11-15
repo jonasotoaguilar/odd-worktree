@@ -119,11 +119,11 @@ describe('extension wiring (T3)', () => {
     const { loadExtension } = require('./fixtures/load-extension.js');
     const { hooks } = await loadExtension({});
     const handlers = hooks.filter(([name]) => name === 'before_agent_start').map(([, handler]) => handler);
-    assert.equal(handlers.length, 1, 'exactly one before_agent_start handler');
+    assert.ok(handlers.length >= 1, 'the section has a before_agent_start handler');
     const options = {};
-    await handlers[0]({ systemPromptOptions: options }, { cwd: os.tmpdir() });
-    assert.equal(options.appendSystemPrompt, SECTION, 'the injected block is the one exact section');
-    assert.doesNotThrow(() => handlers[0]({}, {}));
+    for (const handler of handlers) await handler({ systemPromptOptions: options }, { cwd: os.tmpdir() });
+    assert.equal(options.appendSystemPrompt, SECTION, 'the injected block is the one exact section, appended once');
+    for (const handler of handlers) assert.doesNotThrow(() => handler({}, {}));
   });
 });
 

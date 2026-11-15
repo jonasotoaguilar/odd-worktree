@@ -260,14 +260,16 @@ number on screen can never be sent to another repository.
 ## The `ISSUES` rail section
 
 When Gentle Shell draws its rail, a section titled `ISSUES` lists this checkout's
-related issues: the open issues of the checkout's repository that you authored
-(`author:@me`) and the ones assigned to you (`assignee:@me`), merged by issue
-number — an issue in both appears once — sorted by last update and capped at 20
-rows, each bucket read with `fetchMax: 20`. The section's own meta reports the
-buckets it read: `<n> mine · <n> assigned`.
+related issues: the open issues of the checkout's repository ASSIGNED to you
+(`assignee:@me`) and nothing else. They are sorted by last update, twenty are read
+(`fetchMax: 20`), and at most seven are drawn; when more exist, an eighth and last
+row reads `and N more issues` (`N+` when the read reached its fetch bound) and
+clicking it opens the `/issues` panel. The section's own meta reports what it read:
+`<n> assigned`.
 
-- **A row is an issue.** It reads `#<number> <title>`, and its right-hand meta is
-  `mine`, `assigned` or `mine + assigned`. Clicking a row opens that issue in the
+- **A row is an issue.** It reads `#<number> <title>` with no right-hand meta: with
+  one source every row would wear the same mark, and marking everything marks
+  nothing. Clicking a row opens that issue in the
   browser with the identity `/issues` proves for a browser open:
   `gh issue view <n> --web -R <host>/<owner>/<repo>`. The work is deferred off the
   paint path, runs once per click, and a failure never escapes into the rail.

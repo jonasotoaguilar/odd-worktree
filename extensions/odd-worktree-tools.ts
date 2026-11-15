@@ -7084,11 +7084,15 @@ function issuesSidebarError(err, fallback) {
   return fallback;
 }
 
-// S1/S6: the two buckets `/issues` already reads, for the checkout the session
-// runs in. The identity is resolved FIRST — through the SAME composition
-// `/issues` proves a browser open with, so a single-remote checkout has one too
-// — and every read is bound to it; a resolution failure returns the S5 error and
-// makes no `gh` call at all.
+// S1/S6 (corrected to assigned-only): ONE read — the OPEN issues ASSIGNED to the
+// viewer — for the checkout the session runs in. There is no authored bucket and
+// no merge by issue number: `/issues` keeps its own four tabs, while the rail
+// shows the one relation the user asked for. The identity is resolved FIRST —
+// through the SAME composition `/issues` proves a browser open with, so a
+// single-remote checkout has one too — and the read is bound to it; a resolution
+// failure returns the S5 error and makes no `gh` call at all. `truncated`
+// travels with the answer: the fetch bound was reached, so the real total is
+// larger than what was read and the overflow row says so.
 async function loadIssuesSidebar() {
   const cwd = toolCwd(issuesSidebarCtx);
   let gh;
@@ -7109,25 +7113,23 @@ async function loadIssuesSidebar() {
     return { ok: false, error: (resolved && resolved.error) || "cannot resolve this checkout's own repository" };
   }
   const identity = resolved.identity;
-  const readArgs = { cwd: checkoutRoot, scope: identity, fetchMax: 20 };
-  let results;
+  let read;
   try {
-    results = await Promise.all([
-      gh.listIssues({ query: "author:@me sort:updated-desc", state: "open" }, readArgs),
-      gh.listIssues({ query: "assignee:@me sort:updated-desc", state: "open" }, readArgs),
-    ]);
+    read = await gh.listIssues(
+      { query: "assignee:@me sort:updated-desc", state: "open" },
+      { cwd: checkoutRoot, scope: identity, fetchMax: 20 },
+    );
   } catch (err) {
     return { ok: false, error: issuesSidebarError(err, "gh issue list failed") };
   }
-  const mine = results[0];
-  const assigned = results[1];
-  if (!mine || mine.ok !== true) return { ok: false, error: (mine && mine.error) || "gh issue list failed" };
-  if (!assigned || assigned.ok !== true) return { ok: false, error: (assigned && assigned.error) || "gh issue list failed" };
+  if (!read || read.ok !== true) {
+    return { ok: false, error: (read && read.error) || "gh issue list failed" };
+  }
   return {
     ok: true,
     identity,
-    mine: Array.isArray(mine.issues) ? mine.issues : [],
-    assigned: Array.isArray(assigned.issues) ? assigned.issues : [],
+    issues: Array.isArray(read.issues) ? read.issues : [],
+    truncated: read.truncated === true,
   };
 }
 
@@ -7155,6 +7157,25 @@ function openIssuesSidebarIssue(number, identity) {
     .catch((err) => ({ ok: false, error: issuesSidebarError(err, "cannot open the issue in the browser") }));
 }
 
+// S4 (issues-sidebar): the overflow row opens the `/issues` panel through the
+// SAME host route `dispatchWarpHandoff` uses — one command line, the prompt
+// templates expanded — and returns the `{ ok, error }` shape the section
+// classifies. `pi.sendUserMessage` returns void by contract, so this reports
+// that the command was dispatched, never that a panel opened. A host without the
+// route, or one that throws synchronously, refuses here with nothing dispatched.
+// Never throws; the module defers the call off the paint path.
+function dispatchIssuesPanel(pi) {
+  if (!pi || typeof pi.sendUserMessage !== "function") {
+    return { ok: false, error: "the host cannot dispatch the /issues command here" };
+  }
+  try {
+    pi.sendUserMessage("/issues", { expandPromptTemplates: true });
+  } catch (err) {
+    return { ok: false, error: `the /issues command could not be dispatched: ${issuesSidebarError(err, "unknown error")}` };
+  }
+  return { ok: true };
+}
+
 // S3 (issues-sidebar): the repaint the bridge offers is the only thing the
 // refresh reports; a host that paints by other means gets nothing extra.
 function mountIssuesSidebar(pi, api) {
@@ -7179,6 +7200,7 @@ function mountIssuesSidebar(pi, api) {
     handle = factory.createIssuesSection({
       load: () => loadIssuesSidebar(),
       open: (number, identity) => openIssuesSidebarIssue(number, identity),
+      openAll: () => dispatchIssuesPanel(pi),
       onRefreshed,
     });
   } catch {

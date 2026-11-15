@@ -6,10 +6,11 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 
 ## Specs
 
-- **S1 — the list the user asked for.** "una sidebar que me muestre las issues relacionadas, o sea
-  las issue que cree o las que me asignaron". The rails shows the checkout repository's OPEN issues
-  from exactly two sources: the ones authored by the viewer (`author:@me`) and the ones assigned to
-  the viewer (`assignee:@me`). An issue in both shows once.
+- **S1 — the list the user asked for, corrected to assigned only.** The user first asked for "una
+  sidebar que me muestre las issues relacionadas, o sea las issue que cree o las que me asignaron",
+  then corrected it: "pero correciecon, hagamos que en la sidebar se vean solo las asiggned". The rail
+  therefore shows the checkout repository's OPEN issues ASSIGNED to the viewer (`assignee:@me`) and
+  nothing else — no authored bucket, no second read. `/issues` keeps its own buckets untouched.
 - **S2 — through the bridge, without depending on it.** The section reaches the host only through
   gentle-shell-bridge's published API, read from `Symbol.for("gentle-shell-bridge/api/v1")` after
   the gate (schema `gentle-shell-bridge/api`, `version === 1`, `registerRows`, `registerSection`,
@@ -24,10 +25,15 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   the host has a reason to produce one, the section ALSO refreshes on the session's own activity —
   `before_agent_start` and `turn_end` — behind a 30 s floor, so a session in use is never more than
   about half a minute behind, while an idle session still makes no network call and starts no timer.
-- **S4 — a row is an issue.** Each row reads `#<number> <title>` and its `meta` names the relation:
-  `mine`, `assigned`, or `mine + assigned`. Rows are sorted by `updatedAt` descending and capped at
-  20 issues fetched (`fetchMax: 20`), so the bridge's own 8-row body cap is the only clipping left
-  to it. A row is clickable: its `onClick` opens that issue in the browser with the identity
+- **S4 — a row is an issue.** Each row reads `#<number> <title>` and carries NO per-row meta: with
+  a single source every row would wear the same mark, and marking everything marks nothing. The
+  header's right-aligned text reports the count instead (`N assigned`). Every issue row is drawn in
+  the host's `text` tone, never an accent: a permanent accent reads as a focused row. Rows are
+  sorted by `updatedAt` descending, twenty are fetched (`fetchMax: 20`), and the body shows at most
+  SEVEN of them. When more exist, an eighth and last row in the `dim` tone reads `and N more issues`
+  — `N` being the rows beyond the seven, written `N+` when the read hit its fetch bound — and
+  clicking it opens the `/issues` panel. That keeps the body at the host's 8-row maximum, so the
+  bridge's own inert `… +N more` elision never appears. A row is clickable: its `onClick` opens that issue in the browser with the identity
   `/issues` proves for a browser open — the checkout scope's own identity when the checkout has
   one, otherwise gh's own resolution normalized to `<host>/<owner>/<repo>`, because a single-remote
   checkout has no scope identity to pin — and it never runs on the paint path (the work is deferred
@@ -79,6 +85,14 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 
 ## Log
 
+- **L7 (user, verbatim):** "pero correciecon, hagamos que en la sidebar se vean solo las asiggned" —
+  the rail drops the authored bucket and reads `assignee:@me` only; the per-row relation glyph is
+  removed with it (a mark on every row marks nothing) and the header reports `N assigned`.
+- **L6 (user, verbatim, two messages):** "igual a la derecha en vez de decir mine i asiggned sea un
+  icono, proponme uno. Y en icno aunque sea mine+assigned sale solo 1 y gana ssigned." and "como se
+  veria si fueran 8"; after three options were offered the user chose **7 issues + the overflow row**
+  (8 painted rows). S4 is amended to the glyph and that layout, and the bridge's own arithmetic
+  (7 kept + 1 elision when a section returns more than 8) is why the overflow row must be the 8th.
 - **L5 (user, verbatim):** "igual muestra un maximo de 5 issues, en listado y si tiene mas en una
   sexta linea en color mas gris dice que hay x issues mas y esta sexta linea me deja clickearla y
   me abre el clickear panel /issues (en mine assigned muestra bien cuantas es el total)" — S4 is

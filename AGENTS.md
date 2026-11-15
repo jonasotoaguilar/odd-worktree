@@ -54,7 +54,7 @@ its presence records.
 | `lib/codegraph-card.js`, `lib/codegraph-card-preview.js` | The CodeGraph tool card for the native tool, the MCP explore tool and a `bash` call that runs CodeGraph, on the card substrate. |
 | `lib/gh-issues.js` | The `gh` client: checkout repository scope, identity pinning, issue pages, details, labels, assignees, comments, close, and the `viewerPermission` → capability mapping. |
 | `lib/issues-view.js`, `lib/issue-preview.js` | The pure `/issues` view and its preview formatter. |
-| `lib/issues-section.js` | The checkout's related issues as a rail section: the two buckets merged by issue number, the `#<number> <title>` row and its `mine` / `assigned` meta, the one in-memory snapshot and its TTL. It schedules refreshes and never waits on a child process; only a bridge that published its API can show it. |
+| `lib/issues-section.js` | The checkout's assigned issues as a rail section: the `#<number> <title>` row, the seven-row body, its one `and N more issues` row that opens `/issues`, the one in-memory snapshot and its TTL. It schedules refreshes and never waits on a child process; only a bridge that published its API can show it. |
 | `lib/tui-paint.js`, `lib/view-layout.js`, `lib/preview-scroll-keys.js`, `lib/clipboard.js`, `lib/open-external.js` | Shared presentation helpers: the one palette, window/layout maths, the one preview scroll decision, clipboard, external opener. |
 | `lib/session-auto-name.js`, `lib/session-worktree-register.js` | Session bookkeeping: naming a session after an ODD write, and the host's session-worktree registry entry. |
 | `tools/*.test.js`, `tools/fixtures/` | The Node test suites and their fixtures (`load-extension.js`, `gh-*.json`). |

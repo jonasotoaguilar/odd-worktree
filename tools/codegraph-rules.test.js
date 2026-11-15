@@ -62,6 +62,19 @@ describe('the seven texts on disk', () => {
       'the MCP tool is never named without its prefix',
     );
   });
+
+  test('only the orchestrator points the MCP tool at another checkout, through projectPath, and still delegates', () => {
+    const text = file('orchestrator').replace(/\s+/g, ' ');
+    assert.ok(text.includes(`\`${MCP}\``), 'it names the MCP tool in full');
+    assert.match(text, /`projectPath`/, 'it names the argument that selects the checkout');
+    assert.match(text, /sibling worktree/, 'it covers a worktree of the same project');
+    assert.match(text, /another git project/, 'it covers another project');
+    assert.match(text, /delegate/, 'it keeps delegation for what a look does not settle');
+    assert.match(text, /never present/, 'it keeps one workspace\'s answer from standing for another');
+    for (const variant of rules.VARIANTS.filter((name) => name !== 'orchestrator')) {
+      assert.doesNotMatch(file(variant), /projectPath/, `${variant} does not name projectPath`);
+    }
+  });
 });
 
 describe('selection', () => {

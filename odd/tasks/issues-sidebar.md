@@ -140,7 +140,7 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 | T15 | S3, S6, S8, S9 (round 3 defects: the floor counts attempts, a queued refresh dies with its section, the cache TTL is absolute, cache writes are generation-guarded) | worker | `lib/issues-section.js`, `lib/related-issues-cache.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js`, `tools/related-issues-cache.test.js` | pending |
 | T16 | S6, S9 (a checkout switch must also cut the cache write path) | worker | `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
 | T17 | S4, S9 (a click never opens a number it cannot prove belongs to the current checkout; an inconsistent cache entry never claims an exact total) | worker | `extensions/odd-worktree-tools.ts`, `lib/related-issues-cache.js`, `tools/issues-section.test.js`, `tools/issues-command.test.js`, `tools/related-issues-cache.test.js` | pending |
-| T18 | S4, S9 (a click's identity proof must not survive a session change; a seeded page must never take a mutation meant for another issue) | worker | `extensions/odd-worktree-tools.ts`, `lib/issues-view.js`, `tools/issues-section.test.js`, `tools/issues-view.test.js`, `tools/issues-command.test.js` | pending |
+| T18 | S3, S4, S9 (a click's proof must not survive a session change; a seeded page must never take a mutation meant for another issue, nor paint under a filter it was never read for) | worker | `extensions/odd-worktree-tools.ts`, `lib/issues-view.js`, `tools/issues-section.test.js`, `tools/issues-view.test.js`, `tools/issues-command.test.js` | pending |
 
 ## Log
 
@@ -159,7 +159,20 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   flight, selects 21 and a comment (`c`, then `ctrl+s`) lands on 21 — a mutation on the wrong issue, the
   one thing the identity work existed to prevent. The initial selection must match against the seeded
   rows too, and no mutation may run while the asked number is neither found nor excluded. Both are
-  absent at `13eeb5a`, so the join produced them.
+  absent at `13eeb5a`, so the join produced them. (c) the seeded rows carry no stamp of the query they
+  answer (`rowsQuery: null`), so typing `label:bug` while the first page is in flight still paints the
+  unfiltered seeded rows with exact counts — the S3 rule that hides another query's rows never sees them.
+  All three are the same mistake: the seed is treated as an answer without carrying the facts an answer
+  carries (its query, its identity proof's session, the selection the number asked for).
+
+  Measured, and NOT a blocker this branch owns: the empty-cache differential is byte-identical to the
+  joined parent `13eeb5a` (3 page reads, 12 children, `notes: []`); the differences against the merge-base
+  (the `g all issues` footer, 4→3 pages, 13→12 children) are the panel change that was already merged.
+  Also pre-existing and out of scope: a comment draft survives a page replacement, so a draft written on
+  `#21` can be posted to another issue after `r`. The base does the same.
+
+  The general lesson for anything added later: a seeded row is not an answer. It must carry the query it
+  answers, and the session generation it was proven under, or it will leak across filters and checkouts.
 - **E17 (two corrections the T12/T4 worker's own report exposed):** (a) with the click dispatching only a
   number, a row RETAINED across a checkout change would dispatch that number against the session's current
   checkout; if the new repository happens to have an issue with the same number, the panel opens the wrong

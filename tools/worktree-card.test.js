@@ -16,6 +16,7 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { createWarpMessageRenderer, safeText, stripAnsi, wrapTextToWidth } = require('../lib/worktree-card.js');
 const { CARD_STYLE_SCHEMA } = require('../lib/card-style.js');
+const { CARD_CONTENT } = require('../lib/card-content.js');
 
 // ---- the style seam: the process-wide slot, and a scratch preference home ----
 
@@ -272,6 +273,65 @@ test('a theme without the background role falls back to the neon outline', () =>
 	const rows = renderWarp('float');
 	assert.match(stripAnsiAll(rows[0]), /^╭─ \u2387 Warp · moved/, 'no background role: the neon frame');
 	assert.equal(rows.some((row) => row.includes('\x1b')), false, 'and no background is painted');
+});
+
+// ---- the content level: `minimal` is the heading line alone ----
+//
+// The level is the user's choice in Gentle Shell, published on the process-wide slot
+// `lib/card-content.js` reads — the same level the two tool cards and the CodeGraph
+// card read. The renderer takes the same reader seam (`cardContent`), so a case
+// injects a level instead of touching the real slot, and the default reader stays
+// the real one, asked on every paint.
+const CARD_CONTENT_SLOT = Symbol.for('gentle-pi.card-content');
+
+/** Run with the process-wide level slot set, restoring whatever it held. */
+function withContent(level, run) {
+	const before = globalThis[CARD_CONTENT_SLOT];
+	if (level === undefined) delete globalThis[CARD_CONTENT_SLOT];
+	else globalThis[CARD_CONTENT_SLOT] = level;
+	try {
+		return run();
+	} finally {
+		if (before === undefined) delete globalThis[CARD_CONTENT_SLOT];
+		else globalThis[CARD_CONTENT_SLOT] = before;
+	}
+}
+
+test('a minimal warp card is the heading line alone, and the level is read on every paint', () => {
+	let level = CARD_CONTENT.DEFAULT;
+	const render = createWarpMessageRenderer({ ...metrics, cardContent: () => level });
+	const component = render(messageFor('feat-two'), {}, plainTheme);
+	const compact = component.render(60);
+	assert.equal(compact.length, 4, 'the heading, the two name-only rows and the closing rule');
+	assert.match(contentOf(compact), /moved: feat-one \| to: feat-two/);
+
+	level = CARD_CONTENT.MINIMAL;
+	const minimal = component.render(60);
+	assert.deepEqual(minimal, [compact[0], compact.at(-1)], 'the heading and the closing rule, with no row between them');
+	assert.equal(contentOf(minimal).includes('moved: feat-one'), false, 'the minimal card carries no body row');
+
+	level = CARD_CONTENT.DEFAULT;
+	assert.deepEqual(component.render(60), compact, 'and back again, with no new renderer');
+});
+
+test('a minimal warp card shows the same heading in float and in neon', () => {
+	// No injected reader here: the renderer reads the real slot on every paint.
+	const lines = (style) => withStyle(style, () => withContent(CARD_CONTENT.MINIMAL, () => renderer()(messageFor('feat-two'), {}, paintTheme()).render(60)));
+	const neon = lines('neon');
+	const float = lines('float');
+	assert.equal(neon.length, 2, 'the heading and the closing rule');
+	assert.equal(float.length, 3, 'float adds its padding row above the heading, and no body row');
+	assert.equal(contentOf(float), contentOf(neon), 'the same text in both styles; only the chrome differs');
+	assert.equal(contentOf(float).includes('moved: feat-one'), false, 'no body row in either style');
+	for (const row of float) assert.equal(metrics.visibleWidth(stripAnsiAll(row)), 60, 'a float row is the width it was given');
+	assert.equal(float.some((row) => /[╭╮╰╯─│]/.test(row)), false, 'the float card draws no box');
+});
+
+test('an expanded warp card shows everything at either level', () => {
+	const expandedAt = (level) => withContent(level, () => renderer()(messageFor('feat-two'), { expanded: true }, plainTheme).render(60));
+	const atDefault = expandedAt(CARD_CONTENT.DEFAULT);
+	assert.deepEqual(expandedAt(CARD_CONTENT.MINIMAL), atDefault, 'the reader asked for everything and gets everything');
+	assert.match(contentOf(atDefault), /path: now in "\/clone-worktrees\/feat-two"/, 'including the path and the branch');
 });
 
 // ---- the content the card has always carried ----

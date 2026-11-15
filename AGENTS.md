@@ -4,6 +4,17 @@ Read this before changing anything. It is the contract for this repository: one
 Pi extension, two agent tools, three panels, one preference, no other
 configuration surface.
 
+## How to work here
+
+1. Read the invariants below before your first edit. They are the contract: a
+   change that breaks one is wrong even when its tests pass.
+2. Run `node --test tools/*.test.js` before claiming anything works.
+3. Work on a branch, never on `main`. An ODD gets its own checkout at
+   `<repo-parent>/<repo-name>-worktrees/<odd>`, created with `worktree_create`
+   (invariant 12).
+4. Name the invariant you are honouring or changing when a commit or a PR explains
+   itself by one; the numbers below are how this repository refers to them.
+
 ## Purpose
 
 `pi-odd-worktree` is a Pi extension package. It gives a Pi session:
@@ -18,11 +29,15 @@ configuration surface.
   (`default`), chosen from Gentle Shell's `/gentle:customize` → `Cards` through
   gentle-shell-bridge's published row API. It is not a command (invariant 3).
 
-Deleting a checkout and moving the session are human actions only: they happen
-through `/warp` (its `ctrl+d`, its selector, a typed name, a queued handoff), and
-no agent tool does either. It works in Pi alone, with `git` as the only external
-requirement; Gentle Shell is recommended only because the deletion guard reads
-its presence records.
+Requirements: Pi, with `git` as the only external one. Gentle Shell is
+recommended, not required — the deletion guard reads its presence records, and the
+`Card tool` preference needs gentle-shell-bridge, which is a separate install.
+
+Moving the session between checkouts and removing a checkout are the person's own
+`/warp` surfaces. No agent tool and no command exposes either one (invariant 3),
+which is a rule about this package's surface: it does not make removal a
+person-only operation, and invariant 5 says what an agent may do with a merged
+checkout.
 
 ## Layout
 
@@ -114,10 +129,12 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    section (`lib/issues-section.js`) that is neither a command nor a tool and
    registers no name the host or the agent can call; and the one `Card tool` row
    group (`lib/card-bash-customize.js`), which is neither a command nor a tool
-   either and adds no name to either registry. No agent surface moves the
-   session or removes a checkout: `/warp` moves the session (its `ctrl+d`, the
-   selector, a typed name, a queued handoff) and its `ctrl+d` removes a checkout.
-   Each command and tool keeps its declared name and label.
+   either and adds no name to either registry. Neither moving the session nor
+   removing a checkout is exposed to the agent: `/warp` is the person's front for
+   both (its `ctrl+d`, the selector, a typed name, a queued handoff for moving; its
+   `ctrl+d` for removing). That is a rule about this package's surface, not about
+   what an agent may run itself — invariant 5 says how a merged checkout is
+   removed. Each command and tool keeps its declared name and label.
 
    **The section reaches the host only through gentle-shell-bridge.** It is
    published through that package's sidebar-section API alone: the object read from
@@ -163,7 +180,7 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`). There is no second document,
    store or cache, and no settings file. Without the bridge the preference has no
    control surface and the mode stays `activity`.
-4. **Deletion refuses on a live session.** The only front that removes a checkout
+4. **Deletion refuses on a live session.** The only surface that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
    before the pending-change question and again immediately before removal. This
    session's own checkout is refused with "warp first"; another session's is
@@ -176,6 +193,11 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    (with `--force` only when the caller asked) and the branch is kept. No other
    application is closed, opened or removed on any path — including the panel's
    create and `worktree_create`, which use git and the canonical directory alone.
+   The post-merge cleanup of an ODD uses that same argv: an agent removes its
+   checkout with `git worktree remove <absolute path>` once the branch tip is an
+   ancestor of `origin/<default>` and the tree is clean, and the branch survives.
+   It is reported and skipped — never forced — when the checkout is dirty or when a
+   live session stands in it; those are the only two reasons to leave it in place.
 6. **`/issues` keeps repository identity pinning.** The identity
    (`<host>/<owner>/<repo>`) is pinned when the list loads and bound to every
    read, every mutation and the `o` browser opener. A checkout whose remote moved
@@ -464,7 +486,7 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     process (`session_start` new, resume or fork; not `/reload`). The reminder is
     advice, so no test may assert it blocks, refuses or notifies.
 
-20. **The `bash` guards read text, fail open and add no surface.** The extension's
+22. **The `bash` guards read text, fail open and add no surface.** The extension's
     `tool_call` handler refuses a `bash` call whose command contains `git … worktree
     add` or `git … worktree list` in any cwd, and, only when the session cwd is the
     principal checkout (its root is the parent of the git common dir), a branch

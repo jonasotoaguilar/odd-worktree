@@ -14,6 +14,7 @@ const { after, before, beforeEach, test } = require('node:test');
 
 const { createBashCardResolver, registerBashCard } = require('../lib/bash-card-resolver.js');
 const { createCodegraphCardResolver } = require('../lib/codegraph-card.js');
+const { SHELL_ACTIVITIES, SHELL_ACTIVITY_IDENTITY } = require('../lib/bash-activity.js');
 const { writeCardBashMode } = require('../lib/card-bash-mode.js');
 const { CARD_STYLE } = require('../lib/card-style.js');
 
@@ -45,6 +46,13 @@ const metrics = {
 };
 
 const plainTheme = { fg: (_role, value) => value };
+
+/** A theme that tags every painted cell, so a case can see which role painted what. */
+const taggedTheme = {
+  fg(role, value) {
+    return `<${role}>${value}</${role}>`;
+  },
+};
 
 const CARD_STYLE_SLOT = Symbol.for('gentle-pi.card-style');
 const CARD_BASH_MODE_SLOT = Symbol.for('gentle-pi.card-bash-mode');
@@ -281,59 +289,123 @@ test('the extension\'s one-line registration tolerates a host without the hook',
   assert.equal(registerBashCard(throwingHost, { metrics: () => metrics }).registered, false);
 });
 
-// ---- L5: composition with the CodeGraph card, in both load orders ----
+// ---- composition with the CodeGraph card is the load order, and nothing else ----
+//
+// A mode that says "our cards" must not silently hand one command back to the host,
+// so this card draws EVERY bash call while the mode is `own` — including a
+// `codegraph …` command, which wears the classifier's `codegraph` identity. The
+// richer CodeGraph card still owns its own commands because the extension registers
+// it FIRST: its resolver then receives ours as `next()`, sees `renderShell: 'self'`
+// and claims the row itself, so our slots are never asked. These cases state both
+// halves of that truth in the one order the extension uses.
 
-test('a codegraph command keeps the CodeGraph card in either load order, and every other bash call is ours', () => {
-  const ours = bashResolver().resolver;
-  const codegraph = codegraphResolver();
-  const bases = { 'ours-first': chain(ours, codegraph, HOST_SELF), 'codegraph-first': chain(codegraph, ours, HOST_SELF) };
+/** Our resolver with its two slots counted, so a case can state that neither was asked. */
+function countedResolver(resolver) {
+  const asked = [];
+  const counted = (toolName, next) => {
+    const renderers = resolver(toolName, next);
+    if (renderers === undefined) return renderers;
+    return {
+      ...renderers,
+      renderCall: (...args) => {
+        asked.push('renderCall');
+        return renderers.renderCall(...args);
+      },
+      renderResult: (...args) => {
+        asked.push('renderResult');
+        return renderers.renderResult(...args);
+      },
+    };
+  };
+  return { asked, resolver: counted };
+}
 
-  for (const [order, slot] of Object.entries(bases)) {
-    assert.equal(slot.renderShell, 'self', `${order}: the row is a self-framed card`);
-    // One program, one card: the CodeGraph identity and its the operation as the detail.
-    const codegraphCall = callText(slot, { command: 'cd /tmp/ws && codegraph explore -- auth login' });
-    assert.match(codegraphCall, /codegraph · explore auth login/, `${order}: a codegraph command keeps the CodeGraph card`);
-    assert.doesNotMatch(codegraphCall, /⌕ exploring/, `${order}: it is never this card's exploring identity`);
-    // A CodeGraph command through the other resolver is the same card in either order.
-    const ownCall = callText(slot, { command: 'pnpm test' });
-    assert.match(ownCall, /✓ checking/, `${order}: every other bash call wears the activity card`);
-    assert.doesNotMatch(ownCall, /codegraph ·/, `${order}: and not the CodeGraph heading`);
-  }
+test('with the CodeGraph card registered first, a codegraph command is the CodeGraph card and our slots are never asked', () => {
+  const ours = countedResolver(bashResolver().resolver);
+  const slot = chain(codegraphResolver(), ours.resolver, HOST_SELF);
+  assert.equal(slot.renderShell, 'self', 'the row is a self-framed card');
 
-  // The two orders draw the SAME CodeGraph heading for one command, and the same own heading.
-  assert.equal(
-    stripAnsi(callText(bases['ours-first'], { command: 'codegraph query alpha' })),
-    stripAnsi(callText(bases['codegraph-first'], { command: 'codegraph query alpha' })),
-    'the CodeGraph card is the same row whichever resolver runs first',
-  );
-  assert.equal(
-    stripAnsi(callText(bases['ours-first'], { command: 'git status' })),
-    stripAnsi(callText(bases['codegraph-first'], { command: 'git status' })),
-    'and so is this card',
-  );
+  // One program, one card: the CodeGraph identity and its operation as the detail.
+  const codegraphCall = callText(slot, { command: 'cd /tmp/ws && codegraph explore -- auth login' });
+  assert.match(codegraphCall, /codegraph · explore auth login/, 'a codegraph command keeps the CodeGraph card');
+  assert.doesNotMatch(codegraphCall, /⌕ exploring/, 'it is never this card\'s exploring identity');
+  assert.deepEqual(ours.asked, [], 'the CodeGraph card owns the call row outright');
+
+  // The CodeGraph body is the CLI's own output, not a bash card's preview of it.
+  const codegraphResult = resultText(slot, { command: 'codegraph init' }, textResult('┌  Initializing CodeGraph\n└  Done'), { expanded: true, isPartial: false });
+  assert.match(codegraphResult, /Initializing CodeGraph/, 'the CodeGraph body is the CLI output');
+  assert.match(codegraphResult, /Done/);
+  assert.deepEqual(ours.asked, [], 'and it owns the result row too');
+
+  // Every other bash call in the same chain is this card's.
+  const ownCall = callText(slot, { command: 'pnpm test' });
+  assert.match(ownCall, /✓ checking/, 'every other bash call wears the activity card');
+  assert.doesNotMatch(ownCall, /codegraph ·/, 'and not the CodeGraph heading');
+  assert.deepEqual(ours.asked, ['renderCall'], 'the question reached our call slot only for the row this card owns');
 });
 
-test('in either order a codegraph command keeps its full output, and the other bash call its own body', () => {
-  const ours = bashResolver().resolver;
-  const codegraph = codegraphResolver();
-  for (const [order, slot] of Object.entries({
-    'ours-first': chain(ours, codegraph, HOST_SELF),
-    'codegraph-first': chain(codegraph, ours, HOST_SELF),
-  })) {
-    const forCodegraph = resultText(slot, { command: 'codegraph init' }, textResult('┌  Initializing CodeGraph\n└  Done'), { expanded: true, isPartial: false });
-    assert.match(forCodegraph, /Done/, `${order}: the CodeGraph body is the CLI output`);
-    const forOwn = resultText(slot, { command: 'pnpm test' }, textResult('RUN  v2.0.0\n ✓ a.test.js'), { expanded: true, isPartial: false });
-    assert.match(forOwn, /✓ a\.test\.js/, `${order}: this card's body is the command's output`);
-  }
+test('with only our resolver registered, a codegraph command is OUR card, wearing the codegraph identity', () => {
+  // No `codegraph` CLI means nothing of CodeGraph is registered at all (invariant 19),
+  // so a mode that says "our cards" has to draw this command itself instead of
+  // letting the host's plain row take it.
+  const slot = bashResolver().resolver('bash', () => HOST_SELF);
+  const identity = SHELL_ACTIVITY_IDENTITY.codegraph;
+  const rows = slot.renderCall({ command: 'codegraph init' }, taggedTheme, { isPartial: false }).render(60);
+  const heading = rows.map(stripAnsi).join('\n');
+
+  assert.equal(rows.length, 1, 'a settled call is one heading');
+  assert.ok(heading.includes(`${identity.glyph} codegraph`), `the heading is the classifier's codegraph identity in "${heading}"`);
+  assert.ok(rows[0].includes(`<${identity.titleRole}>${identity.glyph} codegraph</${identity.titleRole}>`), `the label is painted in ${identity.titleRole}`);
+  assert.ok(heading.includes('init'), 'the command itself is the heading detail');
+  assert.doesNotMatch(heading, /host bash call/, 'the host\'s row was not used');
+
+  // And its output is this card's body, not the host's result row.
+  const body = slot.renderResult(textResult('┌  Initializing CodeGraph\n└  Done'), { expanded: true, isPartial: false }, plainTheme, { args: { command: 'codegraph init' } }).render(60).map(stripAnsi).join('\n');
+  assert.match(body, /Initializing CodeGraph/);
+  assert.match(body, /Done/, 'the command\'s own output is the body');
+  assert.doesNotMatch(body, /host bash result/, 'the host\'s result row was not used');
 });
 
-test('with the mode `default` a chained resolver still leaves a codegraph command to the CodeGraph card', () => {
-  const ours = bashResolver().resolver;
-  const codegraph = codegraphResolver();
+test('with the mode `default` a codegraph command stays the host\'s own row', () => {
+  const cards = bashResolver();
   setMode('default');
-  const slot = chain(codegraph, ours, HOST_SELF);
-  // CodeGraph is not the toggled card: its own command keeps it, while every other
-  // bash call is the host's again.
-  assert.match(callText(slot, { command: 'codegraph query alpha' }), /codegraph · query alpha/);
-  assert.equal(callText(slot, { command: 'pnpm test' }), 'host bash call');
+  const slot = cards.resolver('bash', () => HOST_SELF);
+  assert.equal(slot, HOST_SELF, 'the toggle hands every bash row back, this one included');
+  assert.equal(callText(slot, { command: 'codegraph init' }), 'host bash call');
+});
+
+test('in the mode `own`, every bash call is this card\'s when it is the only resolver', () => {
+  // The rule that matters most: a mode that says "our cards" never hands a bash call
+  // to the host. The classifier's own family list is iterated, so a family added
+  // there cannot silently fall back either.
+  const slot = bashResolver().resolver('bash', () => HOST_SELF);
+  const samples = {
+    destructive: 'rm -rf build',
+    checking: 'pnpm test',
+    formatting: 'prettier --write src/a.ts',
+    preparing: 'pnpm install',
+    publishing: 'git push origin feat/one',
+    versioning: 'git commit -m "a message"',
+    codegraph: 'codegraph init',
+    exploring: 'git status',
+  };
+  const drawCall = (command) => slot.renderCall({ command }, plainTheme, { isPartial: false }).render(60).map(stripAnsi).join('\n');
+  const drawResult = (command) => slot.renderResult(textResult('done'), { isPartial: false }, plainTheme, { args: { command } }).render(60).map(stripAnsi).join('\n');
+  for (const activity of SHELL_ACTIVITIES) {
+    const sample = samples[activity];
+    assert.notEqual(sample, undefined, `this case carries a command for ${activity}`);
+    const drawn = drawCall(sample);
+    assert.notEqual(drawn, 'host bash call', `${activity} is this card's`);
+    const mark = SHELL_ACTIVITY_IDENTITY[activity].glyph.trimEnd();
+    assert.ok(drawn.includes(`${mark} `), `${activity} leads with its mark in "${drawn}"`);
+    assert.ok(drawn.includes(activity), `${activity} names its word in "${drawn}"`);
+    assert.doesNotMatch(drawResult(sample), /host bash result/, `${activity}'s result is this card's body`);
+  }
+
+  // And the command nothing names: the generic `$ bash`, still never the host's row.
+  const unnamed = drawCall('./scripts/deploy.sh');
+  assert.notEqual(unnamed, 'host bash call');
+  assert.match(unnamed, /\$ bash/);
+  assert.match(unnamed, /\.\/scripts\/deploy\.sh/);
+  assert.doesNotMatch(drawResult('./scripts/deploy.sh'), /host bash result/);
 });

@@ -195,7 +195,9 @@ test('the identity is the generic `$ bash` for a name nothing claims, and a fami
     assert.deepEqual(bashCardIdentity(value), BASH_CARD_IDENTITY, `${String(value)} keeps the generic identity`);
   }
 
-  // The CodeGraph family is the CodeGraph card's own identity, not a second one.
+  // The CodeGraph family is the CodeGraph card's own identity, not a second one: a
+  // `codegraph …` command drawn here (no CLI, so no CodeGraph card) reads exactly as
+  // the CodeGraph card's own label does.
   assert.equal(bashCardIdentity('codegraph').glyph, CODEGRAPH_MARK);
   assert.equal(bashCardIdentity('codegraph').titleRole, CODEGRAPH_TITLE_ROLE);
 });
@@ -221,9 +223,7 @@ test('one heading per family, drawn from the command the call runs', () => {
     if (sample === undefined) continue;
     const named = inferBashActivity(sample);
     assert.ok(named === activity || named === undefined, `"${sample}" is ${activity} or nothing, never ${named}`);
-    // A CodeGraph command belongs to the CodeGraph card (the composition case in
-    // tools/bash-card-resolver.test.js), so its heading is not drawn here.
-    if (named !== activity || activity === 'codegraph') continue;
+    if (named !== activity) continue;
     const identity = SHELL_ACTIVITY_IDENTITY[activity];
     const rows = callRows(resolver, { command: sample }, taggedTheme, { isPartial: false });
     assert.equal(rows.length, 1, `${activity} draws one settled heading`);
@@ -459,8 +459,12 @@ test('the card module carries no colour, no escape and no host package', () => {
     assert.doesNotMatch(source, /require\(['"](?!\.\/|node:)/, `${file} imports only its own modules and Node builtins`);
     // Nothing is registered, executed or shadowed: the card only draws.
     assert.doesNotMatch(source, /registerTool\(|\.execute\b|registerCommand\(/, `${file} registers and runs nothing`);
-    // S2's composition rule is asked of the CodeGraph module, never re-derived here.
-    if (file === 'bash-card.js') assert.match(source, /codegraphShape/, 'the composition decision is the CodeGraph module\'s');
+    // Composition with the CodeGraph card is the extension's load order, never a
+    // question asked of that module here: a mode that says "our cards" would
+    // otherwise hand one bash command back to the host whenever the CLI is absent.
+    // (`codegraph-card-preview.js` is not that module: it is the shared text reader.)
+    assert.doesNotMatch(source, /require\(['"][^'"]*codegraph-card\.js['"]\)/, `${file} imports no CodeGraph card`);
+    assert.doesNotMatch(source, /codegraphShape/, `${file} asks the CodeGraph card nothing about ownership`);
   }
 });
 
@@ -472,9 +476,11 @@ test('the two modules name no tone background role of their own', () => {
   }
 });
 
-test('a codegraph command is not this card\'s, by the CodeGraph module\'s own reading', () => {
-  // The agreement this card's composition depends on: the classifier's shell half and
-  // the CodeGraph card's own shape predicate never disagree.
+test('the classifier and the CodeGraph card read a codegraph command the same way', () => {
+  // This agreement is what makes the load order work: the CodeGraph card, registered
+  // first, claims exactly the commands whose `codegraph` identity this card would
+  // wear if it were the only resolver. No upstream reading is lost: a command both
+  // modules decline stays this card's generic `$ bash` row.
   for (const command of [
     'codegraph init',
     'codegraph sync',

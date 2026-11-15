@@ -521,14 +521,54 @@ installed — the one `codegraph` entry of `<agent dir>/mcp.json` (see [CodeGrap
 index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry)); Gentle
 Shell's own `card-style.json` is read here, never written.
 
+## The `bash` guards
+
+The extension watches every `bash` tool call and refuses four things before the command
+runs. The refusal is the call's result: it says the command did not run and names the
+order to follow, `worktree_list` first and `worktree_create` only when the ODD has no
+checkout. The prompt block above is what is meant to keep the agent from ever reaching
+them.
+
+| Refused | Where |
+| --- | --- |
+| `git worktree add` | any cwd |
+| `git worktree list` | any cwd |
+| a command that creates a branch (`checkout -b/-B/--orphan`, `switch -c/-C`, `git branch <name>`) | the principal checkout only |
+| a command that switches to anything but the repository's default branch (`checkout`/`switch <ref>`, `-`, a detached checkout) | the principal checkout only |
+
+- **Text only.** The guard reads the command string and nothing else: it finds the
+  `git` … `worktree` … `add|list` sequence anywhere in it, also after `&&`, `||`, `;`,
+  `|`, a newline, a subshell, a line continuation, inside `$(…)` or inside a quoted
+  `bash -c '…'`, and tolerates git's global options (`-C <dir>`, `--no-pager`) and a
+  `git` given by path. It never opens a script, an alias or a file, so a script that
+  runs `git worktree add` inside passes. A string that only prints the sequence
+  (`echo git worktree add`) is refused too: what surrounds it never matters.
+- **Principal checkout.** A linked worktree shares the principal's git common dir, so
+  its root is never that dir's parent and the branch guards do nothing there. A cwd that
+  is not a repository, or an identity that cannot be read, blocks nothing.
+- **Default branch.** Resolved like the create's base: the local `main`, else the branch
+  `origin/HEAD` names, else `init.defaultBranch`, once per checkout. There is no
+  `main`/`master` list, and with no resolvable default a switch is not refused.
+- **`checkout <ref>`.** `git switch` never takes a path, so its argument is a ref. For
+  `git checkout`, an argument is a restore only when that path exists in the cwd, which
+  is how Git settles the ambiguity; `feat/x`, `origin/main` and a bare `develop` are refs.
+  `git checkout <ref> -- <path>` and `git checkout -- <path>` are always restores. Every
+  segment of a compound command counts, so an allowed switch never hides a later one.
+- **Everything else passes**: `git status`, `git branch` alone or with an option,
+  `git restore`, `git worktree remove|prune|move`, and every tool but `bash`.
+- `ODD_WORKTREE_GUARD=0` turns them off for the process, like `ODD_WORKTREE_PROMPT=0`
+  for the prompt blocks. No other value does, and nothing else configures them.
+
 ## The `## ODD worktrees` block in the system prompt
 
 The primary session's system prompt gains a short section telling the agent where
-a worktree lives and that the directory is the ODD it serves, that an ODD with an
-existing assignment is resumed instead of duplicated, to carry pending work that
-belongs to it with `copy_changes`, and that after the merge the branch is kept and
-the checkout removed unless a live session stands in it. Moving the session stays
-the human's.
+a worktree lives and that the directory is the ODD it serves, to call
+`worktree_list` before it creates a worktree or starts or resumes an ODD (work in the
+ODD's worktree when it has one, `worktree_create` it when it has none), to carry the
+current checkout's pending changes that belong to that work with `copy_changes`, that an
+ODD is an area of work with one worktree, to delegate agents in parallel unless they
+would edit the same files, and that after the merge the branch is kept and the checkout
+removed unless a live session stands in it. Moving the session stays the human's.
 
 It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other

@@ -168,18 +168,18 @@ describe('the section states the worktree policy', () => {
     const text = prose();
     assert.match(text, /A worktree lives at `/, text);
     assert.match(text, /directory IS the ODD/, text);
-    assert.match(text, /`worktree_list` finds existing assignments, so resume one instead of duplicating it/, text);
-    assert.match(text, /`worktree_create` creates it/, text);
-    assert.match(text, /carry them with `copy_changes: true`/, text);
+    assert.match(text, /Before you create a worktree, start an ODD or resume one, call `worktree_list`/, text);
+    assert.match(text, /if the ODD already has a worktree, work there/, text);
+    assert.match(text, /if not, create it with `worktree_create`/, text);
+    assert.match(text, /use `copy_changes: true` if the pending changes of the current checkout belong to that work/, text);
   });
 
   test('one ODD, one worktree, and parallel subagents that edit different files', () => {
     const text = prose();
     assert.match(text, /One ODD, one worktree\./, text);
-    assert.match(text, /Work on the same feature goes into its ODD, adding tasks/, text);
-    assert.match(text, /a different feature is a different ODD, with another worktree/, text);
-    assert.match(text, /delegate several subagents in parallel/, text);
-    assert.match(text, /as long as they do not edit the same files/, text);
+    assert.match(text, /An ODD is an area of work: everything within the same area goes into the same ODD and worktree/, text);
+    assert.match(text, /work on a different area is another ODD with its own worktree/, text);
+    assert.match(text, /Delegate agents in parallel, on the same or different worktrees, unless they would edit the same files/, text);
   });
 
   test('after the merge the branch is kept and the worktree removed, unless a session stands there', () => {

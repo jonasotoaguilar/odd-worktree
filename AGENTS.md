@@ -31,6 +31,7 @@ its presence records.
 | `lib/worktree-registry.js` | The one ownership rule, with no file: a checkout this package created is a directory under `<repo-parent>/<repo-name>-worktrees`, so the path decides. Partitions Git's listing into ours and outside, and parses `git worktree list --porcelain` for the create path. |
 | `lib/worktree-create.js` | `worktree_create`'s core: request validation, base resolution, the ODD-named destination, the refusals sentence for sentence, plan execution and the fixed output lines. |
 | `lib/worktree-list.js` | `worktree_list`'s rendering: rows, order, detail lines and footers, from one structured row list. It writes nothing. |
+| `lib/worktree-guard.js` | The `bash` guards' decision: a pure function over the command text and injected seams; it spawns nothing and reads no file. |
 | `lib/worktree-hooks.js` | The preparation chain of a create: submodules, local inputs, `copy_changes`, build-cache and asset links, the setup slot, and the clone-local `gentle-ai/worktree-hooks.json` that extends the lists. |
 | `lib/worktree-setup.js` | The setup chain: the closed command table one lockfile selects, the plan, and the two notice sentences. |
 | `lib/worktree-setup-runner.js` | The tracked background task of a create: runs the planned commands one child at a time, sends their output to its own log under the system temp directory, and reports one notice built from the child process outcome. No state is persisted. |
@@ -409,6 +410,23 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     both guards and what the session used, and so does a new session in the same
     process (`session_start` new, resume or fork; not `/reload`). The reminder is
     advice, so no test may assert it blocks, refuses or notifies.
+
+20. **The `bash` guards read text, fail open and add no surface.** The extension's
+    `tool_call` handler refuses a `bash` call whose command contains `git … worktree
+    add` or `git … worktree list` in any cwd, and, only when the session cwd is the
+    principal checkout (its root is the parent of the git common dir), a branch
+    creation or a switch to anything but the repository's default branch. The decision
+    lives in `lib/worktree-guard.js`, a pure function over the command string and the
+    injected `repoIdentity`, `defaultBranch` and `pathExists` seams. Detection is text
+    only: no script, alias or file is read, and a command it cannot judge passes. It
+    never throws (a throwing `tool_call` handler blocks the tool), an unreadable
+    repository leaves only the worktree refusals active, and the default branch is
+    resolved lazily and memoized per checkout. `ODD_WORKTREE_GUARD=0` is the one way
+    to turn it off, like `ODD_WORKTREE_PROMPT=0` for the prompt blocks; no other
+    value, option or config file does, and it registers no command or tool name
+    (invariant 3). The refusal sentences name `worktree_list` first and
+    `worktree_create` second; the prompt block (invariant 14) is what keeps the agent
+    from reaching them, so a change to one is read against the other.
 
 ## Commits and pull requests
 

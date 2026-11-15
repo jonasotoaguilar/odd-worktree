@@ -548,6 +548,61 @@ advises and runs nothing; what the package does with CodeGraph itself is in
 [CodeGraph: index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry).
 `ODD_WORKTREE_PROMPT=0` suppresses both blocks.
 
+## The two CodeGraph reminders
+
+A session that already holds a CodeGraph tool also gets two short reminders, appended as one extra
+text part to the result of a finished tool call. They are advice in the same words the prompt block
+uses: they never block a call, never replace a result, never arrive as a separate message, and add no
+tool or command. Both are gated exactly like the prompt block — only with the `codegraph` CLI installed
+and only when the session already holds a CodeGraph tool. They cite the CodeGraph rule, so
+`ODD_WORKTREE_PROMPT=0` silences them together with it.
+
+They cover `grep`, `find`, `ls`, `read` and `bash`, because those are the calls the rule asks the agent
+to replace with a `codegraph` `query` or an `explore`. `read` counts only for code: `.md`, `.json`,
+`.yml`, `.yaml`, `.toml` and `.txt` are the docs and configs the rule exempts. `bash` counts only when
+the command searches or reads (a `grep`, `rg`, `find`, `fd`, `ls`, `cat`, `sed`, `head`, `tail`, `awk`
+or `tree` segment); a command that merely mentions a checkout — `git -C`, `curl`, `echo` — is not a
+search. A verb right after a single pipe only filters the output of the command before it, so
+`curl … | head` and `ps aux | grep node` are not searches, while `cat src/a.ts | head` still is: the
+`cat` is the read.
+
+**Guard 1, another checkout.** The primary session, once per other checkout per session:
+
+```text
+This call went to <path>, another checkout. Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` with `projectPath` set to <path> first.
+```
+
+`<path>` is the checkout's real git toplevel, so the reminder names the path the MCP call takes. It
+fires for the same project's other worktree and for another repository alike, and never in a subagent
+child. It stays silent, using up no slot, for a checkout this session already explored with
+`projectPath` since the last compaction.
+
+**Guard 2, the session's own checkout.** The primary session and every child except the `review-*`
+agents, once per the checkout the session is in:
+
+```text
+Follow the CodeGraph rule: run `codegraph` `query` or `explore` first, if it applies.
+```
+
+for the primary session and the explore agent (the native wording only when that role holds the
+native tool), and
+
+```text
+Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first, if it applies.
+```
+
+for every other role. It is keyed by the checkout, so a `/warp` re-arms it, and it stays silent once
+the session used `codegraph` or the MCP tool.
+
+**What is "another checkout".** A different git toplevel (`git -C <dir> rev-parse --show-toplevel`),
+read once per directory and cached for the session. It comes from a tool's own path, or from a `cd`
+target or an absolute path argument of a shell command. A path outside every git checkout (tmp, `/etc`,
+your home) triggers nothing.
+
+**What forgets a reminder.** A compaction forgets both guards and what the session already used, and so
+does a new session in the same process (a new, resumed or forked session; a `/reload` keeps the current
+one). A reminder that does not fire uses up no slot.
+
 ## CodeGraph: index, daemon and MCP entry
 
 Everything here applies **only when the `codegraph` CLI is installed**. The CLI is probed

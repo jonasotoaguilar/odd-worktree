@@ -55,7 +55,8 @@ its presence records.
 | `lib/odd-worktrees-prompt.js` | The append-only injection helper that reads that file. |
 | `lib/codegraph-prompt/*.md` | The `## CodeGraph` prose: one approved text per role (orchestrator, explore, verify, worker, fix, judge, generic). |
 | `lib/codegraph-rules.js` | Selects a role's text from the session's own facts and appends it. Runs and probes nothing. |
-| `lib/codegraph-session.js` | The single CodeGraph wiring point (invariant 19): session start, compaction, the observed native init, the edit/write sync and shutdown, only with the CLI installed. |
+| `lib/codegraph-guard.js`, `lib/codegraph-guard-target.js` | The two reminders (invariant 21): the decision core with its once-per-key state, and the checkout a `grep`/`find`/`ls`/`read`/`bash` call went to. They append one text part to a finished result and run nothing else. |
+| `lib/codegraph-session.js` | The single CodeGraph wiring point (invariant 19): session start, compaction, the observed native init, the edit/write sync, the two reminders and shutdown, only with the CLI installed. |
 | `lib/codegraph-index.js`, `lib/codegraph-lock.js`, `lib/codegraph-compaction.js` | Create-or-sync, worktree seeding, the CLI probe and the notices; the one init lock and the per-project sync lease; the compaction sync. |
 | `lib/codegraph-edit-sync.js`, `lib/codegraph-role.js` | The debounced edit/write sync; the index role that keeps verify and the judges read-only. |
 | `lib/codegraph-daemon.js`, `lib/codegraph-warmup.js`, `lib/codegraph-mcp.js`, `lib/codegraph-mcp-config.js`, `lib/codegraph-paths.js` | The per-checkout daemon registry and client; the warm-up through CodeGraph's own proxy; the MCP exposure warnings; the one `mcp.json` entry writer; root identity and the argv to start `codegraph`. |
@@ -362,6 +363,49 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     (invariant 19): it claims its own `codegraph …` rows with its richer body and
     this card's slots are never asked for them; without the CLI no CodeGraph card
     exists, so those rows are drawn here with the `codegraph` identity.
+
+21. **The two CodeGraph reminders advise; they never block and never add a surface.**
+    `lib/codegraph-guard.js` decides, and `lib/codegraph-session.js` appends its
+    sentence as ONE extra text part to the result of that finished tool call — never
+    a separate message, never a block, and the result (its own parts and its
+    structured content) is kept whole. No tool, command, card or notification is
+    added, and nothing runs in the foreground beyond one bounded, cached git read.
+    Both are gated like the prompt section: only with the `codegraph` CLI installed
+    (invariant 19's registration) and only when the session holds a CodeGraph tool,
+    which the wiring records from `before_agent_start`'s
+    `systemPromptOptions.selectedTools` — no other source. They cite the CodeGraph
+    rule, so `ODD_WORKTREE_PROMPT=0` silences them together with it.
+
+    **Guard 1** is the primary session's alone and fires once per other checkout per
+    session: `This call went to <path>, another checkout. Follow the CodeGraph rule:
+    call mcp__codegraph__codegraph_explore with projectPath set to <path> first.` —
+    with `mcp__codegraph__codegraph_explore` and `projectPath` in backticks and
+    `<path>` the checkout's real git toplevel. It stays silent, using up no slot, for
+    a checkout this session already explored with that tool's `projectPath` since the
+    last compaction.
+    **Guard 2** is the primary session's and every child's except a `review-*` agent,
+    fires once per the session's own checkout, and is keyed by the checkout so a
+    `/warp` re-arms it: the primary session and the explore agent get `Follow the
+    CodeGraph rule: run codegraph query or explore first, if it applies.` (`codegraph`,
+    `query` and `explore` in backticks, the native wording only for a role that holds
+    the native tool), every other role `Follow the CodeGraph rule: call
+    mcp__codegraph__codegraph_explore first, if it applies.` (`mcp__codegraph__codegraph_explore`
+    in backticks). It stays silent once the session used `codegraph` or the MCP tool.
+
+    **What counts as a call** is `grep`, `find`, `ls`, `read` and `bash`: `read` only
+    for code, never for the `.md`/`.json`/`.yml`/`.yaml`/`.toml`/`.txt` the rule
+    exempts, and `bash` only when a segment runs `grep`, `rg`, `find`, `fd`, `ls`,
+    `cat`, `sed`, `head`, `tail`, `awk` or `tree` — and a verb right after a single
+    pipe only filters the previous command's output, so `curl … | head` and
+    `ps aux | grep node` are not reads, while `cat a.ts | head` still is (the `cat`
+    counts). **Another checkout** is a different
+    git toplevel (`git -C <dir> rev-parse --show-toplevel`, read once per directory
+    and cached), from a tool's path or from a `cd` target or absolute path argument
+    of a shell command; a path outside every checkout and a command that only
+    mentions one (`git -C`, `curl`, `echo`) triggers nothing. A compaction forgets
+    both guards and what the session used, and so does a new session in the same
+    process (`session_start` new, resume or fork; not `/reload`). The reminder is
+    advice, so no test may assert it blocks, refuses or notifies.
 
 ## Commits and pull requests
 

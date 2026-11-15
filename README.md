@@ -12,7 +12,7 @@ Two agent tools, three panels and one preference, loaded from one extension entr
 | `worktree_list` | tool | Read-only list of the checkouts this package created, each by its ODD and branch. |
 | `/warp` | panel | Moves this session to another checkout, creates one, and removes one. |
 | `/odd-list` | panel | Reads this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
-| `/issues` | panel | Reads this checkout's GitHub issues and, when your role allows it, edits them. |
+| `/issues` | panel | Reads this checkout's GitHub issues — the three scoped tabs on open, every open issue behind `g` — and, when your role allows it, edits them. |
 | `/card:bash` | preference | Flips a `bash` tool call between this package's activity card, the default, and the host's own drawing. |
 
 Moving the session and removing a checkout are human actions: only `/warp` does either, and no agent tool can. A checkout has one identity, its ODD: the directory name is the ODD it serves, and `branch` is only the git branch.
@@ -50,6 +50,8 @@ The full rules of each step, including every refusal, are in [Create, list, move
 - **A create is instant and writes no state.** The directory is the whole record; there is no list file and no lock file.
 - **Deleting refuses on a live session.** The guard reads Gentle Shell's presence records, discloses what it could not resolve, and never auto-warps. Removal is `git worktree remove` and the branch is kept. See [the deletion guard](docs/reference.md#the-deletion-guard-and-its-honest-limit).
 - **A warp is queued, never dropped.** While this session's tools, agent tasks or background jobs are still running, `/warp` keeps the request pending and moves when they finish. See [the queued warp](docs/reference.md#a-warp-waits-for-this-sessions-own-tools-agent-tasks-and-background-jobs).
+- **Opening `/issues` reads three tabs, not four.** The bar is `My issues`, `Assigned` and `Involved`; `All` is the `g` shortcut's own view, read the first time you enter it and reused after that, with the footer saying `g all issues` outside it and `g related issues` inside. A typed filter spans the three tabs and travels with you into `All`, which then reads a capped search and says so instead of claiming an exact total. See [the tabs, the shortcut and the filter](docs/reference.md#issues-three-tabs-one-shortcut-one-filter).
+- **`/issues` can open on one issue.** `/issues 42` (or `/issues #42`) opens the panel on `Assigned` with that issue selected, and a number that tab cannot find says so instead of guessing a row.
 - **`/issues` pins the repository.** Every read, mutation and browser open is bound to the repository that was loaded, and capabilities fail closed. See [the repository pin](docs/reference.md#issues-pins-the-repository).
 - **Cards follow your shell.** Tool and warp cards use the card style Gentle Shell publishes, and a click expands that card only. See [card style](docs/reference.md#card-style-follows-your-shell).
 - **Bash rows are cards too, and the toggle is yours.** While `/card:bash` is `own` (the default) every `bash` call is drawn as the activity its command names, with that family's mark and word, or the generic `$ bash` when the command names nothing; `default` leaves bash to the host's own drawing. See [the bash card](docs/reference.md#the-bash-card-and-its-toggle).

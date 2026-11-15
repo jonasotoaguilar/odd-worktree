@@ -6603,18 +6603,19 @@ function registerOddCommand(pi) {
 }
 
 // ---------------------------------------------------------------------------
-// `/issues` (T3 S1,S3): a full-screen four-bucket overlay (My issues /
-// Assigned / Involved / All) over the CURRENT checkout's repository issues,
-// through this package's own migrated pieces (lib/gh-issues.js for `gh`,
-// lib/issues-view.js for the pure view).
+// `/issues` (T3 S1,S3): a full-screen issues reader over the CURRENT checkout's
+// repository issues, through this package's own migrated pieces
+// (lib/gh-issues.js for `gh`, lib/issues-view.js for the pure view).
 //
 // GATED INVOCATION: the command is registered eagerly at load so it is always
 // discoverable; the session-start `gh` check only decides whether it may open.
 // Without an authenticated `gh`, one notification per session names what is
 // missing and the command that fixes it, and the handler re-emits it instead
-// of opening. The scoped tabs read cursor search pages (author:@me,
-// assignee:@me, involves:@me -author:@me), `All` reads the repository's own
-// open issue connection, the detail asks for authoritative metadata, and the
+// of opening. The three scoped tabs read cursor search pages (author:@me,
+// assignee:@me, involves:@me -author:@me) and are the only reads opening costs;
+// the `All` view (the `g` shortcut, never a tab) reads the repository's own
+// open issue connection, unfiltered — a filtered `All` is a capped search
+// instead. The detail asks for authoritative metadata, and the
 // `o` key opens `gh issue view <n> --web -R <pinned>` through a fixed argv
 // (never a shell, never an invented opener), with the TUI suspended for the
 // open. Assignment to a checkout is deliberately absent: this reader is
@@ -6629,9 +6630,11 @@ function setIssuesTuiLoader(loader) {
 
 // The three scoped buckets are disjoint at the source: `involved` excludes the
 // viewer's own issues (they already own a row in `mine`). Each query asks gh
-// for last-update ordering so no client re-sorts. `All` is the interactive
-// reader's fourth tab: every open issue of the repository, with nothing
-// inferred or deduplicated against the three scoped ones.
+// for last-update ordering so no client re-sorts. `All` is NOT a tab: it is the
+// interactive reader's shortcut view (S1/S2) — every open issue of the
+// repository, with nothing inferred or deduplicated against the three scoped
+// ones, marked `lazy` so the mount-time prefetch skips it and it is read the
+// first time the reader's shortcut key enters it.
 const ISSUES_PAGE_QUERIES = [
   { id: "mine", label: "My issues", query: "author:@me sort:updated-desc" },
   { id: "assigned", label: "Assigned", query: "assignee:@me sort:updated-desc" },
@@ -6644,8 +6647,11 @@ const ISSUES_INTERACTIVE_BUCKETS = [
   // connection instead of the search API: GitHub refuses to page a search
   // past 1000 matches, while `repository.issues` walks to its end with an
   // exact total. `query` stays the bucket's search scope for a typed reader
-  // query; it is never forwarded to the connection, which takes no text.
-  { id: "all", label: "All", query: "sort:updated-desc", connection: true },
+  // query; it is never forwarded to the connection, which takes no text — which
+  // is why a FILTERED `All` read is a capped search and the view marks that
+  // count inexact (S5). `lazy` keeps it out of the tab bar, the tab cycle and
+  // the prefetch, so opening `/issues` costs the three scoped reads.
+  { id: "all", label: "All", query: "sort:updated-desc", connection: true, lazy: true },
 ];
 
 const ISSUES_FETCH_PAGE_SIZE = 30;
@@ -6792,9 +6798,20 @@ async function issuesFetchPages(gh, cwd, state, scope) {
 async function executeIssues(rawArgs, ctx) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
+  // S7: `/issues <number>` (also `#<number>`) opens the same panel on one
+  // issue. ONLY a bare positive integer is accepted; every other argument keeps
+  // this command's original refusal, so `/issues`, a typo and a second argument
+  // behave exactly as before. The number adds nothing before the gate, the
+  // checkout resolution or the identity pin — they all run as for a plain open.
+  let initialIssue = null;
   if (raw !== "") {
-    if (typeof notify === "function") notify(`Unknown option "${raw}". Use /issues.`, "error");
-    return;
+    const match = /^#?(\d+)$/.exec(raw);
+    const number = match ? Number(match[1]) : NaN;
+    if (!match || !Number.isInteger(number) || number <= 0) {
+      if (typeof notify === "function") notify(`Unknown option "${raw}". Use /issues.`, "error");
+      return;
+    }
+    initialIssue = number;
   }
   const cwd = toolCwd(ctx);
   // The reader belongs to the checkout the session runs in: inside a worktree
@@ -7023,10 +7040,22 @@ async function executeIssues(rawArgs, ctx) {
         hostTuiRef = hostTui;
         return libRequire("issues-view.js").createIssuesView({
           // Bucket metadata only: the rows arrive page by page through
-          // `loadIssuePage`, so no accumulated list is handed over. All four
-          // tabs are prefetched once at open, so no tab sits at a false zero.
-          pages: ISSUES_INTERACTIVE_BUCKETS.map((spec) => ({ id: spec.id, label: spec.label, issues: null })),
+          // `loadIssuePage`, so no accumulated list is handed over. The three
+          // scoped tabs are prefetched once at open, so none sits at a false
+          // zero; `All` is marked lazy there, so the prefetch skips it and it is
+          // read the first time the reader's shortcut key enters it (S1/S2).
+          pages: ISSUES_INTERACTIVE_BUCKETS.map((spec) => ({
+            id: spec.id,
+            label: spec.label,
+            issues: null,
+            lazy: spec.lazy === true,
+          })),
           loadIssuePage,
+          // S7: a numbered open starts on `Assigned` with that issue selected
+          // (the command already refused anything that is not a positive
+          // integer); a plain open passes neither option, so its mount is
+          // exactly the previous one.
+          ...(initialIssue === null ? {} : { initialBucket: "assigned", initialIssue }),
           loadLabels,
           loadAssignees,
           checkoutName,

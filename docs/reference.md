@@ -304,11 +304,18 @@ repository to paint three tabs was work nobody asked for.
   `All`'s loaded rows and total, so it can never list rows that belong to a
   previous one. Clearing the filter re-reads the three scoped tabs; `All` is read
   again when you enter it, or at once if you are in it when the query changes.
-- **`/issues <number>` opens on one issue.** `/issues 42` and `/issues #42` open
-  the panel on `Assigned` with #42 selected and its detail loaded. The view pages
-  up to five pages of that tab looking for it, the first page counting; a number it
-  does not find leaves the first row selected and says so on the note row:
-  `#42 is not in Assigned`. Any other argument keeps the command's refusal,
+- **`/issues <number>` opens on one issue, loaded.** `/issues 42` and
+  `/issues #42` open the panel on the tab the rail's cache says holds #42 —
+  `Assigned` when it is there (an issue that is both yours and assigned opens on
+  `Assigned`), `My issues` when it is only there, and `Assigned` when the cache is
+  cold or unknown — with #42 selected and its detail read. The view pages up to
+  five pages of that tab looking for it, the first page counting; when it is not
+  there it looks ONCE in the other of those two tabs (`assigned`/`mine`) before it
+  gives up, and only then leaves the first row of the requested tab selected and
+  says so on the note row: `#42 is not in Assigned`. The first frame carries the
+  facts the rail already knew — number, title, state, labels, assignees, author —
+  with the read named below them, so the body following behind never begins as a
+  bare `loading…` pane. Any other argument keeps the command's refusal,
   `Unknown option "<what you typed>". Use /issues.`, so a typo opens nothing. The
   selection is one-shot: the first key you press spends it, and a later filter,
   refresh, tab switch or page never moves the focus back to that number.
@@ -326,45 +333,45 @@ number on screen can never be sent to another repository.
 ## The `ISSUES` rail section
 
 When Gentle Shell draws its rail, a section titled `ISSUES` lists this checkout's
-related issues: the open issues of the checkout's repository ASSIGNED to you
-(`assignee:@me`) and nothing else. Rows are sorted by last update, seven are
-drawn, and when the read answered with more, an eighth and last dim row reads
-`and N more issues` (`N+` when the read was truncated at its cap, because the real
-total is larger). The section's own meta reports what it holds: `<n> assigned`,
-and `<n> assigned · stale` while the rows on screen are the last good ones.
+open issues that you AUTHORED (`author:@me`) or are ASSIGNED (`assignee:@me`),
+merged into one list: deduplicated by issue number (an issue that is both keeps
+the `assigned` row, since that is the tab its click opens), sorted by last update,
+seven drawn, and when the read answered with more, an eighth and last dim row
+reads `and N more issues` (`N+` when either contributing search was truncated at
+its cap, because the real total is larger). The section's own meta reports what it
+holds as the bare count — `8`, never `8 assigned` — and `8 · stale` while the rows
+on screen are the last good ones.
 
 - **One request per refresh.** A refresh is a single `gh api graphql` request with
   three aliased searches — `author:@me`, `assignee:@me` and
   `involves:@me -author:@me`, each open and each sorted by last update — and each
-  answers its own `issueCount` and rows. The section draws only the assigned
-  search; the other two are cached (below), and `/issues` paints its first frame
-  from that cache.
-- **A row is an issue.** It reads `#<number> <title>` with no relation text: with
-  one source every row would wear the same mark, and marking everything marks
-  nothing. The one marker a row can carry says something else: when one of the
-  issue's cross-reference events is a pull request (the read inspects the first ten
-  of them), the row wears the Nerd Font pull-request glyph, and a terminal without
-  a Nerd Font draws a box instead. That marker arrives in the same combined request
-  as the rows, so a failed read takes the rows and their markers together and lands
-  in the stale state below.
+  answers its own `issueCount` and rows. The section draws the merged `mine` +
+  `assigned` pair (the `involved` search is only cached, below), and `/issues`
+  paints its first frame from that cache.
+- **A row is an issue, and its one mark is a pull-request number.** It reads
+  `#<number> <title>`, and when one of the issue's cross-reference events is a
+  pull request (the read inspects the first ten of them) its right-hand mark is the
+  FIRST such pull request's number, `#69`, painted in the bridge's own `muted`
+  right-hand column — gray for that segment only, never the whole row. No pull
+  request, no mark; nowhere does the rail print an icon. That number arrives in the
+  same combined request as the rows, so a failed read takes the rows and their
+  marks together and lands in the stale state below. The line keeps ONE click
+  target — the issue — because a bridge row carries one `onClick` and has no
+  per-segment handler, so clicking the number opens the issue too.
 - **A row click opens the panel; the overflow row opens it with no number.**
-  Clicking an issue row sends `/issues <n>` to the host, so the panel opens on
-  `Assigned` with that issue selected and its detail loaded — not in a browser.
-  `/issues`' own `o` key is still the browser open,
-  `gh issue view <n> --web -R <host>/<owner>/<repo>`. Nothing is sent until the
-  click proves this checkout's repository is the one the row was read from,
-  because a row stays on screen across a checkout change: a row from another
-  checkout, or a checkout whose own repository cannot be proven, dispatches
-  nothing and the panel does not open. The proof is pinned to the session it was
-  made in: if `session_start` moves the session to another checkout while the
-  proof is still running, the click dispatches nothing either, because the number
-  was proven against the checkout you left. That refusal is recorded on the section's
-  snapshot instead of thrown, and the list on screen stays exactly as it was —
-  the rail paints no click error of its own, so what you see is that nothing
-  opened. The `and N more issues` row names no issue, so it sends plain `/issues`.
-  Both are deferred off the paint path, run once per click, and a failure never
-  escapes into the rail; a dispatch reports that the command was sent, never that
-  a panel opened.
+  Clicking an issue row sends `/issues <n>` to the host at once, so the panel opens
+  with that issue selected and its detail read — not in a browser. `/issues`' own
+  `o` key is still the browser open,
+  `gh issue view <n> --web -R <host>/<owner>/<repo>`. The click does NOT prove the
+  repository: the panel pins and proves it itself when it opens, exactly like a
+  typed `/issues <n>`, so a row retained across a checkout change still dispatches
+  its number and the panel decides what it opens. What the click still refuses is a
+  host that cannot dispatch at all, and that refusal is VISIBLE: one transcript
+  entry through the host's `appendEntry` seam, or the host's notice seam when it
+  has no entries — never only a field on the snapshot. The `and N more issues` row
+  names no issue, so it sends plain `/issues`. Both are deferred off the paint
+  path, run once per click, and a failure never escapes into the rail; a dispatch
+  reports that the command was sent, never that a panel opened.
 - **It reaches the host only through gentle-shell-bridge.** The section is read
   from that package's published sidebar-section API — the object in the
   `Symbol.for("gentle-shell-bridge/api/v1")` slot, after its schema and version gate
@@ -406,15 +413,17 @@ and `<n> assigned · stale` while the rows on screen are the last good ones.
   and not the host process's own directory.
 - **A failed refresh keeps the rows.** Once a list is on screen, a refresh that
   fails does not replace it: the same rows, in the same order, with the same
-  markers, stay where they are and the header reads `<n> assigned · stale`
-  instead. A transient `gh` stall is therefore a stale list, not an empty one, and
+  marks, stay where they are and the header reads `<n> · stale` instead. A transient `gh` stall is therefore a stale list, not an empty one, and
   the next successful read clears the mark.
 - **Every state is a row, none is a throw.** `loading…` (dim) before the first
   answer, `no open issues` (dim) for an empty result, and one error row naming the
   failure — but only while there is nothing to show; after that, a failure is the
   stale state above. The error row covers a failed `gh` read and a checkout whose
   own repository cannot be resolved; the resolution fails closed, exactly as
-  `/issues` reads it, and no `gh` call is made without a proven identity. A failing
+  `/issues` reads it, and no `gh` call is made without a proven identity. A cwd
+  that is not inside a repository is not that error: the section's one line is
+  exactly `not a git repository`, in the `dim` gray role and with no path, while
+  `/warp` and `/issues` keep their own, fuller sentence. A failing
   click is recorded instead of thrown, and it never turns the list into an error
   row.
 - **One cache, in memory, per repository.** The three scoped views live in one

@@ -5043,6 +5043,76 @@ describe('issues view opens on one issue (S7)', () => {
     assert.ok(!leftColumn(view, 160).includes('▸ issue title 51'), 'a filter change never re-selects the opening issue');
   });
 
+  // S9 (T10): the pre-dispatch proof lived in the rail and is gone, so a number
+  // the requested bucket does not hold is still worth one look in the OTHER
+  // bucket of the pair before the reader is told it is absent. The command has
+  // already picked a bucket when the cache knows one; a cold cache leaves this
+  // fallback to answer, and the reader lands on the tab that actually has it.
+  test('a number that is only in My issues falls back to that bucket instead of reporting a miss', async () => {
+    const { view, requests } = pagedView({ mine: [61], assigned: [51, 52], involved: [] }, {
+      initialBucket: 'assigned',
+      initialIssue: 61,
+    });
+    await tick();
+    const frame = bodyOf(view, 160);
+    const bar = frame.split('\n').find((line) => line.includes('Assigned')) ?? '';
+    assert.match(bar, /▸ My issues/, 'the reader lands on the bucket that holds the issue');
+    assert.match(leftColumn(view, 160), /▸ issue title 61/, 'and focuses it there');
+    assert.ok(!frame.includes('is not in'), 'no miss is reported when the other bucket has it');
+    assert.equal(assignedReads(requests)[0].cursor, null,
+      'the requested bucket is searched first, as the command asked');
+    assert.ok(requests.some((request) => request.bucketId === 'mine'),
+      'and the other bucket of the pair is tried before the miss');
+  });
+
+  test('a number nowhere in the pair still reports the miss for the requested bucket', async () => {
+    const { view } = pagedView({ mine: [61], assigned: [51, 52], involved: [] }, {
+      initialBucket: 'assigned',
+      initialIssue: 999,
+    });
+    await tick();
+    const frame = bodyOf(view, 160);
+    assert.match(frame, /#999 is not in Assigned/, 'the miss names the bucket the open requested');
+    assert.match(leftColumn(view, 160), /▸ issue title 51/,
+      'and the reader is left on the requested bucket, not on the one it tried second');
+  });
+
+  // S9 (T10) part 2: the first frame of a numbered open shows what the rail
+  // already knows — number, title, state, labels, assignees, author — through
+  // the ONE pending rendering `lib/issue-preview.js` already owns. A bare
+  // `loading…` pane is the defect this pins: the body may still be on its way,
+  // but the identity of the issue never waits for it.
+  test('the first frame of a numbered open carries the known facts instead of a bare loading… pane', async () => {
+    const held = new Promise(() => {});
+    const seeded = {
+      ...issue(51, {
+        title: 'Seeded fifty-one',
+        assignees: [{ login: 'ana' }, { login: 'beto' }],
+      }),
+    };
+    const view = createIssuesView({
+      helpers,
+      rowsAvailable: () => 24,
+      requestRender: () => {},
+      done: () => {},
+      prefetchBuckets: false,
+      pages: [{ id: 'assigned', label: 'Assigned', issues: [seeded] }],
+      loadIssuePage: () => held,
+      loadIssue: () => held,
+      initialBucket: 'assigned',
+      initialIssue: 51,
+    });
+    await tick();
+    const right = rightRows(view, 160).join('\n');
+    assert.match(right, /#51 Seeded fifty-one/, 'the number and title are on screen');
+    assert.match(right, /assignees: ana, beto/, 'so are the assignees the rail cached');
+    assert.match(right, /labels: bug/, 'and the labels');
+    assert.match(right, /by octo/, 'and the author');
+    assert.match(right, /loading…/, 'the read still names itself');
+    assert.ok(right.indexOf('#51 Seeded fifty-one') < right.indexOf('loading…'),
+      'the facts come first and the read is named below them — never a bare loading pane');
+  });
+
   test('a plain open still starts on My issues with nothing selected by number', async () => {
     const { view, requests, details } = pagedView({ mine: [1, 2], assigned: [51], involved: [] });
     await tick();

@@ -7120,6 +7120,9 @@ async function executeIssues(rawArgs, ctx) {
   const seededPages = pinnedRepo && pinnedRepo.ok === true
     ? issuesSidebarCachedPages(pinnedRepo.identity)
     : null;
+  // S9 (T10): the bucket the numbered open starts on, chosen from the cache the
+  // rail filled; a cold cache leaves the view's own fallback to decide.
+  const initialBucket = initialIssue === null ? null : issuesSidebarInitialBucket(pinnedRepo, initialIssue);
   try {
     await ctx.ui.custom(
       (hostTui, theme, _keybindings, done) => {
@@ -7152,11 +7155,13 @@ async function executeIssues(rawArgs, ctx) {
             };
           }),
           loadIssuePage,
-          // S7: a numbered open starts on `Assigned` with that issue selected
-          // (the command already refused anything that is not a positive
-          // integer); a plain open passes neither option, so its mount is
-          // exactly the previous one.
-          ...(initialIssue === null ? {} : { initialBucket: "assigned", initialIssue }),
+          // S7/S9: a numbered open starts on the bucket the cache says holds
+          // the number (`assigned` when it is there, `mine` when it is only
+          // there, `assigned` when the cache is cold) with that issue selected;
+          // the command already refused anything that is not a positive
+          // integer. A plain open passes neither option, so its mount is exactly
+          // the previous one.
+          ...(initialIssue === null ? {} : { initialBucket, initialIssue }),
           loadLabels,
           loadAssignees,
           checkoutName,
@@ -7287,8 +7292,8 @@ function issuesSidebarError(err, fallback) {
 
 // S9 (issues-sidebar T14): ONE cache per extension instance, built lazily so a
 // host that never draws the rail never pays for it. A missing cache module is
-// not fatal: the read then answers the assigned bucket straight from the
-// response instead of storing it.
+// not fatal: the read then merges the response's own mine and assigned buckets
+// instead of storing them.
 function issuesSidebarRelatedCache() {
   if (issuesSidebarCache !== null) return issuesSidebarCache;
   try {
@@ -7354,20 +7359,67 @@ function issuesSidebarCachedPages(identity) {
   return pages.size === 0 ? null : pages;
 }
 
-// S1/S6 (corrected to assigned-only) + S9: ONE read — a single `gh api graphql`
-// request with the three scoped views (`mine`, `assigned`, `involved`) — for the
-// checkout the session runs in. `/issues` keeps its own four tabs and the rail
-// still DRAWS only the assigned bucket; what changed is that the same read now
-// fills the process cache, so a later consumer can open instantly. The identity
-// is resolved FIRST — through the SAME composition `/issues` proves a browser
-// open with, so a single-remote checkout has one too — and the read is bound to
-// it; a resolution failure returns the S5 error and makes no `gh` call at all.
-// The cache decides the size: 100 per bucket with no (or an aged, or an
-// inconsistent) entry, the newest 20 afterwards, merged by issue number. A
-// failed read never touches the cache and returns the S5 error, so the section's
-// T10 stale handling keeps working unchanged. `truncated` travels with the
-// answer: the assigned bucket's `issueCount` exceeded the cache cap, so the real
-// total is larger than what is stored and the overflow row says so.
+// S7 (T8): the rail's rows are the UNION of the two buckets the user named — the
+// issues they authored (`mine`) and the ones they are assigned (`assigned`) —
+// merged and deduplicated by issue number, with the `assigned` row winning a
+// collision (it is the bucket the row's click opens). Each row keeps the bucket
+// it came from, so the section can hand it to the opener. `involved` is not part
+// of the merge.
+//
+// The merge never invents a row: a malformed entry with no usable number cannot
+// be deduplicated, so it is dropped exactly like the cache drops it.
+function mergeRailIssues(buckets) {
+  const byNumber = new Map();
+  const source = buckets && typeof buckets === 'object' ? buckets : {};
+  for (const key of ["mine", "assigned"]) {
+    const rows = Array.isArray(source[key]) ? source[key] : [];
+    for (const row of rows) {
+      if (!row || typeof row !== "object" || !Number.isInteger(row.number) || row.number <= 0) continue;
+      if (byNumber.has(row.number) && key !== "assigned") continue;
+      byNumber.set(row.number, { ...row, bucket: key });
+    }
+  }
+  return [...byNumber.values()];
+}
+
+// S9 (T10) part 3: the bucket a numbered open starts on. The rail's cache already
+// knows where the number is: `assigned` when it holds it there, `mine` when it
+// holds it ONLY there (the user's own priority — "assigned tiene prioridad"),
+// and `assigned` when the cache is cold or unknown, which leaves the view to try
+// the other bucket of the pair before it reports the number absent. A cache read
+// that throws answers nothing, exactly like no cache: the panel still opens.
+function issuesSidebarInitialBucket(pinned, number) {
+  if (issuesSidebarCache === null) return "assigned";
+  if (!pinned || pinned.ok !== true || typeof pinned.identity !== "string") return "assigned";
+  let entry = null;
+  try {
+    entry = issuesSidebarCache.get(pinned.identity);
+  } catch {
+    entry = null;
+  }
+  const has = (key) => {
+    const rows = entry && entry.buckets && Array.isArray(entry.buckets[key]) ? entry.buckets[key] : [];
+    return rows.some((row) => row && row.number === number);
+  };
+  if (has("assigned")) return "assigned";
+  if (has("mine")) return "mine";
+  return "assigned";
+}
+
+// S1/S6/S7 + S9: ONE read — a single `gh api graphql` request with the three
+// scoped views (`mine`, `assigned`, `involved`) — for the checkout the session
+// runs in. `/issues` keeps its own four tabs and the rail DRAWS the merged mine +
+// assigned list (S7/T8); the same read fills the process cache, so a later
+// consumer can open instantly. The identity is resolved FIRST — through the SAME
+// composition `/issues` proves a browser open with, so a single-remote checkout
+// has one too — and the read is bound to it; a resolution failure returns the S5
+// error and makes no `gh` call at all. The cache decides the size: 100 per bucket
+// with no (or an aged, or an inconsistent) entry, the newest 20 afterwards,
+// merged by issue number. A failed read never touches the cache and returns the
+// S5 error, so the section's T10 stale handling keeps working unchanged.
+// `truncated` is true when EITHER contributing bucket's `issueCount` exceeded the
+// cache cap, so the real total is larger than the merged rows and the overflow
+// row says so.
 //
 // T15 (S6/S9): the read is numbered and generation-stamped BEFORE its first
 // await, so its place in the order is the START, not the answer. A read with no
@@ -7388,7 +7440,10 @@ async function loadIssuesSidebar() {
     return { ok: false, error: `issues: cannot load the gh client: ${issuesSidebarError(err, "unknown error")}` };
   }
   const checkoutRoot = await oddCheckoutRootAsync(cwd);
-  if (!checkoutRoot) return { ok: false, error: notGitRepositoryLine(cwd) };
+  // S12 (T11): a cwd outside a repository is not a failure of the read — there is
+  // simply nothing to read. The rail's own line is the short one, in the gray
+  // tone, and names no path; `/warp` and `/issues` keep their fuller sentence.
+  if (!checkoutRoot) return { ok: false, error: ISSUES_SIDEBAR_NOT_REPOSITORY, errorTone: "dim" };
   let resolved = null;
   try {
     resolved = await issuesBrowserRepoIdentity(gh, checkoutRoot);
@@ -7422,13 +7477,23 @@ async function loadIssuesSidebar() {
     }
   }
   const cached = canWriteCache ? cache.get(identity) : null;
-  const fallback = read.buckets && read.buckets.assigned ? read.buckets.assigned : null;
-  const issues = cached !== null && cached.buckets && Array.isArray(cached.buckets.assigned)
-    ? cached.buckets.assigned
-    : (fallback && Array.isArray(fallback.issues) ? fallback.issues : []);
+  const readBuckets = read.buckets && typeof read.buckets === "object" ? read.buckets : null;
+  const issues = cached !== null && cached.buckets
+    ? mergeRailIssues(cached.buckets)
+    : mergeRailIssues({
+      mine: readBuckets && readBuckets.mine ? readBuckets.mine.issues : [],
+      assigned: readBuckets && readBuckets.assigned ? readBuckets.assigned.issues : [],
+    });
+  // A bucket whose `issueCount` outruns the rows the same answer carried is
+  // truncated: the merged list cannot be the whole result.
+  const readTruncated = (key) => {
+    const bucket = readBuckets ? readBuckets[key] : null;
+    if (!bucket || !Array.isArray(bucket.issues)) return false;
+    return Number.isInteger(bucket.issueCount) && bucket.issueCount > bucket.issues.length;
+  };
   const truncated = cached !== null && cached.truncated
-    ? cached.truncated.assigned === true
-    : Boolean(fallback && Number.isInteger(fallback.issueCount) && fallback.issueCount > issues.length);
+    ? (cached.truncated.mine === true || cached.truncated.assigned === true)
+    : (readTruncated("mine") || readTruncated("assigned"));
   return {
     ok: true,
     identity,
@@ -7439,106 +7504,89 @@ async function loadIssuesSidebar() {
 
 // S4 (issues-sidebar, L11/T12): a row click opens the PANEL on that issue
 // instead of the browser. It reaches it through the SAME host route the overflow
-// row uses — `pi.sendUserMessage("/issues <n>", { expandPromptTemplates: true })`
-// — so the panel opens on `Assigned` with that issue selected and its detail
-// shown, and the panel says so itself when the number is not in that view.
+// row uses — `pi.sendUserMessage("/issues <n>", { expandPromptTemplates: true })`.
 //
-// T17 (E17a, S4): the NUMBER alone travels — `/issues` still proves its own
-// identity when it opens — but a number is only dispatched after THIS checkout
-// proves it is the one the row was read from. A row retained on screen across a
-// checkout change (the section keeps its rows while the new checkout's read is in
-// flight, and a stale read can keep the old identity) would otherwise dispatch
-// checkout A's #11 into checkout B, and if B has an #11 the panel would silently
-// open the wrong issue. The proof is the SAME composition the panel and the rail
-// already use (`issuesBrowserRepoIdentity`), run ONCE per click — a click is not
-// a paint — and it neither reads nor writes the cache.
+// S9 (T10) removed the click's second identity proof. The panel PINS and PROVES
+// the repository itself when it opens (invariant 6, `executeIssues`'s own pin and
+// scope-drift gate), and the section's contract says so; the pre-dispatch proof
+// awaited git (and, on a single-remote checkout, `gh`) before dispatching, so a
+// click could be refused — or simply take a visible beat — for a repository the
+// panel was about to prove anyway, and every refusal landed in a snapshot field
+// nothing draws. The click is now synchronous: no awaited read, no generation
+// check, no identity comparison. The number alone travels, and the panel decides.
 //
-// S4 (the overflow row) keeps dispatching `/issues` with no number: it names no
-// issue, so there is no number whose repository could be wrong. `pi.sendUserMessage`
-// returns void by contract, so this reports that the command was dispatched,
-// never that a panel opened. A host without the route, or one that throws
-// synchronously, refuses here with nothing dispatched. Never throws (it is async,
-// so it cannot reject either): the module defers the call off the paint path, and
-// its own recorded-error path classifies the `{ ok, error }` answered here.
-const ISSUES_SIDEBAR_OTHER_CHECKOUT = "the issue list on screen belongs to another checkout";
+// What the click still refuses is a host that truly cannot dispatch: no
+// `sendUserMessage`, or one that throws. That refusal is made VISIBLE (S9) —
+// one transcript entry through the host's `appendEntry` seam when it has one,
+// else the notice seam, and never only the silent snapshot field. The
+// `{ ok, error }` this returns is what the section records for its own readers.
+//
+// The row's bucket (S7/T8) may ride along as a third argument, but this seam does
+// not dispatch it: the `/issues <n>` command picks the bucket from the cache when
+// it runs, so the panel does not depend on a row the human clicked seconds ago.
+// `pi.sendUserMessage` returns void by contract, so this reports that the command
+// was dispatched, never that a panel opened. Never throws.
+const ISSUES_SIDEBAR_NOT_REPOSITORY = "not a git repository";
+const ISSUES_PANEL_REFUSAL_ENTRY = "odd-worktree-issues-refusal";
+const ISSUES_PANEL_DISPATCH_FAILED = "the host cannot dispatch the /issues command here";
 
-// The identity the CURRENT checkout proves, resolved once per click. The proof is
-// FRESH, exactly like the panel's own pin when it opens: a remote that moved since
-// the last read must not answer with the identity it used to have. No checkout
-// root and a failed proof are both "unprovable" — which is not the same thing as
-// a match, so neither may dispatch.
-async function issuesCurrentCheckoutIdentity() {
-  if (issuesSidebarCtx === null) {
-    return { ok: false, error: "this session has no checkout to prove" };
-  }
-  const cwd = toolCwd(issuesSidebarCtx);
-  const checkoutRoot = await oddCheckoutRootAsync(cwd);
-  if (!checkoutRoot) return { ok: false, error: notGitRepositoryLine(cwd) };
-  let gh;
-  try {
-    gh = libRequire("gh-issues.js");
-  } catch (err) {
-    return { ok: false, error: `issues: cannot load the gh client: ${issuesSidebarError(err, "unknown error")}` };
-  }
-  try {
-    const proof = await issuesBrowserRepoIdentity(gh, checkoutRoot, true);
-    if (!proof || proof.ok !== true) {
-      return { ok: false, error: (proof && proof.error) || "cannot resolve this checkout's own repository" };
+// S9 (T10): one refusal, one visible surface. The host's own transcript entry is
+// first (it survives the frame and needs no permission); the notice seam is the
+// fallback a host that exposes one gets. Neither exists → the message lives only
+// in the returned `{ ok: false }`, which the section still records.
+function announceIssuesPanelRefusal(pi, message) {
+  if (pi && typeof pi.appendEntry === "function") {
+    try {
+      pi.appendEntry(ISSUES_PANEL_REFUSAL_ENTRY, { line: message });
+      return true;
+    } catch {
+      // A host that refuses the entry gets the notice seam below.
     }
-    return { ok: true, identity: proof.identity };
-  } catch (err) {
-    return { ok: false, error: issuesSidebarError(err, "cannot resolve this checkout's own repository") };
   }
+  const notify = issuesSidebarCtx && issuesSidebarCtx.ui ? issuesSidebarCtx.ui.notify : undefined;
+  if (typeof notify === "function") {
+    try {
+      notify(message, "warning");
+      return true;
+    } catch {
+      // Nothing left to tell; the caller still gets the refusal.
+    }
+  }
+  return false;
 }
 
-async function dispatchIssuesPanel(pi, number, identity) {
+function dispatchIssuesPanel(pi, number, _identity, _bucket) {
   const asked = Number(number);
   const namesIssue = Number.isInteger(asked) && asked > 0;
   const command = namesIssue ? `/issues ${asked}` : "/issues";
   if (!pi || typeof pi.sendUserMessage !== "function") {
-    return { ok: false, error: "the host cannot dispatch the /issues command here" };
-  }
-  // A row that carries no identity (the fresh-row case) has nothing to compare
-  // against, so it dispatches exactly as the click always did: the panel's own
-  // proof still binds whatever it opens. Only a row that NAMES a repository can
-  // contradict the one this checkout proves.
-  const rowIdentity = typeof identity === "string" && identity.length > 0 ? identity : null;
-  if (namesIssue && rowIdentity !== null) {
-    // E18 (S4): the proof below waits on git (and, on a single-remote checkout,
-    // on `gh`), and the session can move to another checkout while it does:
-    // `session_start` bumps this generation BEFORE anything it awaits, and so do
-    // `session_shutdown` and a bridge rebinding. A proof that STARTED under one
-    // session says nothing about the next one — A's #11 proved, then delivered as
-    // B's `/issues 11`, would open B's own #11, which is the silent wrong issue
-    // the identity proof exists to prevent. So the click dispatches only while
-    // the generation it started under is still the current one.
-    const generation = issuesSidebarCacheGeneration;
-    const proof = await issuesCurrentCheckoutIdentity();
-    if (proof.ok !== true) {
-      return {
-        ok: false,
-        error: `${ISSUES_SIDEBAR_OTHER_CHECKOUT} and this checkout's repository could not be proven (${proof.error}); the /issues panel was not opened`,
-      };
-    }
-    if (issuesSidebarCacheGeneration !== generation) {
-      return {
-        ok: false,
-        error: "the session moved to another checkout while this click was being proved; the /issues panel was not opened",
-      };
-    }
-    if (proof.identity !== rowIdentity) {
-      return {
-        ok: false,
-        error: `${ISSUES_SIDEBAR_OTHER_CHECKOUT} (${rowIdentity}, not ${proof.identity}); the /issues panel was not opened`,
-      };
-    }
+    announceIssuesPanelRefusal(pi, ISSUES_PANEL_DISPATCH_FAILED);
+    return { ok: false, error: ISSUES_PANEL_DISPATCH_FAILED };
   }
   try {
     pi.sendUserMessage(command, { expandPromptTemplates: true });
   } catch (err) {
-    return { ok: false, error: `the /issues command could not be dispatched: ${issuesSidebarError(err, "unknown error")}` };
+    const message = `the /issues command could not be dispatched: ${issuesSidebarError(err, "unknown error")}`;
+    announceIssuesPanelRefusal(pi, message);
+    return { ok: false, error: message };
   }
   return { ok: true };
+}
+
+// S9 (T10): the refusal entry is one plain dim line, exactly like the warp
+// queue's durable fallback, so a host that can append entries paints it as text
+// instead of an unknown custom shape. A host without the renderer seam simply
+// never shows the fallback.
+function registerIssuesRefusalEntryRenderer(pi) {
+  if (typeof pi?.registerEntryRenderer !== "function") return;
+  try {
+    pi.registerEntryRenderer(ISSUES_PANEL_REFUSAL_ENTRY, (entry, _options, theme) => {
+      const line = entry && entry.data && typeof entry.data.line === "string" ? entry.data.line : "";
+      return warpSteeringWidget(line)(null, theme);
+    });
+  } catch {
+    // Presentation only: a host that cannot register it still keeps the entry.
+  }
 }
 
 // S3 (issues-sidebar): the repaint the bridge offers is the only thing the
@@ -7568,13 +7616,13 @@ function mountIssuesSidebar(pi, api) {
   try {
     handle = factory.createIssuesSection({
       load: () => loadIssuesSidebar(),
-      // T12/T17: a row click and the overflow row dispatch the panel command; the
-      // row's number AND the identity it was built from ride the seam, so the
-      // dispatch can prove the number belongs to THIS checkout before it opens
-      // anything. `openIssuesSidebarIssue` (the browser opener this seam used to
-      // run) is gone with its only caller — `issuesOpenInBrowser` survives for
-      // `/issues`' own `o` key.
-      open: (number, identity) => dispatchIssuesPanel(pi, number, identity),
+      // T12/T17/S9: a row click and the overflow row dispatch the panel command.
+      // The row's number and the bucket it came from ride the seam; the panel
+      // proves the repository itself when it opens, so no proof runs on the click
+      // path (`dispatchIssuesPanel` is synchronous). `openIssuesSidebarIssue` (the
+      // browser opener this seam used to run) is gone with its only caller —
+      // `issuesOpenInBrowser` survives for `/issues`' own `o` key.
+      open: (number, identity, bucket) => dispatchIssuesPanel(pi, number, identity, bucket),
       openAll: () => dispatchIssuesPanel(pi),
       onRefreshed,
     });
@@ -7793,6 +7841,8 @@ export default function (pi) {
   // renderer for its own entry type, exactly like Pi's `restored N messages`
   // line. A host without the seam simply never shows the fallback.
   registerWarpQueueEntryRenderer(pi);
+  // S9 (T10): the issues-panel refusal's one visible fallback line.
+  registerIssuesRefusalEntryRenderer(pi);
   // S2 (issues-sidebar): the rail section, only when gentle-shell-bridge
   // published its API; otherwise one ready-announcement subscription. The same
   // path contributes the one customize row group (S3, card-bash).

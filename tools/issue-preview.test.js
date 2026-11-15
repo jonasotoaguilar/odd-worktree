@@ -75,9 +75,24 @@ describe('issue preview formatter (S16)', () => {
   });
 
   test('a pending read paints the known fields and names the read', () => {
-    const text = render({ number: 12, title: 'issue title 12', labels: [{ name: 'bug' }] }, [], { pending: true });
+    const text = render(
+      {
+        number: 12,
+        title: 'issue title 12',
+        author: 'octo',
+        labels: [{ name: 'bug' }],
+        assignees: [{ login: 'ana' }],
+      },
+      [],
+      { pending: true },
+    );
     assert.match(text, /#12 issue title 12/);
     assert.match(text, /labels: bug/);
+    assert.match(text, /assignees: ana/);
+    // S9 (T10): the row the rail caches already names its author, so the first
+    // frame of a numbered open carries it instead of withholding it until the
+    // detail read lands.
+    assert.match(text, /by octo/);
     assert.match(text, /loading…/);
     assert.doesNotMatch(text, /the body|no description|\(end of issue\)/);
   });

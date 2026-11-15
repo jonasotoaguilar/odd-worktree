@@ -2,33 +2,39 @@
 // T1/T2/T8/T9/T10/T11 (issues-sidebar S1-S7): the rail section and its wiring.
 //
 // Contract under test, through the public surface only:
-// - ONE source (S1): the checkout repository's OPEN issues ASSIGNED to the
-//   viewer. No authored bucket, no merge, no dedupe and no per-row relation:
-//   every row is drawn in the host's `text` tone and carries NO `meta` — with a
-//   single source a mark on every row would mark nothing — while the header
-//   reports `<n> assigned`;
-// - a row reads `#<number> <title>` sorted by `updatedAt` descending, and the
-//   body paints at most SEVEN of them (S4); a read that produced more appends
-//   ONE eighth, dim, clickable `and N more issues` row (`N+` when the read hit
-//   its fetch bound) and a click on it dispatches `/issues`;
+// - the rows are the UNION of the checkout repository's OPEN issues the viewer
+//   authored and the ones they are assigned (S7/T8), merged and deduplicated by
+//   number, ordered `updatedAt` descending, each row keeping the bucket it came
+//   from so its click can ask for it — while the header reports the merged count
+//   alone (`8`, never `8 assigned`, and `8 · stale` while stalled);
+// - a row reads `#<number> <title>`, and the body paints at most SEVEN of them
+//   (S4); a read that produced more appends ONE eighth, dim, clickable
+//   `and N more issues` row (`N+` when the read hit its fetch bound) and a click
+//   on it dispatches `/issues`;
 // - ONE combined GraphQL read (S9/T14) returns the rows AND their
 //   pull-request cross-reference facts (`author:@me`, `assignee:@me` and
 //   `involves:@me -author:@me` in one request), feeds a process cache and leaves
 //   every failure to the section's own read state; a row whose issue has a pull
-//   request wears the marker, one without carries no `meta`;
+//   request wears that pull request's NUMBER (`#69`, S8/T9) in the bridge's
+//   right-hand `meta` column — painted `muted` by the bridge itself, which is
+//   the gray the user asked for — and one without a pull request carries no
+//   `meta`;
 // - a failed refresh over an on-screen list keeps every row and reports
-//   `<n> assigned · stale` (T10), while a failed first read is still one error
-//   row;
+//   `<n> · stale` (T10), while a failed first read is still one error row —
+//   except a session cwd that is not a repository (S12/T11), whose one line is
+//   exactly `not a git repository` in the `dim` tone, never `error`;
 // - a host with no bridge gets ONE warning per process naming
 //   `pi install npm:gentle-shell-bridge` (T11), primary sessions only, after
 //   the announcement window and never once the bridge announced;
 // - `lines()`/`meta()` are synchronous frames over an in-process snapshot: a
 //   never-settled read still answers, two stale frames schedule ONE refresh,
 //   and `onRefreshed` fires once per landed refresh;
-// - a row click defers `open(number, identity)` off the paint path, exactly
-//   once, and a failing opener lands in the snapshot instead of escaping the
-//   caller; the identity is the one the ROW was built from, so a row retained
-//   across a checkout change opens the repository it was read from;
+// - a row click defers `open(number, identity, bucket)` off the paint path,
+//   exactly once, and a failing opener lands in the snapshot instead of escaping
+//   the caller; the identity is the one the ROW was built from, so a row
+//   retained across a checkout change opens the repository it was read from;
+//   the click itself proves NOTHING (S9/T10): the panel proves its own identity
+//   when it opens, and a host that cannot dispatch says so visibly;
 // - a read still in flight at `session_shutdown` repaints nothing and lands
 //   nowhere;
 // - `refreshIfStale(maxAgeMs)` is the activity seam: one read for an absent or
@@ -40,9 +46,9 @@
 //   registers one section, absent it subscribes to the ready announcement
 //   once and registers nothing;
 // - the drawn section reads the checkout's own repository ONCE:
-//   `checkoutRepoScope({cwd})` then ONE `gh issue list` search for the assigned
-//   open issues, scoped to that pinned identity, and a failed resolution is the
-//   error row with NO `gh` call;
+//   `checkoutRepoScope({cwd})` then ONE combined `gh api graphql` read of the
+//   three scoped buckets, and a failed resolution is the error row with NO `gh`
+//   call;
 // - a hidden section costs nothing (T13): `session_start` reads nothing at all,
 //   `drawnWithin(window)` is false until `lines()`/`meta()` draws (and false
 //   again after `invalidate()`/`dispose()`), and the session's own activity
@@ -207,7 +213,7 @@ test('S4: no issue row carries a meta — the header reports the count instead',
   for (const row of rows) {
     assert.equal('meta' in row, false, `no row carries a meta (saw ${JSON.stringify(row)})`);
   }
-  assert.equal(handle.section.meta({}), '2 assigned', 'the heading names the one relation and its count');
+  assert.equal(handle.section.meta({}), '2', 'the heading names the one relation and its count');
 });
 
 test('S4: more than seven issues paint seven rows plus one dim, clickable overflow row', async () => {
@@ -231,7 +237,7 @@ test('S4: more than seven issues paint seven rows plus one dim, clickable overfl
   assert.equal(rows[7].tone, 'dim');
   assert.equal('meta' in rows[7], false, 'the overflow row carries no meta either');
   assert.equal(typeof rows[7].onClick, 'function');
-  assert.equal(handle.section.meta({}), '9 assigned',
+  assert.equal(handle.section.meta({}), '9',
     'the header counts every issue read, before any display cap');
 
   rows[7].onClick();
@@ -270,23 +276,21 @@ test('S4: a read that reached its fetch bound writes the overflow count with a +
   assert.equal(rows[7].label, 'and 13+ more issues',
     'the bound was reached, so the real total is larger than the rows counted here');
   assert.equal(rows[7].tone, 'dim');
-  assert.equal(handle.section.meta({}), '20 assigned', 'the header reports the count it read');
+  assert.equal(handle.section.meta({}), '20', 'the header reports the count it read');
 });
 
-// T9 (S4 amended, L8): the ONE marker left on a row is not about the relation:
-// an issue that already has at least one pull request referencing it wears the
-// Nerd Font pull-request glyph, and one without a pull request wears no meta at
-// all. The fact is best effort — it arrives as `hasPullRequest` on the issue
-// entry the read answered with — so it travels through the snapshot too and a
-// decoration never changes a row's tone.
-test('S4 (T9): an issue with a pull request carries the pull-request glyph, one without carries no meta', async () => {
+// T9 amended (S8): the mark is the pull request's NUMBER, not a glyph, and the
+// bridge paints the right-hand `meta` column in its own `muted` role — that is
+// the gray the user asked for, segment by segment. The row's `tone` stays
+// `text`, so nothing paints the whole row gray to gray one mark.
+test('S8 (T9): an issue whose pull request is #69 carries `#69`, one without a number carries no meta', async () => {
   const handle = createIssuesSection({
     load: async () => ({
       ok: true,
       identity: IDENTITY,
       issues: [
-        { ...issue(4, 'Waits for a merge', '2024-02-01T00:00:00Z'), hasPullRequest: true },
-        issue(3, 'Nobody opened a PR', '2024-01-01T00:00:00Z'),
+        { ...issue(4, 'Waits for a merge', '2024-02-01T00:00:00Z'), hasPullRequest: true, pullRequestNumber: 69 },
+        { ...issue(3, 'Nobody opened a PR', '2024-01-01T00:00:00Z'), hasPullRequest: false, pullRequestNumber: null },
       ],
       truncated: false,
     }),
@@ -298,28 +302,32 @@ test('S4 (T9): an issue with a pull request carries the pull-request glyph, one 
 
   const rows = handle.section.lines({});
   assert.deepEqual(rows.map((row) => row.label), ['#4 Waits for a merge', '#3 Nobody opened a PR']);
-  assert.equal(rows[0].meta, '\ue726', 'the row whose issue has a pull request wears the glyph');
+  assert.equal(rows[0].meta, '#69', 'the row whose issue has a pull request carries its number');
   assert.equal('meta' in rows[1], false, 'the row without one carries no meta at all');
   assert.deepEqual(rows.map((row) => row.tone), ['text', 'text'],
-    'the marker never turns a row into an accent');
+    'the marker never turns the row gray: the bridge paints only the meta column muted');
   assert.deepEqual(Object.keys(rows[0]).sort(), ['label', 'meta', 'onClick', 'tone'],
     'the marker is the row\'s only extra field');
 
   const snap = handle.snapshot();
   assert.equal(snap.issues[0].hasPullRequest, true, 'the fact is observable on the snapshot');
+  assert.equal(snap.issues[0].pullRequestNumber, 69, 'so is the number the mark is drawn from');
   assert.equal(snap.issues[1].hasPullRequest, false,
     'an issue the decoration did not answer for reports the fact as false, never undefined');
-  assert.equal(handle.section.meta({}), '2 assigned', 'the marker never changes the count');
+  assert.equal(snap.issues[1].pullRequestNumber, null,
+    'and no reference reports null instead of a number nobody opened');
+  assert.equal(handle.section.meta({}), '2', 'the marker never changes the count');
 });
 
-test('S4 (T9): only a literal true marks a row — an ambiguous answer marks nothing', async () => {
+test('S8 (T9): only a positive integer number marks a row — anything else marks nothing', async () => {
   const handle = createIssuesSection({
     load: async () => ({
       ok: true,
       identity: IDENTITY,
       issues: [
-        { ...issue(6, 'Unknown', '2024-03-01T00:00:00Z'), hasPullRequest: 'yes' },
-        { ...issue(5, 'One PR', '2024-02-01T00:00:00Z'), hasPullRequest: true },
+        { ...issue(6, 'Unknown', '2024-03-01T00:00:00Z'), hasPullRequest: 'yes', pullRequestNumber: 'yes' },
+        { ...issue(5, 'One PR', '2024-02-01T00:00:00Z'), hasPullRequest: true, pullRequestNumber: 70 },
+        { ...issue(4, 'Zero', '2024-01-01T00:00:00Z'), hasPullRequest: true, pullRequestNumber: 0 },
       ],
       truncated: false,
     }),
@@ -329,9 +337,60 @@ test('S4 (T9): only a literal true marks a row — an ambiguous answer marks not
   });
   await handle.refresh();
   const rows = handle.section.lines({});
-  assert.equal('meta' in rows[0], false, 'anything but a literal true is no marker');
-  assert.equal(rows[1].meta, '\ue726');
+  assert.equal('meta' in rows[0], false, 'anything but a positive integer is no mark');
+  assert.equal(rows[1].meta, '#70');
+  assert.equal('meta' in rows[2], false, 'a zero is not a pull request number');
   assert.equal(handle.snapshot().issues[0].hasPullRequest, false);
+  assert.equal(handle.snapshot().issues[0].pullRequestNumber, null);
+});
+
+// T11 (S12): a checkout that is not a repository is its own state: ONE short
+// line, in the gray tone the rail already has for secondary text, never the
+// error red. The wording belongs to the rail alone; the command notices keep
+// their own sentence.
+test('S12 (T11): a checkout that is not a repository paints one dim line, never an error row', async () => {
+  const handle = createIssuesSection({
+    load: async () => ({ ok: false, error: 'not a git repository', errorTone: 'dim' }),
+    open: () => {},
+    openAll: () => {},
+    schedule: () => {},
+  });
+  await handle.refresh();
+  assert.deepEqual(handle.section.lines({}), [{ label: 'not a git repository', tone: 'dim' }],
+    'one short gray line, with no path and no git advice');
+  assert.equal(handle.section.meta({}), undefined, 'and no count to report');
+});
+
+// S7 (T8): the rows are one merged list, but each row remembers the bucket it
+// came from, so its click can ask the panel for that bucket. The module never
+// merges — the extension owns the read — it only carries the tag the read set.
+test('S7 (T8): a row keeps its bucket, and its click hands it to the opener', async () => {
+  const opened = [];
+  const sched = manualSchedule();
+  const handle = createIssuesSection({
+    load: async () => ({
+      ok: true,
+      identity: IDENTITY,
+      issues: [
+        { ...issue(11, 'Mine eleven', '2024-02-01T00:00:00Z'), bucket: 'mine' },
+        { ...issue(22, 'Assigned twenty-two', '2024-01-01T00:00:00Z'), bucket: 'assigned' },
+      ],
+      truncated: false,
+    }),
+    open: (number, identity, bucket) => { opened.push({ number, identity, bucket }); },
+    openAll: () => {},
+    schedule: sched.schedule,
+  });
+  await handle.refresh();
+  const rows = handle.section.lines({});
+  assert.deepEqual(rows.map((row) => row.label), ['#11 Mine eleven', '#22 Assigned twenty-two']);
+  assert.deepEqual(handle.snapshot().issues.map((item) => item.bucket), ['mine', 'assigned'],
+    'the merged rows keep the bucket each one came from');
+
+  rows[0].onClick();
+  await sched.flush();
+  assert.deepEqual(opened, [{ number: 11, identity: IDENTITY, bucket: 'mine' }],
+    'the click asks for the bucket the row was read from');
 });
 
 test('S3: a frame never waits, two stale frames schedule one refresh, and onRefreshed fires once per landing', async () => {
@@ -472,7 +531,7 @@ test('S3: only lines() schedules the TTL refresh, a meta-only frame schedules no
   assert.equal(sched.pending(), 1, 'the drawn body schedules exactly one refresh');
   await sched.flush();
   assert.equal(loads, 1);
-  assert.equal(handle.section.meta({}), '0 assigned');
+  assert.equal(handle.section.meta({}), '0');
 
   // A ready snapshot past its TTL: still only the drawn body schedules.
   clock += 200;
@@ -508,7 +567,7 @@ test('S1/S6: an explicit refresh never coalesces, and an older answer never over
   await second;
   assert.equal(handle.snapshot().identity, 'github.com/myfork/repo-b');
   assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#20 B issue']);
-  assert.equal(handle.section.meta({}), '1 assigned');
+  assert.equal(handle.section.meta({}), '1');
 
   // A settles later: its rows are dropped, never applied over B's.
   deferred[0]({
@@ -521,7 +580,7 @@ test('S1/S6: an explicit refresh never coalesces, and an older answer never over
   assert.equal(handle.snapshot().identity, 'github.com/myfork/repo-b');
   assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#20 B issue'],
     'the older answer never overwrites the newer one');
-  assert.equal(handle.section.meta({}), '1 assigned',
+  assert.equal(handle.section.meta({}), '1',
     'the metadata is the newer repository\'s too');
 });
 
@@ -718,7 +777,7 @@ test('S5 (T10): a failed refresh keeps every ready row and reports it stale', as
     ok: true,
     identity: IDENTITY,
     issues: [
-      { ...issue(2, 'Has a pull request', '2024-02-01T00:00:00Z'), hasPullRequest: true },
+      { ...issue(2, 'Has a pull request', '2024-02-01T00:00:00Z'), hasPullRequest: true, pullRequestNumber: 69 },
       issue(1, 'Plain', '2024-01-01T00:00:00Z'),
     ],
     truncated: false,
@@ -736,8 +795,8 @@ test('S5 (T10): a failed refresh keeps every ready row and reports it stale', as
   await handle.refresh();
   const ready = handle.section.lines({});
   const successfulAt = handle.snapshot().at;
-  assert.equal(handle.section.meta({}), '2 assigned');
-  assert.equal(ready[0].meta, '\ue726', 'the marker is part of what is on screen');
+  assert.equal(handle.section.meta({}), '2');
+  assert.equal(ready[0].meta, '#69', 'the marker is part of what is on screen');
 
   clock += 200;
   answer = { ok: false, error: 'gh timed out after 30000ms' };
@@ -750,7 +809,7 @@ test('S5 (T10): a failed refresh keeps every ready row and reports it stale', as
     'the age stays the last SUCCESSFUL read, which is what keeps the TTL retrying');
   assert.deepEqual(handle.section.lines({}), ready,
     'the rows stay exactly as they were: same rows, same order, same markers');
-  assert.equal(handle.section.meta({}), '2 assigned · stale', 'the header discloses the stall');
+  assert.equal(handle.section.meta({}), '2 · stale', 'the header discloses the stall');
 
   // A second failure changes nothing about the rows, and a success replaces the
   // stale list as it always did.
@@ -771,7 +830,7 @@ test('S5 (T10): a failed refresh keeps every ready row and reports it stale', as
   assert.equal(handle.snapshot().error, null);
   assert.equal(handle.snapshot().at, clock, 'a success moves the age again');
   assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#3 Back again']);
-  assert.equal(handle.section.meta({}), '1 assigned', 'the stale suffix is gone with the stall');
+  assert.equal(handle.section.meta({}), '1', 'the stale suffix is gone with the stall');
 });
 
 test('S5 (T10): a failed first read is still ONE error row, and a success clears a stale list', async () => {
@@ -812,7 +871,7 @@ test('S5 (T10): a failed first read is still ONE error row, and a success clears
   assert.equal(handle.snapshot().status, 'ready');
   assert.deepEqual(handle.section.lines({}), [{ label: 'no open issues', tone: 'dim' }],
     'a success after the stale list draws the empty state again');
-  assert.equal(handle.section.meta({}), '0 assigned');
+  assert.equal(handle.section.meta({}), '0');
 });
 
 test('S5: loading, empty and error are rows, never a throw', async () => {
@@ -916,13 +975,14 @@ function graphqlQueryOf(call) {
 
 // A test row becomes the GraphQL node the combined read returns. A row may
 // carry the whole node shape already; the row-level fields are the ones these
-// tests speak in, and `hasPullRequest` becomes the cross-reference source the
-// marker is derived from.
+// tests speak in, and `hasPullRequest`/`pullRequestNumber` become the
+// cross-reference source the marker and its number are derived from.
 function graphqlNode(item) {
   const entry = item && typeof item === 'object' ? item : {};
+  const source = (number) => ({ source: { __typename: 'PullRequest', ...(Number.isInteger(number) ? { number } : {}) } });
   const timeline = entry.timelineItems && Array.isArray(entry.timelineItems.nodes)
     ? entry.timelineItems.nodes
-    : (entry.hasPullRequest === true ? [{ source: { __typename: 'PullRequest' } }] : []);
+    : (entry.hasPullRequest === true ? [source(entry.pullRequestNumber)] : []);
   const labels = entry.labels && typeof entry.labels === 'object' && Array.isArray(entry.labels.nodes)
     ? entry.labels
     : { nodes: Array.isArray(entry.labels) ? entry.labels : [] };
@@ -1070,7 +1130,10 @@ test('S2: with no bridge but events, the ready announcement is subscribed once',
   assert.equal(loaded.commands.has('issues'), true);
 });
 
-test("S6: session_start reads ONLY the assigned issues of the checkout's own repository", async () => {
+// S7 (T8): ONE combined read, and the rail draws the UNION of the two buckets the
+// user named — the issues they authored and the ones they are assigned — merged
+// by number, ordered by `updatedAt` descending, under the bare merged count.
+test("S6/S7 (T8): session_start reads the checkout's mine AND assigned issues, merged under a bare count", async () => {
   const checkout = makeCheckout();
   const { registered } = installBridge();
   const loaded = await loadExtension({});
@@ -1079,6 +1142,13 @@ test("S6: session_start reads ONLY the assigned issues of the checkout's own rep
     issues: [
       { number: 11, title: 'Assigned older', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' },
       { number: 12, title: 'Assigned newer', state: 'OPEN', updatedAt: '2024-06-01T00:00:00Z' },
+      // 13 is BOTH authored and assigned: it is one row, and it is the assigned
+      // one (that is the bucket its click opens). 14 is only authored.
+      { number: 13, title: 'Both thirteen', state: 'OPEN', updatedAt: '2024-07-01T00:00:00Z' },
+    ],
+    mine: [
+      { number: 13, title: 'Both thirteen', state: 'OPEN', updatedAt: '2024-07-01T00:00:00Z' },
+      { number: 14, title: 'Only mine fourteen', state: 'OPEN', updatedAt: '2024-04-01T00:00:00Z' },
     ],
   });
   ghIssues.setGhRunner(gh.runner);
@@ -1089,9 +1159,13 @@ test("S6: session_start reads ONLY the assigned issues of the checkout's own rep
   const section = registered[0];
   const rows = await waitForRows(section, ctx);
 
-  assert.deepEqual(rows.map((row) => row.label), ['#12 Assigned newer', '#11 Assigned older']);
+  assert.deepEqual(rows.map((row) => row.label),
+    ['#13 Both thirteen', '#12 Assigned newer', '#11 Assigned older', '#14 Only mine fourteen'],
+    'one merged list, deduplicated by number, newest first');
+  assert.equal(section.meta(ctx), '4', 'the header is the merged count alone, never `4 assigned`');
   assert.ok(rows.every((row) => !('meta' in row)), 'no row reports a relation');
-  assert.equal(section.meta(ctx), '2 assigned');
+  const snap = section.lines(ctx);
+  assert.equal(snap.length, 4);
 
   const reads = graphqlCalls(gh.calls);
   assert.equal(reads.length, 1, 'exactly one gh call: the combined read, nothing else');
@@ -1102,6 +1176,38 @@ test("S6: session_start reads ONLY the assigned issues of the checkout's own rep
       `the combined read carries ${qualifier}`);
   }
   assert.equal((query.match(/first: 100/g) || []).length, 3, 'the first sync reads 100 per bucket');
+});
+
+// S7 (T8): `truncated` is true when EITHER contributing bucket hit the cache cap:
+// the overflow row's `N+` says the real total is larger than the merged rows.
+test('S7 (T8): a truncated mine bucket alone still writes the overflow count with a +', async () => {
+  const checkout = makeCheckout();
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub({
+    issues: [
+      { number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' },
+    ],
+    mine: issueList(9).map((item, index) => ({
+      number: 100 + index,
+      title: item.title,
+      state: 'OPEN',
+      updatedAt: item.updatedAt,
+    })),
+    // The mine bucket reported more issues than the cache could hold.
+    counts: { mine: 150 },
+  });
+  ghIssues.setGhRunner(gh.runner);
+
+  const ctx = { cwd: checkout, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctx);
+  const section = registered[0];
+  const rows = await waitForRows(section, ctx);
+  assert.equal(rows.length, 8, 'seven merged rows plus the one overflow row');
+  assert.equal(rows[7].label, 'and 3+ more issues',
+    'either contributing bucket being truncated makes the count inexact');
+  assert.equal(section.meta(ctx), '10', 'the header counts the merged rows it has');
 });
 
 test('S4: nine assigned issues paint seven rows plus an overflow row that dispatches /issues once', async () => {
@@ -1133,7 +1239,7 @@ test('S4: nine assigned issues paint seven rows plus an overflow row that dispat
   assert.equal(rows[7].label, 'and 2 more issues');
   assert.equal(rows[7].tone, 'dim');
   assert.equal('meta' in rows[7], false, 'the overflow row carries no meta');
-  assert.equal(section.meta(ctx), '9 assigned', 'the header counts every issue read');
+  assert.equal(section.meta(ctx), '9', 'the header counts every issue read');
   assert.equal(graphqlCalls(gh.calls).length, 1, 'one read, never one per bucket');
 
   rows[7].onClick();
@@ -1171,6 +1277,40 @@ test("S6: a failed scope resolution is one error row and makes no gh call", asyn
   assert.match(rows[0].label, /cannot read this checkout's git configuration/);
   assert.equal(section.meta(ctx), undefined);
   assert.equal(gh.calls.length, 0, 'no gh call runs without a proven identity');
+});
+
+// S12 (T11): a cwd that is not a repository is not an ERROR — nothing is broken,
+// there is simply nothing to read. The rail says so with one short line in the
+// gray tone it already has for secondary text, and names no path: the human
+// knows where they are. The command notices keep their own, fuller sentence.
+test('S12 (T11): a session outside a repository paints one short dim line, and the command keeps its wording', async () => {
+  const notGit = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-not-git-')));
+  const { registered } = installBridge();
+  const notices = [];
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub();
+  ghIssues.setGhRunner(gh.runner);
+
+  const ctx = { cwd: notGit, ui: { notify: (text, level) => { notices.push({ text, level }); } } };
+  await fireSessionStart(loaded.hooks, ctx);
+  assert.equal(registered.length, 1);
+  const section = registered[0];
+  const rows = await waitForRows(section, ctx);
+
+  assert.deepEqual(rows, [{ label: 'not a git repository', tone: 'dim' }],
+    'one short line, no path, no git advice, and never the error tone');
+  assert.equal(section.meta(ctx), undefined, 'and no count');
+  assert.equal(graphqlCalls(gh.calls).length, 0, 'and no issue read runs at all');
+
+  // The command's own notices are untouched by this: `/issues` still says the
+  // full sentence it always did.
+  const notes = [];
+  const commandCtx = { cwd: notGit, ui: { notify: (text, level) => { notes.push([text, level]); } } };
+  await loaded.commands.get('issues').handler('', commandCtx);
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0][0], `not a git repository: ${notGit}; run 'git init' first`,
+    'the command notice keeps its own wording');
 });
 
 // S6: the supersede is synchronous. A session that starts in ANOTHER checkout
@@ -1287,7 +1427,7 @@ test("S6: a session starting in another checkout drops the previous checkout's a
   );
 });
 
-test('S4 (T9): the ONE combined read supplies both the rows and their pull-request markers', async () => {
+test('S8 (T9): the ONE combined read supplies both the rows and the pull-request number each marker draws', async () => {
   const checkout = makeCheckout();
   const { registered } = installBridge();
   const loaded = await loadExtension({});
@@ -1303,11 +1443,12 @@ test('S4 (T9): the ONE combined read supplies both the rows and their pull-reque
     if (argv[0] === 'api' && argv[1] === 'graphql') {
       return okJson(JSON.stringify(relatedAnswer({
         assigned: [
-          { number: 11, title: 'Has a PR', updatedAt: '2024-05-01T00:00:00Z', hasPullRequest: true },
+          { number: 11, title: 'Has a PR', updatedAt: '2024-05-01T00:00:00Z', hasPullRequest: true, pullRequestNumber: 69 },
           { number: 12, title: 'No PR', updatedAt: '2024-06-01T00:00:00Z' },
           { number: 13, title: 'Two PRs', updatedAt: '2024-07-01T00:00:00Z', timelineItems: { nodes: [
-            { source: { __typename: 'Issue' } },
-            { source: { __typename: 'PullRequest' } },
+            { source: { __typename: 'Issue', number: 5 } },
+            { source: { __typename: 'PullRequest', number: 70 } },
+            { source: { __typename: 'PullRequest', number: 71 } },
           ] } },
         ],
       })));
@@ -1323,12 +1464,12 @@ test('S4 (T9): the ONE combined read supplies both the rows and their pull-reque
 
   const rows = section.lines(ctx);
   assert.deepEqual(rows.map((row) => row.label), ['#13 Two PRs', '#12 No PR', '#11 Has a PR']);
-  assert.equal(rows[0].meta, '\ue726', 'two pull requests mark the row exactly like one');
+  assert.equal(rows[0].meta, '#70', 'an issue with several pull requests marks the FIRST number');
   assert.equal('meta' in rows[1], false, 'an issue no pull request references carries no marker');
-  assert.equal(rows[2].meta, '\ue726');
+  assert.equal(rows[2].meta, '#69');
   assert.deepEqual(rows.map((row) => row.tone), ['text', 'text', 'text'],
-    'the marker never turns a row into an accent');
-  assert.equal(section.meta(ctx), '3 assigned', 'the marker never changes the count');
+    'only the meta column is gray: the row keeps the plain text tone');
+  assert.equal(section.meta(ctx), '3', 'the marker never changes the count');
 
   // T14: the marker read T9 introduced is gone — the same read that returns the
   // rows returns their cross-reference facts, so there is no second call.
@@ -1347,6 +1488,8 @@ test('S4 (T9): the ONE combined read supplies both the rows and their pull-reque
   }
   assert.ok(query.includes('timelineItems(first: 10, itemTypes: [CROSS_REFERENCED_EVENT])'),
     'the marker selection rides each row');
+  assert.ok(query.includes('... on PullRequest { number }'),
+    'and the selection asks for the number the mark prints (S8)');
 });
 
 // T14 rewrote this test: its old premise — a separate marker read that fails
@@ -1361,7 +1504,7 @@ test('S4 (T9): a row without a cross-referenced pull request carries no marker a
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub({
     issues: [
-      { number: 11, title: 'Has a PR', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z', hasPullRequest: true },
+      { number: 11, title: 'Has a PR', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z', hasPullRequest: true, pullRequestNumber: 69 },
       { number: 12, title: 'No PR', state: 'OPEN', updatedAt: '2024-06-01T00:00:00Z' },
     ],
   });
@@ -1376,9 +1519,9 @@ test('S4 (T9): a row without a cross-referenced pull request carries no marker a
   assert.deepEqual(rows.map((row) => row.label), ['#12 No PR', '#11 Has a PR'],
     'the rows are the combined read\'s own');
   assert.equal('meta' in rows[0], false, 'the decoration is simply absent');
-  assert.equal(rows[1].meta, '\ue726', 'the row with a pull request keeps its one marker');
+  assert.equal(rows[1].meta, '#69', 'the row with a pull request carries its number');
   const meta = section.meta(ctx);
-  assert.equal(meta, '2 assigned', 'the section stays ready, never stale');
+  assert.equal(meta, '2', 'the section stays ready, never stale');
   assert.ok(!String(meta).includes('stale'), 'a decoration never reports a stall');
 });
 
@@ -1546,9 +1689,10 @@ test('S4 (T4/T12): a single-remote checkout lists its issues, and a row click op
 });
 
 // T12: the deferred click contract is unchanged — off the paint path, a recorded
-// `{ ok, error }`, never a throw — and a host with no dispatch route refuses with
-// NOTHING dispatched. No browser open runs and the ready list is never lost.
-test('S4 (T12): a host with no sendUserMessage refuses the click and dispatches nothing', async () => {
+// `{ ok, error }`, never a throw. T10 (S9) adds the one thing the old shape
+// lacked: a host that cannot dispatch is TOLD so visibly, never by a silent
+// snapshot field alone.
+test('S9 (T10): a host that cannot dispatch leaves a visible transcript entry, never silence', async () => {
   const checkout = makeCheckout();
   const { registered } = installBridge();
   const loaded = await loadExtension({});
@@ -1573,13 +1717,17 @@ test('S4 (T12): a host with no sendUserMessage refuses the click and dispatches 
     const section = registered[0];
     const rows = await waitForRows(section, ctx);
     assert.equal(rows[0].label, '#11 Assigned one');
-    // The click returns immediately and never throws; the refusal is recorded.
+    // The click returns immediately and never throws; the refusal is both
+    // recorded for a caller AND appended as one transcript entry.
     assert.equal(rows[0].onClick(), undefined, 'the deferred click never throws at the caller');
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.deepEqual(opened, [], 'no browser open runs when the host cannot dispatch');
+    assert.equal(loaded.entries.length, 1, 'the refusal is one visible transcript entry');
+    assert.match(String(loaded.entries[0].data && loaded.entries[0].data.line),
+      /cannot dispatch the \/issues command/, 'the entry names the refusal');
     assert.deepEqual(section.lines(ctx).map((row) => row.label), ['#11 Assigned one'],
       'the recorded refusal never turns the ready list into an error row');
-    assert.equal(section.meta(ctx), '1 assigned', 'and the header still counts the list it has');
+    assert.equal(section.meta(ctx), '1', 'and the header still counts the list it has');
   } finally {
     worktreeGit.runArgvAsync = original;
   }
@@ -1788,14 +1936,13 @@ test('S4: a row retained across a checkout change opens the identity it was buil
 
 // T12 wrote this test to assert that a row retained across a checkout change
 // dispatched `/issues 11` — the number alone, so the panel proved its own
-// repository. T17 (E17a) found what that silently did: checkout B has an issue
-// #11 too, so the panel opened B's #11 while the human had clicked A's. The
-// row's identity is now compared with the identity THIS checkout proves before
-// anything is dispatched, so the retained click dispatches NOTHING and the
-// current checkout's list survives it. The old assertion (a dispatch, no
-// browser, no repository on the command line) is impossible to keep: E17 makes
-// the dispatch itself the defect.
-test('S4 (T17): a retained row from another checkout dispatches nothing', async () => {
+// repository. T17 (E17a) then compared the row's identity with this checkout's
+// before dispatching, and T10 (S9) removes that second proof again: the panel
+// pins and proves the identity itself when it opens (invariant 6), and the
+// pre-dispatch proof was exactly what left a click dead with no visible effect.
+// What is left — and what this test states — is the dispatch itself: the number
+// alone travels, and whatever repository the click came from, the panel decides.
+test('S9 (T10): a retained row dispatches its number, and the panel proves its own identity', async () => {
   const checkoutA = makeCheckout([
     ['origin', 'git@github.com:myfork/project-a.git'],
     ['upstream', 'git@github.com:original/project-a.git'],
@@ -1857,28 +2004,26 @@ test('S4 (T17): a retained row from another checkout dispatches nothing', async 
     );
 
     // The host still holds A's frame, so this click happens after B's snapshot
-    // landed — the exact window the finding lived in.
+    // landed. The click dispatches the NUMBER alone — the panel is what proves
+    // the repository it opens, exactly like a plain `/issues 11` typed by hand.
     rowA.onClick();
-    // Nothing observable completes a refused click, so the proof gets a turn of
-    // its own before the assertion.
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await waitFor(() => sent.length > 0, 'the retained row never dispatched /issues');
 
-    assert.deepEqual(sent, [], 'a row built from another checkout opens nothing');
+    assert.deepEqual(sent, [{ text: '/issues 11', opts: { expandPromptTemplates: true } }],
+      'the click dispatches the number alone, with no repository on the command line');
     assert.deepEqual(opened, [], 'and opens no browser');
     assert.ok(section.lines(ctxB).some((row) => row.label === '#11 B eleven'),
-      'the refusal never grows the list the current checkout is showing');
-    assert.equal(section.meta(ctxB), '1 assigned', 'and the header still counts it');
+      'the ready list is never disturbed by the click');
+    assert.equal(section.meta(ctxB), '1', 'and the header still counts it');
   } finally {
     worktreeGit.runArgvAsync = original;
   }
 });
 
-// T17 (E17a): the seam's answer, and the two cases a row cannot produce through
-// this extension. The seam is exported for exactly this contract (like the
-// other test seams in the extension): the extension's own loader ALWAYS answers
-// a proven identity, so the fresh-row case (a click that carries none) and the
-// unprovable one have no other public route. Both load the extension the way the
-// host does, with a stub `pi`.
+// T10 (S9): the seam's answer. The seam is exported for exactly this contract
+// (like the other test seams in the extension): it is the function the row click
+// defers, and it is where the click's whole behaviour is observable without a
+// host. It loads the extension the way the host does, with a stub `pi`.
 async function loadSeam(pi = {}) {
   process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
   const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-seam-')));
@@ -1897,70 +2042,73 @@ async function loadSeam(pi = {}) {
   return { mod, hooks };
 }
 
-test('S4 (T17): a click whose row names another checkout dispatches nothing and says why', async () => {
+// T10 (S9) part 1: the pre-dispatch proof is gone. A row click dispatches
+// `/issues <n>` synchronously — no awaited checkout probe, no generation check —
+// because the panel pins and proves the identity itself when it opens. The proof
+// was the thing that left a click dead with no visible effect: it awaited git
+// (and, on a single-remote checkout, `gh`) and its failures only reached a field
+// nothing draws.
+test('S9 (T10): a click dispatches `/issues <n>` synchronously, with no awaited identity read', async () => {
   const checkout = makeCheckout();
   const sent = [];
   const dispatch = { sendUserMessage: (text, opts) => { sent.push({ text, opts }); } };
   const { mod, hooks } = await loadSeam(dispatch);
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
-  const gh = sectionGithub({});
-  ghIssues.setGhRunner(gh.runner);
-
-  const ctx = { cwd: checkout, ui: { notify: () => {} } };
-  await fireSessionStart(hooks, ctx);
-
-  // This checkout proves `github.com/myfork/project`; the row says it came from
-  // another one.
-  const outcome = await mod.dispatchIssuesPanel(dispatch, 11, 'github.com/other/project');
-  assert.equal(outcome.ok, false, 'a number from another checkout is refused');
-  assert.match(outcome.error, /belongs to another checkout/,
-    'the refusal says whose list the click came from');
-  assert.match(outcome.error, /the \/issues panel was not opened/,
-    'and says nothing was opened');
-  assert.deepEqual(sent, [], 'nothing is dispatched for a number this checkout cannot prove');
-
-  // The same seam with the identity this checkout DOES prove opens the panel the
-  // way it always did: the comparison is the only new step.
-  const matched = await mod.dispatchIssuesPanel(dispatch, 11, 'github.com/myfork/project');
-  assert.deepEqual(matched, { ok: true });
-  assert.deepEqual(sent, [{ text: '/issues 11', opts: { expandPromptTemplates: true } }],
-    'a row of this checkout dispatches the panel command for that issue');
+  ghIssues.setGhRunner(sectionGithub({}).runner);
+  const worktreeGit = require(path.join(LIB_DIR, 'worktree-git.js'));
+  const reads = [];
+  const original = worktreeGit.runArgvAsync;
+  worktreeGit.runArgvAsync = async (bin, argv, opts) => {
+    reads.push({ bin, argv: argv.slice() });
+    return original(bin, argv, opts);
+  };
+  try {
+    await fireSessionStart(hooks, { cwd: checkout, ui: { notify: () => {} } });
+    const before = reads.length;
+    // A row names a repository, and this one names another checkout: neither
+    // fact is read on this path any more, and the dispatch happens before the
+    // call returns — it is not a promise to await.
+    const outcome = mod.dispatchIssuesPanel(dispatch, 11, 'github.com/other/project', 'mine');
+    assert.deepEqual(outcome, { ok: true }, 'the click answers at once');
+    assert.deepEqual(sent, [{ text: '/issues 11', opts: { expandPromptTemplates: true } }],
+      'the number alone reaches the panel');
+    assert.equal(reads.length, before, 'no checkout identity is read on the click path');
+  } finally {
+    worktreeGit.runArgvAsync = original;
+  }
 });
 
-test('S4 (T17): a click that cannot prove the current checkout dispatches nothing', async () => {
-  const checkout = makeCheckout();
-  const sent = [];
-  const dispatch = { sendUserMessage: (text, opts) => { sent.push({ text, opts }); } };
-  const { mod, hooks } = await loadSeam(dispatch);
+// T10 (S9) part 1, second half: a host that truly cannot dispatch is told so,
+// visibly. The first surface is the host's own transcript entry seam; a host
+// without it gets the notice seam instead. The snapshot field keeps recording
+// the outcome, but it is never the only place the refusal lands.
+test('S9 (T10): a host with no sendUserMessage appends the refusal as a transcript entry', async () => {
+  const entries = [];
+  const host = { appendEntry: (customType, data) => { entries.push({ customType, data }); } };
+  const { mod } = await loadSeam(host);
+  const outcome = mod.dispatchIssuesPanel(host, 11);
+  assert.equal(outcome.ok, false, 'the refusal is still reported to the caller');
+  assert.match(outcome.error, /cannot dispatch the \/issues command/);
+  assert.equal(entries.length, 1, 'exactly one visible entry, never silence');
+  assert.match(String(entries[0].data && entries[0].data.line), /cannot dispatch the \/issues command/,
+    'the entry carries the refusal the caller got');
+});
+
+test('S9 (T10): with no entry seam, the refusal reaches the host notice seam', async () => {
+  const notices = [];
+  const host = { appendEntry: undefined };
+  const { mod, hooks } = await loadSeam(host);
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
-  const gh = sectionGithub({});
-  ghIssues.setGhRunner(gh.runner);
-
-  // The session moves to a directory no git checkout backs, so there is no
-  // identity to compare against — which is not the same thing as a match.
-  const elsewhere = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-not-git-')));
-  await fireSessionStart(hooks, { cwd: checkout, ui: { notify: () => {} } });
-  await fireSessionStart(hooks, { cwd: elsewhere, ui: { notify: () => {} } });
-
-  const outcome = await mod.dispatchIssuesPanel(dispatch, 11, 'github.com/myfork/project');
-  assert.equal(outcome.ok, false, 'an unprovable checkout refuses the click');
-  assert.match(outcome.error, /belongs to another checkout/);
-  assert.match(outcome.error, /the \/issues panel was not opened/);
-  assert.deepEqual(sent, [], 'nothing is dispatched when the proof fails');
-});
-
-test('S4 (T17): a row that carries no identity still opens its issue', async () => {
-  const sent = [];
-  const dispatch = { sendUserMessage: (text, opts) => { sent.push({ text, opts }); } };
-  const { mod } = await loadSeam(dispatch);
-
-  // A caller with nothing to compare is the fresh-row path: no proof runs, so it
-  // works with no session context and no checkout at all, and behaves exactly as
-  // the click did before E17.
-  const outcome = await mod.dispatchIssuesPanel(dispatch, 11, undefined);
-  assert.deepEqual(outcome, { ok: true });
-  assert.deepEqual(sent, [{ text: '/issues 11', opts: { expandPromptTemplates: true } }],
-    'a row without an identity is dispatched as the click always was');
+  ghIssues.setGhRunner(sectionGithub({}).runner);
+  const checkout = makeCheckout();
+  await fireSessionStart(hooks, {
+    cwd: checkout,
+    ui: { notify: (text, level) => { notices.push({ text, level }); } },
+  });
+  const outcome = mod.dispatchIssuesPanel(host, 11);
+  assert.equal(outcome.ok, false);
+  assert.ok(notices.some((notice) => /cannot dispatch the \/issues command/.test(notice.text)),
+    'a host with only a notice seam is told there too');
 });
 
 test('S6: a read in flight at session_shutdown never repaints the rail', async () => {
@@ -2310,7 +2458,7 @@ test('S9 (T14): an issue that left the assigned set makes the next refresh a ful
       () => section.lines(ctx).map((row) => row.label).join('|') === '#12 Twelve',
       'the full read never replaced the bucket',
     );
-    assert.equal(section.meta(ctx), '1 assigned');
+    assert.equal(section.meta(ctx), '1');
   } finally {
     Date.now = realNow;
   }
@@ -2360,7 +2508,7 @@ test('S9 (T14): a failed read keeps the cache and the section stale, so the next
     await fireSessionStart(loaded.hooks, ctx);
     const section = registered[0];
     await waitForRows(section, ctx);
-    assert.equal(section.meta(ctx), '2 assigned');
+    assert.equal(section.meta(ctx), '2');
 
     offset = 61000;
     section.lines(ctx);
@@ -2715,73 +2863,43 @@ test('S6/S9 (T16): a checkout switch cuts the previous read out of the cache', a
   );
   assert.ok(!section.lines(ctxB).some((row) => row.label === '#11 Left behind'),
     "the previous checkout's rows never survive the move");
-  assert.match(section.meta(ctxB), /^1 assigned/, 'the header counts only the moved session rows');
+  assert.match(section.meta(ctxB), /^1$/, 'the header counts only the moved session rows');
 });
 
-// E18 (S4, verify round 5 blocker a): the click's identity proof runs asynchronously
-// and the session can move to another checkout while it does. The proof for A says
-// nothing about B, so a click whose proof outlived its session must dispatch
-// NOTHING — the reproduced defect was A's proof releasing into `/issues 11` for B,
-// where B's own #11 would then open silently.
-//
-// The seam is the extension's own (`dispatchIssuesPanel`, exported for exactly this
-// contract like the other test seams): it is the function the row click defers.
-test('S4 (E18): a proof still running when the session moves dispatches nothing', async () => {
-  // Two checkouts of the SAME repository: the identity comparison passes for both,
-  // so a refusal can only come from the session itself having moved.
+// T10 (S9): the pre-dispatch proof E18 described is gone, so there is no window
+// in which a proof can outlive its session. The click is synchronous: it answers
+// before any session boundary can move, and the number alone travels — the panel
+// is the one surface that pins and proves the repository it opens. This states
+// the removal, so a proof creeping back onto the click path fails here.
+test('S9 (T10): the click path holds no proof a session move could outlive', async () => {
   const checkoutA = makeCheckout([['origin', 'git@github.com:myfork/project.git']]);
   const checkoutB = makeCheckout([['origin', 'git@github.com:myfork/project.git']]);
   const sent = [];
   const dispatch = { sendUserMessage: (text, opts) => { sent.push({ text, opts }); } };
   const { mod, hooks } = await loadSeam(dispatch);
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
-  const gh = sectionGithub({ repoView: 'myfork/project' });
-  ghIssues.setGhRunner(gh.runner);
-
+  ghIssues.setGhRunner(sectionGithub({ repoView: 'myfork/project' }).runner);
   await fireSessionStart(hooks, { cwd: checkoutA, ui: { notify: () => {} } });
 
-  // Baseline (the rule keeps working): the same click with no session change in
-  // between dispatches the panel exactly as it always did.
-  const settled = await mod.dispatchIssuesPanel(dispatch, 11, 'github.com/myfork/project');
-  assert.deepEqual(settled, { ok: true });
-  assert.deepEqual(sent, [{ text: '/issues 11', opts: { expandPromptTemplates: true } }],
-    'a click with no session change dispatches its issue');
-
-  // The proof is HELD: the checkout's own git read waits until the test releases it.
   const worktreeGit = require(path.join(LIB_DIR, 'worktree-git.js'));
   const original = worktreeGit.runArgvAsync;
-  let holdNext = false;
-  let release = () => {};
-  const gate = new Promise((resolve) => { release = resolve; });
+  const held = [];
   worktreeGit.runArgvAsync = async (bin, argv, opts) => {
-    if (holdNext && bin === 'git' && argv[0] === 'rev-parse' && argv[1] === '--show-toplevel') {
-      holdNext = false;
-      await gate;
+    if (bin === 'git' && argv[0] === 'rev-parse' && argv[1] === '--show-toplevel') {
+      held.push({ bin, argv: argv.slice() });
     }
     return original(bin, argv, opts);
   };
-
   try {
-    holdNext = true;
-    const clicking = mod.dispatchIssuesPanel(dispatch, 11, 'github.com/myfork/project');
-    // The session moves to the other checkout while that proof is in flight.
-    await fireSessionStart(hooks, { cwd: checkoutB, ui: { notify: () => {} } });
-    release();
-    const outcome = await clicking;
-
-    assert.equal(outcome.ok, false, 'a proof that outlived its session dispatches nothing');
-    assert.match(outcome.error, /another checkout/,
-      'the refusal says the session changed checkout');
-    assert.match(outcome.error, /the \/issues panel was not opened/,
-      'and says nothing was opened');
+    // The click answers BEFORE the session moves, and the move that follows
+    // changes nothing: the dispatch already happened, in the session that made it.
+    const outcome = mod.dispatchIssuesPanel(dispatch, 11, 'github.com/myfork/project');
+    assert.deepEqual(outcome, { ok: true });
     assert.deepEqual(sent, [{ text: '/issues 11', opts: { expandPromptTemplates: true } }],
-      'no second dispatch: the number proved under the old session never reaches the new one');
-
-    // The same click in the settled session dispatches again: the guard is the
-    // boundary itself, never a lockout.
-    const again = await mod.dispatchIssuesPanel(dispatch, 11, 'github.com/myfork/project');
-    assert.deepEqual(again, { ok: true });
-    assert.equal(sent.length, 2, 'a click made inside the current session still opens the panel');
+      'the click dispatched its issue');
+    await fireSessionStart(hooks, { cwd: checkoutB, ui: { notify: () => {} } });
+    assert.deepEqual(held, [], 'no checkout proof ran on the click path');
+    assert.equal(sent.length, 1, 'a later session move never re-dispatches or drops it');
   } finally {
     worktreeGit.runArgvAsync = original;
   }

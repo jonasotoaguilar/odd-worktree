@@ -360,6 +360,12 @@ test('with only our resolver registered, a codegraph command is OUR card, wearin
   assert.ok(heading.includes('init'), 'the command itself is the heading detail');
   assert.doesNotMatch(heading, /host bash call/, 'the host\'s row was not used');
 
+  // The input after the program is the detail, an argument after the subcommand included.
+  const argued = slot.renderCall({ command: 'codegraph status .' }, taggedTheme, { isPartial: false }).render(60).map(stripAnsi).join('\n');
+  assert.ok(argued.includes(`${identity.glyph} codegraph`), `the same identity for a subcommand with an argument in "${argued}"`);
+  assert.ok(argued.includes('status .'), 'the subcommand and its argument are the detail');
+  assert.doesNotMatch(argued, /\$ bash/, 'the row never reads as the generic bash card');
+
   // And its output is this card's body, not the host's result row.
   const body = slot.renderResult(textResult('┌  Initializing CodeGraph\n└  Done'), { expanded: true, isPartial: false }, plainTheme, { args: { command: 'codegraph init' } }).render(60).map(stripAnsi).join('\n');
   assert.match(body, /Initializing CodeGraph/);

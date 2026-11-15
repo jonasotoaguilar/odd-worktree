@@ -1508,8 +1508,9 @@ describe('fork scope (S5)', () => {
 // separate pull-request marker read (T9's `listIssuePullRequestReferences`). It
 // is one `gh api graphql` request with three aliased searches, each in the same
 // `repo:<owner>/<name> is:issue is:open` scope, and every row is normalized like
-// a panel row. The marker fact rides the same node selection, so it costs no
-// extra call, and every failure shape is `{ ok: false }`.
+// a panel row. The marker fact — and its number (T9, S8) — rides the same node
+// selection, so it costs no extra call, and every failure shape is
+// `{ ok: false }`.
 // ---------------------------------------------------------------------------
 describe('listRelatedIssues: one combined read of the three scoped views', () => {
   const IDENTITY = 'github.com/myfork/project';
@@ -1588,6 +1589,13 @@ describe('listRelatedIssues: one combined read of the three scoped views', () =>
     assert.ok(query.includes('issueCount'), 'each alias reports its exact count');
     assert.ok(query.includes('timelineItems(first: 10, itemTypes: [CROSS_REFERENCED_EVENT])'),
       'the pull-request marker rides the same node selection');
+    // T9 (S8): the marker is a NUMBER, so the cross-referenced source carries it.
+    assert.ok(query.includes('... on PullRequest { number }'),
+      'the pull-request source selection asks for its number');
+    // T10 (S9): the row the rail caches is the panel\'s seed, so it carries the
+    // assignees the first frame shows.
+    assert.ok(query.includes('assignees(first: 10) { nodes { login } }'),
+      'the row selection carries the assignees a seeded first frame shows');
 
     assert.deepEqual(Object.keys(result.buckets).sort(), ['assigned', 'involved', 'mine']);
     assert.equal(result.buckets.mine.issueCount, 1);
@@ -1625,19 +1633,20 @@ describe('listRelatedIssues: one combined read of the three scoped views', () =>
     assert.equal(row.isPullRequest, false);
   });
 
-  test('derives hasPullRequest from PullRequest sources only', async () => {
+  test('derives hasPullRequest and its number from PullRequest sources only', async () => {
     ghIssues.setGhRunner(async () => okJson(relatedJson({
       assigned: [
-        issueNode(11, { timelineItems: { nodes: [{ source: { __typename: 'PullRequest' } }] } }),
+        issueNode(11, { timelineItems: { nodes: [{ source: { __typename: 'PullRequest', number: 69 } }] } }),
         issueNode(12, {
           timelineItems: {
             nodes: [
-              { source: { __typename: 'Issue' } },
-              { source: { __typename: 'PullRequest' } },
+              { source: { __typename: 'Issue', number: 5 } },
+              { source: { __typename: 'PullRequest', number: 70 } },
+              { source: { __typename: 'PullRequest', number: 71 } },
             ],
           },
         }),
-        issueNode(13, { timelineItems: { nodes: [{ source: { __typename: 'Issue' } }] } }),
+        issueNode(13, { timelineItems: { nodes: [{ source: { __typename: 'Issue', number: 6 } }] } }),
         issueNode(14, { timelineItems: { nodes: [] } }),
       ],
     })));
@@ -1649,6 +1658,32 @@ describe('listRelatedIssues: one combined read of the three scoped views', () =>
       [true, true, false, false],
       'one or many pull requests are the same true, and an Issue source is false',
     );
+    // S8 (T9): the row carries the number, and the FIRST one when an issue has
+    // several pull requests; an issue source or no reference is `null`, never a
+    // number nobody opened.
+    assert.deepEqual(
+      result.buckets.assigned.issues.map((row) => row.pullRequestNumber),
+      [69, 70, null, null],
+      'the first pull-request number rides the row, and an issue reference is none',
+    );
+  });
+
+  // T10 (S9): the rail's cached row IS the panel's first frame, so the assignees
+  // the connect-shaped answer carries are normalized onto it exactly like the
+  // detail read's `assignees` array.
+  test('normalizes a connection-shaped assignee list onto the row', async () => {
+    ghIssues.setGhRunner(async () => okJson(relatedJson({
+      assigned: [
+        issueNode(21, { assignees: { nodes: [{ login: 'ana' }, { login: 'beto' }] } }),
+        issueNode(22),
+      ],
+    })));
+    const result = await ghIssues.listRelatedIssues({ first: 20 }, { scope: IDENTITY });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.buckets.assigned.issues[0].assignees, ['ana', 'beto'],
+      'the row carries the assignees as logins');
+    assert.deepEqual(result.buckets.assigned.issues[1].assignees, [],
+      'a row the answer did not assign carries none, never undefined');
   });
 
   test('every failure shape is { ok: false } and never a throw', async () => {

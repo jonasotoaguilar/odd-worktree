@@ -95,6 +95,14 @@ test('the CodeGraph card is registered once through the host hook, with the exte
   assert.deepEqual(registered, ['resolver'], 'the hook is looked up when it is used');
 });
 
+test('S6: the CodeGraph card gets the session cwd through a live seam', async () => {
+  const { calls, run } = setup();
+  assert.equal(typeof calls.card[0].cwd, 'function', 'the card factory is handed a cwd seam');
+  assert.equal(calls.card[0].cwd(), undefined, 'unknown until the session says');
+  await run('session_start', { reason: 'startup' });
+  assert.equal(calls.card[0].cwd(), '/work/repo', 'the seam answers with the session checkout');
+});
+
 test('a host without the renderer hook is given no registration to call', () => {
   const { calls } = setup();
   assert.equal(calls.card[0].registerToolRenderer('x'), undefined, 'a missing hook is a no-op, never a throw');
@@ -160,7 +168,7 @@ test('a compaction asks for one sync of the session checkout', async () => {
   assert.equal(calls.compaction[0].cwd, '/work/repo');
 });
 
-test('a successful native init is followed by one coordinated sync and its outcome is appended to the result', async () => {
+test('S4: a successful native init is followed by one coordinated sync and appends nothing to the result', async () => {
   const { calls, run } = setup();
   const patch = await run('tool_result', {
     toolName: 'codegraph',
@@ -170,9 +178,23 @@ test('a successful native init is followed by one coordinated sync and its outco
   });
   assert.equal(calls.init.length, 1);
   assert.equal(calls.init[0].cwd, '/work/repo');
-  assert.equal(patch.content.length, 2);
-  assert.equal(patch.content[0].text, 'initialized', 'the tool result is kept whole');
-  assert.match(patch.content[1].text, /sync completed/);
+  assert.equal(patch, undefined, "the tool's own content is the whole answer");
+});
+
+test('S4: a post-init sync that did not complete appends one short line naming the failure', async () => {
+  const { run } = setup({ impl: { syncAfterNativeInit: async () => 'failed' } });
+  const patch = await run('tool_result', {
+    toolName: 'codegraph',
+    input: { operation: 'init' },
+    isError: false,
+    content: [{ type: 'text', text: 'initialized' }],
+  });
+  assert.equal(patch.content.length, 2, 'one extra part, not a paragraph');
+  assert.deepEqual(patch.content[0], { type: 'text', text: 'initialized' }, 'the tool result keeps its own words first');
+  assert.equal(patch.content[1].text.includes('\n'), false, 'one line');
+  assert.doesNotMatch(patch.content[1].text, /pi-odd-worktree/);
+  assert.match(patch.content[1].text, /failed/);
+  assert.match(patch.content[1].text, /not confirmed current|may be behind/);
 });
 
 test('a failed init, another operation or another tool changes nothing and starts no sync', async () => {
@@ -187,11 +209,13 @@ test('a failed init, another operation or another tool changes nothing and start
   assert.equal(calls.init.length, 0);
 });
 
-test('a read-only role gets the skipped line and no sync', async () => {
+test('S4: a read-only role gets the one skipped line and no sync', async () => {
   const { calls, run } = setup({ env: { GENTLE_PI_AGENTS_CHILD: '1', GENTLE_PI_AGENTS_REQUESTED_TOOLS: 'read,bash,codegraph' } });
   const patch = await run('tool_result', { toolName: 'codegraph', input: { operation: 'init' }, isError: false, content: [] });
   assert.equal(calls.init.length, 0);
+  assert.equal(patch.content.length, 1);
   assert.match(patch.content[0].text, /read-only/);
+  assert.equal(patch.content[0].text.includes('\n'), false, 'one short line');
 });
 
 test('an init aimed at another checkout is left to its own index', async () => {

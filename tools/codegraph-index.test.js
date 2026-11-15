@@ -953,17 +953,25 @@ test('S3: the warm-up outcome is reported apart from the index one', () => {
   assert.deepEqual(warmOutcomeNotice('failed', 'C:\\p'), { text: `CodeGraph warm-up failed in C:\\p`, level: 'warning' });
 });
 
-test('S3: the post-init note never calls an unconfirmed index current', () => {
-  assert.match(postInitSyncNotice('completed'), /one coordinated index sync completed/);
+test('S4: a completed post-init sync appends nothing, and a sync that did not complete is one short line', () => {
+  assert.equal(postInitSyncNotice('completed'), undefined, 'the tool result stays the whole answer when the sync completed');
+  for (const outcome of ['pending', 'failed', 'unavailable', 'skipped-read-only']) {
+    const notice = postInitSyncNotice(outcome);
+    assert.equal(typeof notice, 'string', outcome);
+    assert.equal(notice.includes('\n'), false, `${outcome}: one line, no second paragraph`);
+    assert.doesNotMatch(notice, /pi-odd-worktree/, `${outcome}: no plugin prefix`);
+    assert.doesNotMatch(notice, /coordinated index sync completed/, `${outcome}: a completed sync is the only thing that says completed`);
+  }
   assert.match(postInitSyncNotice('pending'), /pending/);
   assert.match(postInitSyncNotice('pending'), /not confirmed current/);
   assert.doesNotMatch(postInitSyncNotice('pending'), /synced|up to date/i);
   assert.match(postInitSyncNotice('failed'), /failed; this index may be behind/);
   assert.doesNotMatch(postInitSyncNotice('failed'), /synced/);
-  assert.match(postInitSyncNotice('unavailable'), /no coordinated sync could be started/);
+  assert.match(postInitSyncNotice('unavailable'), /could not start/);
   assert.match(postInitSyncNotice('unavailable'), /not confirmed current/);
   assert.doesNotMatch(postInitSyncNotice('unavailable'), /synced/);
-  assert.match(postInitSyncNotice('skipped-read-only'), /no sync was requested: this session's role is read-only/);
+  assert.match(postInitSyncNotice('skipped-read-only'), /read-only/);
+  assert.match(postInitSyncNotice('skipped-read-only'), /not confirmed current/);
 });
 
 test('S2: the index root is the nearest directory at or above the cwd holding the database', () => {
@@ -1117,7 +1125,7 @@ test('S6: a read-only role starts no index write at all, and its tool result say
   });
   assert.equal(outcome, 'skipped-read-only');
   assert.equal(asked, false, 'the coordination is not even asked');
-  assert.match(postInitSyncNotice(outcome), /no sync was requested: this session's role is read-only/);
+  assert.match(postInitSyncNotice(outcome), /read-only/);
 });
 
 test('S3: an init that left no index requests nothing, because syncing a missing index would fail', async () => {

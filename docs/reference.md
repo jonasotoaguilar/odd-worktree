@@ -448,9 +448,17 @@ filled box under either of them.
   would have.
 - A host without the tool-renderer hook, or without a usable measurement seam,
   keeps drawing its own bash rows: the card is cosmetic and announces nothing.
-- The gentle-shell reference's per-row reveal meter and its `activity|output`
-  sub-modes are deliberately not ported. The toggle here is
-  ours-versus-the-host's, and the body is the output.
+- The gentle-shell reference's per-row reveal meter is dropped, not deferred: a
+  collapsed card already states whether its input was folded (`…` on the row and a
+  `… +N lines` suffix), so a measurement deciding whether to OFFER the expand key
+  answers a question the drawing already answers. Its `activity|output` sub-modes are
+  not ported either. The toggle here is ours-versus-the-host's, and the body is the
+  output.
+- A collapsed body states the last three output lines and does **not** announce the
+  cut, so a two-line output and a two-hundred-line one draw the same body. Expansion
+  is how a reader sees the rest; the count was left out on purpose, because the four
+  limits above are about what the card refuses to claim and this one is about what it
+  declines to add.
 - `default` is a drawing preference, not a guard: it never makes anything run or
   stop running.
 

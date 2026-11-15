@@ -89,7 +89,8 @@ The question this page answers: which rules must every change preserve, and what
    (with `--force` only when the caller asked) and the branch is kept. No other
    application is closed, opened or removed on any path — including the panel's
    create and `worktree_create`, which use git and the canonical directory alone.
-   The post-merge cleanup of an ODD uses that same argv: an agent removes its
+   The post-merge cleanup of an ODD uses that same argv: an agent first updates the
+   default branch, then removes its
    checkout with `git worktree remove <absolute path>` once the branch tip is an
    ancestor of `origin/<default>` and the tree is clean, and the branch survives.
    It is reported and skipped — never forced — when the checkout is dirty or when a

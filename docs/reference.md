@@ -350,15 +350,25 @@ the elapsed time are identical in both; only the chrome differs.
   between renders.
 - **The tone is a theme role, never a colour.** A card paints the state's own
   theme role everywhere: the frame — the neon `╭ ╮ ╰ ╯` rule and the `float` `▎`
-  rail alike — carries `success` when a call settles, `warning` while it runs or
-  for `/warp`'s confirmation, `error` when it fails, and the plain `border` for an
-  informational card. The heading label carries the same role, except on the
+  rail alike — carries `warning` for the two worktree tools, running or settled, and
+  for `/warp`'s confirmation, `error` when a call fails, and the plain `border` for
+  an informational card. The CodeGraph card is the one exception: it paints its whole
+  box in its own `mdCode` role, and a running call still wears `warning` and a failed
+  one `error`. The heading label carries the same role, except on the
   informational card, whose label is the theme's `accent` on its plain border. A
   tool result's body is the theme's own `text` — and so is every row of `/warp`'s
   confirmation card — so a card's content never borrows the chrome's tone. The
   float band paints the tone's background role
   (`toolSuccessBg`, `toolPendingBg` for a running call, `toolErrorBg` for a
   failure). No hex value and no escape sequence is written by this package.
+- **The card content level decides how much a collapsed card shows.** Gentle Shell
+  publishes the level (`default` or `minimal`) and every card reads it on each paint,
+  so a switch applies to the next paint. At `default` a collapsed card shows its
+  heading and at most three body rows; at `minimal` it is the heading alone, closed by
+  the rule that carries the elapsed time. A failure still says why at either level,
+  and `ctrl+o` expands any card to everything. A host without Gentle Shell reads as
+  `default`. This holds for `worktree_create`, `worktree_list`, `/warp` and the
+  CodeGraph card alike.
 - **A row is clipped while it is still plain, and painted after.** Text is
   wrapped, clipped to the card's inner width (with the `…` mark) and padded first;
   the role wraps that result and nothing this package painted is measured again.
@@ -439,9 +449,10 @@ Preparing's mark carries one trailing space of its own: U+2692 is painted two
 cells wide by an emoji-fallback font while the host counts it as one, so the
 heading's counted width matches what the terminal paints.
 
-Among the segments of one command the strongest identity wins: a deletion first,
-then a check, a remote write, a history change, a rewrite, a build-up, and
-CodeGraph just above plain inspection.
+Among the segments of one command a deletion wins first, then CodeGraph: a call that
+runs the program is its card whatever else it does, because the card's detail is the
+command itself. Among the rest the strongest wins: a check, a remote write, a history
+change, a rewrite, a build-up, and plain inspection last.
 
 **The generic `$ bash` heading is what declining looks like.** A command no family
 names keeps the shell tool's own mark, word and theme role — never a family's mark
@@ -572,14 +583,54 @@ installed — the one `codegraph` entry of `<agent dir>/mcp.json` (see [CodeGrap
 index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry)); Gentle
 Shell's own `card-style.json` is read here, never written.
 
+## The `bash` guards
+
+The extension watches every `bash` tool call and refuses four things before the command
+runs. The refusal is the call's result: it says the command did not run and names the
+order to follow, `worktree_list` first and `worktree_create` only when the ODD has no
+checkout. The prompt block above is what is meant to keep the agent from ever reaching
+them.
+
+| Refused | Where |
+| --- | --- |
+| `git worktree add` | any cwd |
+| `git worktree list` | any cwd |
+| a command that creates a branch (`checkout -b/-B/--orphan`, `switch -c/-C`, `git branch <name>`) | the principal checkout only |
+| a command that switches to anything but the repository's default branch (`checkout`/`switch <ref>`, `-`, a detached checkout) | the principal checkout only |
+
+- **Text only.** The guard reads the command string and nothing else: it finds the
+  `git` … `worktree` … `add|list` sequence anywhere in it, also after `&&`, `||`, `;`,
+  `|`, a newline, a subshell, a line continuation, inside `$(…)` or inside a quoted
+  `bash -c '…'`, and tolerates git's global options (`-C <dir>`, `--no-pager`) and a
+  `git` given by path. It never opens a script, an alias or a file, so a script that
+  runs `git worktree add` inside passes. A string that only prints the sequence
+  (`echo git worktree add`) is refused too: what surrounds it never matters.
+- **Principal checkout.** A linked worktree shares the principal's git common dir, so
+  its root is never that dir's parent and the branch guards do nothing there. A cwd that
+  is not a repository, or an identity that cannot be read, blocks nothing.
+- **Default branch.** Resolved like the create's base: the local `main`, else the branch
+  `origin/HEAD` names, else `init.defaultBranch`, once per checkout. There is no
+  `main`/`master` list, and with no resolvable default a switch is not refused.
+- **`checkout <ref>`.** `git switch` never takes a path, so its argument is a ref. For
+  `git checkout`, an argument is a restore only when that path exists in the cwd, which
+  is how Git settles the ambiguity; `feat/x`, `origin/main` and a bare `develop` are refs.
+  `git checkout <ref> -- <path>` and `git checkout -- <path>` are always restores. Every
+  segment of a compound command counts, so an allowed switch never hides a later one.
+- **Everything else passes**: `git status`, `git branch` alone or with an option,
+  `git restore`, `git worktree remove|prune|move`, and every tool but `bash`.
+- `ODD_WORKTREE_GUARD=0` turns them off for the process, like `ODD_WORKTREE_PROMPT=0`
+  for the prompt blocks. No other value does, and nothing else configures them.
+
 ## The `## ODD worktrees` block in the system prompt
 
 The primary session's system prompt gains a short section telling the agent where
-a worktree lives and that the directory is the ODD it serves, that an ODD with an
-existing assignment is resumed instead of duplicated, to carry pending work that
-belongs to it with `copy_changes`, and that after the merge the branch is kept and
-the checkout removed unless a live session stands in it. Moving the session stays
-the human's.
+a worktree lives and that the directory is the ODD it serves, to call
+`worktree_list` before it creates a worktree or starts or resumes an ODD (work in the
+ODD's worktree when it has one, `worktree_create` it when it has none), to carry the
+current checkout's pending changes that belong to that work with `copy_changes`, that an
+ODD is an area of work with one worktree, to delegate agents in parallel unless they
+would edit the same files, and that after the merge the branch is kept and the checkout
+removed unless a live session stands in it. Moving the session stays the human's.
 
 It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other
@@ -609,6 +660,61 @@ there, and skipped when its heading is already present. The prompt section only
 advises and runs nothing; what the package does with CodeGraph itself is in
 [CodeGraph: index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry).
 `ODD_WORKTREE_PROMPT=0` suppresses both blocks.
+
+## The two CodeGraph reminders
+
+A session that already holds a CodeGraph tool also gets two short reminders, appended as one extra
+text part to the result of a finished tool call. They are advice in the same words the prompt block
+uses: they never block a call, never replace a result, never arrive as a separate message, and add no
+tool or command. Both are gated exactly like the prompt block — only with the `codegraph` CLI installed
+and only when the session already holds a CodeGraph tool. They cite the CodeGraph rule, so
+`ODD_WORKTREE_PROMPT=0` silences them together with it.
+
+They cover `grep`, `find`, `ls`, `read` and `bash`, because those are the calls the rule asks the agent
+to replace with a `codegraph` `query` or an `explore`. `read` counts only for code: `.md`, `.json`,
+`.yml`, `.yaml`, `.toml` and `.txt` are the docs and configs the rule exempts. `bash` counts only when
+the command searches or reads (a `grep`, `rg`, `find`, `fd`, `ls`, `cat`, `sed`, `head`, `tail`, `awk`
+or `tree` segment); a command that merely mentions a checkout — `git -C`, `curl`, `echo` — is not a
+search. A verb right after a single pipe only filters the output of the command before it, so
+`curl … | head` and `ps aux | grep node` are not searches, while `cat src/a.ts | head` still is: the
+`cat` is the read.
+
+**Guard 1, another checkout.** The primary session, once per other checkout per session:
+
+```text
+This call went to <path>, another checkout. Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` with `projectPath` set to <path> first.
+```
+
+`<path>` is the checkout's real git toplevel, so the reminder names the path the MCP call takes. It
+fires for the same project's other worktree and for another repository alike, and never in a subagent
+child. It stays silent, using up no slot, for a checkout this session already explored with
+`projectPath` since the last compaction.
+
+**Guard 2, the session's own checkout.** The primary session and every child except the `review-*`
+agents, once per the checkout the session is in:
+
+```text
+Follow the CodeGraph rule: run `codegraph` `query` or `explore` first, if it applies.
+```
+
+for the primary session and the explore agent (the native wording only when that role holds the
+native tool), and
+
+```text
+Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first, if it applies.
+```
+
+for every other role. It is keyed by the checkout, so a `/warp` re-arms it, and it stays silent once
+the session used `codegraph` or the MCP tool.
+
+**What is "another checkout".** A different git toplevel (`git -C <dir> rev-parse --show-toplevel`),
+read once per directory and cached for the session. It comes from a tool's own path, or from a `cd`
+target or an absolute path argument of a shell command. A path outside every git checkout (tmp, `/etc`,
+your home) triggers nothing.
+
+**What forgets a reminder.** A compaction forgets both guards and what the session already used, and so
+does a new session in the same process (a new, resumed or forked session; a `/reload` keeps the current
+one). A reminder that does not fire uses up no slot.
 
 ## CodeGraph: index, daemon and MCP entry
 
@@ -659,8 +765,12 @@ package never stops a daemon it did not start.
 
 With the CLI installed the package also draws CodeGraph's tool rows as a card on the same card
 substrate as the worktree tools: the native `codegraph` tool, the MCP `codegraph_explore` tool
-(bare or `mcp__codegraph__codegraph_explore`) and a `bash` call whose command is a CodeGraph
-command. It is registered through the host's tool-renderer hook, adds no tool or command, and
+(bare or `mcp__codegraph__codegraph_explore`) and a `bash` call that runs CodeGraph: any
+command in which `codegraph` is the command word of some segment, with or without a launcher
+such as `npx` or `pnpm exec`, in any pipeline or `;`/`&&` sequence. A command that only
+mentions it (`echo codegraph init`, `cat codegraph.json`, `grep -r codegraph src`) stays the
+host's own `bash` row. A `bash` card shows the command itself as its detail, on one line
+collapsed and whole when expanded, with no operation label. It is registered through the host's tool-renderer hook, adds no tool or command, and
 hands every other tool back exactly as the host resolved it; a `bash` command that is not
 CodeGraph's is forwarded to the host's own renderer. A host without that hook draws nothing of
 ours. Every card in this package, the two worktree tools and the CodeGraph rows alike, declares `renderShell: "self"`: it frames itself in float or neon, and the host's own filled box is never drawn under it. The collapsed card is one factual row per operation (an init, a sync, a query or explore

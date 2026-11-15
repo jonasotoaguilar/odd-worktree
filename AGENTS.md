@@ -31,6 +31,7 @@ its presence records.
 | `lib/worktree-registry.js` | The one ownership rule, with no file: a checkout this package created is a directory under `<repo-parent>/<repo-name>-worktrees`, so the path decides. Partitions Git's listing into ours and outside, and parses `git worktree list --porcelain` for the create path. |
 | `lib/worktree-create.js` | `worktree_create`'s core: request validation, base resolution, the ODD-named destination, the refusals sentence for sentence, plan execution and the fixed output lines. |
 | `lib/worktree-list.js` | `worktree_list`'s rendering: rows, order, detail lines and footers, from one structured row list. It writes nothing. |
+| `lib/worktree-guard.js` | The `bash` guards' decision: a pure function over the command text and injected seams; it spawns nothing and reads no file. |
 | `lib/worktree-hooks.js` | The preparation chain of a create: submodules, local inputs, `copy_changes`, build-cache and asset links, the setup slot, and the clone-local `gentle-ai/worktree-hooks.json` that extends the lists. |
 | `lib/worktree-setup.js` | The setup chain: the closed command table one lockfile selects, the plan, and the two notice sentences. |
 | `lib/worktree-setup-runner.js` | The tracked background task of a create: runs the planned commands one child at a time, sends their output to its own log under the system temp directory, and reports one notice built from the child process outcome. No state is persisted. |
@@ -43,6 +44,7 @@ its presence records.
 | `lib/checkout-facts.js` | The facts one checkout row shows in the selector. |
 | `lib/worktree-card.js` | The `worktree-warp` message renderer (the moved/queued card), composed on the card substrate like the tool cards. |
 | `lib/card-style.js` | The one style reader: the live process-wide slot Gentle Shell publishes, then the strict `<home>/card-style.json`, then `float`. It reports the source and the reason it fell back, caches only the document branch, and is re-read on `session_start`. |
+| `lib/card-content.js` | The one reader of the card content level Gentle Shell publishes (`default` or `minimal`), read at paint time; every card honors it. |
 | `lib/card-bash-mode.js` | The one bash-card mode reader and writer: the live process-wide slot this package's toggle sets, then the strict `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1","mode":"own"|"default"}`), then `own`. Same resolution order and reasons as `lib/card-style.js`; the writer is atomic, owner-only, document-first and never rewrites a document it cannot parse. |
 | `lib/bash-activity.js` | The classifier the bash card heads with: the one quote-aware segmenter, the eight named families and the mark and theme role each wears, and the package's own conservatism — a segment it cannot name leaves the call unnamed, which is what the generic `$ bash` heading is. |
 | `lib/bash-destructive.js` | The destructive family's evidence: the segment that names a deleting program, and the whole command whose pipe or heredoc feeds a database client its statements. Evidence only — no permission, guard or execution decision may read it. |
@@ -55,7 +57,8 @@ its presence records.
 | `lib/odd-worktrees-prompt.js` | The append-only injection helper that reads that file. |
 | `lib/codegraph-prompt/*.md` | The `## CodeGraph` prose: one approved text per role (orchestrator, explore, verify, worker, fix, judge, generic). |
 | `lib/codegraph-rules.js` | Selects a role's text from the session's own facts and appends it. Runs and probes nothing. |
-| `lib/codegraph-session.js` | The single CodeGraph wiring point (invariant 19): session start, compaction, the observed native init, the edit/write sync and shutdown, only with the CLI installed. |
+| `lib/codegraph-guard.js`, `lib/codegraph-guard-target.js` | The two reminders (invariant 21): the decision core with its once-per-key state, and the checkout a `grep`/`find`/`ls`/`read`/`bash` call went to. They append one text part to a finished result and run nothing else. |
+| `lib/codegraph-session.js` | The single CodeGraph wiring point (invariant 19): session start, compaction, the observed native init, the edit/write sync, the two reminders and shutdown, only with the CLI installed. |
 | `lib/codegraph-index.js`, `lib/codegraph-lock.js`, `lib/codegraph-compaction.js` | Create-or-sync, worktree seeding, the CLI probe and the notices; the one init lock and the per-project sync lease; the compaction sync. |
 | `lib/codegraph-edit-sync.js`, `lib/codegraph-role.js` | The debounced edit/write sync; the index role that keeps verify and the judges read-only. |
 | `lib/codegraph-daemon.js`, `lib/codegraph-warmup.js`, `lib/codegraph-mcp.js`, `lib/codegraph-mcp-config.js`, `lib/codegraph-paths.js` | The per-checkout daemon registry and client; the warm-up through CodeGraph's own proxy; the MCP exposure warnings; the one `mcp.json` entry writer; root identity and the argv to start `codegraph`. |
@@ -312,7 +315,9 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     be read, gets `generic.md`; a `review-*` agent gets nothing. A missing or
     heading-less file falls back to `generic.md`, and a missing generic means no
     section. Only the orchestrator and explore texts name the native operations; the
-    other roles name the MCP tool in full; no text mentions `init`, `sync` or an
+    other roles name the MCP tool in full, and only the orchestrator text also points
+    that tool at another checkout through `projectPath` (a sibling worktree or another
+    git project) before it delegates an explorer there; no text mentions `init`, `sync` or an
     index fallback, because no agent prepares the index: the package does
     (invariant 19).
 
@@ -362,6 +367,66 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     (invariant 19): it claims its own `codegraph …` rows with its richer body and
     this card's slots are never asked for them; without the CLI no CodeGraph card
     exists, so those rows are drawn here with the `codegraph` identity.
+
+21. **The two CodeGraph reminders advise; they never block and never add a surface.**
+    `lib/codegraph-guard.js` decides, and `lib/codegraph-session.js` appends its
+    sentence as ONE extra text part to the result of that finished tool call — never
+    a separate message, never a block, and the result (its own parts and its
+    structured content) is kept whole. No tool, command, card or notification is
+    added, and nothing runs in the foreground beyond one bounded, cached git read.
+    Both are gated like the prompt section: only with the `codegraph` CLI installed
+    (invariant 19's registration) and only when the session holds a CodeGraph tool,
+    which the wiring records from `before_agent_start`'s
+    `systemPromptOptions.selectedTools` — no other source. They cite the CodeGraph
+    rule, so `ODD_WORKTREE_PROMPT=0` silences them together with it.
+
+    **Guard 1** is the primary session's alone and fires once per other checkout per
+    session: `This call went to <path>, another checkout. Follow the CodeGraph rule:
+    call mcp__codegraph__codegraph_explore with projectPath set to <path> first.` —
+    with `mcp__codegraph__codegraph_explore` and `projectPath` in backticks and
+    `<path>` the checkout's real git toplevel. It stays silent, using up no slot, for
+    a checkout this session already explored with that tool's `projectPath` since the
+    last compaction.
+    **Guard 2** is the primary session's and every child's except a `review-*` agent,
+    fires once per the session's own checkout, and is keyed by the checkout so a
+    `/warp` re-arms it: the primary session and the explore agent get `Follow the
+    CodeGraph rule: run codegraph query or explore first, if it applies.` (`codegraph`,
+    `query` and `explore` in backticks, the native wording only for a role that holds
+    the native tool), every other role `Follow the CodeGraph rule: call
+    mcp__codegraph__codegraph_explore first, if it applies.` (`mcp__codegraph__codegraph_explore`
+    in backticks). It stays silent once the session used `codegraph` or the MCP tool.
+
+    **What counts as a call** is `grep`, `find`, `ls`, `read` and `bash`: `read` only
+    for code, never for the `.md`/`.json`/`.yml`/`.yaml`/`.toml`/`.txt` the rule
+    exempts, and `bash` only when a segment runs `grep`, `rg`, `find`, `fd`, `ls`,
+    `cat`, `sed`, `head`, `tail`, `awk` or `tree` — and a verb right after a single
+    pipe only filters the previous command's output, so `curl … | head` and
+    `ps aux | grep node` are not reads, while `cat a.ts | head` still is (the `cat`
+    counts). **Another checkout** is a different
+    git toplevel (`git -C <dir> rev-parse --show-toplevel`, read once per directory
+    and cached), from a tool's path or from a `cd` target or absolute path argument
+    of a shell command; a path outside every checkout and a command that only
+    mentions one (`git -C`, `curl`, `echo`) triggers nothing. A compaction forgets
+    both guards and what the session used, and so does a new session in the same
+    process (`session_start` new, resume or fork; not `/reload`). The reminder is
+    advice, so no test may assert it blocks, refuses or notifies.
+
+20. **The `bash` guards read text, fail open and add no surface.** The extension's
+    `tool_call` handler refuses a `bash` call whose command contains `git … worktree
+    add` or `git … worktree list` in any cwd, and, only when the session cwd is the
+    principal checkout (its root is the parent of the git common dir), a branch
+    creation or a switch to anything but the repository's default branch. The decision
+    lives in `lib/worktree-guard.js`, a pure function over the command string and the
+    injected `repoIdentity`, `defaultBranch` and `pathExists` seams. Detection is text
+    only: no script, alias or file is read, and a command it cannot judge passes. It
+    never throws (a throwing `tool_call` handler blocks the tool), an unreadable
+    repository leaves only the worktree refusals active, and the default branch is
+    resolved lazily and memoized per checkout. `ODD_WORKTREE_GUARD=0` is the one way
+    to turn it off, like `ODD_WORKTREE_PROMPT=0` for the prompt blocks; no other
+    value, option or config file does, and it registers no command or tool name
+    (invariant 3). The refusal sentences name `worktree_list` first and
+    `worktree_create` second; the prompt block (invariant 14) is what keeps the agent
+    from reaching them, so a change to one is read against the other.
 
 ## Commits and pull requests
 

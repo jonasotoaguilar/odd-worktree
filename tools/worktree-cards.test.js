@@ -16,6 +16,7 @@ const { before, after, test } = require('node:test');
 const { ELLIPSIS, WORKTREE_CARD_TOOLS, createWorktreeCards } = require('../lib/worktree-cards.js');
 const { worktreeListView } = require('../lib/worktree-list.js');
 const { CARD_STYLE } = require('../lib/card-style.js');
+const { CARD_CONTENT } = require('../lib/card-content.js');
 
 // ---- the injected text seam (fakes: plain ASCII, each character one column) ----
 
@@ -274,10 +275,10 @@ test('a running call draws one muted running row and closes its own frame in war
 	assert.match(tagged[0], /^<warning>╭<\/warning>/, 'pending is the warning tone');
 	assert.match(tagged[1], /^<warning>│<\/warning> <muted>running…<\/muted>/, 'the running text is the muted role');
 
-	// Settling moves the very same heading to success and drops the running row.
+	// Settling keeps the very same heading, in the same tone, and drops the running row.
 	const settledRows = call('worktree_create', CREATE_ARGS, taggedTheme, { isPartial: false }, 40);
-	assert.match(settledRows[0], /^<success>╭<\/success>/);
-	assert.match(settledRows[0], /<success>⎇ worktree create<\/success>/, 'a settled heading labels itself in its own tone, never in the accent');
+	assert.match(settledRows[0], /^<warning>╭<\/warning>/, 'a finished card wears the warp tone, never the success role');
+	assert.match(settledRows[0], /<warning>⎇ worktree create<\/warning>/, 'a settled heading labels itself in its own tone, never in the accent');
 	assert.equal(settledRows.some((row) => row.includes('running')), false);
 
 	const failed = call('worktree_create', CREATE_ARGS, taggedTheme, { isPartial: false, isError: true }, 40);
@@ -366,8 +367,78 @@ test('a collapsed result shows at most three body rows and marks what it hides',
 	);
 });
 
-test('a refusal stays fully readable expanded and keeps its reason collapsed', () => {
-	for (const width of [60, 30]) {
+// ---- the content level: `minimal` is the call alone, `default` the preview ----
+//
+// The level is the user's choice in Gentle Shell, published on the process-wide slot
+// `lib/card-content.js` reads, exactly as the CodeGraph card reads it. The factory
+// takes the same reader seam (`cardContent`), so a case injects a level instead of
+// touching the real slot, and the default reader stays the real one.
+const CARD_CONTENT_SLOT = Symbol.for('gentle-pi.card-content');
+
+/** Run with the process-wide level slot set, restoring whatever it held. */
+function withContent(level, run) {
+	const before = globalThis[CARD_CONTENT_SLOT];
+	if (level === undefined) delete globalThis[CARD_CONTENT_SLOT];
+	else globalThis[CARD_CONTENT_SLOT] = level;
+	try {
+		return run();
+	} finally {
+		if (before === undefined) delete globalThis[CARD_CONTENT_SLOT];
+		else globalThis[CARD_CONTENT_SLOT] = before;
+	}
+}
+
+test('a minimal card draws the call alone, and the level is read on every paint', () => {
+	let level = CARD_CONTENT.DEFAULT;
+	// The seam is a function of the mutable `level` the case moves, so one renderer
+	// answers both levels, the way the shell's own slot switches under one card.
+	const driven = createWorktreeCards({ metrics, cardContent: () => level }).renderer('worktree_create');
+	const component = driven.renderResult(textResult(CREATE_TEXT), { expanded: false, isPartial: false }, plainTheme, {});
+	const atDefault = component.render(60);
+	assert.equal(atDefault.length, 4, 'the default level draws its three-row preview and the closing rule');
+	assert.match(bodyText(atDefault[0]), /^worktree created:/, 'and that preview is the tool text');
+
+	level = CARD_CONTENT.MINIMAL;
+	const minimal = component.render(60);
+	assert.deepEqual(minimal, [`╰${'─'.repeat(58)}╯`], 'the same component repaints as the closing rule alone: nothing under the call');
+	assertFramed(minimal, 60);
+
+	level = CARD_CONTENT.DEFAULT;
+	assert.deepEqual(component.render(60), atDefault, 'and back again, with no new renderer and no rebuild');
+
+	// The call above is the whole card either way: the level hides body rows only.
+	const callAt = (levelValue) => withContent(levelValue, () => call('worktree_create', CREATE_ARGS, plainTheme, { isPartial: false }, 60));
+	assert.equal(callAt(CARD_CONTENT.MINIMAL).length, 1, 'a minimal call is one heading line');
+	assert.deepEqual(callAt(CARD_CONTENT.MINIMAL), callAt(CARD_CONTENT.DEFAULT), 'the call is the same line at either level');
+	assert.equal(driven.renderCall(CREATE_ARGS, plainTheme, { isPartial: false }).render(60).length, 1, 'and the injected seam draws it the same way');
+});
+
+test('a minimal refusal still says why', () => {
+	// No injected reader here: the shared factory reads the real slot on every paint.
+	const refused = withContent(CARD_CONTENT.MINIMAL, () => resultRows('worktree_list', textResult(REFUSAL_TEXT, true), { expanded: false, isPartial: false }, plainTheme, {}, 60));
+	assert.ok(refused.length > 1, 'a failure keeps its reason at the minimal level');
+	assert.match(bodyText(refused[0]), /^branch feat\/cards-v2 is/, 'the reason opens the body');
+	assert.equal(refused.at(-1), `╰${'─'.repeat(58)}╯`, 'and the card still closes with its rule');
+	assertFramed(refused, 60);
+
+	// The same text without the failure is nothing to draw under the call at all.
+	const quiet = withContent(CARD_CONTENT.MINIMAL, () => resultRows('worktree_list', textResult(REFUSAL_TEXT), { expanded: false, isPartial: false }, plainTheme, {}, 60));
+	assert.equal(quiet.length, 1, 'a successful minimal result is the closing rule alone');
+
+	// A minimal card that is still streaming draws nothing at all: no rows, and no
+	// closing rule, which belongs to the result that settles.
+	const streaming = withContent(CARD_CONTENT.MINIMAL, () => resultRows('worktree_list', textResult('worktree list: 2 checkouts'), { expanded: false, isPartial: true }, plainTheme, {}, 60));
+	assert.equal(streaming.length, 0, 'a streamed result has nothing to draw at the minimal level');
+});
+
+test('an expanded card shows everything at either level', () => {
+	const expandedAt = (level) => withContent(level, () => resultRows('worktree_create', textResult(CREATE_TEXT), { expanded: true, isPartial: false }, plainTheme, {}, 60));
+	const atDefault = expandedAt(CARD_CONTENT.DEFAULT);
+	assert.deepEqual(expandedAt(CARD_CONTENT.MINIMAL), atDefault, 'the reader asked for everything and gets everything');
+	assert.equal(squash(atDefault.slice(0, -1).map(bodyText).join('')), squash(CREATE_TEXT), 'and everything is the whole text');
+});
+
+test('a refusal stays fully readable expanded and keeps its reason collapsed', () => {	for (const width of [60, 30]) {
 		const expanded = resultRows('worktree_list', textResult(REFUSAL_TEXT, true), { expanded: true, isPartial: false }, plainTheme, {}, width);
 		assertFramed(expanded, width);
 		const body = expanded.slice(0, -1).map(bodyText);
@@ -392,18 +463,23 @@ test('a refusal stays fully readable expanded and keeps its reason collapsed', (
 	}
 });
 
-test('the tone follows the state: success when finished, warning pending, error on failure', () => {
+test('the tone follows the state: the warp warning once finished or pending, error on failure', () => {
 	const result = (tool, value, options, context) => resultRows(tool, value, options, taggedTheme, context ?? {}, 40);
 
-	assert.match(result('worktree_create', textResult(CREATE_TEXT), { expanded: false, isPartial: false })[0], /^<success>│<\/success>/);
-	assert.match(result('worktree_list', textResult('project: x'), { expanded: false, isPartial: false })[0], /^<success>│<\/success>/, 'a list is not a failure');
+	assert.match(result('worktree_create', textResult(CREATE_TEXT), { expanded: false, isPartial: false })[0], /^<warning>│<\/warning>/, 'a finished result wears the warp tone, not success');
+	assert.match(result('worktree_list', textResult('project: x'), { expanded: false, isPartial: false })[0], /^<warning>│<\/warning>/, 'a list is not a failure and wears the same tone');
 	assert.match(result('worktree_create', textResult('boom', true), { expanded: false, isPartial: false })[0], /^<error>│<\/error>/, 'the tool own isError decides');
 	assert.match(result('worktree_create', textResult('boom'), { expanded: false, isPartial: false }, { isError: true })[0], /^<error>│<\/error>/, 'so does the row isError');
 	assert.match(result('worktree_create', textResult(CREATE_TEXT), { expanded: false, isPartial: true })[0], /^<warning>│<\/warning>/, 'a streamed result is still pending');
 
+	// The call's heading wears the same tone as its result: one card, one state.
+	assert.match(call('worktree_create', CREATE_ARGS, taggedTheme, { isPartial: false }, 40)[0], /^<warning>╭<\/warning>/, 'a finished create call is the warp tone');
+	assert.match(call('worktree_list', {}, taggedTheme, { isPartial: false }, 40)[0], /^<warning>╭<\/warning>/, 'and so is a finished list call');
+	assert.match(call('worktree_list', {}, taggedTheme, { isPartial: false, isError: true }, 40)[0], /^<error>╭<\/error>/, 'a failed call is still the error tone');
+
 	const recorder = recordingTheme();
 	resultRows('worktree_list', textResult('project: x'), { expanded: false, isPartial: false }, recorder, {}, 40);
-	assert.deepEqual([...new Set(recorder.roles)].sort(), ['success', 'text'], 'a settled success paints its own role and the body text role');
+	assert.deepEqual([...new Set(recorder.roles)].sort(), ['text', 'warning'], 'a settled card paints the warp tone and the body text role, and no success role');
 });
 
 test('a result body is painted in the theme text role, and the heading keeps the tone', () => {
@@ -417,9 +493,9 @@ test('a result body is painted in the theme text role, and the heading keeps the
 	};
 	const made = createWorktreeCards({ metrics: ansiMetrics });
 	const settled = made.renderer('worktree_list').renderResult(textResult('project: x'), { isPartial: false }, taggedTheme, {}).render(30);
-	assert.match(settled[0], /^<success>│<\/success> <text>project: x<\/text>/, 'the body row carries the text role inside the tone frame');
-	assert.match(settled[0], /<success>│<\/success>$/, 'and the tone role closes it');
-	assert.equal(settled[0].includes('<warning>'), false, 'the body never borrows the accent');
+	assert.match(settled[0], /^<warning>│<\/warning> <text>project: x<\/text>/, 'the body row carries the text role inside the tone frame');
+	assert.match(settled[0], /<warning>│<\/warning>$/, 'and the tone role closes it');
+	assert.equal(settled[0].includes('<success>'), false, 'no role outside the tone and the body text paints a row');
 
 	const failed = made.renderer('worktree_list').renderResult(textResult('boom', true), { isPartial: false }, taggedTheme, {}).render(30);
 	assert.match(failed[0], /^<error>│<\/error> <text>boom<\/text>/, 'a refusal body is text too, inside the error frame');
@@ -533,9 +609,9 @@ test('a float card paints the accent rail and the tone background, and draws no 
 	// The state still reaches the background; the accent stays the theme orange.
 	const settled = paintTheme();
 	withStyle(CARD_STYLE.FLOAT, () => resultRows('worktree_list', textResult(SHORT_LIST), { expanded: true, isPartial: false }, settled, {}, 40));
-	assert.deepEqual(settled.roles.bg, ['toolSuccessBg']);
-	assert.equal(settled.roles.fg.includes('success'), true, 'a settled card paints the tone role on its rail and its label');
-	assert.equal(settled.roles.fg.includes('warning'), false, 'the accent is not a second, fixed colour');
+	assert.deepEqual(settled.roles.bg, ['toolPendingBg'], 'a finished card keeps the warp tone, and with it the warp background');
+	assert.equal(settled.roles.fg.includes('warning'), true, 'a settled card paints the warp role on its rail and its label');
+	assert.equal(settled.roles.fg.includes('success'), false, 'the success role is gone from the card, in both styles');
 
 	const failed = paintTheme();
 	withStyle(CARD_STYLE.FLOAT, () => resultRows('worktree_list', textResult(REFUSAL_TEXT, true), { expanded: true, isPartial: false }, failed, {}, 40));

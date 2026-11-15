@@ -2855,6 +2855,103 @@ function handleWorktreeOddEvent(event, ctx, pi, allowPhaseTrigger) {
   return undefined;
 }
 
+// The worktree guard (S1–S6, S8–S10): one `tool_call` observation that REFUSES the
+// `bash` commands which would take work out of the ODD's own checkout. The decision
+// is `lib/worktree-guard.js`'s — text-only, and only for the `bash` tool — and this
+// is the wiring that hands it the git answers it needs, which is the only part that
+// touches git. Nothing is registered here: the guard adds no command, no tool, no
+// option and no setting (S7).
+//
+// S8: the handler never throws, because a thrown `tool_call` handler blocks the tool
+// fail-safe. It returns `{block: true, reason}` to refuse the call and `undefined` to
+// let the host run it, exactly like a handler that has nothing to say.
+
+// One git text read: a fixed argv with a bounded timeout (invariant 9), or undefined
+// for any answer that is not a value. Never throws.
+function readGitTextSync(git, cwd, args) {
+  try {
+    if (!git || typeof git.runArgv !== "function") return undefined;
+    const result = git.runArgv("git", args, { cwd, timeoutMs: 5000 });
+    if (!result || result.status !== 0) return undefined;
+    const text = String(result.stdout || "").trim();
+    return text.length > 0 ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// S5: the repository's own default branch, resolved exactly like the create's base
+// (`lib/worktree-create.js`): a local `main`, else the branch `origin/HEAD` names,
+// else `init.defaultBranch`. A candidate whose ref does not resolve is passed over, so
+// there is no `main`/`master` allowlist. Undefined when nothing resolves — the guard
+// then refuses no switch (S8), because the real default must stay reachable.
+function resolveDefaultBranch(git, root) {
+  const candidates = [{ branch: "main", ref: "refs/heads/main" }];
+  const originHead = readGitTextSync(git, root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+  if (typeof originHead === "string") {
+    const remoteBranch = originHead.replace(/^origin\//, "");
+    if (remoteBranch.length > 0) candidates.push({ branch: remoteBranch, ref: `refs/remotes/origin/${remoteBranch}` });
+  }
+  const configured = readGitTextSync(git, root, ["config", "--get", "init.defaultBranch"]);
+  if (typeof configured === "string") candidates.push({ branch: configured, ref: `refs/heads/${configured}` });
+  for (const candidate of candidates) {
+    if (readGitTextSync(git, root, ["rev-parse", "--verify", "--quiet", candidate.ref])) return candidate.branch;
+  }
+  return undefined;
+}
+
+// The default branch memo, bounded and most-recently-used exactly like
+// `repoIdentityCache` above: a session switches branches in a handful of checkouts,
+// and a `bash` call must never pay a spawn per call. The answer is a random-access
+// fact of the checkout, so it is resolved once per root per process; an entry wraps
+// the value because "no resolvable default" is itself an answer worth caching.
+const DEFAULT_BRANCH_CACHE_LIMIT = 32;
+const defaultBranchCache = new Map();
+
+function cachedDefaultBranch(git, root) {
+  const key = String(root);
+  const hit = defaultBranchCache.get(key);
+  if (hit !== undefined) {
+    defaultBranchCache.delete(key);
+    defaultBranchCache.set(key, hit);
+    return hit.value;
+  }
+  const value = resolveDefaultBranch(git, key);
+  defaultBranchCache.set(key, { value });
+  if (defaultBranchCache.size > DEFAULT_BRANCH_CACHE_LIMIT) {
+    defaultBranchCache.delete(defaultBranchCache.keys().next().value);
+  }
+  return value;
+}
+
+// The registered `tool_call` handler: the guard's one host surface. A non-`bash` call
+// returns before any module is read, and the git answers ride in as the guard's seams,
+// memoized per checkout, so the hot path costs one `Map` hit per call.
+function guardWorktreeBashCall(event, ctx) {
+  try {
+    if (!event || event.toolName !== "bash") return undefined;
+    const guard = libRequire("worktree-guard.js");
+    if (!guard || typeof guard.decideBashGuard !== "function") return undefined;
+    const git = libRequire("worktree-git.js");
+    const input = event.input || {};
+    const decision = guard.decideBashGuard({
+      toolName: event.toolName,
+      command: input.command,
+      cwd: oddEventCwd(event, ctx),
+      repoIdentity: (cwd) => cachedRepoIdentity(git, cwd),
+      defaultBranch: (root) => cachedDefaultBranch(git, root),
+      pathExists: (cwd, value) => fs.existsSync(path.resolve(cwd, value)),
+    });
+    if (decision && decision.block === true && typeof decision.reason === "string") {
+      return { block: true, reason: decision.reason };
+    }
+    return undefined;
+  } catch {
+    // S8: the guard never throws into the host, and a command it cannot judge passes.
+    return undefined;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // `/warp <name>` (S23): move the SESSION to another
 // checkout by NAME.
@@ -7152,6 +7249,11 @@ export default function (pi) {
     startupEpoch += 1;
   });
   pi.on("tool_call", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi));
+  // S1/S3/S4/S9: the worktree guard, the ONE `tool_call` observation that refuses a
+  // `bash` command instead of observing it. It sits beside the naming handler and is
+  // the only handler that returns a `block` answer; every other tool call is left
+  // exactly as the host proposed it. Nothing about it is callable by the agent (S7).
+  pi.on("tool_call", (event, ctx) => guardWorktreeBashCall(event, ctx));
   pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
   // S10: the host's execution pair feeds the queue's in-flight tool counter for
   // EVERY tool of the session, not only this package's.

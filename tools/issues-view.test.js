@@ -527,8 +527,9 @@ describe('issues view right pane', () => {
 describe('round3: every tab is read at open, and a switch never refetches', { concurrency: false }, () => {
   // The reported defect: opening Issues showed `All (0)` while the repository
   // had open issues, and each tab refetched on every switch. The reader must
-  // read all four buckets ONCE when it opens, show their real totals, and reuse
-  // them while switching.
+  // read the three scoped buckets ONCE when it opens, show their real totals,
+  // and reuse them while switching. `All` is no tab: it is read the first time
+  // the shortcut enters it (issues-all-toggle S1/S2).
   function serverView(extra = {}) {
     const requests = [];
     const queue = [];
@@ -555,11 +556,12 @@ describe('round3: every tab is read at open, and a switch never refetches', { co
     entry.resolve({ ok: true, issues: numbers.map((n) => ({ ...issue(n), cursor: `c${n}` })), total, hasNextPage: false });
   }
 
-  test('all four buckets are requested when the view opens', async () => {
+  test('the three scoped buckets are requested when the view opens, never All', async () => {
     const { view, requests } = serverView();
     view.render(120);
     await tick();
-    assert.deepEqual(requests.map((entry) => entry.bucketId).sort(), ['all', 'assigned', 'involved', 'mine']);
+    assert.deepEqual(requests.map((entry) => entry.bucketId).sort(), ['assigned', 'involved', 'mine'],
+      'opening the reader reads the three scoped tabs and stops (S2)');
   });
 
   test('an unvisited tab shows its real total instead of a false zero, and switching reads nothing', async () => {
@@ -571,24 +573,36 @@ describe('round3: every tab is read at open, and a switch never refetches', { co
     answer(queue, 'mine', [1]);
     answer(queue, 'assigned', []);
     answer(queue, 'involved', []);
-    answer(queue, 'all', [1], 1);
     await tick();
     const frame = bodyOf(view, 160);
-    assert.match(frame, /All \(1\)/, `All reports the repository total: ${frame.split('\n')[2]}`);
     assert.match(frame, /My issues \(1\)/, 'the active bucket keeps its own count');
+    assert.match(frame, /Assigned \(0\)/, 'an answered bucket names its own total');
     const before = requests.length;
     for (let step = 0; step < 3; step += 1) {
       view.handleInput('tab');
       await tick();
     }
     assert.equal(requests.length, before, 'switching between loaded tabs reads nothing again');
+    // S1/S2: `All` left the bar and is read when the shortcut first enters it.
+    view.handleInput('g');
+    await tick();
+    assert.deepEqual(requests.slice(before).map((entry) => entry.bucketId), ['all'],
+      'the first entry into All is what reads it');
+    answer(queue, 'all', [1], 1);
+    await tick();
+    assert.match(bodyOf(view, 160), /▸ All \(1\)/, 'All reports the repository total once it is asked for');
+    const asked = requests.length;
+    view.handleInput('g');
+    view.handleInput('g');
+    await tick();
+    assert.equal(requests.length, asked, 're-entering All reuses the page it read');
   });
 
   test('a bucket that has not answered yet is unknown, never a zero', async () => {
     const { view, queue } = serverView();
     view.render(120);
     await tick();
-    // The active bucket answers; the other three are still in flight.
+    // The active bucket answers; the other two are still in flight.
     answer(queue, 'mine', [1]);
     await tick();
     const tabs = bodyOf(view, 160).split('\n').find((line) => line.includes('My issues')) ?? '';
@@ -2567,7 +2581,7 @@ describe('issues left list width, wrapping and fresh pages (S3/S5/D1/D3)', () =>
 // Every request is a public input: the loader receives
 // {bucketId, cursor, limit, query}.
 describe('issues view All tab, tab cache and server search (S9/S13/S15)', () => {
-  test('the fourth tab All lists every open issue of the repository with no dedup', async () => {
+  test('the shortcut lists every open issue of the repository with no dedup', async () => {
     const requests = [];
     const { view } = makeView({
       rows: 24,
@@ -2585,16 +2599,18 @@ describe('issues view All tab, tab cache and server search (S9/S13/S15)', () => 
     assert.match(tabs, /▸ My issues \(1\)/, 'the default bucket is still first');
     assert.match(tabs, /Assigned \(–\)/);
     assert.match(tabs, /Involved \(–\)/);
-    assert.match(tabs, /All \(–\)/, 'an unread tab is unknown, never a false zero');
+    assert.ok(!tabs.includes('All'), 'All is no longer a tab');
     assert.equal(requests.length, 1, 'only the default bucket was read');
     assert.equal(requests[0].bucketId, 'mine');
-    view.handleInput('tab');
-    view.handleInput('tab');
-    view.handleInput('tab');
+    view.handleInput('g');
     await tick();
-    assert.equal(view.state.page, 3, 'All is the fourth and last tab');
+    assert.equal(view.state.page, 3, 'the shortcut moves to the All view');
     assert.equal(requests[requests.length - 1].bucketId, 'all', 'All reads the whole open repository');
-    assert.match(strip(view.render(100)[2]), /All \(2\)/, 'the All tab counts the whole open repository');
+    const allTabs = strip(view.render(100)[2]);
+    assert.match(allTabs, /▸ All \(2\)/, 'the All view counts the whole open repository');
+    for (const label of ['My issues', 'Assigned', 'Involved']) {
+      assert.ok(!allTabs.includes(label), `the bar reads only All: ${allTabs}`);
+    }
     const left = leftColumn(view, 100);
     assert.match(left, /belt and braces/, 'an issue that also lists under My issues lists here too');
     assert.match(left, /issue title 77/, 'the other open issue is listed');
@@ -2656,7 +2672,11 @@ describe('issues view All tab, tab cache and server search (S9/S13/S15)', () => 
     assert.equal(requests.length, 1, 'typing only schedules the read');
     clock.fire();
     await tick();
-    assert.equal(requests.length, 2, 'the settled burst is ONE request');
+    assert.deepEqual(
+      requests.slice(1).map((entry) => [entry.bucketId, entry.query]),
+      [['mine', 'label:bug'], ['assigned', 'label:bug'], ['involved', 'label:bug']],
+      'the settled burst reads every scoped bucket once, at the head of its own result set',
+    );
     assert.deepEqual(
       requests[1],
       { bucketId: 'mine', cursor: null, limit: 18, query: 'label:bug' },
@@ -2666,15 +2686,16 @@ describe('issues view All tab, tab cache and server search (S9/S13/S15)', () => 
     leftColumn(view, 100);
     view.handleInput(']');
     await tick();
+    const append = requests.at(-1);
     assert.deepEqual(
-      requests[2],
+      append,
       { bucketId: 'mine', cursor: 'q1', limit: 18, query: 'label:bug' },
       'the appended read continues after the last loaded row of the same query',
     );
     view.handleInput('r');
     await tick();
     assert.deepEqual(
-      requests[3],
+      requests.at(-1),
       { bucketId: 'mine', cursor: null, limit: 18, query: 'label:bug' },
       'r re-reads the list from the head of the current query',
     );
@@ -2700,13 +2721,19 @@ describe('issues view All tab, tab cache and server search (S9/S13/S15)', () => 
     view.handleInput('T');
     view.handleInput('a');
     clock.fire();
-    assert.deepEqual(pending.slice(1).map((entry) => entry.request.query), ['a'], 'the settled query is read once');
+    assert.deepEqual(pending.slice(1).map((entry) => entry.request.query), ['a', 'a', 'a'],
+      'the settled query is read by the three scoped tabs');
     view.handleInput('b');
     clock.fire();
-    assert.deepEqual(pending.slice(1).map((entry) => entry.request.query), ['a', 'ab'], 'the next settled query reads its own');
-    pending[2].entry.resolve(pageResult([cursorRow('n1', issue(2, { title: 'ab match' }))], { total: 1 }));
+    assert.deepEqual(pending.slice(1).map((entry) => entry.request.query), ['a', 'a', 'a', 'ab', 'ab', 'ab'],
+      'the next settled query reads its own three buckets');
+    for (const entry of pending.filter((item) => item.request.query === 'ab')) {
+      entry.entry.resolve(pageResult([cursorRow('n1', issue(2, { title: 'ab match' }))], { total: 1 }));
+    }
     await tick();
-    pending[1].entry.resolve(pageResult([cursorRow('o1', issue(3, { title: 'a only match' }))], { total: 1 }));
+    for (const entry of pending.filter((item) => item.request.query === 'a')) {
+      entry.entry.resolve(pageResult([cursorRow('o1', issue(3, { title: 'a only match' }))], { total: 1 }));
+    }
     await tick();
     const left = leftColumn(view, 100);
     assert.match(left, /ab match/, 'the newest query answer paints');
@@ -2768,6 +2795,329 @@ describe('issues view All tab, tab cache and server search (S9/S13/S15)', () => 
     await tick();
     assert.ok(loads.includes(42), 'the appended row previews its own detail');
     assert.match(bodyOf(view, 100), /#42/, 'the focused row is the appended issue');
+  });
+});
+
+// S1-S5/D1-D3 (issues-all-toggle): `All` leaves the tab bar and becomes a
+// shortcut key, so opening `/issues` reads only the three scoped buckets; a
+// typed filter is read by ALL three scoped tabs (each count is the FILTERED
+// total) and travels into `All`, whose read is the exact repository connection
+// when unfiltered and a search GitHub caps when filtered.
+describe('issues All shortcut and the filter across the scoped tabs (S1/S2/S3/S4/S5)', () => {
+  // The buckets the extension mounts: the three scoped tabs plus the LAZY `All`
+  // page (`lazy: true`), every read through the one cursor-page seam. Each
+  // bucket answers a known number of rows unfiltered and filtered, so a test can
+  // tell a FILTERED total from the unfiltered one instead of reading the same
+  // number twice.
+  const TOTALS = {
+    mine: { open: 2, filtered: 1, base: 10 },
+    assigned: { open: 1, filtered: 1, base: 20 },
+    involved: { open: 3, filtered: 2, base: 30 },
+    all: { open: 6, filtered: 3, base: 40 },
+  };
+
+  function bucketPage(request) {
+    const spec = TOTALS[request.bucketId] || { open: 0, filtered: 0, base: 0 };
+    const query = String(request.query || '');
+    const count = query === '' ? spec.open : spec.filtered;
+    const rows = Array.from({ length: count }, (_, at) => cursorRow(
+      `${request.bucketId}-${at}`,
+      issue(spec.base + at, { title: `${request.bucketId} row ${at + 1}${query === '' ? '' : ` ${query}`}` }),
+    ));
+    return pageResult(rows, { total: count });
+  }
+
+  function serverView(overrides = {}) {
+    const requests = [];
+    const view = createIssuesView({
+      helpers,
+      theme: plainTheme,
+      prefetchBuckets: true,
+      rowsAvailable: () => 24,
+      requestRender: () => {},
+      done: () => {},
+      pages: [
+        { id: 'mine', label: 'My issues', issues: null },
+        { id: 'assigned', label: 'Assigned', issues: null },
+        { id: 'involved', label: 'Involved', issues: null },
+        { id: 'all', label: 'All', issues: null, lazy: true },
+      ],
+      loadIssuePage: (request) => {
+        requests.push(request);
+        return overrides.serve ? overrides.serve(request) : bucketPage(request);
+      },
+      loadIssue: overrides.loadIssue || ((n) => ({ ok: true, issue: issue(n), comments: [] })),
+      loadAssignees: overrides.loadAssignees,
+      scheduleQuery: overrides.scheduleQuery,
+      cancelSchedule: overrides.cancelSchedule,
+    });
+    return { view, requests };
+  }
+
+  const tabRow = (view, width = 120) => strip(view.render(width)[2]);
+  const noteRow = (view, width = 120) => strip(view.render(width)[3]);
+  const footerOf = (view, width = 200) => strip(view.render(width).at(-2));
+
+  // Type a filter, settle its debounce and leave the box, so the following keys
+  // reach the reading interaction instead of the search widget.
+  async function typeFilter(view, clock, text) {
+    view.handleInput('T');
+    for (const ch of text) view.handleInput(ch);
+    clock.fire();
+    view.handleInput('enter');
+    await tick();
+  }
+
+  test('the tab bar reads the three scoped tabs and never All (S1)', async () => {
+    const { view } = serverView();
+    view.render(120);
+    await tick();
+    const tabs = tabRow(view);
+    assert.match(tabs, /▸ My issues \(2\)/, `the active scoped tab carries its own count: ${tabs}`);
+    assert.match(tabs, /Assigned \(1\)/, 'every scoped tab keeps its count');
+    assert.match(tabs, /Involved \(3\)/, 'the third scoped tab keeps its count');
+    assert.ok(!/\bAll\b/.test(tabs), `All is not a tab any more: ${tabs}`);
+  });
+
+  test('opening the panel reads only the three scoped buckets (S2)', async () => {
+    const { view, requests } = serverView();
+    view.render(120);
+    await tick();
+    assert.deepEqual(
+      requests.map((entry) => entry.bucketId),
+      ['mine', 'assigned', 'involved'],
+      'opening costs the three scoped reads and no more',
+    );
+    assert.ok(!requests.some((entry) => entry.bucketId === 'all'), 'the lazy All bucket is not read at open');
+  });
+
+  test('the shortcut enters the All view, where the bar and the hint both say so (S1/D1)', async () => {
+    const { view, requests } = serverView();
+    view.render(120);
+    await tick();
+    assert.match(footerOf(view), /g all issues/, 'outside All the shortcut teaches what it opens');
+    view.handleInput('g');
+    await tick();
+    assert.equal(view.state.page, 3, 'the shortcut moves to the All view');
+    assert.deepEqual(
+      requests.map((entry) => entry.bucketId),
+      ['mine', 'assigned', 'involved', 'all'],
+      'the first entry into All is what reads it',
+    );
+    const tabs = tabRow(view);
+    assert.match(tabs, /▸ All \(6\)/, `the All view names its own count: ${tabs}`);
+    for (const label of ['My issues', 'Assigned', 'Involved']) {
+      assert.ok(!tabs.includes(label), `the scoped tabs leave the bar inside All: ${tabs}`);
+    }
+    assert.match(footerOf(view), /g related issues/, 'inside All the same key says it goes back');
+    assert.ok(!footerOf(view).includes('g all issues'), 'the outbound label is gone inside the All view');
+  });
+
+  test('the same key returns to the tab that was active when the reader entered (D2)', async () => {
+    const { view } = serverView();
+    view.render(120);
+    await tick();
+    view.handleInput('tab');
+    assert.equal(view.state.page, 1, 'Assigned is the active tab');
+    view.handleInput('g');
+    await tick();
+    assert.equal(view.state.page, 3, 'the shortcut enters All from there');
+    view.handleInput('g');
+    await tick();
+    assert.equal(view.state.page, 1, 'the same key returns to Assigned, not to the first tab');
+    assert.match(tabRow(view), /▸ Assigned \(1\)/, 'and the bar says so');
+  });
+
+  test('the cycling keys do nothing in the All view (S1)', async () => {
+    const { view, requests } = serverView();
+    view.render(120);
+    await tick();
+    view.handleInput('g');
+    await tick();
+    const asked = requests.length;
+    for (const key of ['tab', 'shift+tab', 'left', 'right']) {
+      view.handleInput(key);
+      await tick();
+      assert.equal(view.state.page, 3, `${key} never leaves the one view`);
+    }
+    assert.equal(requests.length, asked, 'and none of them reads another bucket');
+    assert.match(tabRow(view), /▸ All \(6\)/, 'the bar still reads only All');
+  });
+
+  test('All is read on first entry and reused when the reader comes back (S2)', async () => {
+    const { view, requests } = serverView();
+    view.render(120);
+    await tick();
+    view.handleInput('g');
+    await tick();
+    assert.deepEqual(
+      requests.filter((entry) => entry.bucketId === 'all').map((entry) => entry.query),
+      [''],
+      'the unfiltered All read is the one connection read',
+    );
+    const read = requests.length;
+    view.handleInput('g');
+    await tick();
+    assert.equal(view.state.page, 0, 'the shortcut returned to the tab it came from');
+    view.handleInput('g');
+    await tick();
+    assert.equal(requests.length, read, 're-entering All reuses the page it already read');
+    assert.match(leftColumn(view, 120), /all row 1/, 'and paints the rows it holds');
+  });
+
+  test('the settled filter is read by the three scoped tabs and every count is the FILTERED total (S3)', async () => {
+    const clock = manualScheduler();
+    const { view, requests } = serverView({ scheduleQuery: clock.schedule, cancelSchedule: clock.cancel });
+    view.render(120);
+    await tick();
+    const mount = requests.length;
+    view.handleInput('T');
+    for (const ch of 'label:bug') view.handleInput(ch);
+    assert.equal(requests.length, mount, 'typing only schedules the read');
+    clock.fire();
+    await tick();
+    assert.deepEqual(
+      requests.slice(mount).map((entry) => [entry.bucketId, entry.query]),
+      [['mine', 'label:bug'], ['assigned', 'label:bug'], ['involved', 'label:bug']],
+      'the settled filter is read by all three scoped tabs, not only the one on screen',
+    );
+    const tabs = tabRow(view);
+    assert.match(tabs, /▸ My issues \(1\)/, `the active tab names the FILTERED total: ${tabs}`);
+    assert.match(tabs, /Assigned \(1\)/, 'the tab that answered names its own filtered total');
+    assert.match(tabs, /Involved \(2\)/, 'a tab that is not on screen carries the filtered total too');
+    assert.ok(!tabs.includes('Involved (3)'), 'no unfiltered number survives next to the filtered list');
+    assert.match(leftColumn(view, 120), /mine row 1 label:bug/, 'the rows on screen match the filter');
+  });
+
+  test('the filter survives a tab switch and travels into All (S4)', async () => {
+    const clock = manualScheduler();
+    const { view, requests } = serverView({ scheduleQuery: clock.schedule, cancelSchedule: clock.cancel });
+    view.render(120);
+    await tick();
+    await typeFilter(view, clock, 'bug');
+    view.handleInput('tab');
+    await tick();
+    assert.match(tabRow(view), /▸ Assigned \(1\)/, 'the switched-to tab keeps the filtered total');
+    assert.match(tabRow(view), /Involved \(2\)/, 'and so does the tab next to it');
+    assert.match(strip(view.render(120)[1]), /› bug/, 'the filter survives the tab switch');
+    const before = requests.length;
+    view.handleInput('g');
+    await tick();
+    assert.deepEqual(
+      requests.slice(before).map((entry) => [entry.bucketId, entry.query]),
+      [['all', 'bug']],
+      'the All read is issued WITH the filter',
+    );
+  });
+
+  test('a filter change invalidates the All page so it never shows another filter rows (D3)', async () => {
+    const clock = manualScheduler();
+    const { view, requests } = serverView({ scheduleQuery: clock.schedule, cancelSchedule: clock.cancel });
+    view.render(120);
+    await tick();
+    view.handleInput('g');
+    await tick();
+    assert.match(leftColumn(view, 120), /all row 1\b/, 'the unfiltered All lists the connection rows');
+    view.handleInput('g');
+    await tick();
+    assert.equal(view.state.page, 0, 'back on the first scoped tab');
+    await typeFilter(view, clock, 'bug');
+    const before = requests.length;
+    view.handleInput('g');
+    await tick();
+    assert.deepEqual(
+      requests.slice(before).map((entry) => [entry.bucketId, entry.query]),
+      [['all', 'bug']],
+      'the All page is read again, with the filter that invalidated it',
+    );
+    const left = leftColumn(view, 120);
+    assert.match(left, /all row 1 bug/, 'the filtered rows are the rows on screen');
+    assert.ok(!/all row 4/.test(left), 'no row of the previous filter survives in the All view');
+  });
+
+  test('a filtered All reads through the search path and never claims an exact total (S5)', async () => {
+    const clock = manualScheduler();
+    const { view, requests } = serverView({ scheduleQuery: clock.schedule, cancelSchedule: clock.cancel });
+    view.render(120);
+    await tick();
+    view.handleInput('g');
+    await tick();
+    assert.match(tabRow(view), /▸ All \(6\)/, 'the unfiltered connection total is exact, with no mark');
+    assert.match(noteRow(view), /via connection/, 'the frame names the read on screen');
+    const before = requests.length;
+    view.handleInput('T');
+    for (const ch of 'bug') view.handleInput(ch);
+    clock.fire();
+    await tick();
+    assert.equal(requests.at(-1).bucketId, 'all', 'the All view re-reads itself under the filter');
+    assert.equal(requests.at(-1).query, 'bug', 'and the read carries the filter');
+    assert.ok(requests.length > before, 'the filtered All read went out');
+    assert.match(tabRow(view), /▸ All \(3\+\)/, 'a filtered All never claims an exact total');
+    assert.match(noteRow(view), /via search/, 'and the frame says which read is on screen');
+  });
+
+  test('clearing the filter re-reads everything that is loaded (S4/S5)', async () => {
+    const clock = manualScheduler();
+    const { view, requests } = serverView({ scheduleQuery: clock.schedule, cancelSchedule: clock.cancel });
+    view.render(120);
+    await tick();
+    view.handleInput('g');
+    await tick();
+    await typeFilter(view, clock, 'bug');
+    view.handleInput('T');
+    const before = requests.length;
+    view.handleInput('delete');
+    assert.equal(requests.length, before, 'clearing only schedules the read, like any query edit');
+    clock.fire();
+    await tick();
+    assert.deepEqual(
+      requests.slice(before).map((entry) => [entry.bucketId, entry.query]),
+      [['mine', ''], ['assigned', ''], ['involved', ''], ['all', '']],
+      'clearing the filter reads every bucket that is loaded, the All view included',
+    );
+    assert.match(tabRow(view), /▸ All \(6\)/, 'the exact connection total comes back');
+    assert.match(noteRow(view), /via connection/, 'and the frame names the read again');
+  });
+
+  test('no other key moves: a still assigns, and g types inside the search box (S6)', async () => {
+    const { view } = serverView({
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: EDITABLE }), comments: [] }),
+      loadAssignees: () => ({ ok: true, users: [{ login: 'ann', name: 'Ann' }] }),
+    });
+    view.render(120);
+    await tick();
+    assert.match(footerOf(view), /a assign/, 'a still names the assignee editor');
+    view.handleInput('a');
+    assert.equal(view.state.mode, 'assignees', 'a opens the assignee editor, never the All view');
+    view.handleInput('escape');
+    assert.equal(view.state.mode, 'list');
+    assert.equal(view.state.page, 0, 'a moved no view');
+    view.handleInput('T');
+    view.handleInput('g');
+    assert.equal(view.state.query, 'g', 'g is a letter of the query inside the search box');
+    assert.equal(view.state.page, 0, 'and it never switches the view from there');
+  });
+
+  test('the shortcut hint rides the one-row legend at every width the reader gets (D1)', async () => {
+    const { view } = serverView();
+    view.render(200);
+    await tick();
+    for (const width of [40, 60, 80, 120, 200]) {
+      const lines = view.render(width);
+      for (const line of lines) {
+        assert.equal(helpers.visibleWidth(line), width, `${width}: the frame stays cell-exact`);
+      }
+      const legend = lines.map(strip).filter((line) => /esc close/.test(line));
+      assert.equal(legend.length, 1, `${width}: exactly one footer row`);
+      // Below 60 cells the one legend row has room for the movement keys, the
+      // bucket switch and `esc close` only — the same entries it already dropped
+      // there — so the shortcut is taught from 60 cells up.
+      if (width >= 60) assert.match(legend[0], /\bg\b/, `${width}: the shortcut hint survives the drop: ${legend[0]}`);
+    }
+    assert.match(strip(view.render(120).at(-2)), /g all issues/, 'outside All the hint reads all issues');
+    view.handleInput('g');
+    await tick();
+    assert.match(strip(view.render(120).at(-2)), /g related issues/, 'inside All it reads related issues');
   });
 });
 
@@ -3131,7 +3481,7 @@ describe('issues remote search scheduling (S9)', () => {
     return { ...made, requests };
   }
 
-  test('a burst of typing schedules ONE read for the query it settles on', async () => {
+  test('a burst of typing schedules ONE read for each scoped bucket when it settles', async () => {
     const clock = manualScheduler();
     const { view, requests, paints } = scheduledServerView(clock, () => pageResult([cursorRow('m1', issue(1))], { total: 1 }));
     await tick();
@@ -3152,7 +3502,11 @@ describe('issues remote search scheduling (S9)', () => {
     assert.ok(clock.live()[0].delayMs >= 100 && clock.live()[0].delayMs <= 250,
       `a short fixed debounce delay: ${clock.live()[0].delayMs}`);
     clock.fire();
-    assert.equal(requests.length, 2, 'the settled query reads once');
+    assert.deepEqual(
+      requests.slice(1).map((entry) => [entry.bucketId, entry.query]),
+      [['mine', 'crash'], ['assigned', 'crash'], ['involved', 'crash']],
+      'the settled query is read once per scoped bucket, never once per keystroke',
+    );
     assert.deepEqual(requests[1], { bucketId: 'mine', cursor: null, limit: 18, query: 'crash' });
     assert.equal(view.state.searchPending, false, 'the wait ends when the read starts');
   });
@@ -3176,7 +3530,7 @@ describe('issues remote search scheduling (S9)', () => {
     leftColumn(view, 100);
     view.handleInput('T');
     view.handleInput('a');
-    view.handleInput('enter');            // the 'a' read is in flight
+    view.handleInput('enter');            // the 'a' reads are in flight
     assert.deepEqual(pending[1].request, { bucketId: 'mine', cursor: null, limit: 18, query: 'a' });
     view.handleInput('T');
     view.handleInput('b');                // 'ab' waits, so 'a' is already stale
@@ -3186,10 +3540,12 @@ describe('issues remote search scheduling (S9)', () => {
     assert.match(waiting, /mount row/, 'the rows on screen are the ones the reader last saw');
     assert.ok(!waiting.includes('a only match'), 'the answer for the superseded query never paints');
     clock.fire();
-    pending[2].entry.resolve(pageResult([cursorRow('n1', issue(3, { title: 'ab match' }))], { total: 1 }));
+    for (const entry of pending.filter((item) => item.request.query === 'ab')) {
+      entry.entry.resolve(pageResult([cursorRow('n1', issue(3, { title: 'ab match' }))], { total: 1 }));
+    }
     await tick();
     assert.match(leftColumn(view, 100), /ab match/, 'only the newest query answer paints');
-    assert.equal(pending.length, 3, 'exactly three reads: mount, flushed query, settled query');
+    assert.equal(pending.length, 7, 'the mount read, the flushed three and the settled three');
   });
 
   test('leaving the box reads the pending query once and never twice', async () => {
@@ -3201,15 +3557,15 @@ describe('issues remote search scheduling (S9)', () => {
     assert.equal(requests.length, 1, 'typing waits for the debounce');
     view.handleInput('enter');
     assert.equal(view.state.searching, false);
-    assert.equal(requests.length, 2, 'leaving the box issues the read now');
+    assert.equal(requests.length, 4, 'leaving the box issues the three scoped reads now');
     assert.deepEqual(requests[1], { bucketId: 'mine', cursor: null, limit: 18, query: 'bug' });
     assert.equal(clock.live().length, 0, 'the pending callback is cancelled, not left to fire');
     clock.fire();
-    assert.equal(requests.length, 2, 'a cancelled callback never reads');
+    assert.equal(requests.length, 4, 'a cancelled callback never reads');
     view.handleInput('T');
     view.handleInput('x');
     view.handleInput('escape');
-    assert.equal(requests.length, 3, 'escape keeps the filter and reads it once too');
+    assert.equal(requests.length, 7, 'escape keeps the filter and reads it once per scoped bucket too');
     assert.equal(view.state.query, 'bugx', 'escape never changes the typed query');
     assert.equal(clock.live().length, 0);
   });
@@ -3223,11 +3579,11 @@ describe('issues remote search scheduling (S9)', () => {
     view.handleInput('enter');
     leftColumn(view, 100);
     view.handleInput('r');
-    assert.equal(requests.length, 3, 'the explicit refresh reads the current page of the current query');
-    assert.deepEqual(requests[2], { bucketId: 'mine', cursor: null, limit: 18, query: 'lab' },
+    assert.equal(requests.length, 5, 'the explicit refresh reads the current page of the current query once');
+    assert.deepEqual(requests.at(-1), { bucketId: 'mine', cursor: null, limit: 18, query: 'lab' },
       'never an old cursor, never the previous query');
     clock.fire();
-    assert.equal(requests.length, 3, 'no second request from a cancelled callback');
+    assert.equal(requests.length, 5, 'no second request from a cancelled callback');
   });
 
   test('static local search stays immediate and never schedules', async () => {
@@ -3296,7 +3652,7 @@ describe('issues remote search scheduling (S9)', () => {
     view.handleInput('z');
     view.handleInput('enter');
     await tick();
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 4, 'the settled search reads the three scoped buckets');
     assert.deepEqual(requests[1], { bucketId: 'mine', cursor: null, limit: 18, query: 'z' });
     const body = bodyOf(view, 100);
     assert.match(body, /failed to load issues: GitHub issue search exceeds 1000 matches; narrow the filter/,
@@ -3374,11 +3730,9 @@ describe('issues remote search scheduling (S9)', () => {
       return pageResult([cursorRow('m1', issue(40, { title: 'mine row' }))], { total: 1 });
     });
     await tick();
-    view.handleInput('tab');
-    view.handleInput('tab');
-    view.handleInput('tab');
+    view.handleInput('g');
     await tick();
-    assert.equal(view.state.page, 3, 'All is the fourth tab');
+    assert.equal(view.state.page, 3, 'the shortcut enters the All view');
     assert.match(strip(view.render(100)[2]), /▸ All \(2\+\)/, 'All names the connection total');
     assert.match(leftColumn(view, 100), /all connection row/, 'All paints the connection rows');
     view.handleInput('T');
@@ -3473,13 +3827,15 @@ describe('issues remote search scheduling (S9)', () => {
     view.handleInput('T');
     view.handleInput('b');
     clock.fire();
-    assert.deepEqual(pending[2].request, { bucketId: 'mine', cursor: null, limit: 18, query: 'ab' });
+    assert.deepEqual(pending[4].request, { bucketId: 'mine', cursor: null, limit: 18, query: 'ab' });
     pending[1].entry.resolve({ ok: false, error: 'GitHub issue search exceeds 1000 matches' });
     await tick();
     const waiting = leftColumn(view, 100);
     assert.match(waiting, /mount row/, 'the rows on screen are never cleared by a stale failure');
     assert.ok(!strip(view.render(100).join('\n')).includes('1000 matches'), 'and its error never paints');
-    pending[2].entry.resolve(pageResult([cursorRow('n1', issue(3, { title: 'ab match' }))], { total: 1 }));
+    for (const entry of pending.filter((item) => item.request.query === 'ab')) {
+      entry.entry.resolve(pageResult([cursorRow('n1', issue(3, { title: 'ab match' }))], { total: 1 }));
+    }
     await tick();
     assert.match(leftColumn(view, 100), /ab match/, 'only the newest query answer paints');
   });
@@ -4106,7 +4462,7 @@ describe('issues continuous list scrolling instead of pages (S3)', () => {
     assert.match(left, /issue title 2/);
   });
 
-  test('the All tab still lists the repository and keeps the query', async () => {
+  test('the All view still lists the repository and keeps the query', async () => {
     const calls = [];
     const clock = manualScheduler();
     const { view } = makeView({
@@ -4121,11 +4477,9 @@ describe('issues continuous list scrolling instead of pages (S3)', () => {
     });
     await tick();
     const tabs = strip(view.render(120)[2]);
-    assert.match(tabs, /All/, 'the fourth tab survives the layout change');
-    view.handleInput('tab');
-    view.handleInput('tab');
-    view.handleInput('tab');
-    assert.equal(view.state.page, 3, 'tab reaches the All bucket');
+    assert.ok(!/\bAll\b/.test(tabs), `All is a shortcut, not the fourth tab (S1): ${tabs}`);
+    view.handleInput('g');
+    assert.equal(view.state.page, 3, 'the shortcut enters the All bucket');
     await tick();
     assert.equal(calls.at(-1).bucketId, 'all', 'All reads its own bucket');
     assert.match(leftColumn(view, 120, 20), /all tab hit/);
@@ -4340,7 +4694,7 @@ describe('issues preview renders styled markdown (S12)', () => {
 
   test('the markdown roles come from the theme, like the ODD document pane', async () => {
     const theme = recordingTheme();
-    const view = await viewFor('## Steps\n\nuse `gh` now', { theme });
+    await viewFor('## Steps\n\nuse `gh` now', { theme });
     assert.ok(theme.calls.some((call) => call.role === 'mdHeading' && call.text.includes('Steps')),
       'a heading is painted mdHeading');
     assert.ok(theme.calls.some((call) => call.role === 'dim' && call.text.includes('gh')),

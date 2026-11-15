@@ -484,7 +484,7 @@ describe('/issues gate (S3)', () => {
 });
 
 describe('/issues overlay and arguments', () => {
-  test('opens full screen fed by the scoped searches and the All connection', async () => {
+  test('opens full screen fed by the three scoped searches, and leaves All until it is asked for', async () => {
     const root = makeRepo({ tag: 'issues-open' });
     const { runner, calls } = makeIssuesRunner();
     const { component, customs, notes } = await openIssues(root, { runner });
@@ -503,15 +503,79 @@ describe('/issues overlay and arguments', () => {
       'assignee:@me sort:updated-desc',
       'involves:@me -author:@me sort:updated-desc',
     ], 'every scoped tab is read once with its own exact query');
-    assert.equal(connectionReads(calls).length, 1, 'the All tab is read once through the issue connection');
+    assert.equal(connectionReads(calls).length, 0,
+      'opening the panel reads no connection page: All is read when it is entered (S2)');
     const body = clean(component.render(110).join('\n'));
     assert.match(body, /My issues/);
     assert.match(body, /Assigned/);
     assert.match(body, /Involved/);
+    assert.doesNotMatch(clean(component.render(110)[2]), /\bAll\b/, 'All is no longer a tab (S1)');
     assert.match(body, /76/, 'the listed issue number');
     assert.match(body, /chore: update/, 'the listed issue title');
     assert.match(body, /◈ Issues/, 'the header names the surface');
     assert.ok(!body.includes(path.basename(root)), 'the header never repeats the checkout name');
+  });
+
+  test('All is read the first time the shortcut enters it, and re-entering reuses it (S1/S2)', async () => {
+    const root = makeRepo({ tag: 'issues-all-lazy' });
+    const { runner, calls } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner });
+    await tick();
+    assert.equal(connectionReads(calls).length, 0, 'the mount reads no connection page');
+    assert.equal(searchQueries(calls).length, 3, 'and exactly the three scoped searches');
+    component.handleInput('g');
+    await tick();
+    const reads = connectionReads(calls);
+    assert.equal(reads.length, 1, 'entering All issues one connection read');
+    const bar = clean(component.render(110)[2]);
+    assert.match(bar, /▸ All \(\d+\)/, `the bar reads only the All view: ${bar}`);
+    for (const label of ['My issues', 'Assigned', 'Involved']) {
+      assert.ok(!bar.includes(label), `the scoped tabs leave the bar in the All view: ${bar}`);
+    }
+    // The full legend only fits a wide frame; the label is what is under test.
+    assert.match(clean(component.render(200).at(-2)), /g related issues/,
+      'inside All the hint says the key goes back (D1)');
+    component.handleInput('g');
+    await tick();
+    assert.match(clean(component.render(200).at(-2)), /g all issues/,
+      'outside All the hint names what the key opens (D1)');
+    assert.equal(connectionReads(calls).length, 1, 'leaving All reads nothing');
+    component.handleInput('g');
+    await tick();
+    assert.equal(connectionReads(calls).length, 1, 're-entering All reuses the page it read (S2)');
+  });
+
+  test('a typed filter is read by the three scoped tabs, and the All view searches instead of connecting (S3/S4/S5)', async () => {
+    const root = makeRepo({ tag: 'issues-filter' });
+    const { runner, calls } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner });
+    await tick();
+    const mount = searchQueries(calls).length;
+    assert.equal(mount, 3, 'the mount read the three scoped buckets');
+    component.handleInput('t');
+    for (const ch of 'label:bug') component.handleInput(ch);
+    await waitFor(() => searchQueries(calls).length >= mount + 3);
+    await tick();
+    assert.deepEqual(searchQueries(calls).slice(mount), [
+      'author:@me sort:updated-desc label:bug',
+      'assignee:@me sort:updated-desc label:bug',
+      'involves:@me -author:@me sort:updated-desc label:bug',
+    ], 'the settled filter re-reads all three scoped buckets, each with its own scope');
+    component.handleInput('enter');
+    await tick();
+    // Entering All while the filter is on is a SEARCH read: the connection takes
+    // no text, and the search count is capped, so the view never claims it exact.
+    const before = searchQueries(calls).length;
+    component.handleInput('g');
+    await waitFor(() => searchQueries(calls).length > before);
+    await tick();
+    assert.deepEqual(searchQueries(calls).slice(before), ['sort:updated-desc label:bug'],
+      'a filtered All goes through the search path, with the filter');
+    assert.equal(connectionReads(calls).length, 0, 'and never reads the unfiltered connection');
+    await waitFor(() => /▸ All \(\d+\+\)/.test(clean(component.render(110)[2])));
+    assert.match(clean(component.render(110)[2]), /▸ All \(\d+\+\)/,
+      'a filtered All marks its count inexact instead of claiming an exact total');
+    assert.match(clean(component.render(110)[3]), /via search/, 'the frame names the read on screen');
   });
 
   test('an argument notifies and opens nothing', async () => {
@@ -704,7 +768,7 @@ describe('/issues actions (S3,S4)', () => {
     const primed = searchQueries(calls);
     assert.equal(primed.length, 3, 'the mount read every scoped bucket once');
     const connections = connectionReads(calls).length;
-    assert.equal(connections, 1, 'and the All bucket once, through the connection');
+    assert.equal(connections, 0, 'and no page of the All connection (S2)');
 
     const before = clean(component.render(110).join('\n'));
     component.handleInput('f');
@@ -803,6 +867,8 @@ describe('/issues page seam (S5,D1)', () => {
         ['involved', 'Involved', null],
         ['all', 'All', null],
       ], 'bucket metadata only: no accumulated rows are handed to the view');
+      assert.deepEqual(options.pages.filter((page) => page.lazy === true).map((page) => page.id), ['all'],
+        'the All bucket is marked lazy so the mount-time prefetch skips it (S2)');
       assert.equal(options.loadPages, undefined, 'no eager/lazy-list loader is passed beside the fresh seam');
       assert.equal(typeof options.loadIssuePage, 'function');
       const first = run.pages[0];
@@ -1099,7 +1165,7 @@ describe('/issues repository identity (S5)', () => {
     const run = await capturedIssuesOptions(root, { runner: gh.runner, calls: gh.calls });
     const gitCalls = [];
     const original = worktreeGit.runArgvAsync;
-    worktreeGit.runArgvAsync = async (bin, argv) => {
+    worktreeGit.runArgvAsync = async (_bin, argv) => {
       gitCalls.push({ argv: argv.slice() });
       return { status: 0, stdout: '', stderr: '', error: null };
     };
@@ -1128,7 +1194,7 @@ describe('/issues repository identity (S5)', () => {
     const run = await capturedIssuesOptions(root, { runner: gh.runner, calls: gh.calls });
     const gitCalls = [];
     const original = worktreeGit.runArgvAsync;
-    worktreeGit.runArgvAsync = async (bin, argv) => {
+    worktreeGit.runArgvAsync = async (_bin, argv) => {
       gitCalls.push({ argv: argv.slice() });
       return { status: 0, stdout: '', stderr: '', error: null };
     };

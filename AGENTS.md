@@ -313,7 +313,9 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     be read, gets `generic.md`; a `review-*` agent gets nothing. A missing or
     heading-less file falls back to `generic.md`, and a missing generic means no
     section. Only the orchestrator and explore texts name the native operations; the
-    other roles name the MCP tool in full; no text mentions `init`, `sync` or an
+    other roles name the MCP tool in full, and only the orchestrator text also points
+    that tool at another checkout through `projectPath` (a sibling worktree or another
+    git project) before it delegates an explorer there; no text mentions `init`, `sync` or an
     index fallback, because no agent prepares the index: the package does
     (invariant 19).
 

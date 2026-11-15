@@ -540,15 +540,26 @@ the elapsed time are identical in both; only the chrome differs.
   cannot paint the background role, draws the `neon` outline instead of a
   half-drawn float card.
 
-## The bash card, and its toggle
+## The bash card, and its preference
 
-`/card:bash` is this package's fourth command and its one preference. With no
-argument it flips between the two ways a `bash` tool call can be drawn — `own`,
-this package's activity card, which is the default, and `default`, the host's own
-drawing — reports the state in one line (`bash cards: own (activity)` or
-`bash cards: gentle default`) and remembers it. An argument is refused with
-`Unknown option "<what you typed>". Use /card:bash with no argument to flip the
-bash card.`, so a mistyped option never flips the mode by surprise.
+The bash card mode is this package's one preference, and it is not a command:
+`/card:bash` does not exist. The preference is the single `Card tool` row group
+in Gentle Shell's `/gentle:customize`, under `Cards`, and its two values are the
+two ways a `bash` tool call can be drawn:
+
+- `activity` — this package's activity card, named after what the command does.
+  It is the default, and it is `own` in the mode module's own vocabulary.
+- `default` — the host's own bash drawing.
+
+Selecting a value applies it at once (the next frame of a card already on screen
+reads the new mode) and it survives a restart. The row is contributed ONLY
+through `gentle-shell-bridge`'s published row API: `lib/card-bash-customize.js`
+registers one provider (`odd-worktree-card-bash`, one `Card tool` setting) when
+the bridge object is on its `Symbol.for("gentle-shell-bridge/api/v1")` slot, at
+most once per process, and the host renders the two rows as one setting line with
+`Enter` applying the choice. There is no import of that package and no dependency
+on it. Without the bridge the preference has no control surface at all — nothing
+is registered, nothing throws, and the mode stays `activity`.
 
 The choice lives in `<home>/card-bash.json`, and that document is strict: exactly
 two keys, this package's schema string and one of the two modes.
@@ -559,9 +570,9 @@ two keys, this package's schema string and one of the two modes.
 
 - `<home>` is the one `card-style.json` resolves: `GENTLE_PI_CONFIG_HOME` →
   `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`.
-- **The mode is read live.** The process-wide slot the toggle sets answers first,
-  then the document read fresh on every call, then `own`; there is no cache, so
-  no paint can answer with a mode the file no longer states. A missing,
+- **The mode is read live.** The process-wide slot a selection sets answers
+  first, then the document read fresh on every call, then `own`; there is no
+  cache, so no paint can answer with a mode the file no longer states. A missing,
   unreadable, malformed or wrong-schema document reads as `own`, and the reader
   reports which of those it was.
 - **The write is atomic and owner-only.** A temporary file beside the document is
@@ -569,9 +580,22 @@ two keys, this package's schema string and one of the two modes.
   document or the new one and never half of either. The document goes first and
   the live slot second, so a failure leaves both on the old mode and there is
   nothing to roll back.
-- **A document this package cannot parse is never overwritten.** The toggle
-  reports `bash cards: could not save <file> (the existing file is malformed);
-  still own (activity)` and the state does not move.
+- **One legacy shape is read, and the next write migrates it.** A file written by
+  an older tool carries the same schema and one `bash` key instead of `mode`:
+
+  ```json
+  { "schema": "gentle-pi.card-bash/v1", "bash": "activity" }
+  ```
+
+  `activity` means `own` and `default` means `default`, so the customize row marks
+  it like any other document and one click replaces it with the canonical
+  `{"schema":"gentle-pi.card-bash/v1","mode":…}`. It is the ONLY shape outside
+  the canonical one that is understood.
+- **A document this package cannot parse is never overwritten.** A wrong schema,
+  an unknown value, an extra key, invalid JSON or no read permission reads as
+  `own`, is reported as `malformed_file` or `unreadable_file`, and a selection
+  leaves it byte-identical. There is no second document, store or cache behind
+  this one.
 
 **The heading names the activity, never a guess.** `lib/bash-activity.js` reads
 the command alone and answers one family or nothing; `lib/bash-card.js` dresses
@@ -636,14 +660,14 @@ the whole output, row for row. Expansion is the host's own: the card offers the
 host's expand key hint on a settled call, and the host's `expanded` flag
 (`ctrl+o`) decides what is drawn.
 
-**The toggle repaints what is on screen.** The mode is read twice. When a row is
+**The preference repaints what is on screen.** The mode is read twice. When a row is
 created the resolver asks it, so a row created while the mode was `default` is the
 host's own row and stays the host's for its lifetime — its shell must never become
 ours. And a card already on screen reads it again on every paint: the card builds
 its rows inside the component's `render(width)`, which the host calls on every
-frame, so flipping `/card:bash` repaints the bash rows this card drew. There is no
-repaint hook to ask `ctx.ui` for, and the toggle does not pretend to have one: it
-writes the mode, and the next frame decides.
+frame, so choosing a value on the `Card tool` row repaints the bash rows this card
+drew. There is no repaint hook to ask `ctx.ui` for, and the row does not pretend to
+have one: it writes the mode, and the next frame decides.
 
 **Composition with the CodeGraph card is load order.** `own` means every bash call
 is ours, a `codegraph …` command included, and the CodeGraph card is registered
@@ -720,8 +744,9 @@ travel in the Pi session files the host already owns. The setup logs live under
 the system temp directory (`odd-worktree-setup-*`), one directory per create.
 
 One document holds a preference rather than worktrees: `<home>/card-bash.json`,
-the bash card mode `/card:bash` flips. Its format, reader and writer are in [the
-bash card, and its toggle](#the-bash-card-and-its-toggle). Nothing else in user
+the bash card mode the `Card tool` customize row writes. Its format, reader and
+writer are in [the
+bash card, and its preference](#the-bash-card-and-its-preference). Nothing else in user
 configuration is written by this package, except — with the `codegraph` CLI
 installed — the one `codegraph` entry of `<agent dir>/mcp.json` (see [CodeGraph:
 index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry)); Gentle
@@ -921,7 +946,7 @@ ours. Every card in this package, the two worktree tools and the CodeGraph rows 
 count); `ctrl+o` expands it to the whole output, and the Gentle Shell card content level
 (`minimal`) hides the result body while a failure still says why. A `codegraph …`
 `bash` call is that card's only while the CLI is installed; without it [the bash
-card](#the-bash-card-and-its-toggle) draws the same command with the classifier's
+card](#the-bash-card-and-its-preference) draws the same command with the classifier's
 `codegraph` identity.
 
 ## Deliberately absent
@@ -929,8 +954,9 @@ card](#the-bash-card-and-its-toggle) draws the same command with the classifier'
 This package is the worktree / ODD / issues surface only: two agent tools, three
 panels, one optional rail section and the one bash-card preference, no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
-companion-app integration, and no worktree↔issue association. There is nothing to
-configure beyond `/card:bash`, and `/warp`, `/odd-list` and `/issues` are always
+companion-app integration, and no worktree↔issue association. Its one customize
+contribution is the `Card tool` row group, which adds no command and no tool of its
+own. Apart from that row there is nothing to configure, and `/warp`, `/odd-list` and `/issues` are always
 on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 

@@ -1,5 +1,5 @@
 'use strict';
-// S2/S4 surface: the standalone package always registers /warp, /odd-list and
+// S4 surface: the standalone package always registers /warp, /odd-list and
 // /issues plus the TWO agent worktree tools (S3/S4: `worktree_delete` and
 // `worktree_warp` are not registered, so `/warp` is the only front that moves
 // the session and the panel's ctrl+d the only one that removes a checkout),
@@ -11,6 +11,11 @@
 // The issues reader, preview formatter and view are the migrated T2 units and
 // are shipped; `/issues` is the T3 command that mounts them, without any
 // worktree↔issue association.
+//
+// The ONE preference is the bash card mode, and it is not a command (S3): it is
+// a `Card tool` row group contributed through gentle-shell-bridge's published
+// row API into `/gentle:customize` → `Cards`, so the shipped surface is exactly
+// three commands, two tools and one sidebar section.
 //
 // Everything here reads the observable surface: the registered command and
 // tool objects, the manifest, the files on disk. No internal state is read.
@@ -64,36 +69,61 @@ describe('manifest', () => {
     // S1,S3): the per-tab cache is still gone, but the `gh` client, the
     // formatter and the issues view `/issues` mounts are shipped, so their
     // presence is asserted rather than forbidden. The three bash card modules
-    // are the shipped `/card:bash` drawing (T2/T4): a classifier, the card and
-    // its resolver, and nothing else.
-    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-card.js', 'bash-card-resolver.js']) {
+    // are the shipped drawing (T2/T4): a classifier, the card and its resolver,
+    // and the mode module plus the customize row that owns the one preference.
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-card.js', 'bash-card-resolver.js', 'card-bash-mode.js', 'card-bash-customize.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
   });
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd-list, /issues, /card:bash and the two worktree tools', async () => {
+  test('registers /warp, /odd-list, /issues and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['card:bash', 'issues', 'odd-list', 'warp'], 'the command list is exactly the three panels and the card toggle');
+    assert.deepEqual(registered, ['issues', 'odd-list', 'warp'], 'the command list is exactly the three panels');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
 
-  // S1/S7: the toggle is the ONE preference this package owns, and it is a
-  // preference with a document in the Pi home — not a configuration surface.
-  // Everything the invariants still forbid stays forbidden.
-  test('the one preference this package writes is the bash card mode', async () => {
+  // S3: the ONE preference this package owns is the bash card mode, and it has
+  // no command name any more. It is a preference with a document in the Pi home
+  // — not a configuration surface — whose only control is the customize row
+  // group contributed through the bridge API.
+  test('the one preference this package writes is the bash card mode, controlled by a customize row', async () => {
     const source = stubbedSource();
-    assert.ok(source.includes('pi.registerCommand("card:bash"'), 'the toggle is the fourth command');
-    assert.ok(source.includes('function registerCardBashCommand'), 'its registration is a named step');
-    assert.ok(source.includes('libRequire("card-bash-mode.js")'), 'the mode document has one reader/writer');
+    assert.ok(source.includes('libRequire("card-bash-customize.js")'), 'the preference reaches /gentle:customize through the bridge API');
+    assert.ok(source.includes('function registerCardBashCustomize'), 'its registration is a named step');
+    assert.equal(source.includes('registerCommand("card:bash"'), false, 'the preference has no command name');
+    assert.equal(source.includes('writeCardBashMode'), false, 'no command writes the preference: the customize action is the only caller');
+    for (const gone of ['cardBashStateLabel', 'cardBashSaveReason', 'cardBashSaveFailureLine', 'registerCardBashCommand']) {
+      assert.equal(source.includes(gone), false, `${gone} is gone with the command`);
+    }
+
+    // `lib/card-bash-mode.js` stays the only writer of the one document, and the
+    // customize row is its only caller.
+    const lib = path.join(ROOT, 'lib');
+    const modules = fs.readdirSync(lib).filter((entry) => entry.endsWith('.js') && entry !== 'card-bash-mode.js');
+    const callers = modules
+      .filter((entry) => /writeCardBashMode\s*\(/.test(fs.readFileSync(path.join(lib, entry), 'utf8')))
+      .sort();
+    assert.deepEqual(callers, ['card-bash-customize.js'], 'the customize row is the writer\'s only caller');
+    const named = modules.filter((entry) => /CARD_BASH_FILE\s*=\s*['"]/.test(fs.readFileSync(path.join(lib, entry), 'utf8')));
+    assert.deepEqual(named, [], 'the document is named once, in the mode module');
+
     const { commands } = await loadExtension({});
+    assert.equal(commands.has('card:bash'), false, 'no /card:bash command is registered');
     for (const gone of ['card-style', 'card-bash', 'customize', 'worktree-mode']) {
       assert.equal(commands.has(gone), false, `no /${gone} command`);
     }
+  });
+
+  test('the bridge is never imported, and the surface reaches it through its published object', () => {
+    const source = stubbedSource();
+    assert.equal(/from\s+["']gentle-shell-bridge/.test(source), false, 'no import of the bridge package anywhere');
+    assert.equal(/require\(\s*["']gentle-shell-bridge/.test(source), false, 'no require of the bridge package anywhere');
+    assert.equal(source.split('api.registerSection(').length - 1, 1, 'exactly one sidebar section is contributed');
   });
 
   test('the bash activity card registers through one host hook, next to the CodeGraph card (T4)', async () => {

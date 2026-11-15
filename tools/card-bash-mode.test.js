@@ -1,12 +1,13 @@
 'use strict';
-// S1/S6/S7: the `/card:bash` toggle and the one document behind it.
+// S3: the bash card preference and the one document behind it.
 //
 // The first half reads the mode module's public surface — the two modes, the
 // strict `<home>/card-bash.json`, the process-wide slot a live session reads and
-// the writer that persists the toggle — and never its module state. The second
-// half drives the registered command through the loaded extension, so what is
-// asserted is what a human sees: the one reported line, the document on disk and
-// the state a failure leaves behind.
+// the writer that persists the choice — and never its module state. The second
+// half drives the customize row the preference lives in, through the bridge API
+// on its published slot and the loaded extension, so what is asserted is what a
+// human sees: the row group, the document on disk and the state a failure leaves
+// behind.
 //
 // Every document lives in a scratch directory reached through
 // `GENTLE_PI_CONFIG_HOME` (the home resolution `lib/card-style.js` already owns),
@@ -31,10 +32,16 @@ const {
 	resolveCardBashMode,
 	writeCardBashMode,
 } = require('../lib/card-bash-mode.js');
+const { registerCardBashCustomize } = require('../lib/card-bash-customize.js');
 const { loadExtension } = require('./fixtures/load-extension.js');
 
 const VALID = (mode) => JSON.stringify({ schema: CARD_BASH_SCHEMA, mode });
+// The one legacy shape the human's own file carries (S3): the same schema and a
+// `bash` key whose value is the card's own vocabulary.
+const LEGACY = (value) => JSON.stringify({ schema: CARD_BASH_SCHEMA, bash: value });
 const CANONICAL = (mode) => `${JSON.stringify({ schema: CARD_BASH_SCHEMA, mode })}\n`;
+// The bridge's published object, read from its slot and never imported.
+const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
 
 let scratch;
 const newHome = (name) => {
@@ -68,12 +75,14 @@ before(() => {
 
 beforeEach(() => {
 	useSlot(undefined);
+	delete globalThis[BRIDGE_SLOT];
 	delete process.env.GENTLE_PI_CONFIG_HOME;
 	delete process.env.GENTLE_SHELL_CONFIG_HOME;
 });
 
 afterEach(() => {
 	useSlot(undefined);
+	delete globalThis[BRIDGE_SLOT];
 	restoreEnv();
 });
 
@@ -116,12 +125,35 @@ describe('the mode reader', () => {
 			JSON.stringify({ schema: CARD_BASH_SCHEMA, mode: 'activity' }),
 			JSON.stringify({ schema: CARD_BASH_SCHEMA, mode: 1 }),
 			JSON.stringify([{ schema: CARD_BASH_SCHEMA, mode: CARD_BASH_MODE.OWN }]),
+			// S3: a wrong schema, an extra key and an unknown value are still
+			// malformed — only the one recognized legacy shape is read.
+			JSON.stringify({ schema: 'gentle-pi.card-bash/v2', bash: 'activity' }),
+			JSON.stringify({ schema: CARD_BASH_SCHEMA, bash: 'activity', mode: CARD_BASH_MODE.OWN }),
+			JSON.stringify({ schema: CARD_BASH_SCHEMA, bash: 'activity', extra: true }),
+			JSON.stringify({ schema: CARD_BASH_SCHEMA, bash: 'own' }),
+			JSON.stringify({ schema: CARD_BASH_SCHEMA, bash: 1 }),
+			JSON.stringify({ schema: CARD_BASH_SCHEMA, bash: null }),
 		]) {
 			assert.equal(parseCardBashModeFile(raw), undefined, `${JSON.stringify(raw)} states no mode`);
 		}
 		for (const value of [undefined, null, 1, {}]) {
 			assert.equal(parseCardBashModeFile(value), undefined, 'a non-string is not a document');
 		}
+	});
+
+	test('the legacy document shape reads its mode, in the card\'s own vocabulary', () => {
+		assert.equal(parseCardBashModeFile(LEGACY('activity')), CARD_BASH_MODE.OWN, '"activity" is our card');
+		assert.equal(parseCardBashModeFile(LEGACY('default')), CARD_BASH_MODE.DEFAULT, '"default" is the host\'s drawing');
+		assert.equal(parseCardBashModeFile(`${LEGACY('default')}\n`), CARD_BASH_MODE.DEFAULT, 'a trailing newline is the same document');
+
+		const home = newHome('legacy-read');
+		writeDocument(home, LEGACY('default'));
+		assert.deepEqual(
+			resolveCardBashMode({ gentlePiConfigHome: home }),
+			{ mode: CARD_BASH_MODE.DEFAULT, source: 'file', reason: null, slot: undefined, globalFile: documentIn(home) },
+			'the legacy document is a real answer, not a malformed file',
+		);
+		assert.equal(cardBashMode({ gentlePiConfigHome: home }), CARD_BASH_MODE.DEFAULT);
 	});
 
 	test('a missing document is our card switched on, and the reader says why', () => {
@@ -252,6 +284,33 @@ describe('the mode writer', () => {
 		assert.equal(globalThis[CARD_BASH_MODE_SLOT], CARD_BASH_MODE.DEFAULT, 'the live session reads the new mode at once');
 	});
 
+	test('a write over the legacy shape succeeds and produces the canonical document', () => {
+		const home = newHome('legacy-write');
+		writeDocument(home, LEGACY('activity'));
+		assert.equal(cardBashMode({ gentlePiConfigHome: home }), CARD_BASH_MODE.OWN, 'the legacy document reads before the write');
+
+		const result = writeCardBashMode(CARD_BASH_MODE.DEFAULT, { gentlePiConfigHome: home });
+		assert.deepEqual(result, { ok: true, file: documentIn(home), mode: CARD_BASH_MODE.DEFAULT });
+		assert.equal(readFileSync(documentIn(home), 'utf8'), CANONICAL(CARD_BASH_MODE.DEFAULT), 'the next write migrates it to the one document');
+		assert.deepEqual(readdirSync(home), [CARD_BASH_FILE], 'the temporary file is gone');
+	});
+
+	test('a wrong-schema, extra-key or unknown-value document is still malformed and still refused', () => {
+		const home = newHome('malformed-variants');
+		for (const raw of [
+			JSON.stringify({ schema: 'gentle-pi.card-bash/v2', bash: 'activity' }),
+			JSON.stringify({ schema: CARD_BASH_SCHEMA, bash: 'activity', mode: CARD_BASH_MODE.OWN }),
+			JSON.stringify({ schema: CARD_BASH_SCHEMA, bash: 'own' }),
+		]) {
+			writeFileSync(documentIn(home), raw);
+			const read = resolveCardBashMode({ gentlePiConfigHome: home });
+			assert.equal(read.mode, CARD_BASH_MODE.OWN, `${raw} reads as our card on`);
+			assert.equal(read.reason, 'malformed_file', `${raw} says why`);
+			assert.equal(writeCardBashMode(CARD_BASH_MODE.DEFAULT, { gentlePiConfigHome: home }).reason, 'malformed_file');
+			assert.equal(readFileSync(documentIn(home), 'utf8'), raw, `${raw} is byte-identical after the refused write`);
+		}
+	});
+
 	test('never rewrites a malformed document, and leaves its bytes alone', () => {
 		const home = newHome('malformed-write');
 		writeDocument(home, '{"schema":"gentle-pi.card-bash/v1","mode":"activity"}');
@@ -302,109 +361,170 @@ describe('the mode writer', () => {
 	});
 });
 
-// ---- `/card:bash`: one line, one document, and a failure that changes nothing ----
+// ---- the customize row: the preference's only control surface ----
+//
+// S3 (T3): the preference is ONE `Card tool` row group in `/gentle:customize` →
+// `Cards`, contributed through gentle-shell-bridge's published row API. These
+// cases read that provider the way the host does — the API object on its global
+// slot, the rows it hands over and the actions it runs — and assert the document
+// on disk, never module state. The extension is loaded fresh per case, so the
+// registration under test is the one that load made.
 
-describe('the /card:bash command', () => {
-	/**
-	 * The registered command plus a context whose notifications are exactly what a
-	 * human would see. Each case loads its own extension instance, so the command
-	 * under test is the one this case installed.
-	 */
-	async function harness() {
-		const { commands } = await loadExtension({});
-		const lines = [];
-		const notify = (text, level) => lines.push([level, text]);
-		const ctx = { cwd: scratch, hasUI: false, mode: 'tui', ui: { notify } };
-		return { commands, lines, ctx };
-	}
+/** A fake bridge on the published slot, recording what the extension registers. */
+function installBridge() {
+	const providers = [];
+	const sections = [];
+	const repaints = [];
+	globalThis[BRIDGE_SLOT] = {
+		schema: 'gentle-shell-bridge/api',
+		version: 1,
+		registerRows: (provider) => {
+			providers.push(provider);
+			return () => {};
+		},
+		registerSection: (section) => {
+			sections.push(section);
+			return () => {};
+		},
+		createStore: () => ({}),
+		requestRepaint: () => { repaints.push(1); },
+	};
+	return { providers, sections, repaints };
+}
 
-	test('is registered with the name the surface declares', async () => {
-		const { commands } = await harness();
-		const definition = commands.get('card:bash');
-		assert.ok(definition, '/card:bash is registered');
-		assert.equal(typeof definition.handler, 'function');
-		assert.equal(typeof definition.description, 'string');
-		assert.ok(definition.description.length > 0, 'the command is discoverable with a description');
+const rowsOf = (provider, home) => provider.rows({ theme: {}, configHome: home });
+const currentOf = (rows) => rows.map((row) => row.choice.current());
+const actionOf = (rows, value) => rows.find((row) => row.choice.value === value).action;
+
+describe('the customize row', () => {
+	test('registers one row provider for the Card tool setting under Cards', async () => {
+		const home = newHome('customize-provider');
+		process.env.GENTLE_PI_CONFIG_HOME = home;
+		const { providers } = installBridge();
+		const loaded = await loadExtension({});
+
+		assert.equal(providers.length, 1, 'exactly one row provider is registered');
+		const provider = providers[0];
+		assert.equal(provider.id, 'odd-worktree-card-bash');
+		assert.equal(provider.category, 'Cards');
+		assert.equal(provider.name, 'Odd worktree');
+		assert.equal(typeof provider.rows, 'function');
+
+		// S3: three commands, not four. The preference has no command name any more.
+		assert.deepEqual([...loaded.commands.keys()].sort(), ['issues', 'odd-list', 'warp'], 'the preference is not a command');
+		assert.deepEqual([...loaded.tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'the two tools are untouched');
+
+		const rows = rowsOf(provider, home);
+		assert.equal(rows.length, 2, 'the Card tool line has two values');
+		assert.deepEqual(rows.map((row) => row.choice.setting), ['Card tool', 'Card tool'], 'the two rows are one setting');
+		assert.deepEqual(rows.map((row) => row.choice.value), ['default', 'activity']);
+		assert.deepEqual(rows.map((row) => row.label), ['default', 'activity'], 'each row is named by its value');
+		assert.deepEqual(rows.map((row) => row.category), ['Cards', 'Cards'], 'every row carries the page it belongs to');
+		assert.deepEqual(currentOf(rows), [false, true], 'activity — our card — is the default the row marks');
+		for (const row of rows) assert.equal(typeof row.action, 'function', 'every value is applied by its own action');
 	});
 
-	test('the default state flips to the host default, reports it and writes the strict document', async () => {
-		const home = newHome('command-flip');
+	test('selecting a value writes the document and changes the mode at once', async () => {
+		const home = newHome('customize-write');
 		process.env.GENTLE_PI_CONFIG_HOME = home;
-		assert.equal(cardBashMode(), CARD_BASH_MODE.OWN, 'the default state is our card on');
-		const { commands, lines, ctx } = await harness();
+		const { providers, repaints } = installBridge();
+		await loadExtension({});
+		const provider = providers[0];
 
-		await commands.get('card:bash').handler('', ctx);
+		await actionOf(rowsOf(provider, home), 'default')({});
+		assert.equal(readFileSync(documentIn(home), 'utf8'), CANONICAL(CARD_BASH_MODE.DEFAULT), 'the click persists the canonical document');
+		assert.equal(cardBashMode({ gentlePiConfigHome: home }), CARD_BASH_MODE.DEFAULT, 'and the resolved mode follows');
+		assert.equal(globalThis[CARD_BASH_MODE_SLOT], CARD_BASH_MODE.DEFAULT, 'the live slot is what repaints a card already drawn');
+		assert.equal(repaints.length, 1, 'the click asks for the repaint that makes it visible');
+		assert.deepEqual(currentOf(rowsOf(provider, home)), [true, false], 'the row group now marks default');
 
-		assert.deepEqual(lines, [['info', 'bash cards: gentle default']]);
-		assert.equal(readFileSync(documentIn(home), 'utf8'), CANONICAL(CARD_BASH_MODE.DEFAULT));
-		assert.equal(cardBashMode(), CARD_BASH_MODE.DEFAULT, 'and the live session already reads it');
+		await actionOf(rowsOf(provider, home), 'activity')({});
+		assert.equal(readFileSync(documentIn(home), 'utf8'), CANONICAL(CARD_BASH_MODE.OWN), 'and activity writes its own mode back');
+		assert.equal(cardBashMode({ gentlePiConfigHome: home }), CARD_BASH_MODE.OWN);
+		assert.equal(repaints.length, 2, 'every applied choice repaints');
+		assert.deepEqual(currentOf(rowsOf(provider, home)), [false, true]);
 	});
 
-	test('invoking it twice returns to the first state', async () => {
-		const home = newHome('command-toggle');
+	test('a refused write repaints nothing and leaves the document byte-identical', async () => {
+		const home = newHome('customize-refused');
 		process.env.GENTLE_PI_CONFIG_HOME = home;
-		const { commands, lines, ctx } = await harness();
+		const broken = '{"schema":"some-other-schema","mode":"own"}\n';
+		writeFileSync(documentIn(home), broken, 'utf8');
+		const { providers, repaints } = installBridge();
+		await loadExtension({});
 
-		await commands.get('card:bash').handler('', ctx);
-		await commands.get('card:bash').handler('', ctx);
-
-		assert.deepEqual(lines, [['info', 'bash cards: gentle default'], ['info', 'bash cards: own (activity)']]);
-		assert.equal(readFileSync(documentIn(home), 'utf8'), CANONICAL(CARD_BASH_MODE.OWN), 'the document follows the toggle');
-		assert.equal(cardBashMode(), CARD_BASH_MODE.OWN, 'and so does the live session');
+		await actionOf(rowsOf(providers[0], home), 'default')({});
+		assert.equal(readFileSync(documentIn(home), 'utf8'), broken, 'a document this package cannot parse is never replaced');
+		assert.deepEqual(repaints, [], 'and nothing claims the change took effect');
 	});
 
-	test('a malformed existing document is reported as a failure and never overwritten', async () => {
-		const home = newHome('command-malformed');
+	test('the legacy document reads as its mode and a click replaces it with the canonical one', async () => {
+		const home = newHome('customize-legacy');
 		process.env.GENTLE_PI_CONFIG_HOME = home;
-		writeDocument(home, '{"schema":"gentle-pi.card-bash/v1","mode":"activity"}');
-		const before = readFileSync(documentIn(home), 'utf8');
-		const { commands, lines, ctx } = await harness();
+		writeDocument(home, LEGACY('default'));
+		const { providers } = installBridge();
+		await loadExtension({});
+		const rows = rowsOf(providers[0], home);
+		assert.deepEqual(currentOf(rows), [true, false], 'the legacy `bash` value is the mode the row marks');
 
-		await commands.get('card:bash').handler('', ctx);
-
-		assert.deepEqual(lines, [['error', `bash cards: could not save ${documentIn(home)} (the existing file is malformed); still own (activity)`]]);
-		assert.equal(readFileSync(documentIn(home), 'utf8'), before, 'the malformed document is byte-identical');
-		assert.equal(cardBashMode(), CARD_BASH_MODE.OWN, 'the state did not move');
+		await actionOf(rows, 'activity')({});
+		assert.equal(readFileSync(documentIn(home), 'utf8'), CANONICAL(CARD_BASH_MODE.OWN), 'one click migrates the document');
 	});
 
-	test('the live slot decides the flip, not the document', async () => {
-		const home = newHome('command-slot');
-		process.env.GENTLE_PI_CONFIG_HOME = home;
-		writeDocument(home, VALID(CARD_BASH_MODE.OWN));
-		useSlot(CARD_BASH_MODE.DEFAULT);
-		const { commands, lines, ctx } = await harness();
-
-		await commands.get('card:bash').handler('', ctx);
-
-		assert.deepEqual(lines, [['info', 'bash cards: own (activity)']], 'the session was on the host default, so the toggle turns ours on');
-		assert.equal(readFileSync(documentIn(home), 'utf8'), CANONICAL(CARD_BASH_MODE.OWN));
+	test('a bridge without registerRows registers nothing and throws nothing', async () => {
+		globalThis[BRIDGE_SLOT] = {
+			schema: 'gentle-shell-bridge/api',
+			version: 1,
+			registerSection: () => () => {},
+			createStore: () => ({}),
+		};
+		const loaded = await loadExtension({});
+		assert.deepEqual([...loaded.commands.keys()].sort(), ['issues', 'odd-list', 'warp'], 'every other surface still registers');
+		assert.deepEqual([...loaded.tools.keys()].sort(), ['worktree_create', 'worktree_list']);
 	});
 
-	test('an unwritable home reports a failure and leaves the state unchanged', async () => {
-		const home = newHome('command-readonly');
-		process.env.GENTLE_PI_CONFIG_HOME = home;
-		const { commands, lines, ctx } = await harness();
-		chmodSync(home, 0o500);
-		try {
-			await commands.get('card:bash').handler('', ctx);
+	test('a bridge that publishes later registers the row on the ready announcement', async () => {
+		delete globalThis[BRIDGE_SLOT];
+		const announced = [];
+		const loaded = await loadExtension({
+			events: {
+				on: (event, handler) => {
+					if (event === 'gentle-shell-bridge:ready') announced.push(handler);
+					return () => {};
+				},
+			},
+		});
+		assert.equal(announced.length, 1, 'one announcement subscription carries every bridge surface');
+		const { providers } = installBridge();
+		assert.equal(providers.length, 0, 'nothing registers before the announcement');
+		announced[0]();
+		assert.equal(providers.length, 1);
+		announced[0]();
+		assert.equal(providers.length, 1, 'a repeated announcement never registers the row twice');
+		assert.equal(loaded.commands.has('issues'), true, 'every other surface still works');
+	});
 
-			assert.equal(lines.length, 1);
-			assert.equal(lines[0][0], 'error', 'a write failure is never reported as success');
-			assert.match(lines[0][1], /^bash cards: could not save .* \((EACCES|EPERM|EROFS)\); still own \(activity\)$/);
-			assert.deepEqual(readdirSync(home), [], 'nothing was written');
-			assert.equal(cardBashMode(), CARD_BASH_MODE.OWN, 'the state is unchanged');
-		} finally {
-			chmodSync(home, 0o700);
+	test('registering is idempotent, returns a disposer, and an absent API is a no-op', () => {
+		const providers = [];
+		const removed = [];
+		const api = {
+			registerRows: (provider) => {
+				providers.push(provider);
+				return () => { removed.push(provider); };
+			},
+		};
+		const first = registerCardBashCustomize(api);
+		assert.equal(typeof first, 'function', 'the registration hands back a disposer');
+		assert.equal(registerCardBashCustomize(api), first, 'a second registration in one process is the same one');
+		assert.equal(providers.length, 1);
+		first();
+		assert.equal(removed.length, 1, 'the disposer removes the row group');
+		registerCardBashCustomize(api);
+		assert.equal(providers.length, 2, 'after disposal a fresh registration is possible');
+
+		for (const absent of [undefined, null, {}, 42, 'bridge']) {
+			assert.equal(registerCardBashCustomize(absent), null, `${JSON.stringify(absent)} is not a bridge`);
+			assert.doesNotThrow(() => registerCardBashCustomize(absent), 'an absent API is a no-op, never a throw');
 		}
-	});
-
-	test('never throws into the host, even without a UI', async () => {
-		const home = newHome('command-no-ui');
-		process.env.GENTLE_PI_CONFIG_HOME = home;
-		const { commands } = await harness();
-
-		await assert.doesNotReject(() => commands.get('card:bash').handler('', { cwd: scratch }));
-		await assert.doesNotReject(() => commands.get('card:bash').handler('', undefined));
-		assert.equal(readFileSync(documentIn(home), 'utf8'), CANONICAL(CARD_BASH_MODE.OWN), 'the toggle still happened; only the report had nowhere to go');
 	});
 });

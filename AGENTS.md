@@ -13,8 +13,10 @@ configuration surface.
 - three panels — `/warp` (move the session between checkouts, and remove one),
   `/odd-list` (read this checkout's `odd/tasks/*.md`), `/issues` (read and, when
   permitted, edit this checkout's GitHub issues);
-- one preference — `/card:bash` (draw a `bash` tool call as this package's
-  activity card, the default, or leave it to the host's own drawing).
+- one preference — the bash card mode: draw a `bash` tool call as this package's
+  activity card (`activity`, the default) or leave it to the host's own drawing
+  (`default`), chosen from Gentle Shell's `/gentle:customize` → `Cards` through
+  gentle-shell-bridge's published row API. It is not a command (invariant 3).
 
 Deleting a checkout and moving the session are human actions only: they happen
 through `/warp` (its `ctrl+d`, its selector, a typed name, a queued handoff), and
@@ -26,7 +28,7 @@ its presence records.
 
 | Path | Responsibility |
 | --- | --- |
-| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the four commands, the two tools, the `worktree-warp` message renderer, the optional `ISSUES` rail section with its one missing-bridge warning, and the `session_start` / `session_shutdown` / `turn_end` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
+| `extensions/odd-worktree-tools.ts` | The **only** Pi entry point. Plain JavaScript under a `.ts` name (`// @ts-nocheck`), so the test copy-to-`.mjs` loader works. Registers the three commands, the two tools, the `worktree-warp` message renderer, the optional `ISSUES` rail section and the one `Card tool` customize row group (each with gentle-shell-bridge and its one missing-bridge warning), and the `session_start` / `session_shutdown` / `turn_end` / `tool_call` / `tool_result` / `before_agent_start` hooks. |
 | `lib/worktree-git.js` | The git seam: identity, worktree listing, branch validation, the canonical target path `<repo-parent>/<repo-name>-worktrees/<slug>` and its helpers, and the async argv runner. |
 | `lib/worktree-registry.js` | The one ownership rule, with no file: a checkout this package created is a directory under `<repo-parent>/<repo-name>-worktrees`, so the path decides. Partitions Git's listing into ours and outside, and parses `git worktree list --porcelain` for the create path. |
 | `lib/worktree-create.js` | `worktree_create`'s core: request validation, base resolution, the ODD-named destination, the refusals sentence for sentence, plan execution and the fixed output lines. |
@@ -45,7 +47,8 @@ its presence records.
 | `lib/worktree-card.js` | The `worktree-warp` message renderer (the moved/queued card), composed on the card substrate like the tool cards. |
 | `lib/card-style.js` | The one style reader: the live process-wide slot Gentle Shell publishes, then the strict `<home>/card-style.json`, then `float`. It reports the source and the reason it fell back, caches only the document branch, and is re-read on `session_start`. |
 | `lib/card-content.js` | The one reader of the card content level Gentle Shell publishes (`default` or `minimal`), read at paint time; every card honors it. |
-| `lib/card-bash-mode.js` | The one bash-card mode reader and writer: the live process-wide slot this package's toggle sets, then the strict `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1","mode":"own"|"default"}`), then `own`. Same resolution order and reasons as `lib/card-style.js`; the writer is atomic, owner-only, document-first and never rewrites a document it cannot parse. |
+| `lib/card-bash-mode.js` | The one bash-card mode reader and writer: the live process-wide slot a customize click sets, then the strict `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1","mode":"own"|"default"}`), then `own`. Same resolution order and reasons as `lib/card-style.js`; the writer is atomic, owner-only, document-first and never rewrites a document it cannot parse — except that the one recognized legacy shape (`{"schema":"gentle-pi.card-bash/v1","bash":"activity"|"default"}`) is READ and migrated by the next write. |
+| `lib/card-bash-customize.js` | The preference's one control surface: the `Card tool` row group (`default` | `activity`) registered through gentle-shell-bridge's published `registerRows` API into `/gentle:customize` → `Cards`, idempotent per process, with a disposer, each row's `current()` read from `lib/card-bash-mode.js` and its action a write through `writeCardBashMode`. The mode module's only caller. It imports no bridge and registers nothing when the API is absent. |
 | `lib/bash-activity.js` | The classifier the bash card heads with: the one quote-aware segmenter, the eight named families and the mark and theme role each wears, and the package's own conservatism — a segment it cannot name leaves the call unnamed, which is what the generic `$ bash` heading is. |
 | `lib/bash-destructive.js` | The destructive family's evidence: the segment that names a deleting program, and the whole command whose pipe or heredoc feeds a database client its statements. Evidence only — no permission, guard or execution decision may read it. |
 | `lib/bash-card.js` | The bash activity card on the card substrate: the heading identity, the collapsed detail and its three-row output tail, the expanded whole command and whole output, the running row, the rail and the elapsed. Its slots re-read the mode on every paint. |
@@ -92,20 +95,26 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    `["./extensions/odd-worktree-tools.ts"]`, and `extensions/` holds no other
    file. A second entry point changes what the host loads.
 2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
-   invariants 18 and 19 allow.** No customize command, no plugin-tools toggles, no
+   invariants 18 and 19 allow.** No customize COMMAND, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
    `herdr-gentle:` command name. The ONE preference this package owns is the bash
-   card mode (invariant 3): no other setting is read, written or offered. CodeGraph
+   card mode (invariant 3), and it contributes exactly ONE customize row group —
+   the `Card tool` line — through gentle-shell-bridge's published `registerRows`
+   API. That row is a contribution to the host's own page, not a customize
+   surface of this package: it registers no command, no page, no setting of its
+   own and no key; no other setting is read, written or offered. CodeGraph
    adds no command and no model-facing tool: no `/codegraph-*` command, no tool
    named `codegraph`, no override of another extension's tool.
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
-3. **The shipped surface is exactly four commands, two tools and one sidebar
-   section.** `/warp`, `/odd-list`, `/issues`, `/card:bash`; `worktree_create`,
-   `worktree_list`; and the one fourth kind of surface, a sidebar section
-   (`lib/issues-section.js`) that is neither a command nor a tool and therefore
-   registers no name the host or the agent can call. No agent surface moves the
+3. **The shipped surface is exactly three commands, two tools, one sidebar
+   section and one customize row group.** `/warp`, `/odd-list`, `/issues`;
+   `worktree_create`, `worktree_list`; the one fourth kind of surface, a sidebar
+   section (`lib/issues-section.js`) that is neither a command nor a tool and
+   registers no name the host or the agent can call; and the one `Card tool` row
+   group (`lib/card-bash-customize.js`), which is neither a command nor a tool
+   either and adds no name to either registry. No agent surface moves the
    session or removes a checkout: `/warp` moves the session (its `ctrl+d`, the
    selector, a typed name, a queued handoff) and its `ctrl+d` removes a checkout.
    Each command and tool keeps its declared name and label.
@@ -119,24 +128,42 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    nothing is registered and no other surface changes. A host
    that HAS the bridge but draws no rail registers the section and never paints it,
    which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
-   contributed by the bridge, not by this package (invariant 2 keeps the customize
-   surface out of it). A host without the bridge otherwise hears nothing about it;
+   contributed by the bridge, not by this package (invariant 2 keeps every customize
+   surface out of it except the one `Card tool` row group). A host without the bridge otherwise hears nothing about it;
    the one warning it can get is discoverability — once per process, from a primary
    session only (`GENTLE_PI_AGENTS_CHILD` is not `1`), naming
    `pi install npm:gentle-shell-bridge`, timed after the announcement window because
    an empty slot at `session_start` may still be a bridge that has not loaded, and
    immediate on a host with no event bus to announce on.
 
-   `/card:bash` is the ONE preference this package owns: it flips between `own`
-   (this package's activity card, the default) and `default` (the host's own bash
-   drawing), reports the new state in one line, and persists it in the strict
-   document `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1",
+   **The bash card mode is the ONE preference this package owns, and it is a
+   customize row, not a command.** `/card:bash` does not exist: no command, no
+   name, no message, and no command handler writes the preference
+   (`tools/package-surface.test.js` asserts both). The preference appears in
+   Gentle Shell's `/gentle:customize` → `Cards` as `Card tool`, with the two
+   values `default` (the host's own bash drawing) and `activity` (this package's
+   activity card, the default), contributed ONLY through gentle-shell-bridge's
+   published `registerRows` API (invariant 2): `lib/card-bash-customize.js`
+   registers one provider, id `odd-worktree-card-bash`, at most once per process,
+   returns a disposer like the issues section, and does nothing at all when the
+   API is absent — no throw, no command, no warning beyond the section's own
+   discoverability one. Selecting a value applies it at once (the writer publishes
+   the live slot) and survives a restart.
+
+   Persistence keeps its one home: the strict document
+   `<home>/card-bash.json` (`{"schema":"gentle-pi.card-bash/v1",
    "mode":"own"|"default"}` and nothing else), written only by
    `lib/card-bash-mode.js` — atomically, owner-only, document first and slot second,
-   and never over a document it cannot parse. `<home>` is the same one
+   and never over a document it cannot parse. One legacy shape is READ as its mode
+   and rewritten to the canonical document on the next write:
+   `{"schema":"gentle-pi.card-bash/v1","bash":"activity"}` (`activity` is `own`)
+   and its `"default"` twin. A wrong schema, an unknown value, an extra key,
+   invalid JSON or no read permission is still `malformed_file`/`unreadable_file`,
+   reads as `own`, and is never rewritten. `<home>` is the same one
    `lib/card-style.js` resolves (`GENTLE_PI_CONFIG_HOME` →
-   `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`). There is no second setting and
-   no settings file.
+   `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`). There is no second document,
+   store or cache, and no settings file. Without the bridge the preference has no
+   control surface and the mode stays `activity`.
 4. **Deletion refuses on a live session.** The only front that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
    before the pending-change question and again immediately before removal. This
@@ -374,7 +401,8 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     `registerToolRenderer` hook, and chooses renderers for the `bash` tool alone:
     every other row is handed back exactly as the chain resolved it, and a host
     without that hook, or without a usable measurement seam, keeps drawing its own
-    bash rows. While `/card:bash` is `own` every bash call is this card's
+    bash rows. While the preference is `own` (the customize row's `activity`) every
+    bash call is this card's
     (`lib/bash-card.js`), a `codegraph …` command included; while it is `default`
     the resolver steps aside and the host draws the row. Nothing here executes,
     spawns, guards, intercepts or shadows a tool — it is drawing only, and the
@@ -383,8 +411,9 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
     the classifier's (`lib/bash-activity.js`): a named family's mark and word, or
     the generic `$ bash` when any segment names nothing, and it is never invented
     at paint time. The mode is read when a row is created and again on every paint
-    (the card builds its rows inside `render(width)`), so the toggle repaints rows
-    this card already drew, while a row created during `default` stays the host's
+    (the card builds its rows inside `render(width)`), so a click on the `Card
+    tool` row repaints rows this card already drew, while a row created during
+    `default` stays the host's
     for its lifetime. The CodeGraph card is registered BEFORE this one on purpose
     (invariant 19): it claims its own `codegraph …` rows with its richer body and
     this card's slots are never asked for them; without the CLI no CodeGraph card

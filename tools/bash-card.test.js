@@ -503,3 +503,16 @@ test('the classifier and the CodeGraph card read a codegraph command the same wa
     assert.equal(isCodegraphCommand(command), codegraphShape('bash', { command }) !== undefined, command);
   }
 });
+
+test('a codegraph command names its program once, not twice', () => {
+  // The heading already says `codegraph`, so repeating it in the detail is noise a reader
+  // has to decode. Only the leading word goes: a wrapper in front keeps the command as
+  // it was written, because the wrapper — not the program — is what leads.
+  const resolver = cardFor();
+  const rows = callRows(resolver, { command: 'codegraph init' }, plainTheme, { isPartial: false });
+  const heading = unpaint(rows[0]);
+  assert.equal(heading.split('codegraph').length - 1, 1, `the program is named once in "${heading}"`);
+  assert.match(heading, /codegraph · init/u, `the detail still states what the command runs, in "${heading}"`);
+  const wrapped = callRows(resolver, { command: 'timeout 30 codegraph sync' }, plainTheme, { isPartial: false });
+  assert.match(unpaint(wrapped[0]), /timeout 30 codegraph sync/u, 'a wrapper keeps the command as written');
+});

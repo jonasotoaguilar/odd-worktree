@@ -2827,6 +2827,15 @@ describe('issues All shortcut and the filter across the scoped tabs (S1/S2/S3/S4
     return pageResult(rows, { total: count });
   }
 
+  // `count` cursor rows titled `<prefix> row <n>`, so a test can tell a row of
+  // one query from a row of another by the text it paints alone.
+  function rowsOf(prefix, count, base = 100) {
+    return Array.from({ length: count }, (_, at) => cursorRow(
+      `${prefix}-${at}`,
+      issue(base + at, { title: `${prefix} row ${at + 1}` }),
+    ));
+  }
+
   function serverView(overrides = {}) {
     const requests = [];
     const view = createIssuesView({
@@ -3077,6 +3086,151 @@ describe('issues All shortcut and the filter across the scoped tabs (S1/S2/S3/S4
     );
     assert.match(tabRow(view), /▸ All \(6\)/, 'the exact connection total comes back');
     assert.match(noteRow(view), /via connection/, 'and the frame names the read again');
+  });
+
+  // S5: the `+` means "inexact or truncated", so it may ONLY mark a fact that
+  // makes the total inexact. A connection read reports the exact total even
+  // when it arrives with more pages still to page through; a capped search, a
+  // bucket whose read says it is bounded and a total the view does not know all
+  // stay marked.
+  test('an exact connection total wears no mark, even with more pages to page through (S5)', async () => {
+    const { view } = serverView({
+      serve: (request) => (request.bucketId === 'all'
+        ? pageResult(rowsOf('all', 18), { total: 40, hasNextPage: true })
+        : bucketPage(request)),
+    });
+    view.render(120);
+    await tick();
+    view.handleInput('g');
+    await tick();
+    const tabs = tabRow(view);
+    assert.match(tabs, /▸ All \(40\)/, `a connection read reports an exact total, unmarked: ${tabs}`);
+    assert.ok(!tabs.includes('(40+)'), `more pages to page through is not an inexact total: ${tabs}`);
+    assert.match(noteRow(view), /via connection \(exact total\)/, 'and the frame names the exact read');
+  });
+
+  test('the + still marks a capped search, a bounded bucket and an unknown total (S5)', async () => {
+    const clock = manualScheduler();
+    const { view } = serverView({
+      scheduleQuery: clock.schedule,
+      cancelSchedule: clock.cancel,
+      serve: (request) => {
+        if (request.bucketId === 'mine' && request.query === '') {
+          return pageResult(rowsOf('mine', 18), { total: 40, hasNextPage: true });
+        }
+        if (request.bucketId === 'all' && request.query === '') {
+          // A page that reports rows and NO total at all: the view can only
+          // count what it holds, so its count is never claimed exact.
+          return { ok: true, issues: rowsOf('all', 5), hasNextPage: false };
+        }
+        if (request.bucketId === 'all') return pageResult(rowsOf('all', 3), { total: 3 });
+        return bucketPage(request);
+      },
+    });
+    view.render(120);
+    await tick();
+    assert.match(tabRow(view), /▸ My issues \(40\+\)/, 'a bucket whose read reports it bounded keeps its mark');
+    view.handleInput('g');
+    await tick();
+    assert.match(tabRow(view), /▸ All \(5\+\)/, 'a total the view does not know is never claimed exact');
+    await typeFilter(view, clock, 'bug');
+    assert.match(tabRow(view), /▸ All \(3\+\)/, 'a capped search read keeps its mark');
+    assert.match(noteRow(view), /via search \(total capped\)/, 'and the frame names the search read');
+  });
+
+  // S5: the dead line was a whitespace-only filter — the extension trims the
+  // query, takes the CONNECTION read, and the view then told the reader it was
+  // on the search path. A trimmed query that is empty is NO filter, and both the
+  // route and the note have to read that one fact.
+  test('a whitespace-only filter is no filter, so the frame names the connection read (S5)', async () => {
+    const clock = manualScheduler();
+    const { view, requests } = serverView({ scheduleQuery: clock.schedule, cancelSchedule: clock.cancel });
+    view.render(120);
+    await tick();
+    view.handleInput('g');
+    await tick();
+    assert.match(noteRow(view), /via connection \(exact total\)/, 'the unfiltered All view names the connection');
+    view.handleInput('T');
+    view.handleInput(' ');
+    clock.fire();
+    await tick();
+    assert.equal(requests.at(-1).query, ' ', 'the read still carries the raw query it was asked for');
+    assert.match(noteRow(view), /via connection \(exact total\)/,
+      'whitespace is no filter, so the connection read is what is on screen');
+    assert.ok(!/\(\d+\+\)/.test(tabRow(view)), `and the count claims no inexact total: ${tabRow(view)}`);
+    view.handleInput('delete');
+    for (const ch of 'bug') view.handleInput(ch);
+    clock.fire();
+    await tick();
+    assert.match(noteRow(view), /via search \(total capped\)/, 'a real filter names the search read');
+    assert.match(tabRow(view), /▸ All \(\d+\+\)/, 'and its count is marked inexact');
+    view.handleInput('delete');
+    clock.fire();
+    await tick();
+    assert.equal(view.state.query, '', 'Delete clears the whole query');
+    assert.match(noteRow(view), /via connection \(exact total\)/, 'clearing returns to the connection read');
+    assert.ok(!/\(\d+\+\)/.test(tabRow(view)), `and the exact total is unmarked again: ${tabRow(view)}`);
+  });
+
+  // S3/D3: a settled filter re-reads the scoped tabs. While the tab ON SCREEN
+  // waits for its own filtered answer, the rows it still holds answer the
+  // PREVIOUS query — painting them would read as matches for the new filter.
+  test('a pending filter never paints another query rows on the scoped tab on screen (S3)', async () => {
+    const clock = manualScheduler();
+    const gate = deferred();
+    const { view } = serverView({
+      scheduleQuery: clock.schedule,
+      cancelSchedule: clock.cancel,
+      serve: (request) => {
+        if (request.query === '') return bucketPage(request);
+        if (request.bucketId === 'mine') return bucketPage(request);
+        return gate.promise;
+      },
+    });
+    view.render(120);
+    await tick();
+    assert.match(leftColumn(view, 120), /mine row 1/, 'the first tab holds its unfiltered rows');
+    view.handleInput('T');
+    view.handleInput('z');
+    clock.fire();
+    await tick();
+    view.handleInput('enter');
+    view.handleInput('tab');
+    await tick();
+    const tabs = tabRow(view);
+    assert.match(tabs, /▸ Assigned \(–\)/, `the count of the query on screen is unknown while it loads: ${tabs}`);
+    const left = leftColumn(view, 120);
+    assert.ok(!left.includes('assigned row 1'), `the previous query rows are not this query result: ${left}`);
+    assert.ok(!left.includes('▸ '), `and nothing among them is selected: ${left}`);
+    assert.match(bodyOf(view, 120), /loading issues/, 'the frame paints the loading state it already uses');
+    gate.resolve(bucketPage({ bucketId: 'assigned', query: 'z' }));
+    await tick();
+    assert.match(tabRow(view), /▸ Assigned \(1\)/, 'the filtered total lands with its own rows');
+    assert.match(leftColumn(view, 120), /assigned row 1 z/, 'and the rows on screen are the filtered ones');
+  });
+
+  // S3: the anti-flash behavior that exists at base is untouched — a reload of
+  // the SAME query keeps the rows already read while the fresh page is in flight.
+  test('an unchanged query keeps its rows while it reloads (S3)', async () => {
+    const gate = deferred();
+    let reads = 0;
+    const { view } = serverView({
+      serve: (request) => {
+        reads += 1;
+        if (reads > 3 && request.bucketId === 'mine') return gate.promise;
+        return bucketPage(request);
+      },
+    });
+    view.render(120);
+    await tick();
+    view.handleInput('r');
+    await tick();
+    const left = leftColumn(view, 120);
+    assert.match(left, /mine row 1/, 'a reload of the SAME query keeps the rows already read');
+    assert.match(tabRow(view), /▸ My issues \(2\)/, 'and the count that describes those rows');
+    gate.resolve(bucketPage({ bucketId: 'mine', query: '' }));
+    await tick();
+    assert.match(leftColumn(view, 120), /mine row 1/, 'the answer paints its rows again');
   });
 
   test('no other key moves: a still assigns, and g types inside the search box (S6)', async () => {
@@ -3707,8 +3861,14 @@ describe('issues remote search scheduling (S9)', () => {
     assert.ok(!bodyOf(view, 100).includes('mine row'), 'the failing bucket lost its rows');
     view.handleInput('tab');
     await tick();
-    assert.match(leftColumn(view, 100), /assigned row/,
-      'the other bucket keeps the rows of its own query while it reads the new one');
+    // S3: the rows this bucket still holds answer the PREVIOUS query and its
+    // read for the new one is in flight, so none of them is painted. The
+    // failure next door still cleared only its own bucket: this one keeps its
+    // own read state, which is why the count says unknown rather than zero.
+    assert.ok(!leftColumn(view, 100).includes('assigned row'),
+      'the previous query rows are not painted while this query reads');
+    assert.match(strip(view.render(100)[2]), /▸ Assigned \(–\)/,
+      'the count of the query on screen is unknown while it loads');
     assigned.resolve(pageResult([cursorRow('a2', issue(5, { title: 'assigned match' }))], { total: 1 }));
     await tick();
     assert.match(leftColumn(view, 100), /assigned match/, 'and its own answer paints when it lands');
@@ -3733,7 +3893,7 @@ describe('issues remote search scheduling (S9)', () => {
     view.handleInput('g');
     await tick();
     assert.equal(view.state.page, 3, 'the shortcut enters the All view');
-    assert.match(strip(view.render(100)[2]), /▸ All \(2\+\)/, 'All names the connection total');
+    assert.match(strip(view.render(100)[2]), /▸ All \(2\)/, 'All names the connection total');
     assert.match(leftColumn(view, 100), /all connection row/, 'All paints the connection rows');
     view.handleInput('T');
     view.handleInput('z');
@@ -3754,7 +3914,7 @@ describe('issues remote search scheduling (S9)', () => {
     assert.equal(requests.at(-1).query, '', 'the cleared query reads the connection source again');
     body = bodyOf(view, 100);
     assert.match(body, /all connection row/, 'the connection rows come back with the query cleared');
-    assert.match(strip(view.render(100)[2]), /▸ All \(2\+\)/, 'and its own count comes back with them');
+    assert.match(strip(view.render(100)[2]), /▸ All \(2\)/, 'and its own count comes back with them');
     assert.ok(!body.includes('failed to load issues'), 'the failure is gone once a read answers');
   });
 
@@ -3831,7 +3991,11 @@ describe('issues remote search scheduling (S9)', () => {
     pending[1].entry.resolve({ ok: false, error: 'GitHub issue search exceeds 1000 matches' });
     await tick();
     const waiting = leftColumn(view, 100);
-    assert.match(waiting, /mount row/, 'the rows on screen are never cleared by a stale failure');
+    // S3: the query on screen (`ab`) is what the rows must answer, and the rows
+    // still held answer the mount's — so none is painted. The stale failure
+    // changed nothing: no error repaints and the next answer is the only one.
+    assert.ok(!waiting.includes('mount row'),
+      'the previous query rows are not painted while the new query reads');
     assert.ok(!strip(view.render(100).join('\n')).includes('1000 matches'), 'and its error never paints');
     for (const entry of pending.filter((item) => item.request.query === 'ab')) {
       entry.entry.resolve(pageResult([cursorRow('n1', issue(3, { title: 'ab match' }))], { total: 1 }));

@@ -578,6 +578,37 @@ describe('/issues overlay and arguments', () => {
     assert.match(clean(component.render(110)[3]), /via search/, 'the frame names the read on screen');
   });
 
+  // S5: the route trims a whitespace-only query into "no filter" and takes the
+  // repository CONNECTION, so the note the view paints has to name that same
+  // read — the route and the note decide from one fact.
+  test('a whitespace-only filter takes the connection read, and the note names it (S5)', async () => {
+    const root = makeRepo({ tag: 'issues-blank-filter' });
+    const { runner, calls } = makeIssuesRunner();
+    const { component } = await openIssues(root, { runner });
+    await tick();
+    const mount = searchQueries(calls).length;
+    assert.equal(mount, 3, 'the mount read the three scoped buckets');
+    component.handleInput('g');
+    await waitFor(() => connectionReads(calls).length === 1);
+    await tick();
+    component.handleInput('t');
+    component.handleInput(' ');
+    await waitFor(() => connectionReads(calls).length === 2);
+    await tick();
+    assert.deepEqual(searchQueries(calls).slice(mount), [
+      'author:@me sort:updated-desc',
+      'assignee:@me sort:updated-desc',
+      'involves:@me -author:@me sort:updated-desc',
+    ], 'the scoped tabs re-read their own searches with no stray text appended');
+    assert.equal(connectionReads(calls).length, 2,
+      'the All view reads the repository connection again, never a search');
+    const note = clean(component.render(110)[3]);
+    assert.match(note, /via connection \(exact total\)/, `the note names the read on screen: ${note}`);
+    const bar = clean(component.render(110)[2]);
+    assert.match(bar, /▸ All \(\d+\)/, `and the exact connection total wears no mark: ${bar}`);
+    assert.ok(!/\(\d+\+\)/.test(bar), `no inexact total is claimed for an exact read: ${bar}`);
+  });
+
   test('an argument notifies and opens nothing', async () => {
     const root = makeRepo({ tag: 'issues-args' });
     const { commands, mod, hooks } = await loadExtension();

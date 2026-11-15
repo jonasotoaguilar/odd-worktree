@@ -182,9 +182,9 @@ describe('removed surface', () => {
     const shipped = fs.readdirSync(lib).filter((entry) => /^codegraph-/.test(entry)).sort();
     const allowed = [
       'codegraph-card-preview.js', 'codegraph-card.js', 'codegraph-compaction.js', 'codegraph-daemon.js',
-      'codegraph-edit-sync.js', 'codegraph-index.js', 'codegraph-lock.js', 'codegraph-mcp-config.js', 'codegraph-mcp.js',
-      'codegraph-paths.js', 'codegraph-prompt', 'codegraph-role.js', 'codegraph-rules.js', 'codegraph-session.js',
-      'codegraph-warmup.js',
+      'codegraph-edit-sync.js', 'codegraph-guard-target.js', 'codegraph-index.js', 'codegraph-lock.js',
+      'codegraph-mcp-config.js', 'codegraph-mcp.js', 'codegraph-paths.js', 'codegraph-prompt', 'codegraph-role.js',
+      'codegraph-rules.js', 'codegraph-session.js', 'codegraph-warmup.js',
     ];
     for (const entry of shipped) assert.ok(allowed.includes(entry), `lib/${entry} is not an allowed CodeGraph module`);
     const read = (name) => fs.readFileSync(path.join(lib, name), 'utf8');

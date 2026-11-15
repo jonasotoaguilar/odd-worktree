@@ -4,7 +4,7 @@ A Pi extension that gives an agent session worktrees, ODD documents and GitHub i
 
 ## What It Does
 
-Two agent tools, three panels and one sidebar section, loaded from one extension entry point. Each ODD feature gets its own checkout beside the clone, and you move between checkouts and read your ODD documents and issues without leaving Pi.
+Two agent tools, three panels, one sidebar section and one preference, loaded from one extension entry point. Each ODD feature gets its own checkout beside the clone, and you move between checkouts and read your ODD documents and issues without leaving Pi.
 
 | Surface | Kind | What it does |
 | --- | --- | --- |
@@ -14,8 +14,11 @@ Two agent tools, three panels and one sidebar section, loaded from one extension
 | `/odd-list` | panel | Reads this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
 | `/issues` | panel | Reads this checkout's GitHub issues and, when your role allows it, edits them. |
 | `ISSUES` rail section | sidebar section | Lists the open issues of this checkout's repository assigned to you, seven at a time plus a count of the rest; a click opens one in your browser and the overflow row opens `/issues`. Needs `gh` and gentle-shell-bridge with its rail. |
+| `/card:bash` | preference | Flips a `bash` tool call between this package's activity card, the default, and the host's own drawing. |
 
 Moving the session and removing a checkout are human actions: only `/warp` does either, and no agent tool can. A checkout has one identity, its ODD: the directory name is the ODD it serves, and `branch` is only the git branch.
+
+`/card:bash` is the one preference the package owns: with no argument it toggles between our activity card (`own`, the default) and the host's own drawing of `bash` (`default`), and remembers the choice. It is also the answer to "why does my bash output look like a card" — turn it off with `/card:bash`. See [the bash card](docs/reference.md#the-bash-card-and-its-toggle).
 
 ## Quick Start
 
@@ -33,7 +36,7 @@ pi install npm:pi-odd-worktree
 
 Inside a Gentle Shell session, use its launcher instead: `gentle-shell install npm:pi-odd-worktree`. From a local clone, `pi install .` installs the working copy.
 
-Expected result: `/warp`, `/odd-list` and `/issues` are available as commands, the agent is offered `worktree_create` and `worktree_list`, and a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows an `ISSUES` section for this checkout.
+Expected result: `/warp`, `/odd-list`, `/issues` and `/card:bash` are available as commands, the agent is offered `worktree_create` and `worktree_list`, and a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows an `ISSUES` section for this checkout.
 
 ## Core Workflow
 
@@ -52,9 +55,12 @@ The full rules of each step, including every refusal, are in [Create, list, move
 - **`/issues` pins the repository.** Every read, mutation and browser open is bound to the repository that was loaded, and capabilities fail closed. See [the repository pin](docs/reference.md#issues-pins-the-repository).
 - **The issues rail is checkout-scoped and optional.** When a Gentle Shell has `gentle-shell-bridge` installed and draws its rail, an `ISSUES` rail section lists the open issues of this checkout's repository assigned to you — that one repository, not every issue across every repository you touch — seven at a time, with `and N more issues` for the rest and a pull-request mark on the issues that already have one. A click opens the issue in your browser; the overflow row opens `/issues`. A frame never waits on `gh`: nothing is read at `session_start`, the rows refresh behind a 30 s floor while the section is being drawn — measured on the last attempt, so a failing `gh` is not retried every turn — there is no polling, and a failed refresh keeps the rows and marks them `stale` rather than emptying the list. With no bridge the section simply never appears; the one thing you get is a single warning naming the install command, in a primary session only. See [the rail section](docs/reference.md#the-issues-rail-section).
 - **Cards follow your shell.** Tool and warp cards use the card style Gentle Shell publishes, and a click expands that card only. See [card style](docs/reference.md#card-style-follows-your-shell).
+- **Bash rows are cards too, and the toggle is yours.** While `/card:bash` is `own` (the default) every `bash` call is drawn as the activity its command names, with that family's mark and word, or the generic `$ bash` when the command names nothing; `default` leaves bash to the host's own drawing. See [the bash card](docs/reference.md#the-bash-card-and-its-toggle).
+- **`bash` cannot create or list worktrees, or branch off the principal checkout.** A `git worktree add` or `git worktree list` is refused in any cwd and pointed at `worktree_list` and `worktree_create`; in the principal checkout, creating a branch or switching to anything but the default branch is refused too. See [the guards](docs/reference.md#the-bash-guards).
 - **Two blocks in the system prompt.** `## ODD worktrees` tells the agent how worktrees and ODDs work. `## CodeGraph` tells a session that already holds a CodeGraph tool how to use it, with one text per role. Both are appended after the host's own text, and `ODD_WORKTREE_PROMPT=0` suppresses them. See [the prompt blocks](docs/reference.md#the--odd-worktrees-block-in-the-system-prompt).
 - **CodeGraph stays fresh, only when its CLI is installed.** At session start the package creates or syncs the checkout's index and warms its daemon, and makes sure your global `mcp.json` has the `codegraph` entry (it adds it or fixes only the differing fields and keeps the rest). It also syncs after a compaction, after a native `codegraph init` and after an `edit` or `write`, in the background and without ever blocking you. See [CodeGraph](docs/reference.md#codegraph-index-daemon-and-mcp-entry). Its tool rows are drawn as a card.
-- **Deliberately absent.** No customize panel, no plugin-tools toggles, no companion-app integration and no worktree-to-issue association. There is nothing to configure.
+- **Two reminders keep a session on the CodeGraph rule.** The first `grep`, `find`, `ls`, `read` or `bash` search in a checkout gets one sentence appended to its result: use `codegraph` first, or — for another checkout — call `mcp__codegraph__codegraph_explore` with that path as `projectPath`. Once per checkout, once per session, never a block. See [the reminders](docs/reference.md#the-two-codegraph-reminders).
+- **Deliberately absent.** No customize panel, no plugin-tools toggles, no companion-app integration and no worktree-to-issue association. There is nothing to configure beyond the one bash-card preference.
 
 ## Documentation
 

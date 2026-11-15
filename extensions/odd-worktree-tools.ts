@@ -2,13 +2,15 @@
 // odd-worktree-tools.ts — the standalone odd-worktree Pi extension.
 //
 // One package, one surface: the two agent worktree tools (create, list) and
-// the three read/inspect panels.
+// the three read/inspect panels, plus the one preference this package owns.
 //
-// Registers three commands:
+// Registers four commands:
 //   /warp      move this session to another checkout of the project
 //   /odd-list  read this checkout's odd/ documents
 //   /issues    read this checkout's GitHub issues, with label/assignee,
 //              comment and close actions when the repository permits them
+//   /card:bash flip the bash tool card between this package's activity card and
+//              the host's own drawing, and remember the choice
 //
 // and two tools: worktree_create and worktree_list. Create prompts for approval
 // when the host offers dialog UI; list never mutates anything; `/warp` is the
@@ -1978,9 +1980,9 @@ async function executeWorktreeClose(params, ctx, opts) {
 const worktreeListTool = defineTool({
   name: "worktree_list",
   label: "Worktree List",
-  description: "List this clone's Git worktrees: the main worktree first, then the checkouts this package created under <repo-name>-worktrees (each row is its directory's name, which is the ODD, and its branch). Read-only; it writes nothing. Pass all:true to also show the worktrees Git knows outside that directory.",
+  description: "List this clone's Git worktrees: the main worktree first, then the checkouts this package created under <repo-name>-worktrees (each row is its directory's name, which is the ODD, and its branch). Use it to see whether an ODD already has a worktree. Read-only; it writes nothing.",
   parameters: Type.Object({
-    all: opt(Type.Boolean({ description: "Omitted lists only the checkouts this package created. true also shows the worktrees Git knows outside <repo-name>-worktrees." })),
+    all: opt(Type.Boolean({ description: "Omit it: the default lists the ODD checkouts, which is what finds an ODD's worktree. true also lists the worktrees Git knows outside <repo-name>-worktrees, which belong to no ODD; use it only to look for one of those." })),
   }),
   ...worktreeToolRenderers("worktree_list"),
   async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -2851,6 +2853,107 @@ function handleWorktreeOddEvent(event, ctx, pi, allowPhaseTrigger) {
     // Any failure is swallowed after the best-effort attempt above.
   }
   return undefined;
+}
+
+// The worktree guard (S1–S6, S8–S10): one `tool_call` observation that REFUSES the
+// `bash` commands which would take work out of the ODD's own checkout. The decision
+// is `lib/worktree-guard.js`'s — text-only, and only for the `bash` tool — and this
+// is the wiring that hands it the git answers it needs, which is the only part that
+// touches git. Nothing is registered here: the guard adds no command, no tool, no
+// option and no setting (S7).
+//
+// S8: the handler never throws, because a thrown `tool_call` handler blocks the tool
+// fail-safe. It returns `{block: true, reason}` to refuse the call and `undefined` to
+// let the host run it, exactly like a handler that has nothing to say.
+
+// One git text read: a fixed argv with a bounded timeout (invariant 9), or undefined
+// for any answer that is not a value. Never throws.
+function readGitTextSync(git, cwd, args) {
+  try {
+    if (!git || typeof git.runArgv !== "function") return undefined;
+    const result = git.runArgv("git", args, { cwd, timeoutMs: 5000 });
+    if (!result || result.status !== 0) return undefined;
+    const text = String(result.stdout || "").trim();
+    return text.length > 0 ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// S5: the repository's own default branch, resolved exactly like the create's base
+// (`lib/worktree-create.js`): a local `main`, else the branch `origin/HEAD` names,
+// else `init.defaultBranch`. A candidate whose ref does not resolve is passed over, so
+// there is no `main`/`master` allowlist. Undefined when nothing resolves — the guard
+// then refuses no switch (S8), because the real default must stay reachable.
+function resolveDefaultBranch(git, root) {
+  const candidates = [{ branch: "main", ref: "refs/heads/main" }];
+  const originHead = readGitTextSync(git, root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+  if (typeof originHead === "string") {
+    const remoteBranch = originHead.replace(/^origin\//, "");
+    if (remoteBranch.length > 0) candidates.push({ branch: remoteBranch, ref: `refs/remotes/origin/${remoteBranch}` });
+  }
+  const configured = readGitTextSync(git, root, ["config", "--get", "init.defaultBranch"]);
+  if (typeof configured === "string") candidates.push({ branch: configured, ref: `refs/heads/${configured}` });
+  for (const candidate of candidates) {
+    if (readGitTextSync(git, root, ["rev-parse", "--verify", "--quiet", candidate.ref])) return candidate.branch;
+  }
+  return undefined;
+}
+
+// The default branch memo, bounded and most-recently-used exactly like
+// `repoIdentityCache` above: a session switches branches in a handful of checkouts,
+// and a `bash` call must never pay a spawn per call. The answer is a random-access
+// fact of the checkout, so it is resolved once per root per process; an entry wraps
+// the value because "no resolvable default" is itself an answer worth caching.
+const DEFAULT_BRANCH_CACHE_LIMIT = 32;
+const defaultBranchCache = new Map();
+
+function cachedDefaultBranch(git, root) {
+  const key = String(root);
+  const hit = defaultBranchCache.get(key);
+  if (hit !== undefined) {
+    defaultBranchCache.delete(key);
+    defaultBranchCache.set(key, hit);
+    return hit.value;
+  }
+  const value = resolveDefaultBranch(git, key);
+  defaultBranchCache.set(key, { value });
+  if (defaultBranchCache.size > DEFAULT_BRANCH_CACHE_LIMIT) {
+    defaultBranchCache.delete(defaultBranchCache.keys().next().value);
+  }
+  return value;
+}
+
+// The registered `tool_call` handler: the guard's one host surface. A non-`bash` call
+// returns before any module is read, and the git answers ride in as the guard's seams,
+// memoized per checkout, so the hot path costs one `Map` hit per call.
+function guardWorktreeBashCall(event, ctx) {
+  try {
+    // `ODD_WORKTREE_GUARD=0` turns the guards off for this process, the way
+    // `ODD_WORKTREE_PROMPT=0` turns off the prompt blocks. Read per call: a guard is
+    // cheap, and an escape hatch that needs a restart is not one.
+    if (process.env.ODD_WORKTREE_GUARD === "0") return undefined;
+    if (!event || event.toolName !== "bash") return undefined;
+    const guard = libRequire("worktree-guard.js");
+    if (!guard || typeof guard.decideBashGuard !== "function") return undefined;
+    const git = libRequire("worktree-git.js");
+    const input = event.input || {};
+    const decision = guard.decideBashGuard({
+      toolName: event.toolName,
+      command: input.command,
+      cwd: oddEventCwd(event, ctx),
+      repoIdentity: (cwd) => cachedRepoIdentity(git, cwd),
+      defaultBranch: (root) => cachedDefaultBranch(git, root),
+      pathExists: (cwd, value) => fs.existsSync(path.resolve(cwd, value)),
+    });
+    if (decision && decision.block === true && typeof decision.reason === "string") {
+      return { block: true, reason: decision.reason };
+    }
+    return undefined;
+  } catch {
+    // S8: the guard never throws into the host, and a command it cannot judge passes.
+    return undefined;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -7473,6 +7576,84 @@ function refreshIssuesSidebarIfDrawn() {
     // A failed activity read never breaks the session; the next frame retries.
   }
 }
+// ---------------------------------------------------------------------------
+// `/card:bash` (T1 S1,S6,S7): the ONE preference this package owns. It flips
+// between the two ways a `bash` tool call can be drawn — this package's activity
+// card (`own`, the default) and the host's own bash drawing (`default`) — and
+// remembers the choice in `<home>/card-bash.json` (lib/card-bash-mode.js is the
+// only reader and the only writer of that document).
+//
+// One line, in the package's voice, naming the state the session is now in; a
+// failed save is an error line naming what could not be written and the state
+// that did not move. The save is document-first, slot-second (inside the writer),
+// so a failure never leaves the live session saying something the file does not.
+//
+// Repaint: the command itself asks nothing of the screen, because the card is what
+// re-decides. The host resolves the renderer once, when a row's component is created
+// (`ToolExecutionComponent` keeps the resolved `toolDefinition`), but the component a
+// renderer RETURNS has its `render(width)` called on every frame — so a card that builds
+// its rows inside that build re-reads the mode while it paints, and the toggle repaints
+// rows already on screen (lib/bash-card.js; odd/tasks/card-bash.md L8). Nothing here
+// routes a repaint through the session-wide tool-expansion flag or appends a fake entry:
+// both would repaint a row without re-deciding how it is drawn. One asymmetry is
+// deliberate: a row created while the mode was `default` stays the host's own row for
+// its lifetime, because its box must never become this package's.
+// ---------------------------------------------------------------------------
+
+/** The state as the report names it. */
+function cardBashStateLabel(mode) {
+  return mode === "own" ? "own (activity)" : "gentle default";
+}
+
+/** Why a save was refused, in prose the human can act on. */
+function cardBashSaveReason(result) {
+  const reason = result && result.reason;
+  if (reason === "malformed_file") return "the existing file is malformed";
+  if (reason === "unreadable_file") return "the existing file is unreadable";
+  if (reason === "no_home") return "no Pi home resolves for the document";
+  if (typeof result?.error === "string" && result.error.length > 0) return result.error;
+  return "the write failed";
+}
+
+/** The one failure line: what could not be saved, and the state that did not move. */
+function cardBashSaveFailureLine(result, unchangedMode) {
+  const file = typeof result?.file === "string" && result.file.length > 0 ? ` ${result.file}` : " the preference";
+  return `bash cards: could not save${file} (${cardBashSaveReason(result)}); still ${cardBashStateLabel(unchangedMode)}`;
+}
+
+function registerCardBashCommand(pi) {
+  if (typeof pi?.registerCommand !== "function") return;
+  pi.registerCommand("card:bash", {
+    description: "Toggle the bash tool card: this package's activity card, or the host's own drawing",
+    handler: async (args, ctx) => {
+      // A dead UI never turns the toggle into a throw, and a host without one still
+      // gets the save: only the report has nowhere to go.
+      const notify = ctx && ctx.ui && typeof ctx.ui.notify === "function"
+        ? (text, level) => { try { ctx.ui.notify(text, level); } catch { /* a dead UI never fails the toggle */ } }
+        : null;
+      try {
+        const raw = String(args ?? "").trim();
+        // The toggle takes no argument. Saying so is the neighbouring commands'
+        // voice, and it keeps a mistyped option from flipping the mode by surprise.
+        if (raw !== "") {
+          if (notify) notify(`Unknown option "${raw}". Use /card:bash with no argument to flip the bash card.`, "error");
+          return;
+        }
+        const modes = libRequire("card-bash-mode.js");
+        const current = modes.resolveCardBashMode();
+        const next = current.mode === modes.CARD_BASH_MODE.OWN ? modes.CARD_BASH_MODE.DEFAULT : modes.CARD_BASH_MODE.OWN;
+        const saved = modes.writeCardBashMode(next);
+        if (!notify) return;
+        if (saved && saved.ok === true) notify(`bash cards: ${cardBashStateLabel(next)}`, "info");
+        else notify(cardBashSaveFailureLine(saved, current.mode), "error");
+      } catch {
+        // Nothing about the card mode may break the host: a read or write that threw
+        // is reported as a state that did not move.
+        if (notify) notify("bash cards: could not read or save the preference; the card mode is unchanged.", "error");
+      }
+    },
+  });
+}
 
 export default function (pi) {
   // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
@@ -7489,6 +7670,9 @@ export default function (pi) {
   registerWarpCommand(pi);
   registerOddCommand(pi);
   registerIssuesCommand(pi);
+  // S1: the fourth command is the one preference the package owns. It is
+  // registered with the others and reads its mode through lib/card-bash-mode.js.
+  registerCardBashCommand(pi);
   pi.registerTool(worktreeCreateTool);
   pi.registerTool(worktreeListTool);
   if (typeof pi?.on !== "function") return;
@@ -7547,6 +7731,11 @@ export default function (pi) {
     startupEpoch += 1;
   });
   pi.on("tool_call", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi));
+  // S1/S3/S4/S9: the worktree guard, the ONE `tool_call` observation that refuses a
+  // `bash` command instead of observing it. It sits beside the naming handler and is
+  // the only handler that returns a `block` answer; every other tool call is left
+  // exactly as the host proposed it. Nothing about it is callable by the agent (S7).
+  pi.on("tool_call", (event, ctx) => guardWorktreeBashCall(event, ctx));
   pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
   // S10: the host's execution pair feeds the queue's in-flight tool counter for
   // EVERY tool of the session, not only this package's.
@@ -7647,6 +7836,16 @@ export default function (pi) {
     libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
   } catch {
     // CodeGraph is best effort.
+  }
+  // S2 (T4): the bash activity card, through the same host hook and in the same shape as the
+  // card above — one call, one line. It composes with that card at paint time: a `codegraph …`
+  // command keeps the CodeGraph identity, every other bash call wears this package's activity
+  // card while `/card:bash` is `own` and the host's own drawing while it is `default`. A host
+  // without `pi.registerToolRenderer` registers nothing and keeps drawing every bash row itself.
+  try {
+    libRequire("bash-card-resolver.js").registerBashCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
+  } catch {
+    // The card is cosmetic.
   }
   // Register every live checkout the registry does not own yet. Dispatched here
   // and awaited by the barrier below: the host runs session_start handlers one

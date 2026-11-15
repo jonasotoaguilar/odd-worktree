@@ -608,10 +608,11 @@ describe('S7/S8: Ctrl+D checks live sessions before the deletion question', () =
     );
   });
 
-  // Invariant 4 (AGENTS.md): the guard's caveats are disclosed, never silently
-  // dropped. The panel's ctrl+d is the only surface that removes a checkout now,
-  // so a stale presence record must reach the human from HERE — the delete tool
-  // whose formatter used to print it is unregistered (T6/S4).
+  // Invariant 4 (docs/codebase/invariants.md): the guard's caveats are
+  // disclosed, never silently dropped. The panel's ctrl+d is the only surface
+  // that removes a checkout now, so a stale presence record must reach the human
+  // from HERE — the delete tool whose formatter used to print it is unregistered
+  // (T6/S4).
   test('a stale presence record\u2019s caveat reaches the human on the panel delete', async () => {
     const { target, notifications, confirmations, ctx } = await panelFixture('stale-caveat');
     publishSession({

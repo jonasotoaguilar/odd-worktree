@@ -5731,9 +5731,10 @@ async function warpDeleteCheckout(targetPath, ctx, deps) {
   // active-session guard's caveats in `details.warnings` — a stale presence
   // record, a session it could not attribute, a truncated scan — and this panel
   // is the only surface that removes a checkout now, so here is where that
-  // evidence is disclosed (AGENTS.md invariant 4: disclosed, never silently
-  // dropped). The guard's own strings are passed through verbatim; one notice
-  // per caveat, and none of them changes the fact that the removal happened.
+  // evidence is disclosed (docs/codebase/invariants.md invariant 4: disclosed,
+  // never silently dropped). The guard's own strings are passed through
+  // verbatim; one notice per caveat, and none of them changes the fact that the
+  // removal happened.
 }
 
 // The EXACT checkout a deletion names, read on both sides of the question.

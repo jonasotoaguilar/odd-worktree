@@ -71,7 +71,7 @@ The full rules of each step, including every refusal, are in [Create, list, move
 | Look up a panel key | [Panel keys](docs/reference.md#panel-keys) |
 | Understand a create, a warp or a delete in detail | [Reference](docs/reference.md) |
 | Run the suite or see what CI and releases do | [Tests](docs/reference.md#tests), [CI and releases](docs/reference.md#ci-and-releases) |
-| Change the package, follow its invariants or cut a release | [`AGENTS.md`](AGENTS.md) |
+| Change the package, follow its invariants or cut a release | [`docs/codebase/mental-model.md`](docs/codebase/mental-model.md) |
 | Report a bug or request a feature | [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) |
 | Open a pull request | [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) |
 

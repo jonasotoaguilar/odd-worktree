@@ -274,7 +274,11 @@ All three sources are read **best effort**, and none is ever guessed:
 Opening the panel reads the three scoped buckets only — `My issues`
 (`author:@me`), `Assigned` (`assignee:@me`) and `Involved`
 (`involves:@me -author:@me`) — one cursor page each, open issues, newest update
-first. `All` costs nothing until you ask for it, which is the point of the split:
+first. When the `ISSUES` rail section has already read this checkout's repository,
+the first frame is painted from that cache instead and ONE tab is read at mount —
+the other two read the first time you open them; [the rail
+section](#the-issues-rail-section) describes the cache and what it changes. `All`
+costs nothing until you ask for it, which is the point of the split:
 the common case is your own issues, and reading every open issue of the
 repository to paint three tabs was work nobody asked for.
 
@@ -333,7 +337,8 @@ and `<n> assigned · stale` while the rows on screen are the last good ones.
   three aliased searches — `author:@me`, `assignee:@me` and
   `involves:@me -author:@me`, each open and each sorted by last update — and each
   answers its own `issueCount` and rows. The section draws only the assigned
-  search; the other two are cached (below) for a later consumer.
+  search; the other two are cached (below), and `/issues` paints its first frame
+  from that cache.
 - **A row is an issue.** It reads `#<number> <title>` with no relation text: with
   one source every row would wear the same mark, and marking everything marks
   nothing. The one marker a row can carry says something else: when one of the
@@ -342,15 +347,21 @@ and `<n> assigned · stale` while the rows on screen are the last good ones.
   a Nerd Font draws a box instead. That marker arrives in the same combined request
   as the rows, so a failed read takes the rows and their markers together and lands
   in the stale state below.
-- **The two clicks differ.** Clicking an issue row opens that issue in the browser
-  with the identity `/issues` proves for a browser open:
-  `gh issue view <n> --web -R <host>/<owner>/<repo>` — the identity the row was
-  built from, so a row still on screen after the session moved to another checkout
-  opens the repository it was read from, never the new one. Clicking the
-  `and N more issues` row sends the `/issues` command to the host instead, and
-  reports that the command was dispatched, never that a panel opened. Both are
-  deferred off the paint path, run once per click, and a failure never escapes into
-  the rail.
+- **A row click opens the panel; the overflow row opens it with no number.**
+  Clicking an issue row sends `/issues <n>` to the host, so the panel opens on
+  `Assigned` with that issue selected and its detail loaded — not in a browser.
+  `/issues`' own `o` key is still the browser open,
+  `gh issue view <n> --web -R <host>/<owner>/<repo>`. Nothing is sent until the
+  click proves this checkout's repository is the one the row was read from,
+  because a row stays on screen across a checkout change: a row from another
+  checkout, or a checkout whose own repository cannot be proven, dispatches
+  nothing and the panel does not open. That refusal is recorded on the section's
+  snapshot instead of thrown, and the list on screen stays exactly as it was —
+  the rail paints no click error of its own, so what you see is that nothing
+  opened. The `and N more issues` row names no issue, so it sends plain `/issues`.
+  Both are deferred off the paint path, run once per click, and a failure never
+  escapes into the rail; a dispatch reports that the command was sent, never that
+  a panel opened.
 - **It reaches the host only through gentle-shell-bridge.** The section is read
   from that package's published sidebar-section API — the object in the
   `Symbol.for("gentle-shell-bridge/api/v1")` slot, after its schema and version gate
@@ -416,13 +427,27 @@ and `<n> assigned · stale` while the rows on screen are the last good ones.
   reported truncated — that is the `N+` in the overflow row — instead of being
   looped over, and a failed read leaves the cache untouched. Clearing it is durable:
   a read in flight when the session shuts down cannot repopulate it, and an answer
-  older than one already applied is ignored rather than written over it. The section draws only
-  the assigned view; the other two are held for a later consumer, and nothing reads
-  them yet: `/issues` keeps its own four tabs.
+  older than one already applied is ignored rather than written over it.
+- **`/issues` opens from this cache, and owns none of it.** When the rail has
+  filled an entry for the repository the panel itself proves, `/issues` paints its
+  first frame from it and reads ONE tab at mount instead of three: the tab on
+  screen is read at mount, the other two are seeded and read the first time you
+  open them, and every answer replaces the rows it seeded. With no entry for that
+  repository the open is exactly the one it always was: three scoped reads at
+  mount. The panel is a reader only — the rail keeps the entry's ownership (its
+  read, its merge, the count invariant above, its clear at shutdown), and nothing
+  the panel does adds, shrinks or rewrites it. `All` is never seeded: the cache
+  holds the three scoped views only, so that view still costs its own read the
+  first time you enter it. An entry the rail calls inconsistent, and a view it
+  reports truncated, are seeded inexact — the tab's count wears a `+` — because a
+  total derived from rows the rail itself does not trust is a number it refuses to
+  report.
 - **The scope is this checkout's repository, and nothing else moves.** It is the one
   repository the `/issues` reader is pinned to, not every issue across every
-  repository you touch. `/issues` itself behaves exactly as before: the section
-  neither changes its behavior nor shares its state.
+  repository you touch. `/issues` keeps its own four tabs, its own repository pin
+  and its own reads; the only thing it takes from the section is the cache entry
+  above, which it reads and never changes, so the section neither grows a second
+  reader nor hands its state over.
 - **What it needs.** `gh`, authenticated (`gh auth login`); a checkout whose own
   repository can be proven — a failed proof is the error row and makes no `gh`
   call; and a Gentle Shell whose `gentle-shell-bridge` published its API and draws

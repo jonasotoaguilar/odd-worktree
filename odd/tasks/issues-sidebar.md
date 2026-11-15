@@ -55,9 +55,9 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   browser: it dispatches `/issues <number>`, and the panel opens on the `Assigned` view with that
   issue selected and its detail shown. When the number is no longer in the assigned list, the panel
   says so instead of guessing a row. Verbatim: "en al clickerla en lugar de abrir en el browser la
-  abra en panel /isuses e esa issue especifac (que seria en tab asigged)". A row is clickable: its `onClick` opens that issue in the browser with the identity
-  `/issues` proves for a browser open — the checkout scope's own identity when the checkout has
-  one, otherwise gh's own resolution normalized to `<host>/<owner>/<repo>`, because a single-remote
+  abra en panel /isuses e esa issue especifac (que seria en tab asigged)". A row is clickable: its `onClick` carries the identity the row was READ from, and the click proves that identity still matches the checkout the session is in
+  (`/issues` proves its own with the same composition: the checkout scope's own identity when the checkout has one, otherwise gh's own resolution normalized to `<host>/<owner>/<repo>`)
+  and dispatches the number only when they agree, because a row retained across a checkout change would otherwise open whatever issue carries that number in the new repository. A row that disagrees, or a checkout that cannot be proven, opens nothing. The browser opener is now `/issues`' own `o` key only; this rule replaces the original click, which spawned `gh issue view <n> --web -R <identity>` because a single-remote
   checkout has no scope identity to pin — and it never runs on the paint path (the work is deferred
   to a macrotask, exactly once per click, and a failure is swallowed into the snapshot's error).
   The identity is the one the ROW was built from: a row still on screen across a checkout change
@@ -110,8 +110,9 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 ## Decisions made while specifying (not user strings)
 
 - D1 — the section's relation is carried in each row's `meta`, not by two separate sections: one card
-  with the host's own row idiom, and one toggle in `/gentle:customize` → `Sections`.
-- D2 — click opens the browser through the same `gh issue view <n> --web -R <identity>` path
+- D2 — the click opens `/issues` ON that issue rather than a browser. Superseded by L11 and closed by
+  T12: it dispatches `/issues <number>` and the panel opens on `Assigned` with it selected, proving the
+  row's identity against this checkout first (T17). The browser path survives only as `/issues`' `o`.
   `/issues` already uses, instead of a second reader inside the rail.
 - D3 — refresh is lazy (TTL on a drawn frame) plus one eager refresh at `session_start`. No polling
   timer, so an idle session makes no network calls.
@@ -139,6 +140,7 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 | T15 | S3, S6, S8, S9 (round 3 defects: the floor counts attempts, a queued refresh dies with its section, the cache TTL is absolute, cache writes are generation-guarded) | worker | `lib/issues-section.js`, `lib/related-issues-cache.js`, `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js`, `tools/related-issues-cache.test.js` | pending |
 | T16 | S6, S9 (a checkout switch must also cut the cache write path) | worker | `extensions/odd-worktree-tools.ts`, `tools/issues-section.test.js` | pending |
 | T17 | S4, S9 (a click never opens a number it cannot prove belongs to the current checkout; an inconsistent cache entry never claims an exact total) | worker | `extensions/odd-worktree-tools.ts`, `lib/related-issues-cache.js`, `tools/issues-section.test.js`, `tools/issues-command.test.js`, `tools/related-issues-cache.test.js` | pending |
+| T18 | S4, S9 (a click's identity proof must not survive a session change; a seeded page must never take a mutation meant for another issue) | worker | `extensions/odd-worktree-tools.ts`, `lib/issues-view.js`, `tools/issues-section.test.js`, `tools/issues-view.test.js`, `tools/issues-command.test.js` | pending |
 
 ## Log
 
@@ -149,6 +151,15 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
   independent, and T12/T4 cannot exist without it), then this branch, which takes the panel by merging
   `main` into it and only then implements T12 (a row click opens the panel on that issue) and T4 (the
   panel opens from this cache).
+- **E18 (verify round 5, two blockers the join introduced):** (a) the click proves the row's identity, but
+  nothing pins that proof to the session: with the proof for checkout A in flight, `session_start` for B
+  and the proof's release dispatch `/issues <n>` against B. The click must capture the session's own
+  generation when it starts and refuse to dispatch if it moved. (b) worse, a SEEDED `Assigned` page lets
+  a numbered open act before its own read answers: seeded `[21, 22]`, `/issues 22` with the page still in
+  flight, selects 21 and a comment (`c`, then `ctrl+s`) lands on 21 — a mutation on the wrong issue, the
+  one thing the identity work existed to prevent. The initial selection must match against the seeded
+  rows too, and no mutation may run while the asked number is neither found nor excluded. Both are
+  absent at `13eeb5a`, so the join produced them.
 - **E17 (two corrections the T12/T4 worker's own report exposed):** (a) with the click dispatching only a
   number, a row RETAINED across a checkout change would dispatch that number against the session's current
   checkout; if the new repository happens to have an issue with the same number, the panel opens the wrong

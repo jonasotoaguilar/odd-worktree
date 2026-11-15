@@ -244,7 +244,8 @@ describe('the card chrome (S1, S15)', () => {
       for (const row of rows) assert.equal(helpers.visibleWidth(row), WIDTH);
       assert.ok(rows.length > previous, `the card grows with ${rowsAvailable} rows`);
       assert.ok(rows.length <= rowsAvailable, `the card never exceeds the ${rowsAvailable} rows`);
-      assert.equal(footerOf(rows).startsWith('\u2191/\u2193 move'), true, 'the footer is painted');
+      const painted = footerOf(rows);
+      assert.ok(painted.includes('esc') && painted.includes('enter'), `the footer is painted: ${painted}`);
       previous = rows.length;
     }
     assert.equal(mount({ rowsAvailable: () => 40 }).view.render(WIDTH).length, 34);
@@ -272,7 +273,7 @@ describe('the card chrome (S1, S15)', () => {
       assert.ok(rows[0].startsWith('╭─ ✿ Files'), rows[0]);
       assert.ok(rows[0].endsWith('esc ╮'), 'too narrow a card drops the path, never the title or esc');
       assert.ok(rows[SEARCH_ROW].includes('› Search'), rows[SEARCH_ROW]);
-      assert.ok(footerOf(rows).startsWith('↑/↓'), footerOf(rows));
+      assert.ok(footerOf(rows).includes('esc'), `the smallest card still names esc: ${footerOf(rows)}`);
     }
   });
 
@@ -303,12 +304,12 @@ describe('the footer (S4)', () => {
     const { view } = await open();
     const footer = footerOf(rowsOf(view, 200));
     for (const token of [
-      '↑/↓ move', 'tab select', 'ctrl+o order', 'space fold',
+      '↑/↓ move', 'tab select', 'ctrl+j/k scroll', 'ctrl+o order', 'space fold',
       'ctrl+u clear', 'ctrl+e edit', 'enter insert', 'esc close',
     ]) {
       assert.ok(footer.includes(token), `the footer names ${token}: ${footer}`);
     }
-    for (const hidden of ['ctrl+j', 'ctrl+k', 'ctrl+shift', 'ctrl+c', 'esc/', 'home', 'end', 'enter/']) {
+    for (const hidden of ['ctrl+k', 'ctrl+shift', 'ctrl+c', 'esc/', 'home', 'end', 'enter/']) {
       assert.ok(!footer.includes(hidden), `the footer never names ${hidden}: ${footer}`);
     }
     assert.ok(footer.endsWith('modified'), footer);
@@ -334,14 +335,15 @@ describe('the footer (S4)', () => {
       assert.ok(footer.includes(keyName), `the footer keeps ${keyName}: ${footer}`);
     }
     assert.ok(!footer.includes(' move'), `the words give way first: ${footer}`);
+    assert.ok(!footer.includes('ctrl+j/k'), `the preview scroll gives way first, the least important key: ${footer}`);
     assert.equal(compact.length, CARD_HEIGHT, 'the footer never adds a row');
     for (const row of compact) assert.equal(helpers.visibleWidth(row), 80);
 
     // Narrower still: only the highest-priority keys survive, on the same row.
     const tiny = rowsOf(view, 40);
     const dropped = footerOf(tiny);
-    assert.ok(dropped.includes('↑/↓'), dropped);
-    assert.ok(!dropped.includes('esc'), `the least important keys give way: ${dropped}`);
+    assert.ok(dropped.includes('esc'), `esc never gives way: ${dropped}`);
+    assert.ok(!dropped.includes('ctrl+j/k') && !dropped.includes('ctrl+u'), `the least important keys give way: ${dropped}`);
     assert.equal(tiny.length, CARD_HEIGHT);
     for (const row of tiny) assert.equal(helpers.visibleWidth(row), 40);
   });
@@ -972,7 +974,7 @@ describe('degradations (S1, S15)', () => {
 
     const absent = await open({ theme: null });
     assert.ok(rowsOf(absent.view)[BODY_TOP].includes('brand-new.ts'));
-    assert.ok(footerOf(rowsOf(absent.view)).startsWith('↑/↓ move'));
+    assert.ok(footerOf(rowsOf(absent.view)).includes('esc'));
   });
 
   test('an unwritable terminal sequence in the scope path never reaches the frame', async () => {

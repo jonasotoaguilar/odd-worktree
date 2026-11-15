@@ -132,12 +132,31 @@ function fileResolver(options) {
   return registered[0];
 }
 
-/** A host that draws the three file tools itself, in the self shell the substrate expects. */
+/** A host that draws the three file tools itself, in the DEFAULT shell: Pi's `read` and `write` renderers declare no shell, so the host wraps them in its own box. */
 const HOST = {
-  renderShell: 'self',
   renderCall: () => ({ render: () => ['host read call'], invalidate() {} }),
   renderResult: () => ({ render: () => ['host read result'], invalidate() {} }),
 };
+
+/** A host renderer that frames itself: Pi's `edit` declares `renderShell: 'self'`, and the host draws NO box around it. */
+const HOST_EDIT = {
+  renderShell: 'self',
+  renderCall: () => ({ render: () => ['host edit call'], invalidate() {} }),
+  renderResult: () => ({ render: () => ['host edit result'], invalidate() {} }),
+};
+
+/** The rows that carry content: the host box's own padding rows are blank. */
+const boxedContent = (rows) => rows.filter((row) => unpaint(row).trim() !== '');
+
+/** The text of the rows a forwarded group contributes, blanks aside. */
+const forwardedText = (rows) => boxedContent(rows).map(unbox);
+
+/** A background-painted blank row: the full width, and nothing on it. */
+function assertBlankRow(row, width) {
+  assert.equal(metrics.visibleWidth(unpaint(row)), width, `the blank row is not ${width} wide: ${JSON.stringify(unpaint(row))}`);
+  assert.equal(unpaint(row).trim(), '', 'the blank row carries no text');
+  assert.ok(row.length > 0, 'the blank row is drawn, not omitted');
+}
 
 const SKILL = 'lib/skills/one/SKILL.md';
 const ODD = 'odd/tasks/cards-skill-odd.md';
@@ -240,18 +259,18 @@ test('a path that names neither a skill nor an ODD artifact is the chain\'s own 
   const resolver = fileResolver();
   const slot = resolver('read', () => HOST);
   assert.equal(slot.renderShell, 'self', 'the card frames itself, so the host draws no filled box under it');
-  assert.deepEqual(slot.renderCall({ path: 'src/app.js' }, plainTheme, { isPartial: false }).render(60).map(unbox), ['host read call']);
+  assert.deepEqual(forwardedText(slot.renderCall({ path: 'src/app.js' }, plainTheme, { isPartial: false }).render(60)), ['host read call']);
   assert.deepEqual(
-    slot.renderResult(textResult('code'), { isPartial: false }, plainTheme, { args: { path: 'src/app.js' } }).render(60).map(unbox),
+    forwardedText(slot.renderResult(textResult('code'), { isPartial: false }, plainTheme, { args: { path: 'src/app.js' } }).render(60)),
     ['host read result'],
   );
   // A folder that merely holds the word is no identity either, and neither is a
   // document called SKILL.md outside a `skills` folder.
   for (const path of ['lib/skillset/notes.md', 'docs/oddity.md', 'odd/work/a.md', 'notes/SKILL.md', '', undefined, 42]) {
-    assert.deepEqual(slot.renderCall({ path }, plainTheme, { isPartial: false }).render(60).map(unbox), ['host read call'], String(path));
+    assert.deepEqual(forwardedText(slot.renderCall({ path }, plainTheme, { isPartial: false }).render(60)), ['host read call'], String(path));
   }
   // A detail too long for the row is forwarded as the chain drew it, never clipped by us.
-  assert.deepEqual(slot.renderCall({ path: 'src/app.js' }, plainTheme, { isPartial: true }).render(20).map(unbox), ['host read call']);
+  assert.deepEqual(forwardedText(slot.renderCall({ path: 'src/app.js' }, plainTheme, { isPartial: true }).render(20)), ['host read call']);
 });
 
 test('every tool this card does not own is handed back exactly as the chain resolved it', () => {
@@ -283,7 +302,7 @@ test('each switch forwards only its own kind, and reading it per paint repaints 
 
   globalThis[CARD_FILES_SLOT] = { skill: false, odd: true };
   try {
-    assert.deepEqual(skillCall.render(60).map(unbox), ['host read call'], 'Card skill off: the chain draws the row');
+    assert.deepEqual(forwardedText(skillCall.render(60)), ['host read call'], 'Card skill off: the chain draws the row');
     assert.match(unpaint(oddCall.render(60)[0]), /📑 odd/u, 'Card odd is still on');
   } finally {
     delete globalThis[CARD_FILES_SLOT];
@@ -292,7 +311,7 @@ test('each switch forwards only its own kind, and reading it per paint repaints 
 
   globalThis[CARD_FILES_SLOT] = { skill: true, odd: false };
   try {
-    assert.deepEqual(oddCall.render(60).map(unbox), ['host read call'], 'Card odd off: only the odd row is forwarded');
+    assert.deepEqual(forwardedText(oddCall.render(60)), ['host read call'], 'Card odd off: only the odd row is forwarded');
     assert.match(unpaint(skillCall.render(60)[0]), /▤ skill/u, 'Card skill is still on');
   } finally {
     delete globalThis[CARD_FILES_SLOT];
@@ -307,7 +326,7 @@ test('a switch saved through the package\'s own writer is the switch the card pa
   try {
     delete globalThis[CARD_FILES_SLOT];
     assert.deepEqual(
-      resolver('read', () => HOST).renderCall({ path: ODD }, plainTheme, { isPartial: false }).render(60).map(unbox),
+      forwardedText(resolver('read', () => HOST).renderCall({ path: ODD }, plainTheme, { isPartial: false }).render(60)),
       ['host read call'],
       'the saved document decides, not only the live cell',
     );
@@ -326,64 +345,124 @@ test('a switch saved through the package\'s own writer is the switch the card pa
 
 // ---- the host's own outer box, reproduced for every row this card hands back ----
 
-test('a forwarded read call keeps the host\'s own box', () => {
+test('a forwarded read call draws the host box\'s own blank rows around its rows', () => {
   const resolver = fileResolver();
-  const theme = boxTheme();
-  const rows = resolver('read', () => HOST).renderCall({ path: 'src/app.js' }, theme, { isPartial: true }).render(40);
-  assert.equal(rows.length, 1, 'one host row, one boxed row');
-  const text = unpaint(rows[0]);
-  assert.equal(metrics.visibleWidth(text), 40, 'the box pads the row to the width the host asked for');
+  const width = 40;
+  const settled = boxTheme();
+  const rows = resolver('read', () => HOST).renderCall({ path: 'src/app.js' }, settled, { isPartial: false }).render(width);
+  assert.equal(rows.length, 2, 'the box opens with one blank row, then the call the host drew');
+  assertBlankRow(rows[0], width);
+  assert.deepEqual([...new Set(settled.roles)], ['toolSuccessBg'], 'a settled call is the settled background, blank row included');
+
+  const text = unpaint(rows[1]);
+  assert.equal(metrics.visibleWidth(text), width, 'the box pads the row to the width the host asked for');
   assert.equal(text.startsWith(' host read call'), true, `exactly one column of padding on the left: ${JSON.stringify(text)}`);
   assert.equal(text.endsWith('  '), true, 'the row is filled on the right, never cut');
-  assert.deepEqual(theme.roles, ['toolPendingBg'], 'a call still streaming wears the pending background');
 
   // `outputPad` is the host's own padding, and one column is only the default.
   const widePad = boxTheme();
-  const padded = resolver('read', () => HOST).renderCall({ path: 'src/app.js' }, widePad, { isPartial: false, outputPad: 3 }).render(40);
-  assert.match(unpaint(padded[0]), /^ {3}host read call/u, 'the host pad is the one the context states');
-  assert.equal(metrics.visibleWidth(unpaint(padded[0])), 40);
+  const padded = resolver('read', () => HOST).renderCall({ path: 'src/app.js' }, widePad, { isPartial: false, outputPad: 3 }).render(width);
+  assert.match(unpaint(padded[1]), /^ {3}host read call/u, 'the host pad is the one the context states');
+  assert.equal(metrics.visibleWidth(unpaint(padded[1])), width);
+  assertBlankRow(padded[0], width);
 });
 
-test('a forwarded result wears the host background its state names', () => {
+test('an awaiting call carries the box\'s closing blank and loses it once the result arrives', () => {
+  const resolver = fileResolver();
+  const width = 30;
+  const awaiting = resolver('read', () => HOST).renderCall({ path: 'src/app.js' }, boxTheme(), { isPartial: true }).render(width);
+  assert.equal(awaiting.length, 3, 'blank, the call, blank: the host paints a complete box before the result');
+  assertBlankRow(awaiting[0], width);
+  assertBlankRow(awaiting[2], width);
+
+  // The host re-renders the call when the result lands, and the result then owns the
+  // closing blank.
+  const settled = resolver('read', () => HOST).renderCall({ path: 'src/app.js' }, boxTheme(), { isPartial: false }).render(width);
+  assert.equal(settled.length, 2, 'the call no longer closes the box');
+  assertBlankRow(settled[0], width);
+  const result = resolver('read', () => HOST).renderResult(textResult('code'), { isPartial: false }, boxTheme(), { args: { path: 'src/app.js' } }).render(width);
+  assert.equal(result.length, 2, 'the result rows, then the box\'s closing blank');
+  assertBlankRow(result.at(-1), width);
+});
+
+test('a forwarded result closes the box with the background its state names', () => {
   const resolver = fileResolver();
   const args = { path: 'src/app.js' };
-  const slot = resolver('read', () => HOST);
-
+  const width = 40;
   const settled = boxTheme();
-  slot.renderResult(textResult('code'), { isPartial: false }, settled, { args }).render(40);
-  assert.deepEqual(settled.roles, ['toolSuccessBg'], 'a settled result is the success background');
+  const settledRows = resolver('read', () => HOST).renderResult(textResult('code'), { isPartial: false }, settled, { args }).render(width);
+  assert.deepEqual([...new Set(settled.roles)], ['toolSuccessBg'], 'a settled result is the success background');
+  assert.equal(unbox(settledRows[0]), 'host read result', 'the chain\'s own row is kept');
+  assertBlankRow(settledRows.at(-1), width);
 
   const failed = boxTheme();
-  const failedRows = slot.renderResult(textResult('boom', { isError: true }), { isPartial: false }, failed, { args }).render(40);
-  assert.deepEqual(failed.roles, ['toolErrorBg'], 'a failed result is the error background');
-  assert.equal(unbox(failedRows[0]), 'host read result', 'the chain\'s own row is kept');
+  resolver('read', () => HOST).renderResult(textResult('boom', { isError: true }), { isPartial: false }, failed, { args }).render(width);
+  assert.deepEqual([...new Set(failed.roles)], ['toolErrorBg'], 'a failed result is the error background');
 
   // `isError` stated in the render options is the same state as the result flag.
   const fromOptions = boxTheme();
-  slot.renderResult(textResult('boom'), { isPartial: false, isError: true }, fromOptions, { args }).render(40);
-  assert.deepEqual(fromOptions.roles, ['toolErrorBg']);
+  resolver('read', () => HOST).renderResult(textResult('boom'), { isPartial: false, isError: true }, fromOptions, { args }).render(width);
+  assert.deepEqual([...new Set(fromOptions.roles)], ['toolErrorBg']);
 
   // A streamed result is the pending background, from the context's own flag.
   const partial = boxTheme();
-  slot.renderResult(textResult('code'), { isPartial: true }, partial, { args }).render(40);
-  assert.deepEqual(partial.roles, ['toolPendingBg']);
+  resolver('read', () => HOST).renderResult(textResult('code'), { isPartial: true }, partial, { args }).render(width);
+  assert.deepEqual([...new Set(partial.roles)], ['toolPendingBg']);
+});
+
+test('a forwarded edit row is returned exactly as the chain drew it', () => {
+  const resolver = fileResolver();
+  const args = { path: 'src/app.js' };
+  for (const partial of [true, false]) {
+    const theme = boxTheme();
+    const rows = resolver('edit', () => HOST_EDIT).renderCall(args, theme, { isPartial: partial }).render(40);
+    // Pi's edit renderer declares `renderShell: 'self'`: the host draws NO box around
+    // it, so this card adds none — no blank, no pad, no background.
+    assert.deepEqual(rows, ['host edit call'], 'exactly the chain\'s rows');
+    assert.equal(rows[0].startsWith(' '), false, 'no left pad');
+    assert.equal(rows[0].includes(String.fromCharCode(27)), false, 'no background paint');
+    assert.deepEqual(theme.roles, [], 'the box asks the theme for no background at all');
+  }
+  const resultTheme = boxTheme();
+  const result = resolver('edit', () => HOST_EDIT).renderResult(textResult('Edited'), { isPartial: false }, resultTheme, { args }).render(40);
+  assert.deepEqual(result, ['host edit result']);
+  assert.deepEqual(resultTheme.roles, []);
+});
+
+test('a chain renderer that declares no shell is the default shell, like the host', () => {
+  const resolver = fileResolver();
+  const UNDECLARED = {
+    renderCall: () => ({ render: () => ['host call'], invalidate() {} }),
+    renderResult: () => ({ render: () => ['host result'], invalidate() {} }),
+  };
+  const DECLARED = {
+    renderShell: 'default',
+    renderCall: () => ({ render: () => ['host call'], invalidate() {} }),
+    renderResult: () => ({ render: () => ['host result'], invalidate() {} }),
+  };
+  for (const inherited of [UNDECLARED, DECLARED]) {
+    const rows = resolver('read', () => inherited).renderCall({ path: 'src/app.js' }, plainTheme, { isPartial: false }).render(24);
+    assert.equal(rows.length, 2, 'the default shell opens with a blank row');
+    assertBlankRow(rows[0], 24);
+    assert.equal(rows[1].startsWith(' '), true, 'and pads the chain\'s row horizontally');
+    assert.equal(unbox(rows[1]), 'host call');
+  }
 });
 
 test('the forwarded text is byte-identical to the row the chain drew, and is never cut', () => {
   const resolver = fileResolver();
   const width = 40;
   const pad = 1;
-  const call = resolver('read', () => HOST);
   const hostCallRows = HOST.renderCall({ path: 'src/app.js' }, plainTheme, {}).render(width - pad * 2);
-  const forwardedCall = call.renderCall({ path: 'src/app.js' }, plainTheme, { isPartial: false }).render(width);
-  assert.deepEqual(forwardedCall.map(unbox), hostCallRows.map(stripAnsi), 'the same text the chain drew, at the box\'s inner width');
+  const forwardedCall = resolver('read', () => HOST).renderCall({ path: 'src/app.js' }, plainTheme, { isPartial: false }).render(width);
+  assert.deepEqual(forwardedText(forwardedCall), hostCallRows.map(stripAnsi), 'the same text the chain drew, at the box\'s inner width');
 
   // A row wider than the box budget is kept, not clipped: the outer box loses its fill,
   // never a character.
   const long = 'x'.repeat(120);
-  const LONG = { renderShell: 'self', renderCall: () => ({ render: () => [long], invalidate() {} }) };
+  const LONG = { renderCall: () => ({ render: () => [long], invalidate() {} }) };
   const longRows = resolver('read', () => LONG).renderCall({ path: 'src/app.js' }, plainTheme, { isPartial: false }).render(20);
-  assert.equal(unbox(longRows[0]), long, 'a row too wide for the box keeps every column');
+  assert.equal(unbox(boxedContent(longRows)[0]), long, 'a row too wide for the box keeps every column');
 
   // The result slot reproduces the same box: the host's own renderer is asked for the
   // inner width and its rows come back padded to the outer one.
@@ -391,13 +470,12 @@ test('the forwarded text is byte-identical to the row the chain drew, and is nev
   const forwardedResult = resolver('read', () => HOST)
     .renderResult(textResult('code'), { isPartial: false }, plainTheme, { args: { path: 'src/app.js' } })
     .render(width);
-  assert.deepEqual(forwardedResult.map(unbox), hostResultRows.map(stripAnsi));
+  assert.deepEqual(forwardedText(forwardedResult), hostResultRows.map(stripAnsi));
 });
 
 test('a chain row that cannot be drawn adds nothing and never throws', () => {
   const resolver = fileResolver();
   const THROWING_COMPONENT = {
-    renderShell: 'self',
     renderCall: () => ({
       render: () => {
         throw new Error('render exploded');
@@ -408,19 +486,25 @@ test('a chain row that cannot be drawn adds nothing and never throws', () => {
       throw new Error('renderer exploded');
     },
   };
+  // No row means no box either: the blank rows only accompany rows that were drawn.
   const slot = resolver('read', () => THROWING_COMPONENT);
   assert.deepEqual(slot.renderCall({ path: 'src/app.js' }, plainTheme, { isPartial: false }).render(40), []);
-  assert.doesNotThrow(() => slot.renderCall({ path: 'src/app.js' }, boxTheme(), { isPartial: false }).render(40));
+  assert.doesNotThrow(() => slot.renderCall({ path: 'src/app.js' }, boxTheme(), { isPartial: true }).render(40));
   assert.deepEqual(slot.renderResult(textResult('code'), { isPartial: false }, plainTheme, { args: { path: 'src/app.js' } }).render(40), []);
+
+  // The same for a renderer that frames itself.
+  const selfSlot = resolver('read', () => ({ renderShell: 'self', renderCall: () => ({ render: () => { throw new Error('nope'); } }), renderResult: () => ({ render: () => { throw new Error('nope'); } }) }));
+  assert.deepEqual(selfSlot.renderCall({ path: 'src/app.js' }, boxTheme(), { isPartial: false }).render(40), []);
 
   // No inherited slot at all is no box either, and no throw.
   const nothing = resolver('read', () => undefined);
   assert.deepEqual(nothing.renderCall({ path: 'src/app.js' }, plainTheme, { isPartial: false }).render(40), []);
   assert.doesNotThrow(() => nothing.renderResult(textResult('code'), { isPartial: false }, plainTheme, { args: { path: 'src/app.js' } }).render(40));
 
-  // A theme that cannot paint a background still draws the padded row.
+  // A theme that cannot paint a background still draws the box's padding and blanks.
   const bare = resolver('read', () => HOST).renderCall({ path: 'src/app.js' }, plainTheme, { isPartial: true }).render(40);
-  assert.match(unpaint(bare[0]), /^ host read call +$/u, 'a theme without bg keeps the box\'s padding');
+  assertBlankRow(bare[0], 40);
+  assert.match(unpaint(bare[1]), /^ host read call +$/u, 'a theme without bg keeps the box\'s padding');
 });
 
 test('a row forwarded because its switch is off is the same boxed row as a path with no identity', () => {

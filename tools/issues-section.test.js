@@ -11,10 +11,11 @@
 //   body paints at most SEVEN of them (S4); a read that produced more appends
 //   ONE eighth, dim, clickable `and N more issues` row (`N+` when the read hit
 //   its fetch bound) and a click on it dispatches `/issues`;
-// - ONE extra GraphQL read marks the rows whose issue already has a pull
-//   request (T9): it covers every issue the list returned, aliased i0..iN, and
-//   every failure of it leaves the rows without the marker and the section
-//   ready;
+// - ONE combined GraphQL read (S9/T14) returns the rows AND their
+//   pull-request cross-reference facts (`author:@me`, `assignee:@me` and
+//   `involves:@me -author:@me` in one request), feeds a process cache and leaves
+//   every failure to the section's own read state; a row whose issue has a pull
+//   request wears the marker, one without carries no `meta`;
 // - a failed refresh over an on-screen list keeps every row and reports
 //   `<n> assigned · stale` (T10), while a failed first read is still one error
 //   row;
@@ -912,28 +913,75 @@ function graphqlQueryOf(call) {
   return raw.startsWith('query=') ? raw.slice('query='.length) : raw;
 }
 
-// gh's answers for the section: the identity probes plus the ONE assigned
-// search. `repoView` is what gh's OWN resolution answers for the checkout.
-function sectionGithub({ issues = [], repoView = 'original/project' } = {}) {
+// A test row becomes the GraphQL node the combined read returns. A row may
+// carry the whole node shape already; the row-level fields are the ones these
+// tests speak in, and `hasPullRequest` becomes the cross-reference source the
+// marker is derived from.
+function graphqlNode(item) {
+  const entry = item && typeof item === 'object' ? item : {};
+  const timeline = entry.timelineItems && Array.isArray(entry.timelineItems.nodes)
+    ? entry.timelineItems.nodes
+    : (entry.hasPullRequest === true ? [{ source: { __typename: 'PullRequest' } }] : []);
+  const labels = entry.labels && typeof entry.labels === 'object' && Array.isArray(entry.labels.nodes)
+    ? entry.labels
+    : { nodes: Array.isArray(entry.labels) ? entry.labels : [] };
+  const comments = entry.comments && typeof entry.comments === 'object'
+    ? entry.comments
+    : { totalCount: Number.isInteger(entry.commentsCount) ? entry.commentsCount : 0 };
+  return {
+    number: entry.number,
+    title: typeof entry.title === 'string' ? entry.title : '',
+    state: typeof entry.state === 'string' ? entry.state : 'OPEN',
+    stateReason: entry.stateReason === undefined ? '' : entry.stateReason,
+    url: typeof entry.url === 'string' ? entry.url : '',
+    createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : '',
+    updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : '',
+    author: entry.author && typeof entry.author === 'object'
+      ? entry.author
+      : { login: typeof entry.author === 'string' ? entry.author : 'me' },
+    labels,
+    comments,
+    reactionGroups: Array.isArray(entry.reactionGroups) ? entry.reactionGroups : [],
+    timelineItems: { nodes: timeline },
+  };
+}
+
+// The combined read's answer (`listRelatedIssues`): three aliased buckets, each
+// with its exact issueCount and nodes. `counts` overrides a bucket's count to
+// model an issue that left the result between two reads.
+function relatedAnswer({ mine = [], assigned = [], involved = [], counts = {} } = {}) {
+  const bucket = (key, rows) => ({
+    issueCount: Number.isInteger(counts[key]) ? counts[key] : rows.length,
+    nodes: rows.map(graphqlNode),
+  });
+  return {
+    data: {
+      mine: bucket('mine', mine),
+      assigned: bucket('assigned', assigned),
+      involved: bucket('involved', involved),
+    },
+  };
+}
+
+// gh's answers for the section: the identity probes plus the ONE combined
+// GraphQL read. `repoView` is what gh's OWN resolution answers for the checkout.
+function sectionGithub({ issues = [], mine = [], involved = [], counts = {}, repoView = 'original/project' } = {}) {
   const calls = [];
   const runner = async (bin, argv, runOpts) => {
     const env = (runOpts && runOpts.env) || {};
     calls.push({ bin, argv: argv.slice(), env: { ...env }, cwd: runOpts && runOpts.cwd });
     if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
     if (argv[0] === 'repo' && argv[1] === 'view') return okJson(JSON.stringify({ nameWithOwner: repoView }));
-    if (argv[0] === 'issue' && argv[1] === 'list') return okJson(JSON.stringify(issues));
+    if (argv[0] === 'api' && argv[1] === 'graphql') {
+      return okJson(JSON.stringify(relatedAnswer({ mine, assigned: issues, involved, counts })));
+    }
     return okJson('');
   };
   return { runner, calls };
 }
 
-function listCalls(calls) {
-  return calls.filter((call) => call.argv[0] === 'issue' && call.argv[1] === 'list');
-}
-
-function searchOf(call) {
-  const at = call.argv.indexOf('--search');
-  return at >= 0 ? call.argv[at + 1] : null;
+function graphqlCalls(calls) {
+  return calls.filter((call) => call.argv[0] === 'api' && call.argv[1] === 'graphql');
 }
 
 function sessionStartHandlers(hooks) {
@@ -1044,12 +1092,15 @@ test("S6: session_start reads ONLY the assigned issues of the checkout's own rep
   assert.ok(rows.every((row) => !('meta' in row)), 'no row reports a relation');
   assert.equal(section.meta(ctx), '2 assigned');
 
-  const lists = listCalls(gh.calls);
-  assert.equal(lists.length, 1, 'exactly one gh call: the assigned search, nothing else');
-  assert.equal(searchOf(lists[0]), 'assignee:@me sort:updated-desc');
-  assert.equal(lists[0].env.GH_REPO, 'github.com/myfork/project', 'the read carries the pinned identity');
-  assert.equal(lists[0].argv[lists[0].argv.indexOf('--state') + 1], 'open');
-  assert.equal(lists[0].argv[lists[0].argv.indexOf('--limit') + 1], '20', 'the fetch is capped at 20');
+  const reads = graphqlCalls(gh.calls);
+  assert.equal(reads.length, 1, 'exactly one gh call: the combined read, nothing else');
+  assert.equal(reads[0].env.GH_REPO, 'github.com/myfork/project', 'the read carries the pinned identity');
+  const query = graphqlQueryOf(reads[0]);
+  for (const qualifier of ['author:@me', 'assignee:@me', 'involves:@me -author:@me']) {
+    assert.ok(query.includes(`repo:myfork/project is:issue is:open ${qualifier} sort:updated-desc`),
+      `the combined read carries ${qualifier}`);
+  }
+  assert.equal((query.match(/first: 100/g) || []).length, 3, 'the first sync reads 100 per bucket');
 });
 
 test('S4: nine assigned issues paint seven rows plus an overflow row that dispatches /issues once', async () => {
@@ -1082,7 +1133,7 @@ test('S4: nine assigned issues paint seven rows plus an overflow row that dispat
   assert.equal(rows[7].tone, 'dim');
   assert.equal('meta' in rows[7], false, 'the overflow row carries no meta');
   assert.equal(section.meta(ctx), '9 assigned', 'the header counts every issue read');
-  assert.equal(listCalls(gh.calls).length, 1, 'one read, never one per bucket');
+  assert.equal(graphqlCalls(gh.calls).length, 1, 'one read, never one per bucket');
 
   rows[7].onClick();
   assert.deepEqual(sent, [], 'the dispatch is deferred off the paint path');
@@ -1138,7 +1189,7 @@ test("S6: a session starting in another checkout drops the previous checkout's a
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
 
-  // Every assigned read is HELD, so the test decides when each one answers; the
+  // Every combined read is HELD, so the test decides when each one answers; the
   // second checkout's gate probe (`gh api user`) is held too.
   const lists = [];
   const gates = [];
@@ -1152,9 +1203,8 @@ test("S6: a session starting in another checkout drops the previous checkout's a
     if (argv[0] === 'repo' && argv[1] === 'view') {
       return Promise.resolve(okJson(JSON.stringify({ nameWithOwner: 'myfork/ignored' })));
     }
-    if (argv[0] === 'issue' && argv[1] === 'list') {
-      const at = argv.indexOf('--search');
-      const entry = { cwd, search: at >= 0 ? argv[at + 1] : null, repo: env.GH_REPO, settle: null };
+    if (argv[0] === 'api' && argv[1] === 'graphql') {
+      const entry = { cwd, repo: env.GH_REPO, query: graphqlQueryOf({ argv }), settle: null };
       entry.answer = new Promise((resolve) => {
         entry.settle = (payload) => resolve(okJson(JSON.stringify(payload)));
       });
@@ -1186,8 +1236,8 @@ test("S6: a session starting in another checkout drops the previous checkout's a
   await waitFor(() => lists.length === 1, 'the first checkout never read its issues');
   assert.deepEqual(lists.map((entry) => entry.repo), ['github.com/myfork/project-a'],
     'the first session reads its own checkout');
-  assert.equal(lists[0].search, 'assignee:@me sort:updated-desc',
-    'the one read is the assigned search');
+  assert.ok(lists[0].query.includes('assignee:@me'),
+    'the one read carries the assigned search');
 
   // The session moves to the second checkout. Its handler is fired without
   // awaiting: it holds on the `gh` gate, which is the window the defect lived in.
@@ -1203,7 +1253,7 @@ test("S6: a session starting in another checkout drops the previous checkout's a
 
   // The first checkout's answer settles NOW — before the second session's gate
   // has answered. It belongs to a superseded session and is dropped.
-  lists[0].settle([{ number: 10, title: 'A ten', state: 'OPEN', updatedAt: '2024-01-01T00:00:00Z' }]);
+  lists[0].settle(relatedAnswer({ assigned: [{ number: 10, title: 'A ten', state: 'OPEN', updatedAt: '2024-01-01T00:00:00Z' }] }));
   await new Promise((resolve) => setTimeout(resolve, 30));
 
   assert.equal(gates.length, 1, 'the second session is still waiting on its gh gate');
@@ -1222,7 +1272,7 @@ test("S6: a session starting in another checkout drops the previous checkout's a
   assert.equal(bList().repo, 'github.com/myfork/project-b',
     "the second session's read carries its own pinned identity");
 
-  bList().settle([{ number: 21, title: 'B twenty-one', state: 'OPEN', updatedAt: '2024-03-01T00:00:00Z' }]);
+  bList().settle(relatedAnswer({ assigned: [{ number: 21, title: 'B twenty-one', state: 'OPEN', updatedAt: '2024-03-01T00:00:00Z' }] }));
   await waitFor(
     () => section.lines(ctxB).some((row) => row.label === '#21 B twenty-one'),
     "the second checkout's rows never painted",
@@ -1236,13 +1286,12 @@ test("S6: a session starting in another checkout drops the previous checkout's a
   );
 });
 
-test('S4 (T9): exactly one GraphQL read marks the rows whose issue has a pull request', async () => {
+test('S4 (T9): the ONE combined read supplies both the rows and their pull-request markers', async () => {
   const checkout = makeCheckout();
   const { registered } = installBridge();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const calls = [];
-  const graphql = [];
   ghIssues.setGhRunner(async (_bin, argv, runOpts = {}) => {
     const env = runOpts.env || {};
     calls.push({ argv: argv.slice(), env: { ...env }, cwd: runOpts.cwd });
@@ -1250,31 +1299,17 @@ test('S4 (T9): exactly one GraphQL read marks the rows whose issue has a pull re
     if (argv[0] === 'repo' && argv[1] === 'view') {
       return okJson(JSON.stringify({ nameWithOwner: 'original/project' }));
     }
-    if (argv[0] === 'issue' && argv[1] === 'list') {
-      return okJson(JSON.stringify([
-        { number: 11, title: 'Has a PR', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' },
-        { number: 12, title: 'No PR', state: 'OPEN', updatedAt: '2024-06-01T00:00:00Z' },
-        { number: 13, title: 'Two PRs', state: 'OPEN', updatedAt: '2024-07-01T00:00:00Z' },
-      ]));
-    }
     if (argv[0] === 'api' && argv[1] === 'graphql') {
-      graphql.push({ argv: argv.slice(), env: { ...env } });
-      return okJson(JSON.stringify({
-        data: {
-          repository: {
-            i0: { timelineItems: { nodes: [{ source: { __typename: 'PullRequest' } }] } },
-            i1: { timelineItems: { nodes: [{ source: { __typename: 'Issue' } }] } },
-            i2: {
-              timelineItems: {
-                nodes: [
-                  { source: { __typename: 'Issue' } },
-                  { source: { __typename: 'PullRequest' } },
-                ],
-              },
-            },
-          },
-        },
-      }));
+      return okJson(JSON.stringify(relatedAnswer({
+        assigned: [
+          { number: 11, title: 'Has a PR', updatedAt: '2024-05-01T00:00:00Z', hasPullRequest: true },
+          { number: 12, title: 'No PR', updatedAt: '2024-06-01T00:00:00Z' },
+          { number: 13, title: 'Two PRs', updatedAt: '2024-07-01T00:00:00Z', timelineItems: { nodes: [
+            { source: { __typename: 'Issue' } },
+            { source: { __typename: 'PullRequest' } },
+          ] } },
+        ],
+      })));
     }
     return okJson('');
   });
@@ -1294,73 +1329,56 @@ test('S4 (T9): exactly one GraphQL read marks the rows whose issue has a pull re
     'the marker never turns a row into an accent');
   assert.equal(section.meta(ctx), '3 assigned', 'the marker never changes the count');
 
-  assert.equal(graphql.length, 1, 'exactly one GraphQL read serves every row');
-  assert.equal(listCalls(calls).length, 1, 'the marker read never re-resolves the list or the identity');
+  // T14: the marker read T9 introduced is gone — the same read that returns the
+  // rows returns their cross-reference facts, so there is no second call.
+  const graphql = graphqlCalls(calls);
+  assert.equal(graphql.length, 1, 'exactly one GraphQL read serves every row and its marker');
   assert.equal(graphql[0].env.GH_REPO, 'github.com/myfork/project',
-    'the marker read carries the identity the list read already proved');
+    'the read carries the identity the checkout already proved');
+  assert.equal(calls.some((call) => call.argv[0] === 'issue' && call.argv[1] === 'list'), false,
+    'no separate list read remains');
   const query = graphqlQueryOf(graphql[0]);
   assert.ok(query !== null, 'the read sends one query argument');
-  assert.equal(query, `query {
-  repository(owner: "myfork", name: "project") {
-    i0: issue(number: 11) {
-      timelineItems(first: 10, itemTypes: [CROSS_REFERENCED_EVENT]) {
-        nodes { ... on CrossReferencedEvent { source { __typename } } }
-      }
-    }
-    i1: issue(number: 12) {
-      timelineItems(first: 10, itemTypes: [CROSS_REFERENCED_EVENT]) {
-        nodes { ... on CrossReferencedEvent { source { __typename } } }
-      }
-    }
-    i2: issue(number: 13) {
-      timelineItems(first: 10, itemTypes: [CROSS_REFERENCED_EVENT]) {
-        nodes { ... on CrossReferencedEvent { source { __typename } } }
-      }
-    }
+  assert.equal((query.match(/first: 100/g) || []).length, 3, 'the first sync reads 100 per bucket');
+  for (const qualifier of ['author:@me', 'assignee:@me', 'involves:@me -author:@me']) {
+    assert.ok(query.includes(`repo:myfork/project is:issue is:open ${qualifier} sort:updated-desc`),
+      `the combined read carries ${qualifier}`);
   }
-}`, 'one alias per issue the list returned, in order, and nothing else');
+  assert.ok(query.includes('timelineItems(first: 10, itemTypes: [CROSS_REFERENCED_EVENT])'),
+    'the marker selection rides each row');
 });
 
-test('S4 (T9): a failed marker read leaves the rows, no markers and the section ready', async () => {
+// T14 rewrote this test: its old premise — a separate marker read that fails
+// while the list read succeeds — no longer exists. The decoration is still best
+// effort in the only way it can be now: a row whose node carries no
+// cross-referenced pull request simply has no marker, and the section stays
+// ready. A failed combined read is the section's own read failure (S5/T10).
+test('S4 (T9): a row without a cross-referenced pull request carries no marker and the section stays ready', async () => {
   const checkout = makeCheckout();
-  const cases = [
-    ['a rejected read', () => Promise.reject(new Error('gh exited with status 1'))],
-    ['a non-zero exit', () => ({ status: 1, stdout: '', stderr: 'HTTP 502: bad gateway', error: null })],
-    ['an unexpected shape', () => okJson(JSON.stringify({ data: { repository: { i0: { timelineItems: { nodes: 'nope' } } } } }))],
-  ];
-  for (const [name, graphqlAnswer] of cases) {
-    const { registered } = installBridge();
-    const loaded = await loadExtension({});
-    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
-    ghIssues.setGhRunner(async (_bin, argv) => {
-      if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
-      if (argv[0] === 'repo' && argv[1] === 'view') {
-        return okJson(JSON.stringify({ nameWithOwner: 'original/project' }));
-      }
-      if (argv[0] === 'issue' && argv[1] === 'list') {
-        return okJson(JSON.stringify([
-          { number: 11, title: 'Has a PR', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' },
-          { number: 12, title: 'No PR', state: 'OPEN', updatedAt: '2024-06-01T00:00:00Z' },
-        ]));
-      }
-      if (argv[0] === 'api' && argv[1] === 'graphql') return graphqlAnswer();
-      return okJson('');
-    });
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub({
+    issues: [
+      { number: 11, title: 'Has a PR', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z', hasPullRequest: true },
+      { number: 12, title: 'No PR', state: 'OPEN', updatedAt: '2024-06-01T00:00:00Z' },
+    ],
+  });
+  ghIssues.setGhRunner(gh.runner);
 
-    const ctx = { cwd: checkout, ui: { notify: () => {} } };
-    await fireSessionStart(loaded.hooks, ctx);
-    assert.equal(registered.length, 1);
-    const section = registered[0];
-    const rows = await waitForRows(section, ctx);
+  const ctx = { cwd: checkout, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctx);
+  assert.equal(registered.length, 1);
+  const section = registered[0];
+  const rows = await waitForRows(section, ctx);
 
-    assert.deepEqual(rows.map((row) => row.label), ['#12 No PR', '#11 Has a PR'],
-      `${name}: the rows are the list read's own`);
-    assert.ok(rows.every((row) => !('meta' in row)),
-      `${name}: the decoration is simply absent`);
-    const meta = section.meta(ctx);
-    assert.equal(meta, '2 assigned', `${name}: the section stays ready, never stale`);
-    assert.ok(!String(meta).includes('stale'), `${name}: a decoration never reports a stall`);
-  }
+  assert.deepEqual(rows.map((row) => row.label), ['#12 No PR', '#11 Has a PR'],
+    'the rows are the combined read\'s own');
+  assert.equal('meta' in rows[0], false, 'the decoration is simply absent');
+  assert.equal(rows[1].meta, '\ue726', 'the row with a pull request keeps its one marker');
+  const meta = section.meta(ctx);
+  assert.equal(meta, '2 assigned', 'the section stays ready, never stale');
+  assert.ok(!String(meta).includes('stale'), 'a decoration never reports a stall');
 });
 
 // ---------------------------------------------------------------------------
@@ -1535,13 +1553,13 @@ test('S1/S6: a single-remote checkout reads only the assigned issues with the id
   const rows = await waitForRows(section, ctx);
   assert.deepEqual(rows.map((row) => row.label), ['#12 Assigned two', '#11 Assigned one']);
 
-  const lists = listCalls(gh.calls);
-  assert.equal(lists.length, 1, 'exactly one read');
-  assert.equal(searchOf(lists[0]), 'assignee:@me sort:updated-desc');
-  assert.equal(lists[0].env.GH_REPO, 'github.com/myfork/project',
+  const reads = graphqlCalls(gh.calls);
+  assert.equal(reads.length, 1, 'exactly one read');
+  assert.equal(reads[0].env.GH_REPO, 'github.com/myfork/project',
     'the read carries the identity gh resolved for this checkout, host-qualified, so the list and the click agree');
-  assert.equal(lists[0].argv[lists[0].argv.indexOf('--state') + 1], 'open');
-  assert.equal(lists[0].argv[lists[0].argv.indexOf('--limit') + 1], '20', 'the fetch is capped at 20');
+  const query = graphqlQueryOf(reads[0]);
+  assert.ok(query.includes('repo:myfork/project is:issue is:open assignee:@me sort:updated-desc'));
+  assert.equal((query.match(/first: 100/g) || []).length, 3, 'the first sync reads 100 per bucket');
 });
 
 // ---------------------------------------------------------------------------
@@ -1582,12 +1600,15 @@ test("S3: the activity after a reload reads the session's own checkout", async (
   assert.deepEqual(rows.map((row) => row.label), ['#12 Assigned two', '#11 Assigned one'],
     'the section shows the reloaded session\'s rows');
 
-  const lists = listCalls(gh.calls);
-  assert.equal(lists.length, 1, 'exactly one read');
-  assert.equal(lists[0].env.GH_REPO, 'github.com/myfork/project',
+  const reads = graphqlCalls(gh.calls);
+  assert.equal(reads.length, 1, 'exactly one read');
+  assert.equal(reads[0].env.GH_REPO, 'github.com/myfork/project',
     "the read is bound to the session's own checkout, not the host process's cwd");
-  assert.equal(lists[0].cwd, checkout, 'the read runs in the session\'s own checkout');
-  assert.equal(searchOf(lists[0]), 'assignee:@me sort:updated-desc');
+  assert.equal(reads[0].cwd, checkout, 'the read runs in the session\'s own checkout');
+  const query = graphqlQueryOf(reads[0]);
+  assert.ok(query.includes('repo:myfork/project is:issue is:open assignee:@me sort:updated-desc'),
+    'the combined read carries the assigned search');
+  assert.equal((query.match(/first: 100/g) || []).length, 3, 'the first sync reads 100 per bucket');
 });
 
 test('S3: session_shutdown drops the ended rows and clears the session context', async () => {
@@ -1606,11 +1627,11 @@ test('S3: session_shutdown drops the ended rows and clears the session context',
     if (argv[0] === 'repo' && argv[1] === 'view') {
       return okJson(JSON.stringify({ nameWithOwner: 'original/project' }));
     }
-    if (argv[0] === 'issue' && argv[1] === 'list') {
+    if (argv[0] === 'api' && argv[1] === 'graphql') {
       const assigned = env.GH_REPO === 'github.com/myfork/project'
         ? { number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }
         : { number: 77, title: 'Host process repo', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' };
-      return okJson(JSON.stringify([assigned]));
+      return okJson(JSON.stringify(relatedAnswer({ assigned: [assigned] })));
     }
     return okJson('');
   });
@@ -1730,14 +1751,14 @@ test('S4: a row clicked after the session moved to another checkout still opens 
     if (argv[0] === 'repo' && argv[1] === 'view') {
       return Promise.resolve(okJson(JSON.stringify({ nameWithOwner: 'myfork/project-a' })));
     }
-    if (argv[0] === 'issue' && argv[1] === 'list') {
+    if (argv[0] === 'api' && argv[1] === 'graphql') {
       const assigned = [{
         number: 11,
         title: env.GH_REPO === 'github.com/myfork/project-a' ? 'A eleven' : 'B eleven',
         state: 'OPEN',
         updatedAt: '2024-01-01T00:00:00Z',
       }];
-      return Promise.resolve(okJson(JSON.stringify(assigned)));
+      return Promise.resolve(okJson(JSON.stringify(relatedAnswer({ assigned }))));
     }
     return Promise.resolve(okJson(''));
   });
@@ -1793,14 +1814,14 @@ test('S6: a read in flight at session_shutdown never repaints the rail', async (
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
 
-  // The assigned read is HELD, so the test decides when it settles.
+  // The combined read is HELD, so the test decides when it settles.
   const lists = [];
   ghIssues.setGhRunner((_bin, argv) => {
     if (argv[0] === 'api' && argv[1] === 'user') return Promise.resolve(okJson('{"login":"me"}'));
     if (argv[0] === 'repo' && argv[1] === 'view') {
       return Promise.resolve(okJson(JSON.stringify({ nameWithOwner: 'myfork/project' })));
     }
-    if (argv[0] === 'issue' && argv[1] === 'list') {
+    if (argv[0] === 'api' && argv[1] === 'graphql') {
       const entry = { settle: null };
       entry.answer = new Promise((resolve) => {
         entry.settle = (payload) => resolve(okJson(JSON.stringify(payload)));
@@ -1827,7 +1848,7 @@ test('S6: a read in flight at session_shutdown never repaints the rail', async (
     'shutdown drops the rows the ended session had');
 
   // The read that was in flight when the session ended settles now.
-  for (const entry of lists) entry.settle([]);
+  for (const entry of lists) entry.settle(relatedAnswer({ assigned: [] }));
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.deepEqual(repaints, [], 'a read that outlived the session never repaints the rail');
   assert.deepEqual(section.lines(ctx), [{ label: 'loading…', tone: 'dim' }],
@@ -1911,7 +1932,6 @@ test('S3 (T13): a hidden section makes no gh call, and the drawn window gates th
     ghIssues.setGhRunner(gh.runner);
     const ctx = { cwd: checkout, ui: { notify: () => {} } };
 
-    const graphqlCalls = () => gh.calls.filter((call) => call.argv[0] === 'api' && call.argv[1] === 'graphql');
     await fireSessionStart(loaded.hooks, ctx);
     assert.equal(registered.length, 1);
     const section = registered[0];
@@ -1921,24 +1941,22 @@ test('S3 (T13): a hidden section makes no gh call, and the drawn window gates th
     await fireHook(loaded.hooks, 'before_agent_start', ctx);
     await fireHook(loaded.hooks, 'turn_end', ctx);
     await new Promise((resolve) => setTimeout(resolve, 150));
-    assert.equal(listCalls(gh.calls).length, 0, 'a hidden section makes no gh issue list call');
-    assert.equal(graphqlCalls().length, 0, 'a hidden section makes no marker read either');
+    assert.equal(graphqlCalls(gh.calls).length, 0, 'a hidden section makes no gh read at all');
     assert.deepEqual(section.lines(ctx), [{ label: 'loading…', tone: 'dim' }],
       'a hidden section has no rows to show, because it was never read');
 
     // The section becomes visible: one frame is what starts its own read.
-    await waitFor(() => listCalls(gh.calls).length === 1, 'the drawn section never read its issues');
+    await waitFor(() => graphqlCalls(gh.calls).length === 1, 'the drawn section never read its issues');
     const drawnRows = await waitForRows(section, ctx);
     assert.deepEqual(drawnRows.map((row) => row.label), ['#11 Assigned one'],
       'the drawn frame paints the read it started');
-    assert.equal(listCalls(gh.calls).length, 1, 'the drawn frame started exactly one read');
-    assert.equal(graphqlCalls().length, 1, 'and the one marker read that decorates it');
+    assert.equal(graphqlCalls(gh.calls).length, 1, 'the drawn frame started exactly one combined read');
 
     // Drawn 31 s ago, inside the two-minute window: activity reads behind the
     // unchanged 30 s floor.
     offset = 31000;
     await fireHook(loaded.hooks, 'turn_end', ctx);
-    await waitFor(() => listCalls(gh.calls).length === 2,
+    await waitFor(() => graphqlCalls(gh.calls).length === 2,
       'a drawn section never read on the turn boundary');
 
     // The drawn window has passed: the same hooks read nothing at all.
@@ -1948,11 +1966,11 @@ test('S3 (T13): a hidden section makes no gh call, and the drawn window gates th
     await fireHook(loaded.hooks, 'before_agent_start', ctx);
     await new Promise((resolve) => setTimeout(resolve, 150));
     assert.equal(gh.calls.length, quiet, 'a section outside the drawn window makes no gh call');
-    assert.equal(listCalls(gh.calls).length, 2, 'and no issue list call either');
+    assert.equal(graphqlCalls(gh.calls).length, 2, 'and no combined read either');
 
     // Drawn again, the section works again: the frame's own TTL starts the read.
     section.lines(ctx);
-    await waitFor(() => listCalls(gh.calls).length === 3, 'the redrawn section never read again');
+    await waitFor(() => graphqlCalls(gh.calls).length === 3, 'the redrawn section never read again');
   } finally {
     Date.now = realNow;
   }
@@ -1974,7 +1992,7 @@ test('S3 (T13): a session that shut down reads nothing on a later activity', asy
   const section = registered[0];
   // The section is on screen and drew its rows.
   section.lines(ctx);
-  await waitFor(() => listCalls(gh.calls).length === 1, 'the drawn section never read its issues');
+  await waitFor(() => graphqlCalls(gh.calls).length === 1, 'the drawn section never read its issues');
   await waitForRows(section, ctx);
 
   // Shutdown supersedes the drawn frame: the section is showing nothing, so the
@@ -1985,4 +2003,277 @@ test('S3 (T13): a session that shut down reads nothing on a later activity', asy
   await fireHook(loaded.hooks, 'before_agent_start', ctx);
   await new Promise((resolve) => setTimeout(resolve, 150));
   assert.equal(gh.calls.length, before, 'a shut-down session reads nothing on a later activity');
+});
+
+// ---------------------------------------------------------------------------
+// T14 (S9): ONE combined read feeds a process-local cache of all three scoped
+// views, and the rail keeps drawing only the assigned bucket. The wiring asks
+// the cache for a plan BEFORE the read — 100 per bucket with no entry, the
+// newest 20 afterwards — makes exactly ONE `gh` child per refresh, applies the
+// answer and returns the cached assigned rows. A count mismatch (an issue closed
+// or unassigned) makes the next refresh full; a failed read touches nothing, so
+// the T10 stale list survives; a shutdown clears the cache.
+// ---------------------------------------------------------------------------
+
+test('S9 (T14): the first refresh reads 100 per bucket, the next reads 20 and merges them', async () => {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const calls = [];
+    const answers = [
+      relatedAnswer({
+        assigned: [
+          { number: 11, title: 'Eleven', updatedAt: '2024-01-01T00:00:00Z' },
+          { number: 12, title: 'Twelve', updatedAt: '2024-02-01T00:00:00Z' },
+        ],
+      }),
+      relatedAnswer({
+        assigned: [
+          { number: 12, title: 'Twelve (updated)', updatedAt: '2024-03-01T00:00:00Z' },
+          { number: 13, title: 'Thirteen', updatedAt: '2024-04-01T00:00:00Z' },
+        ],
+        counts: { assigned: 3 },
+      }),
+    ];
+    ghIssues.setGhRunner(async (_bin, argv, runOpts = {}) => {
+      calls.push({ argv: argv.slice(), env: { ...(runOpts.env || {}) }, cwd: runOpts && runOpts.cwd });
+      if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
+      if (argv[0] === 'repo' && argv[1] === 'view') {
+        return okJson(JSON.stringify({ nameWithOwner: 'myfork/project' }));
+      }
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        return okJson(JSON.stringify(answers.shift()));
+      }
+      return okJson('');
+    });
+
+    const ctx = { cwd: checkout, ui: { notify: () => {} } };
+    await fireSessionStart(loaded.hooks, ctx);
+    assert.equal(registered.length, 1);
+    const section = registered[0];
+    const baseline = calls.length; // the session gate's own identity probes
+
+    const firstRows = await waitForRows(section, ctx);
+    assert.deepEqual(firstRows.map((row) => row.label), ['#12 Twelve', '#11 Eleven']);
+
+    let reads = graphqlCalls(calls);
+    assert.equal(reads.length, 1, 'one combined read serves the first refresh');
+    assert.equal(calls.length, baseline + 1, 'exactly ONE gh child per refresh');
+    let query = graphqlQueryOf(reads[0]);
+    assert.equal((query.match(/first: 100/g) || []).length, 3, 'the first sync reads 100 per bucket');
+    assert.equal(reads[0].env.GH_REPO, IDENTITY, 'the read carries the pinned identity');
+
+    // The section's 60 s TTL starts the next frame's refresh; the cache is well
+    // inside its ten-minute full-read window, so the read is the newest 20.
+    offset = 61000;
+    section.lines(ctx);
+    await waitFor(() => graphqlCalls(calls).length === 2, 'the delta refresh never ran');
+    await waitFor(
+      () => section.lines(ctx).some((row) => row.label === '#13 Thirteen'),
+      'the delta rows never merged with the cached ones',
+    );
+
+    reads = graphqlCalls(calls);
+    assert.equal(calls.length, baseline + 2, 'one gh child per refresh, never more');
+    query = graphqlQueryOf(reads[1]);
+    assert.equal((query.match(/first: 20/g) || []).length, 3, 'later syncs read the newest 20 per bucket');
+    assert.deepEqual(section.lines(ctx).map((row) => row.label),
+      ['#13 Thirteen', '#12 Twelve (updated)', '#11 Eleven'],
+      'the delta merged by number and kept the rows it did not mention');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('S9 (T14): an issue that left the assigned set makes the next refresh a full read', async () => {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const calls = [];
+    const answers = [
+      relatedAnswer({
+        assigned: [
+          { number: 11, title: 'Eleven', updatedAt: '2024-01-01T00:00:00Z' },
+          { number: 12, title: 'Twelve', updatedAt: '2024-02-01T00:00:00Z' },
+        ],
+      }),
+      // Issue 11 was closed: the delta (the newest rows) cannot see it, so the
+      // cached two rows no longer match the reported one.
+      relatedAnswer({
+        assigned: [{ number: 12, title: 'Twelve', updatedAt: '2024-03-01T00:00:00Z' }],
+        counts: { assigned: 1 },
+      }),
+      // The next plan is a full read, which replaces the bucket.
+      relatedAnswer({
+        assigned: [{ number: 12, title: 'Twelve', updatedAt: '2024-03-01T00:00:00Z' }],
+        counts: { assigned: 1 },
+      }),
+    ];
+    ghIssues.setGhRunner(async (_bin, argv, runOpts = {}) => {
+      calls.push({ argv: argv.slice(), env: { ...(runOpts.env || {}) }, cwd: runOpts && runOpts.cwd });
+      if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
+      if (argv[0] === 'repo' && argv[1] === 'view') {
+        return okJson(JSON.stringify({ nameWithOwner: 'myfork/project' }));
+      }
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        return okJson(JSON.stringify(answers.shift()));
+      }
+      return okJson('');
+    });
+
+    const ctx = { cwd: checkout, ui: { notify: () => {} } };
+    await fireSessionStart(loaded.hooks, ctx);
+    const section = registered[0];
+    const firstRows = await waitForRows(section, ctx);
+    assert.deepEqual(firstRows.map((row) => row.label), ['#12 Twelve', '#11 Eleven']);
+
+    offset = 61000;
+    section.lines(ctx);
+    await waitFor(() => graphqlCalls(calls).length === 2, 'the delta refresh never ran');
+    let query = graphqlQueryOf(graphqlCalls(calls)[1]);
+    assert.equal((query.match(/first: 20/g) || []).length, 3, 'the mismatch-causing read is a delta');
+    assert.deepEqual(section.lines(ctx).map((row) => row.label), ['#12 Twelve', '#11 Eleven'],
+      'the merge cannot remove a row it did not see');
+
+    offset = 122000;
+    section.lines(ctx);
+    await waitFor(() => graphqlCalls(calls).length === 3, 'the repair refresh never ran');
+    query = graphqlQueryOf(graphqlCalls(calls)[2]);
+    assert.equal((query.match(/first: 100/g) || []).length, 3,
+      'the count mismatch made the NEXT plan a full read');
+    await waitFor(
+      () => section.lines(ctx).map((row) => row.label).join('|') === '#12 Twelve',
+      'the full read never replaced the bucket',
+    );
+    assert.equal(section.meta(ctx), '1 assigned');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('S9 (T14): a failed read keeps the cache and the section stale, so the next read is incremental', async () => {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const calls = [];
+    const answers = [
+      relatedAnswer({
+        assigned: [
+          { number: 11, title: 'Eleven', updatedAt: '2024-01-01T00:00:00Z' },
+          { number: 12, title: 'Twelve', updatedAt: '2024-02-01T00:00:00Z' },
+        ],
+      }),
+      null, // the stalled read
+      relatedAnswer({
+        assigned: [
+          { number: 12, title: 'Twelve (updated)', updatedAt: '2024-03-01T00:00:00Z' },
+          { number: 13, title: 'Thirteen', updatedAt: '2024-04-01T00:00:00Z' },
+        ],
+        counts: { assigned: 3 },
+      }),
+    ];
+    ghIssues.setGhRunner(async (_bin, argv, runOpts = {}) => {
+      calls.push({ argv: argv.slice(), env: { ...(runOpts.env || {}) }, cwd: runOpts && runOpts.cwd });
+      if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
+      if (argv[0] === 'repo' && argv[1] === 'view') {
+        return okJson(JSON.stringify({ nameWithOwner: 'myfork/project' }));
+      }
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        const answer = answers.shift();
+        if (answer === null) return { status: 1, stdout: '', stderr: 'HTTP 502: bad gateway', error: null };
+        return okJson(JSON.stringify(answer));
+      }
+      return okJson('');
+    });
+
+    const ctx = { cwd: checkout, ui: { notify: () => {} } };
+    await fireSessionStart(loaded.hooks, ctx);
+    const section = registered[0];
+    await waitForRows(section, ctx);
+    assert.equal(section.meta(ctx), '2 assigned');
+
+    offset = 61000;
+    section.lines(ctx);
+    await waitFor(() => graphqlCalls(calls).length === 2, 'the failing refresh never ran');
+    await waitFor(() => String(section.meta(ctx)).includes('· stale'), 'the failure never reported stale');
+    assert.deepEqual(section.lines(ctx).map((row) => row.label), ['#12 Twelve', '#11 Eleven'],
+      'a failed read never erases the rows already on screen');
+
+    // The cache's last SUCCESSFUL apply was two minutes ago, well inside the
+    // ten-minute full-read window, so the recovery read is the newest 20 — the
+    // failed read did not clear or invalidate the entry.
+    offset = 122000;
+    section.lines(ctx);
+    await waitFor(() => graphqlCalls(calls).length === 3, 'the recovery refresh never ran');
+    const query = graphqlQueryOf(graphqlCalls(calls)[2]);
+    assert.equal((query.match(/first: 20/g) || []).length, 3,
+      'a failed read leaves the cache intact, so the recovery stays incremental');
+    await waitFor(
+      () => section.lines(ctx).some((row) => row.label === '#13 Thirteen'),
+      'the recovery read never merged',
+    );
+    assert.deepEqual(section.lines(ctx).map((row) => row.label),
+      ['#13 Thirteen', '#12 Twelve (updated)', '#11 Eleven']);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('S9 (T14): session_shutdown clears the cache, so the next session reads in full', async () => {
+  const checkout = makeCheckout();
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const calls = [];
+  const answers = [
+    relatedAnswer({
+      assigned: [{ number: 11, title: 'Eleven', updatedAt: '2024-01-01T00:00:00Z' }],
+    }),
+    relatedAnswer({
+      assigned: [{ number: 11, title: 'Eleven', updatedAt: '2024-01-01T00:00:00Z' }],
+    }),
+  ];
+  ghIssues.setGhRunner(async (_bin, argv, runOpts = {}) => {
+    calls.push({ argv: argv.slice(), env: { ...(runOpts.env || {}) }, cwd: runOpts && runOpts.cwd });
+    if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
+    if (argv[0] === 'repo' && argv[1] === 'view') {
+      return okJson(JSON.stringify({ nameWithOwner: 'myfork/project' }));
+    }
+    if (argv[0] === 'api' && argv[1] === 'graphql') {
+      return okJson(JSON.stringify(answers.shift()));
+    }
+    return okJson('');
+  });
+
+  const ctx = { cwd: checkout, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctx);
+  const section = registered[0];
+  await waitForRows(section, ctx);
+  assert.equal((graphqlQueryOf(graphqlCalls(calls)[0]).match(/first: 100/g) || []).length, 3);
+
+  await fireHook(loaded.hooks, 'session_shutdown', ctx);
+  // A new session on the same checkout: without the clear, the recent entry
+  // would answer a delta plan (`first: 20`) at once.
+  await fireSessionStart(loaded.hooks, ctx);
+  section.lines(ctx);
+  await waitFor(() => graphqlCalls(calls).length === 2, 'the new session never read its issues');
+  const query = graphqlQueryOf(graphqlCalls(calls)[1]);
+  assert.equal((query.match(/first: 20/g) || []).length, 0, 'no delta plan survived the shutdown');
+  assert.equal((query.match(/first: 100/g) || []).length, 3,
+    'a cleared cache reads every bucket in full again');
 });

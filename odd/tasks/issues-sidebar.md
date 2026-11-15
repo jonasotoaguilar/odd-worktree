@@ -136,6 +136,13 @@ Branch `feat/issues-sidebar`; risk item 3 (the extension entry is shared by ever
 
 ## Log
 
+- **E12 (T14, a name the repo had already retired):** the cache module was specified as
+  `lib/issues-cache.js`, and the worker stopped because `tools/package-surface.test.js` lists that
+  exact name among the modules REMOVED on purpose (its own comment: "the per-tab cache is still
+  gone"). Editing the guard to allow it would weaken the test that keeps retired surface from coming
+  back, and the new cache is a different thing (one in-process cache across the three scoped views,
+  fed by one request). The module is therefore `lib/related-issues-cache.js` and the guard is
+  untouched; the full suite is green with it as it was.
 - **E11 (delivery strategy, recorded at the slice boundary):** this branch is far past one review slice
   (over 2400 changed lines). The commits are already the boundaries, one concern each: the feature
   (`54d9c7b`), three verification-round fixes, the activity refresh, the assigned-only reshape, and

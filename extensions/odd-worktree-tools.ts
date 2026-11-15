@@ -6593,6 +6593,11 @@ let issuesSidebarCtx = null;
 let issuesSidebarHandle = null;
 let issuesSidebarDisposer = null;
 let issuesSidebarSubscribed = false;
+// S9 (issues-sidebar T14): the process-local cache of the three scoped issue
+// views. It is pure (`lib/related-issues-cache.js`), keyed by the PROVEN repository
+// identity and never written to disk; the extension owns its lifetime so a
+// session's shutdown clears it beside the section's snapshot.
+let issuesSidebarCache = null;
 // T11: one hint per process. `Armed` keeps two session starts from arming two
 // checks; `Announced` is what a late publication sets, so the deferred check
 // never speaks over a bridge that arrived; the "already told the human" fact
@@ -7109,43 +7114,45 @@ function issuesSidebarError(err, fallback) {
   return fallback;
 }
 
-// T9 (S4 amended): the decoration read behind a row's pull-request marker. ONE
-// call answers, for every issue the list is about, whether any pull request
-// cross-references it; the identity is the one the list was read with (never
-// resolved twice) and the numbers are the ones it returned. Best effort by rule:
-// a rejection, a non-zero exit, an unparseable body or an unexpected shape all
-// mean the same thing — every entry says `hasPullRequest: false` — so the rows
-// render without the marker and the answer stays `ok: true`.
-async function markIssuesSidebarPullRequests(gh, issues, readOpts) {
-  const numbers = [];
-  for (const item of issues) {
-    if (item && Number.isInteger(item.number) && item.number > 0) numbers.push(item.number);
+// S9 (issues-sidebar T14): ONE cache per extension instance, built lazily so a
+// host that never draws the rail never pays for it. A missing cache module is
+// not fatal: the read then answers the assigned bucket straight from the
+// response instead of storing it.
+function issuesSidebarRelatedCache() {
+  if (issuesSidebarCache !== null) return issuesSidebarCache;
+  try {
+    const factory = libRequire("related-issues-cache.js");
+    if (!factory || typeof factory.createIssuesCache !== "function") return null;
+    issuesSidebarCache = factory.createIssuesCache();
+  } catch {
+    issuesSidebarCache = null;
   }
-  let read = null;
-  if (numbers.length > 0 && gh && typeof gh.listIssuePullRequestReferences === "function") {
-    try {
-      read = await gh.listIssuePullRequestReferences({ numbers }, readOpts);
-    } catch {
-      read = null;
-    }
-  }
-  const marks = read && read.ok === true && read.marks && typeof read.marks === "object" ? read.marks : null;
-  return issues.map((item) => ({
-    ...item,
-    hasPullRequest: marks !== null && item !== null && typeof item === "object" && marks[item.number] === true,
-  }));
+  return issuesSidebarCache;
 }
 
-// S1/S6 (corrected to assigned-only): ONE read — the OPEN issues ASSIGNED to the
-// viewer — for the checkout the session runs in. There is no authored bucket and
-// no merge by issue number: `/issues` keeps its own four tabs, while the rail
-// shows the one relation the user asked for. The identity is resolved FIRST —
-// through the SAME composition `/issues` proves a browser open with, so a
-// single-remote checkout has one too — and the read is bound to it; a resolution
-// failure returns the S5 error and makes no `gh` call at all. `truncated`
-// travels with the answer: the fetch bound was reached, so the real total is
-// larger than what was read and the overflow row says so. T9's marker read runs
-// after it, on the same identity and the numbers it returned.
+function clearIssuesSidebarCache() {
+  if (issuesSidebarCache === null) return;
+  try {
+    issuesSidebarCache.clear();
+  } catch {
+    // The cache is optional: a failed clear never breaks the end of a session.
+  }
+}
+
+// S1/S6 (corrected to assigned-only) + S9: ONE read — a single `gh api graphql`
+// request with the three scoped views (`mine`, `assigned`, `involved`) — for the
+// checkout the session runs in. `/issues` keeps its own four tabs and the rail
+// still DRAWS only the assigned bucket; what changed is that the same read now
+// fills the process cache, so a later consumer can open instantly. The identity
+// is resolved FIRST — through the SAME composition `/issues` proves a browser
+// open with, so a single-remote checkout has one too — and the read is bound to
+// it; a resolution failure returns the S5 error and makes no `gh` call at all.
+// The cache decides the size: 100 per bucket with no (or an aged, or an
+// inconsistent) entry, the newest 20 afterwards, merged by issue number. A
+// failed read never touches the cache and returns the S5 error, so the section's
+// T10 stale handling keeps working unchanged. `truncated` travels with the
+// answer: the assigned bucket's `issueCount` exceeded the cache cap, so the real
+// total is larger than what is stored and the overflow row says so.
 async function loadIssuesSidebar() {
   const cwd = toolCwd(issuesSidebarCtx);
   let gh;
@@ -7166,25 +7173,37 @@ async function loadIssuesSidebar() {
     return { ok: false, error: (resolved && resolved.error) || "cannot resolve this checkout's own repository" };
   }
   const identity = resolved.identity;
+  const cache = issuesSidebarRelatedCache();
+  const plan = cache !== null ? cache.plan(identity) : { full: true, first: 20 };
   let read;
   try {
-    read = await gh.listIssues(
-      { query: "assignee:@me sort:updated-desc", state: "open" },
-      { cwd: checkoutRoot, scope: identity, fetchMax: 20 },
-    );
+    read = await gh.listRelatedIssues({ first: plan.first }, { cwd: checkoutRoot, scope: identity });
   } catch (err) {
-    return { ok: false, error: issuesSidebarError(err, "gh issue list failed") };
+    return { ok: false, error: issuesSidebarError(err, "GitHub query failed") };
   }
   if (!read || read.ok !== true) {
-    return { ok: false, error: (read && read.error) || "gh issue list failed" };
+    return { ok: false, error: (read && read.error) || "GitHub query failed" };
   }
-  const issues = Array.isArray(read.issues) ? read.issues : [];
-  const marked = await markIssuesSidebarPullRequests(gh, issues, { cwd: checkoutRoot, scope: identity });
+  if (cache !== null) {
+    try {
+      cache.apply(identity, read, { full: plan.full === true });
+    } catch {
+      // A cache that refuses the answer is no reason to lose the read itself.
+    }
+  }
+  const cached = cache !== null ? cache.get(identity) : null;
+  const fallback = read.buckets && read.buckets.assigned ? read.buckets.assigned : null;
+  const issues = cached !== null && cached.buckets && Array.isArray(cached.buckets.assigned)
+    ? cached.buckets.assigned
+    : (fallback && Array.isArray(fallback.issues) ? fallback.issues : []);
+  const truncated = cached !== null && cached.truncated
+    ? cached.truncated.assigned === true
+    : Boolean(fallback && Number.isInteger(fallback.issueCount) && fallback.issueCount > issues.length);
   return {
     ok: true,
     identity,
-    issues: marked,
-    truncated: read.truncated === true,
+    issues,
+    truncated,
   };
 }
 
@@ -7479,6 +7498,7 @@ export default function (pi) {
     forgetPendingWarp(ctx);
     forgetInFlightWarpTools();
     invalidateIssuesSidebar();
+    clearIssuesSidebarCache();
     issuesSidebarCtx = null;
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,

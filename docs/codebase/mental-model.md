@@ -13,9 +13,10 @@ obey that same `Card tools` value. It owns creating and listing the checkouts an
 ODD works in, reading a checkout's `odd/tasks/*.md`, browsing and previewing a
 checkout's files, reading and — role permitting — editing that checkout's GitHub
 issues, and the drawing of its own cards. `git` is the only external requirement;
-Gentle Shell is recommended, and gentle-shell-bridge adds only four control
-surfaces: the rail section, the design (which the file cards read), and the file
-picker's keymap action and palette row.
+Gentle Shell is recommended, and gentle-shell-bridge adds only two control
+surfaces: the rail section and the design (which the file cards read). The file
+picker's `alt+f` is not one of them — it is bound directly on the host, and
+`GENTLE_PI_FILES_KEY` overrides the key.
 
 ## What It Does Not Own
 

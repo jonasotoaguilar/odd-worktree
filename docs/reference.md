@@ -87,15 +87,16 @@ and `name`, `r` reload, `esc` close. `←`/`→` and `[`/`]` scroll the list; th
 document pane pages with `ctrl+j`/`ctrl+k`.
 
 `/files` — one option per key. The scope step is `↑`/`↓`, `enter`, `a` (the
-registered checkouts, or every worktree of the clone) and `esc`.
+session's checkouts, or every worktree Git lists for the clone) and `esc`.
 
 | Key | Action |
 | --- | --- |
 | `↑`/`↓` | Move the selection |
 | `tab` | Select or unselect the highlighted file |
 | `ctrl+j`/`ctrl+k` | Scroll the preview one line |
-| `ctrl+o` | Cycle the order: `modified`, `tree`, `ext` |
-| `space` | Fold or unfold the group holding the highlighted file |
+| `ctrl+o` | Cycle the order: `files`, `tree`, `ext` |
+| `space` | In `tree` and `ext`: fold or unfold the group holding the highlighted file |
+| `shift+space` | In `tree` and `ext`: open every other group, or close them when they are all open |
 | `ctrl+u` | Clear the query |
 | `ctrl+e` | Open the highlighted file in `$VISUAL`/`$EDITOR` |
 | `enter` | Insert the selected files plus the highlighted one, and close |
@@ -572,41 +573,51 @@ when the panel opens and never refreshed live.
 
 **A scope step, always.** `/files` first asks which checkout to browse — `main`
 included, so an unregistered session chooses its own checkout instead of being
-dropped straight into the current directory: `main` first, then every other
-checkout this session registered, most recently modified first, each row reading
-`<odd> · <branch>` and its `±n files` (`±1 file`). `a` widens that list to every
-worktree of the clone (the ones `worktree_list` reports) and back, and the footer
-names the list the key switches to (`a all`, then `a registered`); a checkout both
-lists carry keeps the cursor. Above that card's
+dropped straight into the current directory. The default rows are the session's
+own: `main`, the checkout the session stands in (once, when that is `main`) and
+the worktrees this session registered with `worktree_register`, each row reading
+`<odd> · <branch>` and its `±n files` (`±1 file`). A worktree that only exists for
+some ODD is not on that list. `a` widens it to every worktree Git lists for the
+clone — the ODD ones and the ones created outside this package — and back, and the
+footer names the list the key switches to (`a all`, then `a registered`); a
+checkout both lists carry keeps the cursor. Above that card's
 footer sits the focused scope's detail line: the last commit subject, then
 `±n files`, the age of the last modification, and `↑n main` / `↓n main` — the
 `main` row compares with `origin/main`, every other checkout with the local
 `main` — and a field that is zero or absent is not painted at all. The `a` list costs
 two bounded Git reads per checkout before the step paints, which is why a clone
-with many worktrees opens it a moment slower than the registered list alone.
+with many worktrees opens it a moment slower than the session's list alone.
 
 **One option per key.** The footer names one binding per action even when several
 work, and both keys stay live. The compatibility bindings it never names all
 work: `home`/`end` (first and last file), `ctrl+home`/`ctrl+end` (the preview's
 first and last line), `ctrl+shift+j`/`ctrl+shift+k` and `ctrl+c`.
 
-**The three orders.** `ctrl+o` cycles `modified` (the default: one flat list,
-most recently modified first), `tree` (an IDE-style folder tree — inside a folder
+**The three orders.** `ctrl+o` cycles `files` (the default: one flat list with no
+groups, changed files first and the most recently modified first), `tree` (an IDE-style folder tree — inside a folder
 its subfolders come first and then its own files, so at the top level every
 folder group paints before the files at the repository root) and `ext` (one group
 per extension named with its dot, alphabetical by path inside, the extensionless
 group last). The active order is painted at the right of the info row under the
 search row, which also carries the counts: how many files the query lists out of
 the whole listing and the Tab selection in parentheses (`202/202 (4)`). `tree` and
-`ext` are foldable: groups start expanded and the fold state is kept per order
-while the panel is open. Only file rows ever take the cursor — the arrows,
+`ext` are foldable and open folded: every group row paints `▸` when it is
+closed and `▾` when it is open, in the grey role so the structure reads apart
+from the files. Choosing an order (or cycling to the other tree) leaves open only
+the groups holding the highlighted file — `src` and `web` for `src/web/test.ts` in
+`tree`, only `ts` in `ext` — and closes the rest. Only file rows ever take the cursor — the arrows,
 `home`/`end`, the wheel, a click and a query all skip group rows, so a group is
 never marked, inserted or opened. `space` folds the group holding the highlighted
 file (its parent folder in `tree`, its extension group in `ext`) and a click on a
 group row folds it without focusing it; with every group folded and no file row
-left, the cursor may rest on a group row so `space` can reopen the tree. A
+left, the cursor may rest on a group row so `space` can reopen the tree.
+`shift+space` opens every group but the highlighted file's own, or closes them
+when they are all open already, so the cursor never loses its row; it needs a
+terminal that reports the chord (Kitty keyboard protocol or xterm
+`modifyOtherKeys`), and elsewhere `space` still folds one group at a time. In the
+`files` order neither key does anything and the footer does not name them. A
 non-empty query forces every group open, and the fold keys do nothing until it is
-cleared. In `modified` and `ext` a file row paints its parent directory at the
+cleared. In `files` and `ext` a file row paints its parent directory at the
 right; in `tree` it does not, because the tree already places the file under that
 folder.
 
@@ -644,20 +655,19 @@ highlighter and a highlighter that throws all degrade to plain text — never
 blank, never an error, never a partial line — and highlighting runs once per
 preview load, never per repaint.
 
-**Read-only, and reachable from Gentle Shell.** The panel reads and paints: it writes
-nothing, stages nothing and opens no network, and every child is a fixed argv
-with a bounded timeout — `git` through this package's async runner, plus the one
+**Read-only, and one key.** The panel reads and paints: it writes nothing,
+stages nothing and opens no network, and every child is a fixed argv with a
+bounded timeout — `git` through this package's async runner, plus the one
 `$VISUAL`/`$EDITOR` `ctrl+e` starts (a missing variable is reported in its own
-sentence). With `gentle-shell-bridge` published, `/files` contributes one keymap
-action (`files`, "File picker", default `alt+f`, overridable in
-`/gentle:customize` → `Keymaps` and through `GENTLE_PI_FILES_KEY`; a changed key
-applies after `/reload`) and one row in the command palette's `Session` section.
-The bridge carries no handler, so this package asks `resolveKeymap("files")` for the
-effective key and binds it itself; without the bridge nothing is registered, bound
-or announced, and `/files` still opens from the palette and as a command.
-It mounts its own overlay, so a host without `ctx.ui.custom` gets one line saying
-the picker needs an interactive session with overlay support, and no second
-surface in its place.
+sentence). `alt+f` opens it from anywhere: the key is bound directly on the host
+at extension load, `GENTLE_PI_FILES_KEY` overrides it when it holds a non-empty
+value, and it is bound once for the life of the process. A host with no such
+seam, or one that refuses the key, gets no shortcut and no message about it, and
+`/files` keeps working as the command it is. The picker is contributed to no
+shell surface of its own: this package claims no row a plugin would have to
+publish, and nothing here needs `gentle-shell-bridge` to open. It mounts its own
+overlay, so a host without `ctx.ui.custom` gets one line saying the picker needs
+an interactive session with overlay support, and no second surface in its place.
 
 ## Card style follows your shell
 
@@ -1233,9 +1243,10 @@ toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. Its
 customize-side contribution is the `activity` value of the bridge's `Card tools` line
 (or its `Card bash` line, on a bridge older than 0.6.0) — which the skill/ODD file
-cards obey as well — and the file picker's `files` keymap action with its palette
-row, neither of which adds a command, tool or row of its own. There is nothing to
-configure here, and `/warp`, `/odd`, `/files` and `/issues` are always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
+cards obey as well. It adds no command, tool or row of its own, and the file
+picker's `alt+f` is bound on the host directly rather than contributed to any
+shell surface. There is
+nothing to configure here, and `/warp`, `/odd`, `/files` and `/issues` are always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 
 ## Tests

@@ -14,8 +14,8 @@ The question this page answers: which rules must every change preserve, and what
    bridge older than 0.6.0 (invariant 3). The skill/ODD file cards obey that same
    line (invariant 23) and contribute no row of their own; the design is not a
    preference here, because the bridge owns that choice and its store. It registers no command, no page, no setting, no
-   settings file and no key of its own beyond the file picker's ONE keymap action
-   (invariant 3), and no other setting is read, written or offered. CodeGraph
+   settings file and no key of its own beyond the file picker's ONE shortcut,
+   `alt+f` (invariant 3), and no other setting is read, written or offered. CodeGraph
    adds no command and no model-facing tool: no `/codegraph-*` command, no tool
    named `codegraph`, no override of another extension's tool.
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
@@ -64,14 +64,18 @@ The question this page answers: which rules must every change preserve, and what
    no such seam gets one honest line — `files: the file picker needs an interactive
    session with overlay support` — and no second surface in its place: no
    transcript dump, no sub-command, nothing written. It is bridge-independent: it
-   opens as a command and needs no other package to draw. Its ONLY Gentle Shell
-   hooks are optional and go through the same published object as every other
-   bridge surface: the `files` keymap action (label `File picker`, env
-   `GENTLE_PI_FILES_KEY`, default `alt+f`) and the palette row in `Session`, both
-   via `registerKeymap` / `registerCommands`, with the key bound here from
-   `resolveKeymap`; without the bridge they are simply absent, not an error. The
-   command itself registers no store and writes nothing: it reads Git through the
-   ordinary fixed argv (invariant 9) and paints.
+   opens as a command and needs no other package to draw. Its ONE key is bound
+   DIRECTLY on the host, at extension load, through `pi.registerShortcut`: `alt+f`
+   by default (Pi claims `alt+p` on Windows and WSL) and `GENTLE_PI_FILES_KEY`
+   whenever that environment variable holds a non-empty string. It is bound once,
+   and the handler is the command's own, invoked with no argument and the session
+   context the host hands a shortcut. A host with no `registerShortcut`, a host
+   that throws from it and a missing command handler are the same silence: no key,
+   no message, nothing else touched. It registers NO keymap action and NO palette
+   row — through gentle-shell-bridge or otherwise — because no installed host lists
+   a row a plugin contributes, so such a row could never appear and claiming it
+   would be false. The command itself registers no store and writes nothing: it
+   reads Git through the ordinary fixed argv (invariant 9) and paints.
 
    **The cards are a design on the bridge, not a preference here.**
    `lib/bash-design.js` registers ONE design (id `odd-worktree.bash-activity`, label

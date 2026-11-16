@@ -60,6 +60,7 @@ package's whole suite stays green.
   `e9c1b1c`.
 - **T13** — the residual the previous round flagged: an EEXIST at the seed's creation step must not
   publish over another actor's index — `e9c1b1c`.
+- **T14** — the third pass's residual: an unreadable identity must never read as equal or as absent — `ff5cf01`.
 
 ## Log
 
@@ -105,6 +106,22 @@ package's whole suite stays green.
   the existing joined shape, while a bare directory is an honest failed seed — the split is forced by the
   verifier's own created-after-recheck probe, which requires `ok: false` for a foreign directory holding
   no index.
+- **L19** — T14 landed in `ff5cf01` and was accepted by the verifier's own minimized regression (0/1 against
+  `b07ac4f`, 1/1 after) plus both probe suites. Identity is three-valued now — `present` with dev+inode,
+  `ENTRY_ABSENT` only when stat said ENOENT, `ENTRY_UNKNOWN` for EACCES/EPERM, a throwing seam or an answer
+  without an identity — and every decision in the seed, the abandon path and the rollback fails closed on
+  unknown. The differential against `b07ac4f` changed exactly one case (the foreign database now survives a
+  denied stat) and left the ENOENT case rolling back as before, so "fail closed" did not become "never
+  remove". The trade is stated in the commit: with a denied stat our own index can survive a failed seed
+  rather than risk another session's.
+- **L18** — Third pass on `b07ac4f`: the two blockers from L14 are closed at runtime (both foreign-directory
+  interleavings preserve state, the before-recheck control stays green, the search now waits behind a real
+  compaction), and the earlier fixes still hold. It found one residual of the same class: with the database
+  replaced by another actor mid-sync and its stat failing with EACCES, `identityOf` answered `undefined`,
+  `undefined` was read as "not a mismatch", and the rollback removed the other actor's database. Unknown
+  must never mean equal. The fix audits every identity decision in the seed, the abandon path and the
+  rollback, with "unknown fails closed" stated as the rule; the acceptance is the verifier's minimized
+  probe, which failed against `b07ac4f` and must pass.
 - **L17** — Post-verification fixes landed in `e9c1b1c`, accepted against the verifier's probe suite rather
   than a self-authored one: 17/20 before, 20/20 after, with every previously green case still green.
   RED was real on the branch (three failing focused tests, and the probe cases named in L14). The

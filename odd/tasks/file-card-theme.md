@@ -29,10 +29,10 @@ S9 — Verification asserts every observable effect it names, through the public
 ## Tasks
 
 - T1 — DROPPED (moved out): the bridge's public reader is a separate repo, handed off to the `gentle-shell-bridge` session; this feature does not wait on it (S7).
-- T2 gate: delete the two switches and their document, paint the card on the `tools`→activity selection asked from the bridge's published `resolveToolDesignSelection`, pre-switch behaviour on a bridge without it. Commit.
-- T3 roles: heading roles (S2), document body through Pi's Markdown (S3, S5), collapsed preview (S4). Commit.
-- T4 no double chrome: the activity design leaves identity paths alone (S6). Commit.
-- T5 docs and invariants: invariant 23, `docs/codebase/{code-map,invariants,mental-model}.md`, `docs/reference.md`, `README.md`. Commit.
+- T2 — DONE, `52b4fdd`: the two switches and their document are gone; the card rides the bridge's reader, pre-switch behaviour on a bridge without it. Corrected by `5ffe893` (L6.1: the line now declares `write`).
+- T3 — DONE, `52b4fdd`: heading roles, document body through Pi's Markdown, placed without re-painting, and the collapsed preview from the same rendered document. Corrected by `5ffe893` (L6.2 heading duplication, L6.3 write fallback source).
+- T4 — DONE, `397b096`: the activity design returns identity paths byte for byte, both parts.
+- T5 — DONE, `fe18998` and `c1b0bdf`: invariant 23 carries the gate contract (numbering stayed 1-23, no citation churn), the code map gained the card row, and the line's coverage was corrected to include `write`.
 
 ## Log
 
@@ -46,6 +46,8 @@ L6 — Independent verification (CANDIDATE 397b096) found three blockers, two of
   (3) A write whose document cannot be rendered falls back to the result text ("Successfully wrote 17 bytes") instead of the document the call carried, which the baseline rendered. Fix: the fallback source for a write is the call's content, never the result text.
 
 L5 — Bridge peer answer: gentle-shell-bridge 0.7.0 published (commit 1ad1964, tag v0.7.0, release run 43953424864 green) with `resolveToolDesignSelection` on the published object as an optional member plus a `ToolDesignSelection` type, documented in docs/contract.md §14 "Asking which design a tool draws"; suite 733/733 and tsc clean. It deliberately did NOT publish `getToolDesignLineSelection` (a raw stored id would force the caller to re-resolve live/coverage itself), and confirmed the cost is one persisted-selection read per call — already what one render pass pays — with nothing cached. It assessed the theme-role item for designs and declined a paint helper (ctx.theme stays opaque). L5 supersedes the store-reading S7 of L4.
+
+L7 — Verification of the corrected tree, independent of the worker that wrote the fix: a clean clone at `c1b0bdf` (ordinary clone, real node_modules) ran the verifier's OWN three regression tests verbatim — `S3 write fallback uses written source rather than status`, `S2 expanded long heading states tool only once`, `S1/L2 registered activity covers write` — 3/3 green, and the full suite 2145/2145 with zero skips. Before the fix those same three failed at 397b096 and reproduced on the baseline as described in L6. State: feature complete on `feat/file-card-theme`; push and PR are the user's decision.
 
 L4 — Blocker and decision: the session guard refuses `git worktree add` and `git switch -c` in another repository, and `worktree_create` only reaches this clone, so no branch can be cut in gentle-shell-bridge from here. Option C (a public bridge reader) moved out: it was handed to the gentle-shell-bridge session (peer 01a1e617-df1d-70da-b059-c84091bf6987, message 4702a647b45d43bb5206406faae01e48) which reviews whether the gap applies, fixes it if it does, and cuts the release. This feature gates by reading the persisted document instead (S7) and does not wait on that peer.
 

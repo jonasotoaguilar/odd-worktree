@@ -1,5 +1,5 @@
 'use strict';
-// S4 surface: the standalone package always registers /warp, /odd-list, /files
+// S4 surface: the standalone package always registers /warp, /odd, /files
 // and /issues plus the TWO agent worktree tools (S3/S4: `worktree_delete` and
 // `worktree_warp` are not registered, so `/warp` is the only front that moves
 // the session and the panel's ctrl+d the only one that removes a checkout),
@@ -13,8 +13,9 @@
 // worktree↔issue association.
 //
 // The bash activity is not a preference here: it is a design on gentle-shell-bridge's
-// own `bash` line, so the shipped surface is exactly four commands, two tools, one
-// sidebar section, one bash design and the one `Cards` row group.
+// own `Card tools` line, so the shipped surface is exactly four commands, two tools, one
+// sidebar section, one tools design and the one `Cards` row group the two file-card
+// switches carry.
 //
 // Everything here reads the observable surface: the registered command and
 // tool objects, the manifest, the files on disk. No internal state is read.
@@ -69,20 +70,24 @@ describe('manifest', () => {
     // formatter and the issues view `/issues` mounts are shipped, so their
     // presence is asserted rather than forbidden. The bash drawing is the
     // classifier and the one design registered on the bridge. The file cards add
-    // their own five modules — a classifier, the card and its resolver, the switch
-    // document and the customize rows — and still no command.
-    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-design.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'card-files-mode.js', 'cards-customize.js']) {
+    // their own four modules — a classifier, the card, its resolver and the document
+    // body Pi's Markdown draws — and own no preference at all (S1): they are gated by
+    // the bridge's `Card tools` line, which is the bridge's, not ours.
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-design.js', 'bash-frame.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
+    }
+    for (const gone of ['card-files-mode.js', 'cards-customize.js']) {
+      assert.equal(shipped.includes(gone), false, `lib/${gone} is gone (S1)`);
     }
   });
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd-list, /files, /issues and the two worktree tools', async () => {
+  test('registers /warp, /odd, /files, /issues and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['files', 'issues', 'odd-list', 'warp'], 'the command list is exactly the four panels');
+    assert.deepEqual(registered, ['files', 'issues', 'odd', 'warp'], 'the command list is exactly the four panels');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
@@ -91,26 +96,22 @@ describe('registration', () => {
   // two file-card switches ARE preferences of this package: one strict document in
   // the Pi home for the pair, whose only control is the customize row group
   // contributed through the bridge API (asserted below), never a command of ours.
-  test('the bash activity is a design, and the two file-card switches are the preferences this package owns', async () => {
+  test('the bash activity is a design, and this package owns no switch of its own', async () => {
     const source = stubbedSource();
     assert.ok(source.includes('libRequire("bash-design.js")'), 'the design reaches the bridge through its published API');
-    assert.equal(source.includes('registerCommand("card:bash"'), false, 'the preference has no command name');
+    assert.equal(source.includes('registerCommand("card:bash"'), false, 'the design has no command name');
     const lib = path.join(ROOT, 'lib');
     for (const gone of ['card-bash-mode.js', 'card-bash-customize.js', 'bash-card.js', 'bash-card-resolver.js']) {
       assert.equal(fs.existsSync(path.join(lib, gone)), false, `lib/${gone} is gone`);
     }
 
-    // The two file-card switches: the extension names their module, never the file,
-    // and their rows are the only caller of that document's only writer.
-    assert.ok(source.includes('libRequire("cards-customize.js")'), 'the two switches have one reader/writer, reached through their rows');
-    assert.equal(source.includes('card-files.json'), false, 'the extension never names a preference document itself');
-    const modules = fs.readdirSync(lib).filter((entry) => entry.endsWith('.js') && entry !== 'card-files-mode.js');
-    const fileCallers = modules
-      .filter((entry) => /writeCardFileSwitch\b/.test(fs.readFileSync(path.join(lib, entry), 'utf8')))
-      .sort();
-    assert.deepEqual(fileCallers, ['cards-customize.js'], 'their rows are the writer\'s only caller');
-    const fileNamed = modules.filter((entry) => /CARD_FILES_FILE\s*=\s*['"]/.test(fs.readFileSync(path.join(lib, entry), 'utf8')));
-    assert.deepEqual(fileNamed, [], 'the document is named once, in its own module');
+    // S1: the two file-card switches and their document are gone, and the extension
+    // names neither. The file card is gated by the bridge's own `Card tools` line.
+    assert.equal(source.includes('registerCardsCustomize'), false, 'no row provider is registered for a switch');
+    assert.equal(source.includes('card-files'), false, 'the extension never names their document');
+    const modules = fs.readdirSync(lib).filter((entry) => entry.endsWith('.js'));
+    const writers = modules.filter((entry) => /writeCardFileSwitch\b/.test(fs.readFileSync(path.join(lib, entry), 'utf8')));
+    assert.deepEqual(writers, [], 'no module writes a card-file switch any more');
     const { commands } = await loadExtension({});
     assert.equal(commands.has('card:bash'), false, 'no /card:bash command is registered');
     for (const gone of ['card-style', 'card-bash', 'card-skill', 'card-odd', 'customize', 'worktree-mode']) {
@@ -136,10 +137,10 @@ describe('registration', () => {
     }
   });
 
-  test('the file cards and their two switches register through one hook call and one row provider (T5)', async () => {
-    // S1: the card is drawn through the host's `registerToolRenderer` and the switches are
-    // published through the bridge's `registerRows`. Neither is a command, a tool or a store:
-    // the card only chooses how three rows are drawn, and the switches only name a document.
+  test('the file cards register through one hook call and own no preference (T2)', async () => {
+    // S1/S7: the card is drawn through the host's `registerToolRenderer`, and the ONE switch
+    // it obeys is the bridge's own line, asked through the published reader on every paint.
+    // Nothing of ours is registered for it: no command, no tool, no row provider, no store.
     const source = stubbedSource();
     const lines = source.split('\n').map((line) => line.trim());
     assert.deepEqual(
@@ -147,13 +148,9 @@ describe('registration', () => {
       ['libRequire("file-card-resolver.js").registerFileCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });'],
       'the file card is wired through exactly one call',
     );
-    assert.deepEqual(
-      lines.filter((line) => line.includes('registerCardsCustomize(')),
-      ['libRequire("cards-customize.js").registerCardsCustomize(pi);'],
-      'the two switches are wired through exactly one call',
-    );
+    assert.equal(source.includes('registerCardsCustomize'), false, 'and no switch provider is wired at all');
     const { commands, tools } = await loadExtension({});
-    for (const gone of ['file-card', 'cards-customize', 'card-skill', 'card-odd']) {
+    for (const gone of ['file-card', 'card-skill', 'card-odd']) {
       assert.equal(commands.has(gone), false, `the card adds no /${gone} command`);
       assert.equal(tools.has(gone), false, `the card adds no ${gone} tool`);
     }
@@ -274,7 +271,9 @@ describe('removed surface', () => {
 
   test('the loaded extension holds no reference to the removed packages', async () => {
     const { commands } = await loadExtension({});
-    for (const gone of ['customize', 'odd', 'herdr-gentle:warp']) {
+    // `odd` is NOT in this list any more: it is the odd viewer's own name now. What must
+    // never come back is the customize panel and the Herdr worktree panel.
+    for (const gone of ['customize', 'herdr-gentle:warp']) {
       assert.equal(commands.has(gone), false, `no /${gone} command`);
     }
     assert.equal(commands.has('issues'), true, '/issues is the migrated command');

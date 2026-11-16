@@ -105,15 +105,59 @@ function installDefaultBridge() {
   return bridge;
 }
 
+// S13 (issues-startup-performance T11, corrected): the two issues surfaces are
+// registered ONLY when the local presence probe finds `gh`, so a suite that asserts
+// on a surface which exists must not depend on the machine it runs on. That probe
+// is the real one — a directory walk over `process.env.PATH`, no child — and the
+// extension compiles its own `lib/gh-issues.js` instance per load (it purges the
+// lib require cache), so a `setGhWhich` seam set here could never reach it: PATH is
+// the lever, exactly as it is in production.
+//
+// `ghPath(mode)` builds the directory that answers the probe — `present` writes an
+// executable `gh` stub, `absent` writes nothing — and `withGhPath` puts it on PATH
+// for the length of one call and restores the environment afterwards.
+function ghPath(mode) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `odd-gh-${mode}-`));
+  if (mode === 'present') {
+    const file = path.join(dir, process.platform === 'win32' ? 'gh.EXE' : 'gh');
+    fs.writeFileSync(file, '#!/bin/sh\nexit 0\n');
+    fs.chmodSync(file, 0o755);
+  }
+  return dir;
+}
+
+async function withGhPath(mode, run) {
+  const saved = process.env.PATH;
+  const dir = ghPath(mode === 'absent' ? 'absent' : 'present');
+  // `absent` means NOTHING on PATH: prepending an empty directory would still let
+  // the probe find the real `gh` further down, and this suite proves what a host
+  // without the CLI registers — which is nothing, so no lookup may succeed.
+  process.env.PATH = mode === 'absent' ? dir : `${dir}${path.delimiter}${saved === undefined ? '' : saved}`;
+  try {
+    return await run();
+  } finally {
+    if (saved === undefined) delete process.env.PATH;
+    else process.env.PATH = saved;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Load the extension with the injected `pi` double. Returns the registered
 // commands and tools keyed by name, exactly as the host received them.
 //
 // S18 (T14): the bridge is published BEFORE the factory runs, because registration
 // waits for it; with no bridge the extension is expected to register nothing at
 // all, so a suite that wants that passes `{ bridge: false }`.
+//
+// S13 (T11): `gh` is present on PATH unless the suite passes `{ gh: false }`, for the
+// same reason — the issues surfaces do not exist without it.
 async function loadExtension(pi, options = {}) {
   const opts = options && typeof options === 'object' ? options : {};
   if (opts.bridge !== false) installDefaultBridge();
+  return withGhPath(opts.gh === false ? 'absent' : 'present', () => loadWithPath(pi));
+}
+
+async function loadWithPath(pi) {
   process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-worktree-ext-'));
   try {
@@ -142,4 +186,14 @@ async function loadExtension(pi, options = {}) {
   }
 }
 
-module.exports = { LIB_DIR, SRC, BRIDGE_SLOT, loadExtension, stubbedSource, defaultBridge, installDefaultBridge };
+module.exports = {
+  LIB_DIR,
+  SRC,
+  BRIDGE_SLOT,
+  loadExtension,
+  stubbedSource,
+  defaultBridge,
+  installDefaultBridge,
+  ghPath,
+  withGhPath,
+};

@@ -331,7 +331,7 @@ test('S18/S19 (T14): the ready announcement registers the whole surface, exactly
   const bridge = installBridge();
   for (const entry of ready) entry.handler();
 
-  assert.deepEqual([...loaded.commands.keys()].sort(), ['files', 'issues', 'odd-list', 'warp'],
+  assert.deepEqual([...loaded.commands.keys()].sort(), ['files', 'issues', 'odd', 'warp'],
     'the four commands arrive with the bridge');
   assert.deepEqual([...loaded.tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'the two tools');
   assert.deepEqual([...loaded.messageRenderers.keys()], ['worktree-warp'], 'the message renderer');

@@ -30,7 +30,7 @@ S11. Verbatim: "igual recuerda que la mayoria sirve solo si la sidebar de issues
 
 S12. Verbatim: "Igual cambia en Sidebar que dice \"ISSUES\" por \"GITHUB\" mejor, y en numero derecha le pone \"7 issues\" por ejemplos le agregas ahi la palabra issues". The rail heading reads `GITHUB`, and the right-hand count reads `7 issues` (and `7 issues · stale` while stale), keeping the count the number the last read produced.
 
-S13. Verbatim: "el que el panel issues y sidebar requieren claramente gh cli, si no la tiene el so nunca activa sus funciones". Without `gh` on PATH the issues surfaces activate nothing: no child, no read, no timer, and one honest line that names the missing CLI.
+S13. Verbatim: "el que el panel issues y sidebar requieren claramente gh cli, si no la tiene el so nunca activa sus funciones", corrected and confirmed: "te dijke que sin gh no cargan o sea nunca se carga el comando /issues ni nunca se agrega a sidebar github sidebar, pues no serian funcionales". Without the `gh` CLI the two issues surfaces are NOT REGISTERED at all: `/issues` never loads and the `GITHUB` rail section is never added to the rail. There is no dim line, no notice and no refusal line for it — nothing appears, because nothing was registered. Every other surface keeps working. This is registration-time, decided by a local PATH lookup with no child process.
 
 S14. Verbatim: "un detlale fix meor en warp que que ver todos seria con \"a\" no con \"v\"". The extended list's key is `a`, and every hint that names it reads `a`.
 
@@ -58,7 +58,7 @@ T7 — S1-S12 · route: worker · commit 4: docs + invariants + suite
 T8 — S10, S11 · route: worker · commit 3: `perf(issues): refresh the rail on time and after a mutating bash`
 T9 — S10 · route: worker · commit 3: the `bash` command classifier that forces a refresh
 T10 — S12 · route: worker · commit 2: `feat(issues): head the rail GITHUB and count it in issues`
-T11 — S13 · route: worker · commit 4: `feat(issues): activate nothing without the gh CLI`
+T11 — S13 · route: worker · commit 4: `feat(issues): register no issues surface without the gh CLI`
 T12 — S14, S15, S16, S19, S20 · route: worker · commit 5: `feat(warp): scroll the selector and count its checkouts`
 T13 — S17 · route: worker · commit 4: `docs: install the package under Gentle Shell and name the bridge`
 T14 — S18 · route: worker · commit 4: `feat: load nothing without gentle-shell-bridge`
@@ -116,4 +116,10 @@ L23 (parent, evidence): `c6cde14` closes T11 and T14 (S13, S18) — a local PATH
 
 L24 (parent, evidence, slice boundaries for delivery): five commits, 4554 authored changed lines — well past the ~400-line slice. The slices are `8cab67b` (S1-S4), `3712249` (S6, S7, S12), `73bf186` (S8, S10, S11), `055c2e4` (S14-S16, S19, S20) and `c6cde14` (S13, S18), and the docs pass is the last one. They are already reviewable one by one on the branch; publishing them as a chain is the delivery decision and it belongs to the human, not to this log.
 
+L25 (parent, evidence + human decision): `ba96dac` closed T7 (S1-S20) — 52 files against `main`, which looked like 5004 deletions until I checked: `main` advanced 28 commits after this branch's base (`c9d131d`), including the bash/cards refactor that moved behaviour into `lib/bash-frame.js` and deleted `lib/card-files-mode.js` and `lib/cards-customize.js`. Those "deletions" were main's newer work missing here, not work removed. `git rebase main` conflicted on the FIRST commit and would have required resolving the same seven files seven times, so the rebase was aborted and, when asked, the human chose "Integrar main ahora, con verificación completa": one `git merge main`, both behaviours preserved, suite green, merge commit rather than rewritten commits (T16).
+
 L20 (user, verbatim, corrects L19's arithmetic): "no me entediste, debe mostrar 5 worktrees maximos, con los n more daria 7 filas. Si no hay n more, si fuera 7 exactos, se veria 7". The list block is a budget of SEVEN lines shared with the two `n more` lines: 5 checkouts + 2 lines, or 6 + 1, or a full 7 checkouts when nothing is hidden — and with 7 checkouts or fewer, every row shows and no `n more` line exists at all (no padding, no `0 more`).
+
+L26 (user, verbatim, new requirement): "igual en panel issues, tiene la funcion de assigned, poder asignar o desasignar, ahi se da el caso que me la asigne a mi o me quite la asignacion, por la cache o no estoy seguro no se represca altiro los tabs, porque ah ideberia reconoceer el cambio para actualizar rapido si me la asigno seria una mas en assigned y si me saco asignacion una menos y sacarla, actualmente eso demora o no refrezca de hecho hasta que lo cierro y abro panel". Today a self-assignment becomes visible only by closing and reopening the panel: the bucket that gained or lost the row is answered from the page state the panel already holds, and nothing invalidates it when the write lands.
+
+L27 (parent, decision, S13 correction): the human corrected my reading twice and the second one is the contract — "te dijke que sin gh no cargan o sea nunca se carga el comando /issues ni nunca se agrega a sidebar github sidebar, pues no serian funcionales". S13 as first implemented (registered, refuses with one line, dim rail line, session notice) was wrong: without `gh` the command is never registered and the section is never added. The runtime read guards stay as defence in depth only.

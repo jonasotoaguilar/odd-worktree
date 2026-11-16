@@ -193,7 +193,7 @@ const agentStub = {
 describe('/files registration (S17)', () => {
   test('the file picker is registered beside the other three panels', async () => {
     const { commands } = await loadExtension({});
-    assert.deepEqual([...commands.keys()].sort(), ['files', 'issues', 'odd-list', 'warp']);
+    assert.deepEqual([...commands.keys()].sort(), ['files', 'issues', 'odd', 'warp']);
     const files = commands.get('files');
     assert.equal(typeof files.handler, 'function', 'the command carries its handler');
     assert.ok(files.description.includes('files'), 'the description says what it browses');

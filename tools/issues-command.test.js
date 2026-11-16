@@ -36,7 +36,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { LIB_DIR, stubbedSource, installDefaultBridge } = require('./fixtures/load-extension.js');
+const { LIB_DIR, stubbedSource, installDefaultBridge, withGhPath } = require('./fixtures/load-extension.js');
 
 // The client and git seam the extension itself loaded. One extension load compiles
 // its own lib modules, so a fake must reach THAT instance — the extension's
@@ -83,6 +83,11 @@ after(() => {
 afterEach(() => {
   ghIssues.setGhRunner(null);
   ghIssues.setGhWhich(null);
+  // S5 (T8): the gate's clock seam and its cache are process state too; every
+  // test loads its own extension instance, and a leftover fake clock must not
+  // reach the next one.
+  if (typeof ghIssues.setGateClock === 'function') ghIssues.setGateClock(null);
+  if (typeof ghIssues.clearCachedGhStatus === 'function') ghIssues.clearCachedGhStatus();
   // S8 (T4): the rail's published bridge is process-wide, so no test may leave
   // one behind for the next.
   delete globalThis[Symbol.for('gentle-shell-bridge/api/v1')];
@@ -102,29 +107,37 @@ function fixture(name) {
 
 // A fresh copy per load: module-level gate state belongs to one runtime load,
 // exactly like the host's rebuilt command registry.
-async function loadExtension() {
+//
+// S13 (T11): the issues surfaces are registered only when the local presence probe
+// finds `gh`, and that probe reads PATH (the extension compiles its own
+// `lib/gh-issues.js`, so a seam set here would not reach it). The load therefore
+// runs with a PATH that answers the way the case asked — present unless it passes
+// `{ gh: false }` — so the machine the suite runs on decides nothing.
+async function loadExtension(options = {}) {
   // S18 (T14): the extension registers nothing without gentle-shell-bridge, so
   // this file's own host publishes the shared fixture's bridge before the load.
   installDefaultBridge();
-  const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-ext-')));
-  const copy = path.join(dir, 'odd-worktree-tools.mjs');
-  fs.writeFileSync(copy, stubbedSource());
-  const commands = new Map();
-  const hooks = [];
-  const api = {
-    registerTool: () => {},
-    registerCommand: (name, definition) => { commands.set(name, definition); },
-    registerMessageRenderer: () => {},
-    on: (event, handler) => { hooks.push([event, handler]); return () => {}; },
-  };
-  process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
-  const mod = await import(pathToFileURL(copy).href);
-  const factory = mod.default;
-  factory(api);
-  ghIssues = mod.libModule('gh-issues.js');
-  worktreeGit = mod.libModule('worktree-git.js');
-  modsFor.set(hooks, mod);
-  return { commands, hooks, api, mod, factory };
+  return withGhPath(options && options.gh === false ? 'absent' : 'present', async () => {
+    const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-ext-')));
+    const copy = path.join(dir, 'odd-worktree-tools.mjs');
+    fs.writeFileSync(copy, stubbedSource());
+    const commands = new Map();
+    const hooks = [];
+    const api = {
+      registerTool: () => {},
+      registerCommand: (name, definition) => { commands.set(name, definition); },
+      registerMessageRenderer: () => {},
+      on: (event, handler) => { hooks.push([event, handler]); return () => {}; },
+    };
+    process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
+    const mod = await import(pathToFileURL(copy).href);
+    const factory = mod.default;
+    factory(api);
+    ghIssues = mod.libModule('gh-issues.js');
+    worktreeGit = mod.libModule('worktree-git.js');
+    modsFor.set(hooks, mod);
+    return { commands, hooks, api, mod, factory };
+  });
 }
 
 function sessionStartHandlers(hooks) {
@@ -497,6 +510,9 @@ describe('/issues gate (S3)', () => {
     const notes = [];
     await fireSessionStart(hooks, gateCtx(root, notes));
     await fireSessionStart(hooks, gateCtx(root, notes));
+    // S5 (T8): the gate is decided in the background now, so the session start
+    // returns before the verdict lands. The notice still arrives, and still once.
+    assert.ok(await waitFor(() => notes.length === 1), 'the startup notification never arrived');
     assert.ok(commands.has('issues'), 'the command stays discoverable');
     assert.equal(notes.length, 1, 'exactly one startup notification per session');
     assert.match(notes[0][0], /gh CLI is not available/, 'the note names what is missing');
@@ -528,49 +544,44 @@ describe('/issues gate (S3)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// S13 (T11): without the `gh` CLI the issues surfaces activate NOTHING. The CLI
-// is answered LOCALLY — a PATH walk, no child process, no `gh` invocation to find
-// out whether `gh` exists — so a host without it never pays a doomed child: the
-// session gate stops before its health probe, and `/issues` refuses with ONE
-// honest line naming what is missing. A `gh` that is present but unauthenticated
-// is NOT this state and keeps the login fix it always had.
+// S13 (T11, corrected): without the `gh` CLI the two issues surfaces are NOT
+// REGISTERED — `/issues` never loads and the `GITHUB` rail section is never added
+// to the rail — so there is no line, notice or refusal for them: nothing appears,
+// because nothing was registered. The decision is a LOCAL presence answer (a PATH
+// walk, no child process, no `gh` invocation to find out whether `gh` exists), and
+// every other surface this package contributes keeps working. A `gh` that is
+// present but unauthenticated is NOT this state and keeps the login fix it always
+// had.
 // ---------------------------------------------------------------------------
-describe('a missing gh CLI activates nothing (S13, T11)', () => {
-  const CLI_MISSING_LINE = 'issues: the gh CLI is not installed or not on PATH; install it from https://cli.github.com — /issues cannot open until then';
+describe('a missing gh CLI registers no issues surface (S13, T11)', () => {
+  test('without the CLI neither the command nor the rail section exists', async () => {
+    const { commands } = await loadExtension({ gh: false });
 
-  test('the session gate stops before any gh child and says the one line once', async () => {
-    const { commands, hooks } = await loadExtension();
+    assert.equal(commands.has('issues'), false, '/issues never loads without the CLI');
+    // Everything else is still there: a missing `gh` is not a plugin-wide switch.
+    assert.ok(commands.has('warp'), '/warp still registers');
+    assert.ok(commands.has('odd'), '/odd still registers');
+    assert.ok(commands.has('files'), '/files still registers');
+  });
+
+  test('the decision costs no child process, at load or at session start', async () => {
+    const { hooks, mod } = await loadExtension({ gh: false });
     const { runner, calls } = makeIssuesRunner();
     ghIssues.setGhRunner(runner);
-    ghIssues.setGhWhich(() => null);
 
     const root = makeRepo({ tag: 'cli-missing-gate' });
     const notes = [];
     await fireSessionStart(hooks, gateCtx(root, notes));
-    await fireSessionStart(hooks, gateCtx(root, notes));
 
-    assert.ok(commands.has('issues'), 'the command stays discoverable');
     assert.deepEqual(calls, [], 'a missing CLI is answered locally: no gh child is ever spawned');
-    assert.deepEqual(notes, [[CLI_MISSING_LINE, 'info']],
-      'one honest line naming the missing CLI and the install, once per session');
+    assert.deepEqual(notes, [], 'and nothing is said: there is no surface to say it on');
+    assert.equal(typeof mod, 'object');
   });
 
-  test('/issues refuses with that line and opens nothing', async () => {
-    const { commands, mod } = await loadExtension();
-    const { runner, calls } = makeIssuesRunner();
-    ghIssues.setGhRunner(runner);
-    ghIssues.setGhWhich(() => null);
-    mod.setIssuesTuiLoader(async () => stubTui);
-
-    const { ctx, customs, notes } = makeCtx({
-      cwd: makeRepo({ tag: 'cli-missing-open' }),
-      customImpl: async () => null,
-    });
-    await commands.get('issues').handler('', ctx);
-
-    assert.equal(customs.length, 0, 'the reader never mounts without the CLI');
-    assert.deepEqual(calls, [], 'and no gh child runs trying to find that out');
-    assert.deepEqual(notes, [[CLI_MISSING_LINE, 'error']], 'one line, naming the missing CLI');
+  test('with the CLI present the command is registered (PRESERVE)', async () => {
+    const { commands } = await loadExtension();
+    assert.ok(commands.has('issues'), '/issues loads when the CLI is on PATH');
+    assert.equal(typeof commands.get('issues').handler, 'function');
   });
 
   test('an unauthenticated gh that IS present keeps the login fix (PRESERVE)', async () => {
@@ -641,6 +652,245 @@ describe('session startup takes no gh call (S1, S2)', () => {
     await fireSessionStart(hooks, gateCtx(outside, notes));
     assert.deepEqual(calls, [], 'outside a repository there is nothing to check, so no gh child runs');
     assert.deepEqual(notes, [], 'and nothing is said: a non-repository cwd is not an error');
+  });
+});
+
+// S5 (T8): the gate is network work (`gh api user` then `gh repo view`, plus the
+// checkout's own git probes) and the host awaits every `session_start` handler it
+// is handed, so awaiting it there put the first prompt behind the whole probe on
+// every open, resume and switch. What the gate DECIDES is unchanged; only WHEN it
+// runs. These cases drive the registered handlers only.
+describe('S5 (T8): the issues gate never delays session_start', () => {
+  const ghOk = (stdout) => ({ status: 0, stdout, stderr: '', error: null });
+  const USER_OK = ghOk(JSON.stringify({ login: 'me' }));
+  const USER_FAIL = { status: 1, stdout: '', stderr: 'Failed to log in: authentication required', error: null };
+
+  // A fake `gh` that answers the gate's two commands, records the checkout of
+  // every `gh api user` it was asked for, and lets the test decide when that one
+  // call answers.
+  function gateRunner({ user = () => Promise.resolve(USER_OK) } = {}) {
+    const gateCalls = [];
+    const runner = (_bin, argv, opts = {}) => {
+      if (argv[0] === 'api' && argv[1] === 'user') {
+        gateCalls.push(opts.cwd);
+        return user(opts.cwd);
+      }
+      if (argv[0] === 'repo' && argv[1] === 'view') {
+        return Promise.resolve(ghOk(JSON.stringify({ nameWithOwner: 'myfork/project' })));
+      }
+      return Promise.resolve(ghOk(''));
+    };
+    return { runner, gateCalls };
+  }
+
+  // The gate resolves the CHECKOUT before it asks gh anything (S3/T2), so a
+  // session's cwd has to be a real checkout for a probe to run at all: a bare
+  // temporary directory is the non-repository state, which by design spawns
+  // nothing. What these cases measure — dispatch, the TTL, the shared probe, the
+  // generation — is unchanged; only the preconditions of the directory moved.
+  function scratchCheckout(tag) {
+    return makeRepo({ tag: `gate-${tag}` });
+  }
+
+  function sessionShutdownHandlers(hooks) {
+    return hooks.filter(([event]) => event === 'session_shutdown').map(([, handler]) => handler);
+  }
+
+  async function fireSessionShutdown(hooks, ctx) {
+    for (const handler of sessionShutdownHandlers(hooks)) {
+      const out = handler({}, ctx);
+      if (out && typeof out.then === 'function') await out;
+    }
+  }
+
+  // Fire the host's session_start handlers and give them a bounded window to
+  // resolve, so a handler that waits for `gh` fails an assertion below instead of
+  // hanging the suite.
+  async function fireSessionStartPromptly(hooks, ctx) {
+    const pending = sessionStartHandlers(hooks).map((handler) => Promise.resolve(handler({}, ctx)));
+    const outcome = await Promise.race([
+      Promise.all(pending).then(() => 'returned'),
+      new Promise((resolve) => setTimeout(() => resolve('waiting'), 100)),
+    ]);
+    return { outcome, pending };
+  }
+
+  // A window in which a NEW probe would have reached the injected `gh` (the client
+  // reads the checkout's local git configuration first). Nothing arriving inside it
+  // is the evidence that a cached answer was reused.
+  const settleWindow = (ms = 100) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  test('session_start returns while the gate is still pending, and the probe still runs', async () => {
+    const { hooks } = await loadExtension();
+    const held = [];
+    ghIssues.setGhRunner(gateRunner({ user: () => new Promise((resolve) => { held.push(resolve); }) }).runner);
+    const notes = [];
+    const { outcome } = await fireSessionStartPromptly(hooks, gateCtx(scratchCheckout('pending'), notes));
+    assert.equal(outcome, 'returned', 'session_start never waits for the network gate');
+    assert.ok(await waitFor(() => held.length === 1), 'the probe never ran in the background');
+    assert.deepEqual(notes, [], 'and decides nothing before it answers');
+    held[0](USER_OK);
+    await tick();
+    assert.deepEqual(notes, [], 'a usable gh still says nothing, exactly as before');
+  });
+
+  test('a verdict that lands late still notifies the same sentence and still refuses /issues', async () => {
+    const { hooks, commands, mod } = await loadExtension();
+    const held = [];
+    ghIssues.setGhRunner(gateRunner({ user: () => new Promise((resolve) => { held.push(resolve); }) }).runner);
+    const root = scratchCheckout('deferred');
+    const notes = [];
+    const { outcome } = await fireSessionStartPromptly(hooks, gateCtx(root, notes));
+    assert.equal(outcome, 'returned', 'the session start does not wait for the verdict');
+    assert.deepEqual(notes, [], 'the startup note waits for the verdict');
+    assert.ok(await waitFor(() => held.length === 1), 'the probe never ran in the background');
+
+    held[0]({ status: null, stdout: '', stderr: '', error: 'spawn gh ENOENT: gh CLI is not available' });
+    assert.ok(await waitFor(() => notes.length === 1), 'the deferred verdict never notified');
+    assert.match(notes[0][0], /gh CLI is not available/, 'the note names what is missing');
+    assert.match(notes[0][0], /gh auth login/, 'the note names the command that fixes it');
+    assert.match(notes[0][0], /cannot open/, 'the note names the real consequence');
+    assert.equal(notes[0][1], 'info');
+
+    mod.setIssuesTuiLoader(async () => stubTui);
+    const { ctx, customs, notes: invokeNotes } = makeCtx({ cwd: root, customImpl: async () => null });
+    await commands.get('issues').handler('', ctx);
+    assert.equal(customs.length, 0, 'invocation without gh opens nothing');
+    assert.equal(invokeNotes.length, 1, 'invocation reports its own, fuller error');
+    assert.match(invokeNotes[0][0], /gh auth login/);
+    assert.equal(invokeNotes[0][1], 'error');
+  });
+
+  test('concurrent probes share one call and a settled answer is reused inside the TTL', async () => {
+    const { hooks } = await loadExtension();
+    const held = [];
+    const gate = gateRunner({ user: () => new Promise((resolve) => { held.push(resolve); }) });
+    ghIssues.setGhRunner(gate.runner);
+    const root = scratchCheckout('share');
+    const other = scratchCheckout('share-other');
+
+    // Two session starts for ONE checkout while the first probe is in flight.
+    await fireSessionStartPromptly(hooks, gateCtx(root, []));
+    await fireSessionStartPromptly(hooks, gateCtx(root, []));
+    assert.ok(await waitFor(() => gate.gateCalls.length === 1), 'the gate never probed');
+    assert.equal(gate.gateCalls.length, 1, 'concurrent probes for one checkout share one gh call');
+    held[0](USER_OK);
+    await tick();
+
+    // A settled success is reused for the rest of its TTL.
+    await fireSessionStartPromptly(hooks, gateCtx(root, []));
+    await settleWindow();
+    assert.equal(gate.gateCalls.length, 1, 'a later session reuses the answer it already paid for');
+
+    // Another checkout pays for its own.
+    await fireSessionStartPromptly(hooks, gateCtx(other, []));
+    assert.ok(await waitFor(() => gate.gateCalls.length === 2), 'a different checkout never probed');
+    assert.deepEqual(gate.gateCalls, [root, other], 'and the cache is keyed by the checkout');
+    held[1](USER_OK);
+    await tick();
+  });
+
+  test('a success is reused for minutes, a failure only for seconds', async () => {
+    const { hooks } = await loadExtension();
+    const clock = { at: 1_000_000 };
+    ghIssues.setGateClock(() => clock.at);
+
+    const okRoot = scratchCheckout('ttl-ok');
+    const okGate = gateRunner();
+    ghIssues.setGhRunner(okGate.runner);
+    await fireSessionStart(hooks, gateCtx(okRoot, []));
+    await waitFor(() => okGate.gateCalls.length === 1);
+    clock.at += 60_000;
+    await fireSessionStart(hooks, gateCtx(okRoot, []));
+    await settleWindow();
+    assert.equal(okGate.gateCalls.length, 1, 'a success inside its TTL is reused, not re-probed');
+    clock.at += 5 * 60_000;
+    await fireSessionStart(hooks, gateCtx(okRoot, []));
+    await waitFor(() => okGate.gateCalls.length === 2);
+    assert.equal(okGate.gateCalls.length, 2, 'past the success TTL the gate probes again');
+
+    const failRoot = scratchCheckout('ttl-fail');
+    const failGate = gateRunner({ user: () => Promise.resolve(USER_FAIL) });
+    ghIssues.setGhRunner(failGate.runner);
+    await fireSessionStart(hooks, gateCtx(failRoot, []));
+    await waitFor(() => failGate.gateCalls.length === 1);
+    clock.at += 10_000;
+    await fireSessionStart(hooks, gateCtx(failRoot, []));
+    await settleWindow();
+    assert.equal(failGate.gateCalls.length, 1, 'a failure inside its short TTL is reused');
+    clock.at += 30_000;
+    await fireSessionStart(hooks, gateCtx(failRoot, []));
+    await waitFor(() => failGate.gateCalls.length === 2);
+    assert.equal(failGate.gateCalls.length, 2, 'past the short TTL the failure is probed again');
+  });
+
+  test('a verdict from a superseded checkout never applies to the session that replaced it', async () => {
+    const { hooks } = await loadExtension();
+    const held = new Map();
+    ghIssues.setGhRunner(gateRunner({
+      user: (cwd) => new Promise((resolve) => { held.set(cwd, resolve); }),
+    }).runner);
+    const checkoutA = scratchCheckout('supersede-a');
+    const checkoutB = scratchCheckout('supersede-b');
+    const notesA = [];
+    const notesB = [];
+
+    await fireSessionStartPromptly(hooks, gateCtx(checkoutA, notesA));
+    await waitFor(() => held.has(checkoutA));
+    await fireSessionStartPromptly(hooks, gateCtx(checkoutB, notesB));
+    await waitFor(() => held.has(checkoutB));
+
+    // The previous checkout's verdict lands now, after its session was superseded.
+    held.get(checkoutA)(USER_FAIL);
+    await tick();
+    await tick();
+    assert.deepEqual(notesA, [], 'a superseded verdict never notifies the session it belonged to');
+
+    held.get(checkoutB)(USER_OK);
+    await tick();
+    assert.deepEqual(notesB, [], 'the live session keeps its own verdict');
+    assert.equal(held.size, 2, 'no extra probe ran');
+  });
+
+  test('session_shutdown drops the gate cache, so the next session probes afresh', async () => {
+    const { hooks } = await loadExtension();
+    const clock = { at: 2_000_000 };
+    ghIssues.setGateClock(() => clock.at);
+    const gate = gateRunner();
+    ghIssues.setGhRunner(gate.runner);
+    const root = scratchCheckout('shutdown');
+    const ctx = gateCtx(root, []);
+
+    await fireSessionStart(hooks, ctx);
+    await waitFor(() => gate.gateCalls.length === 1);
+    clock.at += 1_000;
+    await fireSessionStart(hooks, ctx);
+    await settleWindow();
+    assert.equal(gate.gateCalls.length, 1, 'inside the TTL the same checkout is reused');
+
+    await fireSessionShutdown(hooks, ctx);
+    await fireSessionStart(hooks, ctx);
+    await waitFor(() => gate.gateCalls.length === 2);
+    assert.equal(gate.gateCalls.length, 2, 'a new session never inherits the probe its predecessor paid for');
+  });
+
+  test('the cache holds a handful of checkouts, never every one ever seen', async () => {
+    const { hooks } = await loadExtension();
+    const gate = gateRunner();
+    ghIssues.setGhRunner(gate.runner);
+    const scopes = Array.from({ length: 10 }, (_, index) => scratchCheckout(`bound-${index}`));
+    for (const scope of scopes) await fireSessionStart(hooks, gateCtx(scope, []));
+    await waitFor(() => gate.gateCalls.length === scopes.length);
+    assert.equal(gate.gateCalls.length, scopes.length, 'every checkout probed once');
+
+    await fireSessionStart(hooks, gateCtx(scopes.at(-1), []));
+    await settleWindow();
+    assert.equal(gate.gateCalls.length, scopes.length, 'the newest checkout is still cached');
+
+    await fireSessionStart(hooks, gateCtx(scopes[0], []));
+    await waitFor(() => gate.gateCalls.length === scopes.length + 1);
+    assert.equal(gate.gateCalls.length, scopes.length + 1,
+      'the oldest checkout was evicted instead of the cache growing without bound');
   });
 });
 

@@ -176,6 +176,21 @@ test('guard 2 stays silent once the session used CodeGraph, and the silent attem
   assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'the slot was never consumed');
 });
 
+test('a call that failed earns no reminder and spends no slot', async () => {
+  const { guard, ctx } = setup();
+  const failed = (event) => ({ ...event, isError: true });
+  assert.equal(await guard.onToolResult(failed(grep()), ctx), undefined, 'a failed grep gave the model nothing to read');
+  assert.equal(await guard.onToolResult(failed(read('/other/a.ts')), ctx), undefined, 'nor did a failed read of another checkout');
+  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'the slot it would have used is still free');
+  assert.equal(await guard.onToolResult(read('/other/a.ts'), ctx), ANOTHER('/other'));
+});
+
+test('a failed CodeGraph call is no use of it either', async () => {
+  const { guard, ctx } = setup();
+  await guard.onToolResult({ toolName: 'codegraph', input: { operation: 'query' }, isError: true, content: [] }, ctx);
+  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'a call that failed proved nothing');
+});
+
 // ---- reset (S7) ----
 
 test('a compaction forgets both guards', async () => {

@@ -36,7 +36,8 @@ otro proyecto git" (nothing blocks any more, see S6; the criterion for what coun
 
 S5. Precision: "la idea es que sea preciso". Guard 1 stays silent if this session already called `mcp__codegraph__codegraph_explore` with that
 checkout as `projectPath` since the last compaction. Guard 2 stays silent if the session already used `codegraph` or the MCP tool
-since the last compaction. A reminder that does not fire does not use up its once-per-key slot.
+since the last compaction. A reminder that does not fire does not use up its once-per-key slot. A call that failed `isError === true`
+is no subject at all (L10/L11): no reminder rides an error result, no slot is spent and a failed `codegraph`/`explore` call records no use.
 
 S6. Nothing blocks. The reminder is one extra text part appended to the tool result of that call (the result is kept whole), never a
 separate message and never a block. It applies only when the `codegraph` CLI is installed and the session holds a CodeGraph tool (the same
@@ -96,6 +97,12 @@ L7 (user): "me parece bien, impelenta los guard" (answering the proposal with th
 L8 (user): "guard 1 seria solo para orchestrator claro".
 
 L9 (user): "guard 2 es transversal para orchestrator y agentes definimos, (todos menos review- agents)"
+
+L10 (user): "eso esta mal, no deberia los guard dar error, son recordatorios, no bloqueantes, al menos lo de codegraph"
+
+L11 (user): "deberia incrustarse en la salida de la tool / o lanzo error porque se hizo mal el grep y no por el guard?" — the error was the
+`grep`'s own (`path: "src"`, and this checkout has no `src/`), and the reminder did embed as its own text part; the real gap it exposed is
+that the reminder rode a FAILED result and spent its once-per-key slot on a call the model could not read. Fixed in the decision core.
 
 ## Delivery
 

@@ -454,17 +454,19 @@ test('S3 (T2): a non-repository line is a state, so no frame and no activity ret
   assert.equal(reads, 2);
 });
 
-// S13 (T11): a missing `gh` CLI is that same kind of state — nothing to check —
-// so the floor timer a draw armed is dropped the moment the toned line lands,
-// instead of surviving to its next fire only to find the state already settled.
-// The line stays, and no later frame arms another one.
-test('S13 (T11): a settled (dim) state owns no floor timer', async () => {
+// S3/S13 (T2, T11): a `dim` state is a STATE, not a failure to retry — a cwd
+// outside a repository is the one the section draws that way, and a `gh` that
+// vanished after load reaches the same shape — so the floor timer a draw armed is
+// dropped the moment the toned line lands, instead of surviving to its next fire
+// only to find the state already settled. The line stays, and no later frame arms
+// another one.
+test('S3/S13 (T2, T11): a settled (dim) state owns no floor timer', async () => {
   const timers = [];
   let reads = 0;
   const handle = createIssuesSection({
     load: async () => {
       reads += 1;
-      return { ok: false, error: 'gh CLI not installed', errorTone: 'dim' };
+      return { ok: false, error: 'nothing to read here', errorTone: 'dim' };
     },
     open: () => {},
     openAll: () => {},
@@ -480,7 +482,7 @@ test('S13 (T11): a settled (dim) state owns no floor timer', async () => {
   handle.section.lines({});
   assert.equal(timers.length, 1, 'the draw armed the one floor timer');
   await handle.refresh();
-  assert.deepEqual(handle.section.lines({}), [{ label: 'gh CLI not installed', tone: 'dim' }]);
+  assert.deepEqual(handle.section.lines({}), [{ label: 'nothing to read here', tone: 'dim' }]);
   assert.equal(reads, 1, 'the read that stated it is the only read');
   assert.equal(timers[0].cleared, true, 'the settled line cleared the timer the draw had armed');
   handle.section.lines({});
@@ -1561,41 +1563,32 @@ test('S12 (T11): a session outside a repository paints one short dim line, and t
     'the command notice keeps its own wording');
 });
 
-// S13 (T11): without the `gh` CLI the rail activates NOTHING. The CLI is answered
-// LOCALLY — a PATH walk, the module answers `ghCliPresent`, no child — so the
-// settled state costs no `gh` child, no git child and no read, the way the
-// non-repository line beside it already does. One dim line names what is missing
-// and the section stops there: a later frame and the session's own activity read
-// nothing either, and the floor timer a draw armed is dropped with the state.
-test('S13 (T11): a missing gh CLI paints one dim line and spawns no gh child at all', async () => {
+// S13 (T11, corrected): without the `gh` CLI the rail section is NEVER ADDED —
+// "/issues nunca se carga ni nunca se agrega a sidebar github sidebar". The decision
+// is a LOCAL presence answer (a PATH walk; the module answers `ghCliPresent`, no
+// child), so the host pays no `gh` child, no git child and no read at all, and there
+// is no line, notice or refusal to draw: nothing appears, because nothing was
+// registered. Every other surface the package contributes is still there.
+test('S13 (T11): without the gh CLI the GITHUB section is never added to the rail', async () => {
   const checkout = makeCheckout();
   const { registered } = installBridge();
-  const loaded = await loadExtension({});
+  // The decision is the real probe over PATH — no seam, because registration reads
+  // it before any module instance a test could patch exists.
+  const loaded = await loadExtension({}, { gh: false });
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub();
   ghIssues.setGhRunner(gh.runner);
-  ghIssues.setGhWhich(() => null);
 
   const ctx = { cwd: checkout, ui: { notify: () => {} } };
   await fireSessionStart(loaded.hooks, ctx);
-  assert.equal(registered.length, 1, 'the rail is installed: it simply has nothing to read');
-  const section = registered[0];
-  const rows = await waitForRows(section, ctx);
-  assert.deepEqual(rows, [{ label: 'gh CLI not installed', tone: 'dim' }],
-    'one line naming the missing CLI, in the gray tone and never the error one');
-  assert.equal(section.meta(ctx), undefined, 'and no count to report');
 
+  assert.deepEqual(registered, [], 'no section is added to the rail: there is nothing to draw');
+  assert.equal(loaded.commands.has('issues'), false, '/issues never loads either');
   await settleStartup(gh.calls);
-  assert.deepEqual(gh.calls, [], 'no gh child at all — not even the session gate\'s health probe');
-
-  // Settled: a later frame and the session's own activity start nothing.
-  await fireHook(loaded.hooks, 'turn_end', ctx);
-  section.lines(ctx);
-  section.meta(ctx);
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  assert.deepEqual(gh.calls, [], 'a settled line never retries: no activity read and no timer read');
-  assert.deepEqual(section.lines(ctx), [{ label: 'gh CLI not installed', tone: 'dim' }],
-    'and the line stays until a session boundary supersedes it');
+  assert.deepEqual(gh.calls, [], 'and no gh child runs — not even the session gate\'s health probe');
+  // A missing `gh` is not a plugin-wide switch: the rest of the surface is here.
+  assert.ok(loaded.commands.has('warp'), '/warp still registers');
+  assert.ok(loaded.commands.has('odd'), '/odd still registers');
 });
 
 // S6: the supersede is synchronous. A session that starts in ANOTHER checkout
@@ -3072,8 +3065,10 @@ test('S9 (T14): the first refresh reads 100 per bucket, the next reads 20 and me
     await fireSessionStart(loaded.hooks, ctx);
     assert.equal(registered.length, 1);
     const section = registered[0];
-    // S1 (issues-startup-performance T1): the session gate is dispatched startup
-    // work now, so its own identity probes are counted only once they have landed.
+    // S1 (issues-startup-performance T1) / S5 (T8): the session gate is dispatched
+    // startup work now, so its own identity probes are counted only once they have
+    // landed — which is what makes the baseline below count the refreshes and
+    // nothing else.
     await settleStartup(calls);
     const baseline = calls.length; // the session gate's own identity probes
 

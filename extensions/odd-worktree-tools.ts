@@ -2,21 +2,24 @@
 // odd-worktree-tools.ts — the standalone odd-worktree Pi extension.
 //
 // One package, one surface: the two agent worktree tools and the four
-// read/inspect panels, plus the two preferences this package owns and the one
-// bash design it contributes.
+// read/inspect panels, plus the one tools design it contributes.
 //
 // Registers four commands:
 //   /warp      move this session to another checkout of the project
-//   /odd-list  read this checkout's odd/ documents
+//   /odd       read this checkout's odd/ documents
 //   /files     browse one checkout's files with a live preview, insert the
 //              chosen paths into the editor, or open one in $EDITOR
 //   /issues    read this checkout's GitHub issues, with label/assignee,
 //              comment and close actions when the repository permits them
 //
-// The bash card is not a preference of this package: it contributes one DESIGN
-// (`activity`) to gentle-shell-bridge's `bash` line in `/gentle:customize` → `Cards`
-// (`native` | `activity`), which the bridge owns, persists and repaints
-// (lib/bash-design.js).
+// The bash heading is not a preference of this package either: it contributes one DESIGN
+// (`activity`) to gentle-shell-bridge's `/gentle:customize` → `Cards` page, on its
+// `Card tools` line when the bridge can group tools (`default` | `activity`) and on
+// the per-tool `bash` line on anything older, which the bridge owns, persists and
+// repaints (lib/bash-design.js). The skill/ODD file card owns no preference at all: it
+// is painted while that same `Card tools` line answers with this design, asked of the
+// bridge per paint (lib/file-card-resolver.js), and the host draws its own row for any
+// other value. Nothing of that is registered here.
 //
 // Plus two tools: worktree_create and worktree_list. Create prompts for approval
 // when the host offers dialog UI; list never mutates anything; `/warp` is the
@@ -6602,7 +6605,7 @@ async function executeOdd(rawArgs, ctx) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
   if (raw !== "") {
-    if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd-list.`, "error");
+    if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
     return;
   }
   const cwd = toolCwd(ctx);
@@ -6711,11 +6714,11 @@ async function oddFallbackListing(root, local) {
   return usable ? ordered : local;
 }
 
-// `/odd-list` (odd-viewer S1-S8): a two-pane viewer of this checkout's odd/
+// `/odd` (odd-viewer S1-S8): a two-pane viewer of this checkout's odd/
 // documents — the list on the left, the styled markdown on the right.
 function registerOddCommand(pi) {
   if (typeof pi?.registerCommand !== "function") return;
-  pi.registerCommand("odd-list", {
+  pi.registerCommand("odd", {
     description: "Read this checkout's odd documents: list on the left, styled markdown on the right",
     handler: async (args, ctx) => {
       await executeOdd(args, ctx);
@@ -7185,6 +7188,13 @@ let issuesGateNotified = false;
 // `null` = not probed yet, `true` = gh was usable this session, `false` = the
 // last probe failed. Registration is eager; this state gates ONLY the open.
 let issuesGateOpen = null;
+// S5 (T8): the probe `session_start` dispatched, and the generation it ran in.
+// Nothing in `session_start` awaits it; a surface that needs the verdict (`/issues`)
+// awaits this same promise instead of starting a second probe. The generation moves
+// on at every session start and shutdown, so a verdict the previous checkout is
+// still holding lands nowhere instead of gating the session that replaced it.
+let issuesGateProbe = null;
+let issuesGateGeneration = 0;
 
 // S3 (issues-sidebar): the rail section beside the `/issues` reader. The
 // bridge is read from its published slot, never imported; the section reads ONE
@@ -7890,20 +7900,27 @@ function issuesGateMessage(error) {
   return `issues: ${text} — /issues cannot open until then`;
 }
 
-// S13 (issues-startup-performance T11): a MISSING `gh` is its own state, and it is
-// answered LOCALLY — one PATH walk through `lib/which-command.js`, never a child
-// process and never a `gh` invocation "to see whether gh exists". The verbatim
-// requirement: "el que el panel issues y sidebar requieren claramente gh cli, si no
-// la tiene el so nunca activa sus funciones". So a host without the CLI gets ONE
-// honest line naming it (and the install), the session gate stops before its
-// health probe, `/issues` refuses instead of opening, and the rail paints the
-// line as a settled state: no read, no timer, no child.
+// S13 (issues-startup-performance T11, corrected): without the `gh` CLI the two
+// issues surfaces are NEVER REGISTERED — "/issues nunca se carga ni nunca se agrega
+// a sidebar github sidebar, pues no serian funcionales". So there is no dim line, no
+// startup notice and no refusal line for that host: with nothing registered there
+// is nothing to draw, announce or refuse. The decision is REGISTRATION-TIME and
+// LOCAL — one PATH walk through `lib/which-command.js`, never a child process and
+// never a `gh` invocation "to see whether gh exists" — and it covers exactly two
+// registrations: the `/issues` command and the `GITHUB` rail section.
+//
+// Every other surface keeps working without `gh` — `/warp`, `/odd`, `/files`,
+// the tools, the cards, the bash design, the prompt append and CodeGraph — because
+// "no desactiva todo el plugin, eso dije". The only plugin-wide switch in this
+// package is the missing `gentle-shell-bridge` (S18).
+//
+// The guards below stay as DEFENCE IN DEPTH, not as the policy: a `gh` that
+// disappears after the extension loaded still fails the gate and the rail's read
+// closed, with no child and no network call.
 const ISSUES_GH_CLI_MISSING = "the gh CLI is not installed or not on PATH";
-const ISSUES_GH_CLI_INSTALL = "https://cli.github.com";
-// The one line `/issues` and the session gate say. One sentence, one dash clause.
-const ISSUES_GH_CLI_MISSING_MESSAGE = `issues: ${ISSUES_GH_CLI_MISSING}; install it from ${ISSUES_GH_CLI_INSTALL} — /issues cannot open until then`;
-// The rail's own line is the short one, like its `not a git repository` sibling:
-// the body has a row's width, and it still names the missing CLI.
+// The rail's read-time line for the one case registration cannot cover: `gh` was
+// on PATH when this extension loaded and is gone now. It is a dim settled state
+// with no child behind it, exactly like its `not a git repository` sibling.
 const ISSUES_GH_CLI_MISSING_RAIL = "gh CLI not installed";
 
 // True only when the local probe can PROVE the CLI is absent. A host whose probe
@@ -7919,98 +7936,142 @@ function issuesGhCliMissing() {
   }
 }
 
-// S1/S3 (issues-startup-performance T1, T2): the session gate. It is STARTUP
-// WORK, never an awaited step of `session_start`: the host awaits every handler it
-// is handed, so awaiting this probe put `gh api user` (≈485 ms) and `gh repo view`
-// (≈550 ms) — serially — in front of the first prompt of every session start AND
-// every session switch. `/issues` probes `gh` on demand when it opens
-// (`probeIssuesGate`), so nothing is lost by answering it in the background.
+// The REGISTRATION-time answer, taken once per load. This one is the POLICY: it
+// decides whether the two issues surfaces exist at all, so it is asked where they
+// register and never again — a chrome-less host keeps no surface and no probe, and
+// `/reload` rebuilds this module, so a fresh install is noticed on the next load
+// and not before. The live `issuesGhCliMissing()` above stays the RUNTIME question,
+// asked by the gate and by the rail's read, so a `gh` that vanishes mid-session
+// still fails closed with no child.
+const ISSUES_GH_CLI_ABSENT = issuesGhCliMissing();
+
+// The probe alone: `gh api user` (and, through the client, `gh repo view`), which is
+// ~1.1 s of network plus the checkout's git probes. It reads and writes no module
+// state and no UI, so the background startup task and a typed command can share it,
+// and the client's own in-flight cache turns the second caller into a waiter on the
+// FIRST probe instead of a second pair of children. Never rejects: a missing or
+// broken `gh` is a verdict, not a crash.
+//
+// S1/S3 (issues-startup-performance T1, T2): and it is STARTUP WORK, never an
+// awaited step of `session_start`: the host awaits every handler it is handed, so
+// awaiting this probe put `gh api user` (≈485 ms) and `gh repo view` (≈550 ms) —
+// serially — in front of the first prompt of every session start AND every session
+// switch. `/issues` takes the same verdict when it opens (`probeIssuesGate`), so
+// nothing is lost by answering it in the background.
 //
 // T2: repository-ness comes FIRST, through the same local checkout seam every
 // other surface uses, so a session outside a repository costs one `git rev-parse`
 // and no `gh` child at all — and says nothing, because that is a state, not an
-// error. A late answer is dropped by the startup epoch: it sets no state and
-// notifies no dead UI, and `issuesGateNotified` stays clear so the next session's
-// gate can still speak.
-async function checkIssuesGate(_pi, ctx, epoch) {
+// error. A late verdict is dropped by the generation `dispatchIssuesGate` captures:
+// it sets no state and notifies no dead UI, and `issuesGateNotified` stays clear so
+// the next session's gate can still speak.
+async function probeIssuesGateStatus(ctx) {
   try {
     const gh = libRequire("gh-issues.js");
-    // S13 (T11): the CLI is answered LOCALLY first, so a host without `gh` costs
-    // no child of any kind — not the checkout probe, not a doomed `gh` — and the
-    // state it reaches is the same settled one the rail paints.
+    // S13 (T11) defence in depth: with `gh` absent nothing was registered, so this
+    // path is a `gh` that vanished after load. It costs no child either way, and
+    // the gate then fails like any other `gh` failure.
     if (issuesGhCliMissing()) {
-      if (epoch !== undefined && !startupTaskLive(epoch)) {
-        return { ok: false, missingCli: true, error: ISSUES_GH_CLI_MISSING };
-      }
-      issuesGateOpen = false;
-      if (!issuesGateNotified && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
-        try {
-          ctx.ui.notify(ISSUES_GH_CLI_MISSING_MESSAGE, "info");
-          issuesGateNotified = true;
-        } catch {
-          // Notifying never breaks startup.
-        }
-      }
-      return { ok: false, missingCli: true, error: ISSUES_GH_CLI_MISSING };
+      return { ok: false, error: ISSUES_GH_CLI_MISSING };
     }
     const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
-    const checkoutRoot = await oddCheckoutRootAsync(cwd);
+    let checkoutRoot = null;
+    try {
+      checkoutRoot = await oddCheckoutRootAsync(cwd);
+    } catch {
+      checkoutRoot = null;
+    }
     if (!checkoutRoot) {
       return { ok: false, notRepository: true, error: ISSUES_SIDEBAR_NOT_REPOSITORY };
     }
     // S3 (T2): the gate asks gh ONE thing — is it usable this session (installed,
-    // authenticated, and able to report a repository)? `scope: null` keeps the
-    // checkout's own repository OUT of it: a checkout whose remote is not a GitHub
-    // repository is the READ's question, and the panel answers it with its own
-    // honest error instead of being refused before it can even open.
-    const res = await gh.ghStatus({ cwd: checkoutRoot, scope: null });
+    // authenticated, and able to answer)? `scope: null` keeps the checkout's own
+    // repository OUT of it: a checkout whose remote is not a GitHub repository is
+    // the READ's question, and the panel answers it with its own honest error
+    // instead of being refused before it can even open. Through the client's cache
+    // the gate shares one probe with a typed `/issues`, so the second caller waits
+    // on the first promise instead of spawning a second pair of children.
+    const res = await gh.cachedGhStatus({ cwd: checkoutRoot, scope: null });
     const ok = !!(res && res.ok === true);
-    // S1: nothing the ended session learned is written into the one that replaced
-    // it, and nothing is announced to a UI that is already gone.
-    if (epoch !== undefined && !startupTaskLive(epoch)) return { ok };
-    issuesGateOpen = ok;
-    if (ok) return { ok: true };
-    const error = (res && res.error) || "gh check failed";
-    if (!issuesGateNotified && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
-      try {
-        ctx.ui.notify(issuesGateMessage(error), "info");
-        issuesGateNotified = true;
-      } catch {
-        // Notifying never breaks startup.
-      }
-    }
-    return { ok: false, error };
+    if (ok) return { ok: true, checkoutRoot };
+    return { ok: false, error: (res && res.error) || "gh check failed", checkoutRoot };
   } catch (err) {
     // The gate must never break startup.
     return { ok: false, error: (err && err.message) || String(err) };
   }
 }
 
-// S1 (T1): the ONE dispatch site. The probe is tracked startup work captured with
-// the epoch `session_shutdown` advances, so it is honest about which session it
-// belongs to and the host never waits for it.
-function dispatchIssuesGate(pi, ctx) {
-  try {
-    trackStartupTask(checkIssuesGate(pi, ctx, beginStartupTask()));
-  } catch {
-    // The gate is optional: a dispatch that throws never breaks startup.
+// Apply a resolved verdict to the session that asked for it: the open state, and the
+// ONE startup notice a failing gate hands the human. Split from the probe so the
+// caller can drop a verdict whose session was superseded before it landed, and so a
+// command that dispatches on its own (`/reload` fires no `session_start`) keeps its
+// own, fuller refusal as the only thing it says.
+function applyIssuesGateStatus(gate, ctx, notifyStartup = true) {
+  issuesGateOpen = !!(gate && gate.ok === true);
+  if (issuesGateOpen) return { ok: true, checkoutRoot: gate && gate.checkoutRoot };
+  const error = (gate && gate.error) || "gh check failed";
+  // S3 (T2): a cwd outside a repository speaks for itself — the surfaces draw the
+  // state and there is nothing for the human to fix — so nothing is announced.
+  // `gh`'s own wording (`gh auth login`, a killed probe) still is.
+  const notRepository = !!(gate && gate.notRepository === true);
+  if (notifyStartup && !issuesGateNotified && !notRepository && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
+    try {
+      ctx.ui.notify(issuesGateMessage(error), "info");
+      issuesGateNotified = true;
+    } catch {
+      // Notifying never breaks startup.
+    }
   }
+  return {
+    ok: false,
+    error,
+    ...(notRepository ? { notRepository: true } : {}),
+  };
+}
+
+// S5 (T8): dispatch the session's gate and return at once. The host awaits every
+// handler it is handed, one at a time, so awaiting this probe is what delayed the
+// first prompt on every open, resume and session switch; it now runs in the
+// background and applies its verdict when it lands. A verdict that outlives its
+// generation (another checkout, or a shutdown) is dropped whole, so it can neither
+// notify a dead UI nor gate the session that replaced it.
+function dispatchIssuesGate(ctx, notifyStartup = true) {
+  const generation = issuesGateGeneration;
+  const probe = probeIssuesGateStatus(ctx).then((gate) => {
+    if (generation !== issuesGateGeneration) return gate;
+    return applyIssuesGateStatus(gate, ctx, notifyStartup);
+  });
+  issuesGateProbe = { generation, run: probe };
+  trackStartupTask(probe);
+  return probe;
+}
+
+// The verdict this session already asked for, shared: the dispatched probe while it
+// is the current generation's, and a fresh one when the session has none (`/reload`
+// fires no `session_start`, and a superseded probe is never reused). A probe
+// dispatched from here says nothing on its own: the caller reports its own refusal.
+function sessionIssuesGate(ctx) {
+  const dispatched = issuesGateProbe;
+  if (dispatched !== null && dispatched.generation === issuesGateGeneration) return dispatched.run;
+  return dispatchIssuesGate(ctx, false);
 }
 
 // The command stays discoverable even before the session gate resolves, so
-// running it probes `gh` on demand. A session that already answered `ok` never
-// re-probes; a failure notifies the same honest fix every time it is asked.
+// running it takes the verdict on demand. A session that already answered `ok` never
+// re-probes; while its own probe is still in flight the command WAITS for that one
+// promise rather than spawning a second pair of `gh` children, and a failure
+// notifies the same honest fix every time it is asked.
 //
-// S3 (T2): outside a repository there is nothing to probe and nothing `gh` could
-// answer, so the checkout is resolved first (one local check) and the caller is
-// handed the state instead of a `gh` error string.
+// S3 (T2): the checkout comes FIRST, from THIS ctx — one local `git rev-parse` pair
+// that the panel then reuses — so a cwd outside a repository is handed back as that
+// state (the caller draws the shared line) instead of a `gh` error string. S13 (T11)
+// defence in depth: a `gh` that disappeared after registration is refused here,
+// before any child.
 async function probeIssuesGate(ctx) {
-  const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
-  // S13 (T11): the missing CLI is refused before the checkout probe and before any
-  // `gh` child, with the one line that names it.
   if (issuesGhCliMissing()) {
-    return { ok: false, missingCli: true, error: ISSUES_GH_CLI_MISSING };
+    return { ok: false, error: ISSUES_GH_CLI_MISSING };
   }
+  const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
   let checkoutRoot = null;
   try {
     checkoutRoot = await oddCheckoutRootAsync(cwd);
@@ -8019,20 +8080,29 @@ async function probeIssuesGate(ctx) {
   }
   if (!checkoutRoot) return { ok: false, notRepository: true, error: ISSUES_SIDEBAR_NOT_REPOSITORY };
   if (issuesGateOpen === true) return { ok: true, checkoutRoot };
-  let gate;
-  try {
-    const gh = libRequire("gh-issues.js");
-    const res = await gh.ghStatus({ cwd: checkoutRoot, scope: null });
-    gate = res && res.ok === true ? { ok: true } : { ok: false, error: (res && res.error) || "gh check failed" };
-  } catch (err) {
-    gate = { ok: false, error: (err && err.message) || String(err) };
+  let gate = await sessionIssuesGate(ctx);
+  // S3 (T2): `notRepository` is a fact about the directory it was measured in, and
+  // this ctx just resolved a checkout of its own. A command typed in a session that
+  // started elsewhere asks its own question instead of inheriting a refusal about
+  // another directory; the shared probe stays shared for every `gh` answer.
+  if (gate && gate.notRepository === true) {
+    gate = await dispatchIssuesGate(ctx, false);
   }
-  issuesGateOpen = gate.ok === true;
-  return { ...gate, checkoutRoot };
+  if (gate && gate.ok === true) return { ok: true, checkoutRoot };
+  return {
+    ok: false,
+    error: (gate && gate.error) || "gh check failed",
+    ...(gate && gate.notRepository === true ? { notRepository: true } : {}),
+  };
 }
 
 function registerIssuesCommand(pi) {
   if (typeof pi?.registerCommand !== "function") return;
+  // S13 (T11, corrected): without the `gh` CLI there is nothing this command could
+  // do, so it is never registered — "/issues nunca se carga". The answer is the one
+  // recorded at registration, with no child process, and every other command and
+  // tool this package contributes is registered above and below regardless.
+  if (ISSUES_GH_CLI_ABSENT) return;
   pi.registerCommand("issues", {
     description: "Browse fresh GitHub issue pages and details; edit labels/assignees, comment or close when permitted",
     handler: async (args, ctx) => {
@@ -8042,12 +8112,6 @@ function registerIssuesCommand(pi) {
         // S1 (issues-sidebar-click T1): the rail click whose command refuses here
         // is over, so the guard goes with it instead of waiting for its timer.
         releaseIssuesPanelOpen();
-        // S13 (T11): without the CLI the consequence is not `gh auth login` — it is
-        // the install — so the missing state carries its own one line.
-        if (gate.missingCli === true) {
-          if (typeof notify === "function") notify(ISSUES_GH_CLI_MISSING_MESSAGE, "error");
-          return;
-        }
         // S3 (T2): a cwd outside a repository is the shared statement every
         // surface makes, at info — never a `gh` error and never an error tone.
         if (gate.notRepository === true) {
@@ -8275,6 +8339,19 @@ function clearIssuesSidebarCache() {
   issuesSidebarCacheGeneration += 1;
 }
 
+// S5 (T8): the client's cached gate answers (`gh-issues.js`) belong to the session
+// that paid for them; a session that ends clears them so the next one starts from
+// its own probe. Best effort: a missing seam or a failed clear never breaks the end
+// of a session.
+function clearIssuesGateCache() {
+  try {
+    const gh = libRequire("gh-issues.js");
+    if (gh && typeof gh.clearCachedGhStatus === "function") gh.clearCachedGhStatus();
+  } catch {
+    // The cache is optional: a failed clear never breaks the end of a session.
+  }
+}
+
 // S9 consumer half (issues-sidebar) / S8 (issues panel, T4): the panel READS the
 // rail's cache so its first frame paints rows instead of waiting for `gh`. It is
 // a READER only — the rail owns that entry (its one combined read, its merge, its
@@ -8386,11 +8463,13 @@ function issuesSidebarInitialBucket(pinned, number) {
 async function loadIssuesSidebar() {
   const sequence = (issuesSidebarReadSequence += 1);
   const cacheGeneration = issuesSidebarCacheGeneration;
-  // S13 (T11): without the CLI there is nothing to read here — no `gh` child, no
-  // cache hydrate, not even the git checkout probe (so this settled state costs
-  // zero children, which is what the rail's own test measures). The line is the
-  // short dim one, exactly like the non-repository state below, so the section's
-  // `stateSettled` keeps NO timer and no later frame retries it.
+  // S13 (T11) defence in depth: a host without the CLI never mounts this section,
+  // so reaching this line means `gh` was on PATH at registration and is gone now.
+  // Nothing to read, then — no `gh` child, no cache hydrate, not even the git
+  // checkout probe (so this settled state costs zero children, which is what the
+  // rail's own test measures). The line is the short dim one, exactly like the
+  // non-repository state below, so the section's `stateSettled` keeps NO timer and
+  // no later frame retries it.
   if (issuesGhCliMissing()) {
     return { ok: false, error: ISSUES_GH_CLI_MISSING_RAIL, errorTone: "dim" };
   }
@@ -8763,7 +8842,12 @@ function registerIssuesSidebar(pi) {
     const api = issuesSidebarBridge();
     if (api !== null) {
       registerBashDesignRows(api);
-      mountIssuesSidebar(pi, api);
+      // S13 (T11, corrected): without the `gh` CLI this section is NEVER ADDED to
+      // the rail — "nunca se agrega a sidebar github sidebar" — and there is no
+      // line, notice or refusal to draw for it, because nothing was registered.
+      // Only the ISSUES section is withheld: the bash design above, the picker's
+      // keymap action and every other surface still register.
+      if (!ISSUES_GH_CLI_ABSENT) mountIssuesSidebar(pi, api);
       return;
     }
     if (issuesSidebarSubscribed) return;
@@ -9268,18 +9352,19 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // session context the section's reads belong to.
   // S6 (issues-sidebar): the supersede of a previous checkout's read happens
   // FIRST and synchronously — the session context is remembered and the section
-  // is invalidated BEFORE anything else is dispatched. No answer the previous
-  // checkout's read is still holding can then find a latest token to win or a
+  // is invalidated before anything else in this boundary runs, so an answer the
+  // previous checkout's read settles with finds no latest token to win and no
   // snapshot to keep.
   // S3 amended (T13, L11): NO read happens here. A hidden section costs nothing,
   // so the first DRAW is what starts the section's read: an absent snapshot is
   // stale inside `lines()`, which schedules its own refresh. The hidden section
   // therefore makes no child process and no network call, and starts no timer.
-  // S1/S2 (issues-startup-performance T1): and NOTHING awaited here spawns a child
-  // process or makes a network call. The `gh` gate is dispatched as tracked
-  // startup work (one epoch per session) instead of being awaited, so the host's
-  // own await of this handler returns at once — on every session start and every
-  // session switch.
+  // S1/S2/S3 (issues-startup-performance T1, T2): and NOTHING awaited here spawns a
+  // child process or makes a network call. The `gh` gate is dispatched as tracked
+  // startup work instead of being awaited, so the host's own await of this handler
+  // returns at once — on every session start and every session switch — and it
+  // resolves the checkout first, so outside a repository it does not even start a
+  // `gh` child.
   pi.on("session_start", (event, ctx) => {
     // S18/S19 (files-picker T8): the second moment the bridge contribution comes
     // from. It is idempotent, and it is what binds the key once the shell on this
@@ -9302,9 +9387,20 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // boundary as the section's own state, and it says nothing yet when the
     // host could still announce.
     checkIssuesSidebarInstall(pi, ctx);
-    // S1/S3 (T1, T2): the gate is dispatched, never awaited — and it resolves the
-    // checkout first, so outside a repository it does not even start a `gh` child.
-    dispatchIssuesGate(pi, ctx);
+    // S5 (T8): the `gh` gate is DISPATCHED here, never awaited. The host awaits
+    // every handler it is handed, one at a time, so awaiting it put the first
+    // prompt behind `gh api user` + `gh repo view` and the checkout's own git
+    // probes on every open, resume and session switch (~1.1 s of network, every
+    // time). It now runs in the background and applies its verdict when it lands;
+    // the generation it carries is bumped FIRST, so a probe the previous checkout
+    // dispatched can never apply its verdict here, and `/issues` awaits this same
+    // promise instead of starting a second probe.
+    issuesGateGeneration += 1;
+    issuesGateProbe = null;
+    // S13 (T11): without the CLI there is nothing for this gate to answer and
+    // nothing registered to use the answer, so no probe is dispatched at all — no
+    // child, no network, nothing said.
+    if (!ISSUES_GH_CLI_ABSENT) dispatchIssuesGate(ctx);
   });
   // A queued warp is session state: shutdown clears its record and its timer so
   // nothing outlives the session that asked for the move. S6 (issues-sidebar):
@@ -9326,6 +9422,13 @@ function registerOddWorktreeSurfaceEntries(pi) {
     releaseIssuesPanelOpen();
     invalidateIssuesSidebar();
     clearIssuesSidebarCache();
+    // S5 (T8): the gate's own state is session state too. The generation moves on,
+    // so a probe still in flight lands nowhere and never notifies a dead UI, and
+    // the client's cached answers are dropped so the next session probes afresh
+    // instead of inheriting its predecessor's.
+    issuesGateGeneration += 1;
+    issuesGateProbe = null;
+    clearIssuesGateCache();
     issuesSidebarCtx = null;
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,
@@ -9446,33 +9549,25 @@ function registerOddWorktreeSurfaceEntries(pi) {
   } catch {
     // CodeGraph is best effort.
   }
-  // S1 (T5): the file cards, through the same host hook. A `read`/`edit`/`write` call whose
-  // path names a skill or an ODD artifact heads as that file while its switch
-  // (`Card skill` / `Card odd`) is on; every other call keeps the host's own boxed row, which
-  // the card reproduces because the hook decides per tool name and never sees the arguments.
-  // A host without `pi.registerToolRenderer` registers nothing and keeps drawing them itself.
+  // S1 (T2): the file cards, through the same host hook. A `read`/`edit`/`write` call whose
+  // path names a skill or an ODD artifact heads as that file while the bridge's `Card tools`
+  // line answers with this package's activity design; every other call keeps the host's own
+  // boxed row, which the card reproduces because the hook decides per tool name and never
+  // sees the arguments. No preference of ours is registered: the gate is the bridge's own
+  // published reader, asked on every paint. A host without `pi.registerToolRenderer`
+  // registers nothing and keeps drawing them itself.
   try {
     libRequire("file-card-resolver.js").registerFileCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
   } catch {
     // The card is cosmetic.
   }
-  // S1 (T5): the two switches in `/gentle:customize` -> `Cards`, through the bridge's
-  // `registerRows` alone — no command, no tool, no store of its own: the choice is this
-  // package's document (`lib/card-files-mode.js`). Without a bridge nothing is registered and
-  // no surface changes.
-  try {
-    libRequire("cards-customize.js").registerCardsCustomize(pi);
-  } catch {
-    // The switches are best effort.
-  }
-  // S1 (issues-startup-performance T1, correction): the live-checkout scan is
-  // DISPATCHED and never awaited. Its only product is `warpDiscoveryCache`, which
-  // nothing reads — every warp lists fresh before acting — so the old "startup
-  // barrier" awaited three git reads for a result the next thing the session does
-  // never consumes. Measured on this checkout: 483 ms → 72 ms of awaited
-  // `session_start`, and the rest of that 72 ms went with the barrier. The task is
-  // still TRACKED, so `awaitPendingStartupTasks` and a shutdown barrier can wait
-  // for it, and a failure still cannot break a session.
+  // The live-checkout scan is DISPATCHED and never awaited. Its only product is
+  // `warpDiscoveryCache`, which nothing reads — every warp lists fresh before
+  // acting — so the old "startup barrier" awaited three git reads for a result the
+  // next thing the session does never consumes. Measured on this checkout:
+  // 483 ms → 72 ms of awaited `session_start`, and the rest of that 72 ms went with
+  // the barrier. The task is still TRACKED, so `awaitPendingStartupTasks` and a
+  // shutdown barrier can wait for it, and a failure still cannot break a session.
   pi.on("session_start", (event, ctx) => {
     try {
       const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd

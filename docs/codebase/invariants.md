@@ -8,12 +8,12 @@ The question this page answers: which rules must every change preserve, and what
 2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
    invariants 18 and 19 allow.** No customize COMMAND, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
-   `herdr-gentle:` command name. This package owns exactly TWO preferences — the
-   file cards' `Card skill` and `Card odd` switches (invariant 3, invariant 23) —
-   and its customize-side contributions are only the rows that carry them and a
-   bash DESIGN (the `activity` value) on gentle-shell-bridge's own `bash` line
-   (invariant 3); the design is not a preference here, because the bridge owns
-   that choice and its store. It registers no command, no page, no setting, no
+   `herdr-gentle:` command name. This package owns NO preference of its own: its
+   only customize-side contribution is a tools DESIGN (the `activity` value) on
+   gentle-shell-bridge's own `Card tools` line, or its `Card bash` line on a
+   bridge older than 0.6.0 (invariant 3). The skill/ODD file cards obey that same
+   line (invariant 23) and contribute no row of their own; the design is not a
+   preference here, because the bridge owns that choice and its store. It registers no command, no page, no setting, no
    settings file and no key of its own beyond the file picker's ONE keymap action
    (invariant 3), and no other setting is read, written or offered. CodeGraph
    adds no command and no model-facing tool: no `/codegraph-*` command, no tool
@@ -22,13 +22,15 @@ The question this page answers: which rules must every change preserve, and what
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
 3. **The shipped surface is exactly four commands, two tools, one sidebar
-   section, one bash design and the one `Cards` row group.** `/warp`, `/odd-list`,
+   section and one tools design.** `/warp`, `/odd`,
    `/files`, `/issues`; `worktree_create`, `worktree_list`; the one fourth kind of
    surface, a sidebar section (`lib/issues-section.js`) that is neither a command nor a tool and
-   registers no name the host or the agent can call; the one bash design
-   (`lib/bash-design.js`) and the one `Cards` row group (`lib/cards-customize.js`,
-   which carries `Card skill` and `Card odd`), which are neither commands nor tools
-   either and add no name to either registry. Neither moving the session nor
+   registers no name the host or the agent can call; the one design
+   (`lib/bash-design.js`), one `Card tools` line over `bash`, `write` and the four read-only
+   tools (the single `tool: "bash"` design on a bridge older than 0.6.0), which is
+   neither a command nor a tool either and adds no name to either registry; and
+   no `Cards` row of its own at all (the file cards add none either — see below).
+   Neither moving the session nor
    removing a checkout is exposed to the agent: `/warp` is the person's front for
    both (its `ctrl+d`, the selector, a typed name, a queued handoff for moving; its
    `ctrl+d` for removing). That is a rule about this package's surface, not about
@@ -50,7 +52,8 @@ The question this page answers: which rules must every change preserve, and what
    that HAS the bridge but draws no rail registers the section and never paints it,
    which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the bridge, not by this package (invariant 2 keeps every customize
-   surface out of it except the `Cards` row group), and the section declares NO
+   surface out of it except the one tools-design row this package puts on the bridge's
+   own `Card tools` line), and the section declares NO
    preview: every `Sections` row draws the host's one shared list of active sections
    and the bridge adds this section's `rowLabel` to it itself, shown or left out
    with the row's own hypothetical (`registerSection` has no `preview` field — do
@@ -81,21 +84,37 @@ The question this page answers: which rules must every change preserve, and what
    command itself registers no store and writes nothing: it reads Git through the
    ordinary fixed argv (invariant 9) and paints.
 
-   **The bash card is a design on the bridge, not a preference here.**
-   `lib/bash-design.js` registers ONE design (`tool: "bash"`, id
-   `odd-worktree.bash-activity`, label `activity`) through the bridge's published
-   `registerToolDesign` API, at most once per process, with an idempotent
-   disposer, and does nothing at all when the API is absent or older — no throw,
-   no command, no warning beyond the section's own discoverability one. The bridge
-   owns Pi's one tool-renderer resolver, builds the host's own card, reads its
-   `bash` line (`native` | `activity`, default `native`) on every render pass and
-   persists the choice in its own store, so this package stores no document for it,
-   reads no file for it, has no `/card:bash` command and depends on no extension
-   load order.
-   The design is pure: `apply(lines, ctx)` rewrites only the heading row of a
-   `call` part, swapping the host's `$` for the family `lib/bash-activity.js`
-   names, taking the added columns from the row's own fill; every other row, every
-   result and every unproven heading is returned byte for byte (invariant 20).
+   **The cards are a design on the bridge, not a preference here.**
+   `lib/bash-design.js` registers ONE design (id `odd-worktree.bash-activity`, label
+   `activity`) through the bridge's published `registerToolDesign` API, at most once per
+   process, with an idempotent disposer, and does nothing at all when the API is absent or
+   older — no throw, no command, no warning beyond the section's own discoverability one.
+   The shape follows the bridge's own `VERSION` and is decided BEFORE anything is
+   registered: one line over `bash`, `grep`, `find`, `ls` and `read` on `0.6.0` and later
+   (one `Card tools` row), and the single `tool: "bash"` design on anything older (one
+   `Card bash` row) or on a release it cannot read — never a grouped registration an older
+   bridge would refuse. The bridge owns Pi's one tool-renderer resolver, builds the host's
+   own card, reads that line (`default` | `activity`, stored as `native` | the design id) on
+   every render pass and persists the choice in its own store. The only thing this package
+   writes is the first-run seed: `seedBashDesignSelection` selects `activity` once, for
+   `bash`, only when the bridge holds no `bash` choice, and it does so BEFORE the
+   registration, because a `0.6.0` bridge carries that choice over to its line's value at
+   registration time; it records `bashActivitySeeded` in its own `odd-worktree` store so a
+   later `native` is never undone. A stored choice is never overwritten, the reserved line
+   key is never written here, a failure seeds nothing. It reads no other file, has no
+   `/card:bash` command and depends on no extension load order.
+   The design is pure: `apply(lines, ctx)` swaps the host's `$` on the heading
+   row of a `call` part for the family `lib/bash-activity.js` names (or `$ bash`
+   when nothing names it), swaps a read-only tool's `<glyph> <tool>` for the constant
+   `⌕ exploring`, taking the added columns from the row's own fill, and
+   through `lib/bash-frame.js` repaints the frame cells in one theme role and
+   writes a finished call's duration into the closing rule. It changes colour and
+   those cells only: no row's width changes, no text of the command, the arguments or the output
+   is rewritten, and without a theme, a render context or room every row is
+   returned byte for byte (invariant 20). Its only state is two bounded memos (512
+   entries each: the classification of one command, and the answer for one
+   tool/rows/theme/call key); a cache hit is byte-identical to a fresh drawing and a
+   caller always gets a new array.
 
    **One rail open at a time, and the click's own identity.** A click on a rail row
    opens one panel at a time: while it is in flight every further click has no
@@ -118,25 +137,13 @@ The question this page answers: which rules must every change preserve, and what
    `tools/issues-open-guard.test.js` pins the guard, its release points, both pins,
    the generation and the normalization.
 
-   **The two file-card switches are the only preferences this package owns.**
-   `lib/cards-customize.js` registers ONE row provider
-   (`odd-worktree.cards.file-switches`) through the same published `registerRows`
-   API, into the same `Cards` page, at most once per process: each switch is two
-   consecutive rows sharing one `choice.setting` — an `on` row then an `off` row —
-   a `current()` that reads the live switch and an `action()` that persists before
-   the host repaints. `Card skill` and `Card odd` are both on by default, add no
-   command, tool or key, and their whole state is one strict document,
-   `<home>/card-files.json`
-   (`{"schema":"gentle-pi.card-files/v1","skill":true,"odd":false}` and nothing
-   else), written only by `lib/card-files-mode.js` — atomically, owner-only,
-   document first and slot second, and never over a document it cannot parse — in
-   the one `<home>` `lib/card-style.js` resolves (`GENTLE_PI_CONFIG_HOME` →
-   `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`). A missing, unreadable,
-   malformed, wrong-schema or non-boolean document reads as both on. A refused
-   write leaves the row's `action` as a throw, which the customize menu reports as
-   ONE error notice, with the stored value and the drawn switch unchanged
-   (invariant 23). Without the bridge neither switch has a control surface, and
-   nothing throws.
+   **The file cards add no surface and own no switch.** They obey the bridge's own
+   `Card tools` line: the card is painted while that line answers with this
+   package's activity design (`odd-worktree.bash-activity`), so the file cards
+   contribute no `Cards` row, no preference and no document of their own, and they
+   are read through the same published object the design registers through. The
+   gate itself — its reader, the id it accepts and its fail-open rule — is
+   invariant 23.
 4. **Deletion refuses on a live session.** The only surface that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
    before the pending-change question and again immediately before removal. This
@@ -308,23 +315,28 @@ The question this page answers: which rules must every change preserve, and what
     REFERENCE's roles (`tools/shell-card.test.js` for all four tones,
     `tools/worktree-card.test.js` and `tools/worktree-cards.test.js` for the card
     each draws), never a role this package would prefer.
-17. **This repo paints last; the host's key hint is the one painted input it
-    measures.** Rows are wrapped, clipped to the inner width with the `…` mark and
+17. **This repo paints last; the only painted inputs it measures are the host's
+    key hint and Pi's own Markdown rows.** Rows are wrapped, clipped to the inner
+    width with the `…` mark and
     padded as PLAIN text and painted in their role afterwards (`cardBodyRows`,
     `cardLine`), so no painted string this repo composes is ever measured or
     clipped — which is why the `/warp` card's ANSI-unaware fallback clip draws the
     same text as the host's ANSI-aware helpers and copies the host's truncation
     rule (a width of zero or less is nothing; an ellipsis too wide for the budget
-    is clipped and emitted itself). The ONE painted input it measures is the host's
+    is clipped and emitted itself). One painted input it measures is the host's
     `keyHint`, which the host paints before handing it over (`keyHint` returns
     `fg("dim", …) + fg("muted", …)`): `lib/worktree-cards.js:185` forwards it, it
     is measured only by `metrics.visibleWidth` at `lib/shell-card.js:218`, `:378`
     and `:424`, and the `/warp` path strips that paint at
-    `lib/worktree-card.js:158`. `tools/warp-fallback-regression.test.js` states
+    `lib/worktree-card.js:158`. The other is the file card's document body, which
+    Pi's Markdown renderer painted: the card PLACES those rows with the ANSI-aware
+    helpers (`cardPaintedRows`, `lib/shell-card.js:461`) and never paints them
+    again (invariant 23). `tools/warp-fallback-regression.test.js` states
     both halves: the two seams draw the same text at the same width, and no body
-    row ever hands a helper a string THIS REPO painted. The host's key hint is the
-    named exception above: it arrives already painted, it is measured here with the
-    host's ANSI-aware width functions, and this repo then wraps it ONCE MORE in
+    row ever hands a helper a string THIS REPO painted. The host's key hint is one
+    of the two named exceptions above: it arrives already painted, it is measured
+    here with the host's ANSI-aware width functions, and this repo then wraps it
+    ONCE MORE in
     `dim` when it draws the tail (`lib/shell-card.js:225`) — a redundant outer
     layer over the host's own paint, harmless, but it means the hint is both
     measured AND repainted here. Write no assertion that no helper ever receives a
@@ -378,17 +390,24 @@ The question this page answers: which rules must every change preserve, and what
     Nothing awaits an index, a daemon or the configuration on the host's path, and
     every child is a fixed argv with a bounded timeout (invariant 9).
 
-20. **The bash design only draws, and it draws what the classifier names.**
+20. **The design only draws, and it draws what the classifier names.**
     `lib/bash-design.js` changes nothing but a heading row: it executes, spawns,
     guards, intercepts and shadows nothing, and the destructive evidence of
     `lib/bash-destructive.js` is presentation: no permission, guard or execution
-    decision may read it. The design context carries no arguments, so the
-    heading is the only evidence and a call is named only when the heading provably
-    shows the WHOLE command — no `…` abbreviation, no `… +N lines` fold, no
-    continuation row, nothing after the command but the host's fill and hint — and
-    the classifier (`lib/bash-activity.js`) names exactly one family for it. Any
-    other case, a row with no fill to pay for the word included, keeps the host's
-    `$` exactly as drawn. The design never throws and never mutates its input. The
+    decision may read it. A bridge that hands over the call's arguments makes them
+    the evidence; without them the heading is the only evidence and a call is named
+    only when the heading provably shows the WHOLE text — no `…` abbreviation, no
+    `… +N lines` fold, no continuation row, nothing after it but the host's fill and
+    hint — and the classifier (`lib/bash-activity.js`) names exactly one family for
+    it. The four read-only tools the same design covers (`grep`, `find`, `ls`, `read`)
+    are headed `exploring` whatever they read, and a read-only heading that cannot be
+    proved is returned unchanged: those four have no generic word of their own. The
+    line also declares `write` (`lib/bash-design.js`) even though the design draws
+    nothing for it: the declaration is what lets the file card ask the bridge about a
+    write, and the rows of a write come back byte for byte. Any
+    other case, a row with no fill to pay for the word included, keeps the host's `$`
+    or its own `<glyph> <tool>` exactly as drawn, and a tool the design does not cover
+    is returned untouched. The design never throws and never mutates its input. The
     CodeGraph card (invariant 19) keeps its own resolver for `codegraph …` rows;
     this package registers no other tool-renderer resolver for `bash`.
 
@@ -420,6 +439,9 @@ The question this page answers: which rules must every change preserve, and what
     mcp__codegraph__codegraph_explore first, if it applies.` (`mcp__codegraph__codegraph_explore`
     in backticks). It stays silent once the session used `codegraph` or the MCP tool.
 
+    **A call that failed is no subject at all**: the model got no result to read, so
+    no reminder rides an error result, no once-per-key slot is spent, and a failed
+    `codegraph` or explore call is no use of the graph either.
     **What counts as a call** is `grep`, `find`, `ls`, `read` and `bash`: `read` only
     for code, never for the `.md`/`.json`/`.yml`/`.yaml`/`.toml`/`.txt` the rule
     exempts, and `bash` only when a segment runs `grep`, `rg`, `find`, `fd`, `ls`,
@@ -463,7 +485,8 @@ The question this page answers: which rules must every change preserve, and what
     with both separators, and a path that names both is decided by the marker
     closest to the file. The card states that identity's mark and label, the tool,
     the path and — for a read only — the line range the call asked for. A path
-    naming neither identity, and a call whose switch is off, is the chain's own row.
+    naming neither identity is the chain's own row, and so is a row of one of these
+    three tools while the bridge's line answers with anything but this design.
 
     **The host's shell is fixed per tool name, so the card reproduces its box.**
     `registerToolRenderer` decides per TOOL NAME and never sees a call's arguments,
@@ -476,27 +499,61 @@ The question this page answers: which rules must every change preserve, and what
     a default-shell renderer (`read`, `write`), and untouched, with no box, no
     padding and no background, for one that frames itself (Pi's `edit`).
 
-    Both switches (`Card skill`, `Card odd`, read through `lib/card-files-mode.js`),
-    the card style slot (`lib/card-style.js`) and the content level
+    **The bridge's design selection is the one switch, and this card owns none of
+    it.** The card is painted while — and only while — the bridge's published
+    reader answers that this package's activity design draws the tool being
+    painted. That reader is `api.resolveToolDesignSelection(tool)`, reached from
+    the `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
+    gate (`lib/file-card-resolver.js:51`, `:160`) and never imported, and the
+    answer that paints is `{ kind: "design", design }` with
+    `design.id === "odd-worktree.bash-activity"` (the id at
+    `lib/file-card-resolver.js:54`, the decision at `:78`). `native`, `missing`,
+    `not-covered` and any other design hand the row back to the host, its box and
+    its key hint included. The question is asked per painted tool, on every frame,
+    never cached, which is what repaints a card already on screen after a
+    mid-session switch. It fails OPEN: the reader is an
+    OPTIONAL member of the published object, so a bridge older than 0.7.0 — or none
+    at all — cannot answer and an answer this build cannot read is unreadable, and
+    in both cases the card paints exactly as it did before it joined that line: an
+    unavailable gate never hides a row, and nothing here throws. The answer, the
+    card style slot (`lib/card-style.js`) and the content level
     (`lib/card-content.js`) are read at paint time, inside the component's
-    `render(width)`, so a flip repaints rows already drawn. The card only draws: it
-    adds no command and no tool, and its only customize surface is the bridge's
-    `Cards` rows (`lib/cards-customize.js`).
+    `render(width)`. The card only draws: it adds no command, no tool and no
+    customize row of its own.
+
+    **The document body is Pi's own renderer.** An expanded — or previewed —
+    Markdown document is drawn by `Markdown` from `@earendil-works/pi-tui`
+    (`markdownRows`, `lib/file-card-markdown.js:116`) with a theme table
+    (`fileCardMarkdownTheme`, `:82`) that gives every Markdown element a theme ROLE
+    (the table is `MARKDOWN_ROLES`, `lib/file-card-markdown.js:26`:
+    `heading`→`mdHeading`, `listBullet`→`mdListBullet`,
+    `code`→`mdCode`, `codeBlock`→`mdCodeBlock`, `codeBlockBorder`→`mdCodeBlockBorder`,
+    `quote`→`mdQuote`, `quoteBorder`→`mdQuoteBorder`, `link`→`mdLink`,
+    `linkUrl`→`mdLinkUrl`, `hr`→`mdHr`, and the text attributes from the theme's own
+    handlers). Those rows arrive ALREADY PAINTED, so invariant 17's exception is the
+    host's own: the substrate PLACES them with the injected ANSI-aware width
+    (`cardPaintedRows`, `lib/shell-card.js:461`) and never re-paints them with a
+    body role, while the frame, the background and the padding stay ours. A host
+    with no TUI package, a renderer that throws and a document that draws no row
+    all fall back to the wrapped plain source, unstyled.
 
 24. **No session path waits on `gh`, and every `gh` reach is deferred.**
     `session_start` DISPATCHES the issues gate as tracked startup work under the
-    module's epoch and never awaits it, so opening a session or switching to
-    another one spends no child process and no network call there. What the gate
-    does off that path is one local `git rev-parse` for repository-ness, one local
-    `PATH` walk (`lib/which-command.js`) for the CLI, and the `gh` health read only
-    when both answer yes; a late answer from a session that has ended sets no state
-    and notifies no UI. `/issues` probes `gh` itself when it opens. In the rail,
-    `lines()` and `meta()` keep their synchronous contract: they read ONE in-memory
-    snapshot and only schedule the refresh. `tools/issues-command.test.js` pins it
-    with "the awaited session_start resolves while the injected gh runner is still
-    pending" and "a session outside a repository makes no gh call at startup, and
-    stays silent"; `tools/issues-section.test.js` with "a frame never waits" and "a
-    missing gh CLI paints one dim line and spawns no gh child at all".
+    generation the dispatch captured and never awaits it, so opening a session or
+    switching to another one spends no child process and no network call there —
+    and a host without the CLI dispatches no gate at all, because the two issues
+    surfaces were never registered. What the gate does off that path is one local
+    `git rev-parse` for repository-ness and the `gh` health read only when that
+    answers yes; a late answer from a session that has ended sets no state and
+    notifies no UI. `/issues` takes that same verdict when it opens instead of
+    starting a second probe, and asks its own question about its OWN cwd when the
+    session's answer was only a non-repository state. In the rail, `lines()` and
+    `meta()` keep their synchronous contract: they read ONE in-memory snapshot and
+    only schedule the refresh. `tools/issues-command.test.js` pins it with "the
+    awaited session_start resolves while the injected gh runner is still pending"
+    and "a session outside a repository makes no gh call at startup, and stays
+    silent"; `tools/issues-section.test.js` with "a frame never waits" and "without
+    the gh CLI the GITHUB section is never added to the rail".
 
 25. **A persisted cache entry never defeats the count invariant or the full-read
     TTL.** The disk half (`lib/issues-cache-store.js`) stores what the plan needs
@@ -549,16 +606,23 @@ The question this page answers: which rules must every change preserve, and what
     same read" and "a hidden section forces no read, and a mutating result after
     shutdown does nothing".
 
-28. **The `gh`-absent and non-repository states are settled.** Both are one short
-    `dim` line — `gh CLI not installed` and `not a git repository` — and a
+28. **A missing `gh` CLI removes the two issues surfaces; a non-repository cwd is a
+    settled state.** The CLI question is answered ONCE, at registration, by a local
+    `PATH` walk (`lib/which-command.js`) with no child process: absent, `/issues` is
+    never registered and the `GITHUB` section is never added to the rail, so there
+    is no line, notice or refusal to draw for it — nothing appears, because nothing
+    was registered — and every other surface keeps working. The path guards that
+    remain (the gate, `/issues`' own probe, the rail's read) are defence in depth
+    for a `gh` that disappears after load: they still fail closed with no child, and
+    the rail's `gh CLI not installed` `dim` line is that case alone. A cwd outside a
+    repository is one short `dim` line — `not a git repository` — and a
     `dim`/`muted` error snapshot is a STATE, not a failure to retry: no later frame,
     no activity read, no timer and no forced read starts there, and only a session
-    boundary supersedes it. The CLI question is answered by a local `PATH` walk
-    (`lib/which-command.js`) before any child, so the absent state costs zero child
-    processes and stops the read before the checkout probe; the non-repository
-    state costs the one local `rev-parse` every surface makes and no `gh` call.
-    `tools/which-command.test.js` pins the lookup;
+    boundary supersedes it; it costs the one local `rev-parse` every surface makes
+    and no `gh` call. `tools/which-command.test.js` pins the lookup;
     `tools/issues-section.test.js` pins "a non-repository line is a state, so no
-    frame and no activity read" and "a settled (dim) state owns no floor timer";
-    `tools/issues-command.test.js` pins "the session gate stops before any gh child
-    and says the one line once".
+    frame and no activity read", "a settled (dim) state owns no floor timer" and
+    "without the gh CLI the GITHUB section is never added to the rail";
+    `tools/issues-command.test.js` pins "without the CLI neither the command nor the
+    rail section exists" and "the decision costs no child process, at load or at
+    session start".

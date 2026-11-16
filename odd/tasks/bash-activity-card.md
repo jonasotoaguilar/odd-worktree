@@ -31,6 +31,13 @@ Worktree `bash-activity-card`, branch `feat/bash-activity-card`, base `main@ed02
 - **T7** (S4) — census of real generic commands, then rules.
 - **T8** (S5) — find and fix the slowdown on open/resume/session switch.
 - **T9** — docs for bridge 0.5.0 (`default`, min version), the theme-role caveat, `Card tools`.
+- **T10** (S2, S4) — DONE (uncommitted; the parent commits). The "the 0.6.0 line lost `ctx.render`"
+  report: the reproduction's context was malformed — `{ args: { args: { command } } }` where Pi hands
+  `{ args: { command } }` — so no design could name the call, and the same malformed context fails
+  identically on a 0.5.0 per-tool registration. Mounting both shapes through the bridge's real 0.6.0
+  modules gives the same rows and the same `ctx.render`, and the adoption pass reports `already` (one
+  wrap, one apply). No package or bridge change; `tools/bash-design.test.js` now pins that a line
+  registration is handed the same `ctx.render` as a per-tool one.
 
 Slices (delivery is the user's call; no push or PR yet):
 - **Slice 1** `bd5dc83..dbfba67` — seed, colour/frame/ms, `fd` and read-only programs, room for the label,
@@ -49,3 +56,10 @@ Slices (delivery is the user's call; no push or PR yet):
   contemplados para cada una, no escatimes en esto, que llegue lo menos posible a generico "$ bash"".
 - **L3** — finding: TokyoNight resolves `mdLink` and `syntaxFunction` to the same blue (#7aa2f7) and `success`
   (#7dcfff) / `bashMode` (#2ac3de) to two near cyans; the roles are the issue's, the theme makes them alike.
+- **L4** — T10 finding: the bridge does not drop `ctx.render`. `/tmp/e2e-lines.mjs` passes its case fragments
+  as `{ args, isPartial, isError }` while they are already `{ args: { … } }`, so `ctx.render.args` arrives as
+  `{ args: { command } }` and this package's `renderedCommand` reads nothing; with that same nesting a
+  per-tool 0.5.0 registration also falls back to `$ bash`, unpainted and without a duration. Naming, frame
+  and duration return with `{ ...fragment, isPartial, isError }` (`/tmp/e2e-lines-fixed.mjs`). The bridge's
+  own line tests never assert a line registration's `ctx` — the S12 `render` test registers per tool — which
+  is how a broken-looking shape can go unnoticed; reported as a coverage gap, not a defect.

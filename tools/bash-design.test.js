@@ -751,6 +751,133 @@ describe('the Card tools line', () => {
   });
 });
 
+// A BRIDGE WE CONTROL, for the one thing this package cannot prove about itself: what the bridge
+// hands `apply`. The real one wraps the host's renderers and passes, from Pi's own render context, a
+// by-value snapshot of the call (`ctx.render`). This fake keeps exactly that contract for BOTH
+// registration shapes and nothing else, so a regression in what this package does with either shape
+// is this package's to fix. It mirrors `toolDesignResolver`: the host's renderers, one wrapper per
+// member, the design applied on every render pass with the context of THAT renderer.
+function fakeRenderBridge(version) {
+  const designs = [];
+  const seen = [];
+  const api = {
+    VERSION: version,
+    registerToolDesign: (design) => {
+      designs.push(design);
+      return () => {
+        const at = designs.indexOf(design);
+        if (at >= 0) designs.splice(at, 1);
+      };
+    },
+  };
+  // A design covers one tool (the historical shape) or several (the 0.6.0 line).
+  const covers = (design) => (typeof design.tool === 'string' ? [design.tool] : design.tools);
+  // Pi's render context → the snapshot the bridge hands a design: the tool's own `args` by reference.
+  const snapshot = (context) => {
+    if (context === null || typeof context !== 'object') return undefined;
+    const render = {};
+    if (typeof context.toolCallId === 'string') render.toolCallId = context.toolCallId;
+    if ('args' in context) render.args = context.args;
+    if (typeof context.isPartial === 'boolean') render.isPartial = context.isPartial;
+    if (typeof context.isError === 'boolean') render.isError = context.isError;
+    if (typeof context.durationMs === 'number') render.durationMs = context.durationMs;
+    return render;
+  };
+  const resolve = (tool, host) => {
+    const design = designs.find((candidate) => covers(candidate).includes(tool));
+    if (design === undefined) return host;
+    const wrap = (member, themeIndex, contextIndex, part) => (...args) => {
+      const component = host[member](...args);
+      return {
+        render: (width) => {
+          const rows = component.render(width);
+          const render = snapshot(args[contextIndex]);
+          seen.push({ tool, part, render });
+          const ctx = render === undefined
+            ? { width, tool, theme: args[themeIndex], part }
+            : { width, tool, theme: args[themeIndex], part, render };
+          return design.apply([...rows], ctx);
+        },
+      };
+    };
+    return {
+      renderCall: wrap('renderCall', 1, 2, 'call'),
+      renderResult: wrap('renderResult', 2, 3, 'result'),
+    };
+  };
+  return { api, resolve, designs, seen };
+}
+
+describe('what the bridge hands the design', () => {
+  // The host cut the heading, so only the call's own arguments can name this card.
+  const COMMAND = `grep -rn "activity" ${'lib/'.repeat(6)} | head -40; echo ---; grep -rn needle docs`;
+  const cutRow = neon(`${COMMAND.slice(0, 52)}…`);
+  const closingRow = () => `╰${'─'.repeat(88)}╯`;
+  const call = { toolCallId: 'c1', args: { command: COMMAND }, isPartial: false, isError: false, durationMs: 132 };
+  const draw = (version) => {
+    const bridge = fakeRenderBridge(version);
+    const dispose = registerBashDesign(bridge.api);
+    assert.equal(typeof dispose, 'function', version);
+    const host = {
+      renderCall: () => ({ render: () => [cutRow] }),
+      renderResult: () => ({ render: () => [closingRow()] }),
+    };
+    const resolved = bridge.resolve('bash', host);
+    const rows = {
+      call: resolved.renderCall({}, theme, call).render(90),
+      result: resolved.renderResult({}, {}, theme, call).render(90),
+    };
+    dispose();
+    return { ...rows, seen: bridge.seen };
+  };
+
+  test('a line registration is handed the same `ctx.render` as a per-tool one, and draws the same card', () => {
+    const perTool = draw('0.5.0');
+    const line = draw('0.6.0');
+    const render = { toolCallId: 'c1', args: { command: COMMAND }, isPartial: false, isError: false, durationMs: 132 };
+    const expected = [
+      { tool: 'bash', part: 'call', render },
+      { tool: 'bash', part: 'result', render },
+    ];
+    assert.deepEqual(perTool.seen, expected, 'the per-tool registration gets the call\'s own context');
+    assert.deepEqual(line.seen, perTool.seen, 'the line registration gets exactly the same context');
+    assert.deepEqual(line.call, perTool.call, 'so it draws the same heading row');
+    assert.deepEqual(line.result, perTool.result, 'and the same closing rule');
+  });
+
+  test('that context is what names a cut command, paints the frame and draws the duration — on both shapes', () => {
+    for (const version of ['0.5.0', '0.6.0']) {
+      const rows = draw(version);
+      assert.ok(rows.call[0] !== cutRow, `${version}: the design ran`);
+      assert.ok(rows.call[0].includes(painted('mdLink', '⌕ exploring')), `${version}: ${strip(rows.call[0])}`);
+      assert.ok(
+        rows.call[0].startsWith(`\u001b[${ROLE_CODE.mdLink}m╭─`),
+        `${version}: the frame is painted in the activity role`,
+      );
+      assert.doesNotMatch(strip(rows.call[0]), /\$ bash/, `${version}: never the generic fallback`);
+      assert.match(strip(rows.result[0]), / 132ms ╯$/, `${version}: the duration is drawn`);
+      assert.ok(rows.result[0].includes(painted('dim', '132ms')), `${version}: the duration is dim`);
+    }
+  });
+
+  test('a context the bridge hands without the call is the host\'s card, never a guess', () => {
+    const bridge = fakeRenderBridge('0.6.0');
+    const dispose = registerBashDesign(bridge.api);
+    try {
+      const resolved = bridge.resolve('bash', { renderCall: () => ({ render: () => [cutRow] }) });
+      const [out] = resolved.renderCall({}, theme, undefined).render(90);
+      // The drawn heading is cut, so nothing can be named: bash's own `$ bash` fallback, the width
+      // kept, and no frame role — the state (`isPartial`, `isError`, `durationMs`) is unknown.
+      assert.ok(out.includes(painted('bashMode', '$ bash')), strip(out));
+      assert.ok(out.startsWith('╭─ '), 'the frame keeps the host\'s paint');
+      assert.equal(cols(out), cols(cutRow));
+      assert.deepEqual(bridge.seen, [{ tool: 'bash', part: 'call', render: undefined }]);
+    } finally {
+      dispose();
+    }
+  });
+});
+
 describe('the seed runs before the registration', () => {
   // A 0.6.0 bridge, as its contract documents it: at REGISTRATION time a line with no value of its
   // own inherits a joining tool's legacy per-tool value, and writes it then.

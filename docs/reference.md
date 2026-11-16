@@ -628,7 +628,13 @@ The rule is the classifier's: never guess. A bridge that hands the design the ca
 render context (`ctx.render`: the arguments, `isPartial`, `isError`, `durationMs`) lets it
 classify the REAL command, so a heading the host truncated, folded or wrapped is still
 named; for a read-only tool that render context is only the proof that the heading is not
-the whole evidence, since the word never depends on what it reads. Without it the drawn
+the whole evidence, since the word never depends on what it reads. That context is the
+bridge's, and it is handed on BOTH registration shapes — the grouped `Card tools` line and
+the historical per-tool one — with the call's own `args` by reference, exactly as Pi passes
+them (`ToolRenderContext.args`); `ctx.render.args.command` is therefore the bash contract.
+A reproduction that nests that object one level deeper (`{ args: { args: { command } } }`)
+looks exactly like a bridge that stopped handing it: the command is unreadable, so a cut
+heading falls back to `$ bash` and the frame and duration are left unpainted. Without it the drawn
 heading is the only evidence and a call is named only when the heading provably shows the
 WHOLE text: no `…` abbreviation, no `… +N lines` fold, no continuation row, and nothing
 after it but the host's fill and hint. Either way, a bash command the classifier cannot

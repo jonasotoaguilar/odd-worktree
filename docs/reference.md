@@ -604,13 +604,25 @@ mark adds are taken from the row's own fill, so the row keeps its width. Every o
 row comes back byte for byte, results are never touched, and the heading keeps the
 host's own paint.
 
-The rule is the classifier's: never guess. The design context carries no arguments, so
-the heading is the only evidence, and a call is named only when the heading provably
-shows the WHOLE command: no `…` abbreviation, no `… +N lines` fold, no continuation
-row, and nothing after the command but the host's fill and hint. A command the
-classifier cannot name, a heading that hides part of the command and a row with no
-fill to pay for the word all keep the host's `$` exactly as drawn. The default is
-`native` only for a user who already chose it. The bridge has no default design (an
+The rule is the classifier's: never guess. A bridge that hands the design the call's
+render context (`ctx.render`: the arguments, `isPartial`, `isError`, `durationMs`) lets it
+classify the REAL command, so a heading the host truncated, folded or wrapped is still
+named. Without it the drawn heading is the only evidence and a call is named only when
+the heading provably shows the WHOLE command. Either way, a command the classifier cannot
+name keeps the generic heading, now drawn `$ bash` (in the host's `bashMode` role) instead
+of a bare `$`, so a card never claims an activity it cannot prove.
+
+Colour is a theme role, never a palette (`ctx.theme`): the label wears its family's role
+(`exploring` `mdLink`, `checking` `mdHeading`, `formatting`/`preparing` `syntaxFunction`,
+`publishing` `success`, `versioning` `warning`, `destructive` `error`, generic `bashMode`),
+and the whole frame (`lib/bash-frame.js`) is repainted in ONE role so no row shows two
+colours side by side. The call's state speaks first: a running call wears `warning` on the
+frame, a failed one `error`, an idle one the family's role; the label keeps its family
+colour in every state. A finished call's duration (`120ms`, `1.2s`, in `dim`) is written
+into the closing rule right-aligned against the corner (neon `╰──── 120ms ╯`; float: the
+bar row's end), only when it fits, never while running and never without a duration. A
+theme that cannot paint, or no render context, leaves those rows exactly as the host
+drew them. The default is `native` only for a user who already chose it. The bridge has no default design (an
 absent value reads `native`), so on its first load with a bridge that has `createStore`,
 this package selects `activity` for `bash` **once**: only when the bridge's
 `bridge-tool-designs` store holds no `bash` choice, and it then writes its own marker

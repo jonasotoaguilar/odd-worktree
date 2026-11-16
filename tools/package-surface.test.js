@@ -69,7 +69,7 @@ describe('manifest', () => {
     // formatter and the issues view `/issues` mounts are shipped, so their
     // presence is asserted rather than forbidden. The bash drawing is the
     // classifier and the one design registered on the bridge.
-    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-design.js']) {
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-design.js', 'bash-frame.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
   });

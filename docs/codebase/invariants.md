@@ -62,10 +62,14 @@ The question this page answers: which rules must every change preserve, and what
    a later `native` is never undone; a stored choice is never overwritten and a
    failure seeds nothing. It reads no other file, has no `/card:bash` command and
    depends on no extension load order.
-   The design is pure: `apply(lines, ctx)` rewrites only the heading row of a
-   `call` part, swapping the host's `$` for the family `lib/bash-activity.js`
-   names, taking the added columns from the row's own fill; every other row, every
-   result and every unproven heading is returned byte for byte (invariant 20).
+   The design is pure: `apply(lines, ctx)` swaps the host's `$` on the heading
+   row of a `call` part for the family `lib/bash-activity.js` names (or `$ bash`
+   when nothing names it), taking the added columns from the row's own fill, and
+   through `lib/bash-frame.js` repaints the frame cells in one theme role and
+   writes a finished call's duration into the closing rule. It changes colour and
+   those cells only: no row's width changes, no text of the command or the output
+   is rewritten, and without a theme, a render context or room every row is
+   returned byte for byte (invariant 20).
 4. **Deletion refuses on a live session.** The only surface that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
    before the pending-change question and again immediately before removal. This

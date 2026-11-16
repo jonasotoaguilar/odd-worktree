@@ -1156,6 +1156,69 @@ test('S3: a directory another actor replaced during the post-seed sync is left b
   assert.deepEqual(fs.readFileSync(replacement), theirs, 'and it is left byte-identical');
 });
 
+test('S3: a replacement database this session cannot read is unknown, so nothing is removed', async () => {
+  const base = temp('cg-seed-eacces-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const targetDir = path.join(worktree, '.codegraph');
+  const db = path.join(targetDir, 'codegraph.db');
+  const foreign = Buffer.from(fakeIndex('foreign accepted index'));
+  let syncing = false;
+  // During the post-seed sync another actor replaces only the database, and every later stat of it is denied: an
+  // unreadable identity is UNKNOWN, which is never "gone" and never "the same one", so it cannot authorize a removal.
+  const seam = {
+    statSync: (entry) => {
+      if (syncing && entry === db) throw Object.assign(new Error('stat denied'), { code: 'EACCES' });
+      return fs.statSync(entry);
+    },
+  };
+  const calls = [];
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists: fs.existsSync,
+    hasBinary: yes,
+    lock: fakeLock([], false),
+    fs: seam,
+    run: async (args, cwd) => {
+      calls.push({ args, cwd });
+      fs.renameSync(db, `${db}.ours`);
+      fs.writeFileSync(db, foreign);
+      syncing = true;
+      return false;
+    },
+  });
+  assert.deepEqual(result, { action: 'seed', ok: false }, 'the seed is still reported as failed');
+  assert.deepEqual(calls.map((call) => call.args), [['sync', '-q']], 'it is still the one reconciliation that ran');
+  assert.equal(fs.existsSync(db), true, 'an unreadable database is unknown, never absent: it stays');
+  assert.deepEqual(fs.readFileSync(db), foreign, 'and so does the directory that holds it');
+});
+
+test('S3: a published database that is positively gone still rolls back the directory this session created', async () => {
+  const base = temp('cg-seed-gone-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const targetDir = path.join(worktree, '.codegraph');
+  // ENOENT is a fact, not an unknown: the database this session published is gone, so nothing is left to protect.
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists: fs.existsSync,
+    hasBinary: yes,
+    lock: fakeLock([], false),
+    run: async () => {
+      fs.rmSync(path.join(targetDir, 'codegraph.db'), { force: true });
+      return false;
+    },
+  });
+  assert.deepEqual(result, { action: 'seed', ok: false });
+  assert.equal(fs.existsSync(targetDir), false, 'a positively absent database leaves nothing to keep');
+});
+
 // ---- The CLI seam (S1, S2) ----
 
 test('S2: a timed-out runCodegraph resolves only once the killed process is gone', async () => {

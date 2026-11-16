@@ -393,6 +393,48 @@ test('S7 (T8): a row keeps its bucket, and its click hands it to the opener', as
     'the click asks for the bucket the row was read from');
 });
 
+// S2 (issues-sidebar-click T1, correction): the caller's read answers with the
+// generation it was taken under, and that opaque token rides the row into the
+// `open` seam. The section never reads it — it is how the opener tells a row read
+// by the session that is still running from one the host retained across a
+// session boundary. A load that carries no generation hands `null`, so nothing
+// depends on the field existing.
+test('S2 (correction): the open seam carries the generation the row was read under', async () => {
+  const sched = manualSchedule();
+  const opened = [];
+  const handle = createIssuesSection({
+    load: async () => ({
+      ok: true,
+      identity: IDENTITY,
+      issues: [issue(11, 'Mine eleven', '2024-02-01T00:00:00Z')],
+      truncated: false,
+      generation: 7,
+    }),
+    open: (number, identity, bucket, generation) => { opened.push({ number, identity, bucket, generation }); },
+    openAll: () => {},
+    schedule: sched.schedule,
+  });
+  await handle.refresh();
+  handle.section.lines({})[0].onClick();
+  await sched.flush();
+  assert.deepEqual(opened, [{ number: 11, identity: IDENTITY, bucket: undefined, generation: 7 }],
+    'the click hands the opener the read\'s own generation, unchanged');
+
+  const bare = [];
+  const schedBare = manualSchedule();
+  const noGeneration = createIssuesSection({
+    load: readyLoad([issue(12, 'Mine twelve', '2024-02-01T00:00:00Z')]),
+    open: (number, identity, bucket, generation) => { bare.push({ number, generation }); },
+    openAll: () => {},
+    schedule: schedBare.schedule,
+  });
+  await noGeneration.refresh();
+  noGeneration.section.lines({})[0].onClick();
+  await schedBare.flush();
+  assert.deepEqual(bare, [{ number: 12, generation: null }],
+    'a read that carries no generation hands `null`, never `undefined` or a clock of its own');
+});
+
 test('S3: a frame never waits, two stale frames schedule one refresh, and onRefreshed fires once per landing', async () => {
   // A read that never settles: the frame still answers immediately, twice, and
   // schedules exactly one refresh.

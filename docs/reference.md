@@ -361,11 +361,16 @@ ROW's identity: the click carries the repository the rail proved when it READ th
 row, and the open pins that exact `<host>/<owner>/<repo>` with no probe at all — no
 `git`, no `gh` — so the first frame paints as soon as the TUI helper is loaded. The
 number belongs to the repository the row was read from, so that is the right target
-even if the checkout has moved since; the hint is used once, only for its own
-number and session, and cleared with the click. Without it (a typed `/issues 12`, a
-hint that is gone) the open pins the checkout's CACHED scope instead of forcing a
-fresh `git`/`gh` proof before the first frame, and a cached pin that cannot be read
-falls back to the fresh proof once. A typed `/issues` always proves freshly.
+even if the checkout has moved since; the hint is used once, cleared with the click,
+and only in the session generation that read the row, so a row the host retained
+across a session boundary still dispatches its number but leaves no hint behind. The
+identity is normalized with the same function every pinned read uses, and a value
+that does not normalize into `<host>/<owner>/<repo>` records no hint at all.
+Without it (a typed `/issues 12`, a hint that is gone) the open pins the checkout's
+CACHED scope instead of forcing a fresh `git`/`gh` proof before the first frame, and
+a cached pin that cannot be read falls back to the fresh proof once. A typed
+`/issues` always proves freshly. The `o` opener binds the same identity to `-R`,
+normalized the same way, so a raw value never reaches gh.
 Nothing that mutates is loosened: every action re-proves the checkout with a fresh
 read and refuses on drift, as above.
 

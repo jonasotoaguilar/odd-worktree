@@ -6877,7 +6877,10 @@ function withSuspendedTerminal(hostTui, run) {
 // fixed-argv runner (never a shell, never xdg-open). `-R <owner/name>` is the
 // repository the LIST was loaded from, bound when the list loads and passed at
 // press time — an issue number on screen always opens the issue it was read
-// from, even if the checkout's remote moved while the reader is open.
+// from, even if the checkout's remote moved while the reader is open. The identity
+// is normalized with the same function every pinned read uses before it reaches
+// `-R`, so no raw value can ever move this open: a value that does not normalize
+// is not an identity, and the opener keeps its own "nothing loaded yet" refusal.
 function issuesOpenInBrowser(hostTui, cwd, number, pinnedIdentity) {
   try {
     const gh = libRequire("gh-issues.js");
@@ -6885,11 +6888,16 @@ function issuesOpenInBrowser(hostTui, cwd, number, pinnedIdentity) {
     if (!git || typeof git.runArgvAsync !== "function") {
       return Promise.resolve({ ok: false, error: "cannot open the browser: no fixed-argv runner" });
     }
-    if (typeof pinnedIdentity !== "string" || pinnedIdentity.length === 0) {
+    const normalized = typeof pinnedIdentity === "string"
+      && gh && typeof gh.normalizeScopeIdentity === "function"
+      ? gh.normalizeScopeIdentity(pinnedIdentity, process.env)
+      : null;
+    if (!normalized || normalized.ok !== true || typeof normalized.identity !== "string"
+      || normalized.identity.length === 0) {
       return Promise.resolve({ ok: false, error: "the issue list has not loaded a repository yet" });
     }
     const bin = gh && typeof gh.ghBinary === "function" ? gh.ghBinary({}) : "gh";
-    const argv = ["issue", "view", String(number), "--web", "-R", pinnedIdentity];
+    const argv = ["issue", "view", String(number), "--web", "-R", normalized.identity];
     return withSuspendedTerminal(hostTui, async () => {
       const res = await git.runArgvAsync(bin, argv, { cwd, timeoutMs: 30000 });
       if (!res) return { ok: false, error: `cannot open issue #${number} in the browser` };
@@ -7631,6 +7639,10 @@ async function loadIssuesSidebar() {
     identity,
     issues,
     truncated,
+    // S2 (issues-sidebar-click T1, correction): the generation this read was taken
+    // under, so the section can carry it with the row and the click that opens it
+    // can tell a live session's row from one the host retained across a boundary.
+    generation: cacheGeneration,
   };
 }
 
@@ -7690,7 +7702,41 @@ function announceIssuesPanelRefusal(pi, message) {
   return false;
 }
 
-function dispatchIssuesPanel(pi, number, identity, _bucket) {
+// S2 (issues-sidebar-click T1, second half): the identity a rail click may leave as
+// the one-shot hint for the open it dispatches. It is normalized with the SAME
+// function every pinned read uses (`GH_REPO` in `issuesBrowserRepoIdentity`, a
+// caller's `scope` in `scopeForCall`), so the hint is exactly the `<host>/<owner>/<repo>
+// the read also keys the rail cache with. A value that does not normalize is no
+// identity at all: no hint is recorded and the open takes the cached-scope pin.
+function issuesPanelOpenHintIdentity(identity) {
+  if (typeof identity !== "string" || identity.trim() === "") return null;
+  let gh;
+  try {
+    gh = libRequire("gh-issues.js");
+  } catch {
+    return null;
+  }
+  if (!gh || typeof gh.normalizeScopeIdentity !== "function") return null;
+  let normalized;
+  try {
+    normalized = gh.normalizeScopeIdentity(identity, process.env);
+  } catch {
+    return null;
+  }
+  if (!normalized || normalized.ok !== true) return null;
+  if (typeof normalized.identity !== "string" || normalized.identity.length === 0) return null;
+  return normalized.identity;
+}
+
+// Test seam only: the cache/click generation a rail row's read is stamped with.
+// A test that models a click the extension cannot construct on its own (one that
+// carries a malformed identity) needs the CURRENT generation, and production code
+// never reads this — the extension is the one place that owns the clock.
+function issuesSidebarGeneration() {
+  return issuesSidebarCacheGeneration;
+}
+
+function dispatchIssuesPanel(pi, number, identity, _bucket, generation) {
   // S1 (issues-sidebar-click T1): a click while a rail open is in flight has no
   // effect at all — not even a visible refusal — so it returns normally and
   // claims nothing.
@@ -7703,9 +7749,23 @@ function dispatchIssuesPanel(pi, number, identity, _bucket) {
   // carries the identity its row was read from leaves both as the one-shot hint the
   // open it dispatches consumes. The dispatch still sends the number alone and stays
   // synchronous; the guard's release clears the hint with the token.
-  issuesPanelOpenHint = namesIssue && typeof identity === "string" && identity.length > 0
-    ? { number: asked, identity, generation: token.generation }
+  //
+  // Two facts decide whether that identity may still be trusted, and both belong to
+  // the row, not to the click:
+  // - the GENERATION its read was taken under. `session_start`, `session_shutdown`
+  //   and a bridge rebinding move the generation on without invalidating the row
+  //   callbacks the host already holds, so a deferred click can land after the
+  //   session that read its row has ended. It still dispatches `/<issues> N`, but it
+  //   must leave no hint: the repository it names belongs to the session that ended,
+  //   and the open's own cached-scope pin is what the next session proved.
+  // - the identity itself, normalized (see `issuesPanelOpenHintIdentity`).
+  const rowGeneration = Number.isFinite(generation) ? generation : null;
+  const hintIdentity = namesIssue && rowGeneration !== null && rowGeneration === token.generation
+    ? issuesPanelOpenHintIdentity(identity)
     : null;
+  issuesPanelOpenHint = hintIdentity === null
+    ? null
+    : { number: asked, identity: hintIdentity, generation: token.generation };
   armIssuesPanelOpenGuard(token);
   const command = namesIssue ? `/issues ${asked}` : "/issues";
   if (!pi || typeof pi.sendUserMessage !== "function") {
@@ -7778,7 +7838,7 @@ function mountIssuesSidebar(pi, api) {
       // path (`dispatchIssuesPanel` is synchronous). `openIssuesSidebarIssue` (the
       // browser opener this seam used to run) is gone with its only caller —
       // `issuesOpenInBrowser` survives for `/issues`' own `o` key.
-      open: (number, identity, bucket) => dispatchIssuesPanel(pi, number, identity, bucket),
+      open: (number, identity, bucket, generation) => dispatchIssuesPanel(pi, number, identity, bucket, generation),
       openAll: () => dispatchIssuesPanel(pi),
       onRefreshed,
     });
@@ -8183,4 +8243,4 @@ export default function (pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, libModule };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule };

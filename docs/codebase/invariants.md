@@ -69,10 +69,19 @@ The question this page answers: which rules must every change preserve, and what
    after the bounded safety interval of about ten seconds that covers a command the
    host never ran. The numbered open pins the identity the CLICKED ROW was read from
    with no probe at all; without that one-shot hint it pins the checkout's cached
-   scope, while a typed plain `/issues` keeps the fresh proof. Both pins are reads:
-   every action still re-proves the checkout fresh and refuses on drift, so no
-   mutation rides a pin. `tools/issues-open-guard.test.js` pins the guard, its
-   release points and both pins.
+   scope, while a typed plain `/issues` keeps the fresh proof. The hint is used once,
+   only for its own number, only while the generation that READ the row is still the
+   current one — a row the host retained across a session boundary still dispatches
+   its number but leaves no hint — and only when the identity normalizes to
+   `<host>/<owner>/<repo>` with the same function every pinned read uses. Both pins
+   are reads: every action still re-proves the checkout fresh and refuses on drift, so
+   no mutation rides a pin. Accepted limit: `pi.sendUserMessage` is `void` and the
+   command it dispatches has no out-of-band channel from it, so a typed `/issues <n>`
+   of the same number run between the click's hint and its dispatched command can
+   consume that hint; the open then pins the repository the user just clicked, and
+   every write still re-proves the checkout fresh.
+   `tools/issues-open-guard.test.js` pins the guard, its release points, both pins,
+   the generation and the normalization.
 
 4. **Deletion refuses on a live session.** The only surface that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`

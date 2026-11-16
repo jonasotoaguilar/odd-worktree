@@ -120,15 +120,39 @@ function git(cwd, args) {
 // remote, so gh's own `repo view` is the whole identity — which is the shape whose
 // cached-scope pin still paid that network call before the click carried its row's
 // identity.
-function makeCheckout({ singleRemote = false } = {}) {
+function makeCheckout({
+  singleRemote = false,
+  origin = 'git@github.com:myfork/project.git',
+  upstream = 'git@github.com:original/project.git',
+} = {}) {
   const dir = track(fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-guard-'))));
   git(dir, ['init']);
   git(dir, ['config', 'user.email', 'test@example.com']);
   git(dir, ['config', 'user.name', 'Test']);
   git(dir, ['commit', '--allow-empty', '-m', 'init']);
-  git(dir, ['remote', 'add', 'origin', 'git@github.com:myfork/project.git']);
-  if (!singleRemote) git(dir, ['remote', 'add', 'upstream', 'git@github.com:original/project.git']);
+  git(dir, ['remote', 'add', 'origin', origin]);
+  if (!singleRemote) git(dir, ['remote', 'add', 'upstream', upstream]);
   return dir;
+}
+
+// A SECOND checkout naming ANOTHER repository. An open that does not ride a rail
+// row's identity pins THIS repository instead, so "did the click's hint survive?"
+// is visible in the identity the reads are bound to, not only in how many children
+// the open spawned.
+function otherCheckout() {
+  return makeCheckout({
+    origin: 'git@github.com:other/project.git',
+    upstream: 'git@github.com:other/upstream.git',
+  });
+}
+
+// The remote URL each checkout of a test names: the harness checkout is
+// `myfork/project` and `other` (when a test has one) is `other/project`.
+function checkoutRemotes(other) {
+  const otherPath = other === undefined || other === null ? null : path.resolve(other);
+  return (cwd) => (otherPath !== null && path.resolve(String(cwd)) === otherPath
+    ? 'git@github.com:other/project.git'
+    : 'git@github.com:myfork/project.git');
 }
 
 function okJson(stdout) {
@@ -171,11 +195,19 @@ function relatedAnswer({ mine = [], assigned = [], involved = [] } = {}) {
   return { data: { mine: bucket(mine), assigned: bucket(assigned), involved: bucket(involved) } };
 }
 
-// gh's answers for the rail's combined read and the gate.
+// gh's answers for the rail's combined read and the gate. Each call records the
+// scope it ran with: the identity reaches gh as `GH_REPO` in its environment, so
+// `repo` is the repository the read was actually bound to.
 function fakeGithub({ assigned = [], gate = true } = {}) {
   const calls = [];
   const runner = async (bin, argv, runOpts = {}) => {
-    calls.push({ bin, argv: argv.slice(), cwd: runOpts.cwd });
+    const env = runOpts.env || {};
+    calls.push({
+      bin,
+      argv: argv.slice(),
+      cwd: runOpts.cwd,
+      repo: typeof env.GH_REPO === 'string' && env.GH_REPO.length > 0 ? env.GH_REPO : null,
+    });
     if (argv[0] === 'api' && argv[1] === 'user') {
       return gate ? okJson('{"login":"me"}') : { status: 1, stdout: '', stderr: 'not logged in', error: null };
     }
@@ -212,8 +244,13 @@ function realGit(argv, cwd) {
 // with the head remote's URL under the test's control: flipping `remoteUrl.value`
 // models a checkout whose remote moved, and the CACHED scope keeps the identity it
 // already proved (a fingerprint over the unchanged configuration still matches)
-// while the FRESH one reads the new URL.
-function identityGit({ remoteUrl = { value: 'git@github.com:myfork/project.git' }, failConfigReads = 0 } = {}) {
+// while the FRESH one reads the new URL. `urlForCwd` answers per checkout, for the
+// tests that run an open in a checkout naming another repository.
+function identityGit({
+  remoteUrl = { value: 'git@github.com:myfork/project.git' },
+  failConfigReads = 0,
+  urlForCwd = null,
+} = {}) {
   const calls = [];
   let configReads = 0;
   return {
@@ -227,7 +264,8 @@ function identityGit({ remoteUrl = { value: 'git@github.com:myfork/project.git' 
         return realGit(argv, opts.cwd);
       }
       if (argv[0] === 'remote' && argv[1] === 'get-url') {
-        return { status: 0, stdout: `${remoteUrl.value}\n`, stderr: '', error: null };
+        const value = urlForCwd === null ? remoteUrl.value : urlForCwd(opts.cwd);
+        return { status: 0, stdout: `${value}\n`, stderr: '', error: null };
       }
       return realGit(argv, opts.cwd);
     },
@@ -296,7 +334,13 @@ async function waitForRows(section, ctx) {
 // warms nothing in the fixture checkout under test, so a numbered open there meets
 // a COLD scope cache and has to prove the identity — the pattern the command tests
 // use for the same reason.
-async function harness({ assigned = nineIssues(), draw = true, gate = true, singleRemote = false } = {}) {
+async function harness({
+  assigned = nineIssues(),
+  draw = true,
+  gate = true,
+  singleRemote = false,
+  identityOptions = {},
+} = {}) {
   const checkout = makeCheckout({ singleRemote });
   const { registered, repaints } = installBridge();
   const sent = [];
@@ -306,7 +350,7 @@ async function harness({ assigned = nineIssues(), draw = true, gate = true, sing
   ghIssues = loaded.mod.libModule('gh-issues.js');
   const gh = fakeGithub({ assigned, gate });
   ghIssues.setGhRunner(gh.runner);
-  const identity = identityGit();
+  const identity = identityGit(identityOptions);
   ghIssues.setGitRunner(identity.run);
   loaded.mod.setIssuesTuiLoader(async () => stubTui);
   const notices = [];
@@ -743,6 +787,30 @@ function rowFor(h, number) {
   return row;
 }
 
+// The `git` children ONE open spawns through the extension's REAL runner: the
+// command always resolves its checkout root (`oddCheckoutRootAsync` → two
+// `rev-parse` probes) before anything else, and the identity read's injected seam
+// (`h.identity`) never sees those. Counting them is what keeps "no identity probe"
+// from quietly meaning "no probe we happened to instrument".
+function countGitChildren(mod) {
+  const lib = mod.libModule('worktree-git.js');
+  const original = lib.runArgvAsync;
+  const calls = [];
+  lib.runArgvAsync = (bin, argv, opts) => {
+    calls.push({ bin, argv: Array.isArray(argv) ? argv.slice() : [], cwd: opts ? opts.cwd : undefined });
+    return original(bin, argv, opts);
+  };
+  restores.push(() => { lib.runArgvAsync = original; });
+  return calls;
+}
+
+// The repository every gh call after `marker` was bound to, newest last.
+function ghScopesSince(h, marker) {
+  return h.gh.calls.slice(marker)
+    .filter((call) => call.argv[0] === 'api')
+    .map((call) => call.repo);
+}
+
 // Click a rail row and then run the command the host would run for it, with the
 // view captured instead of drawn. `cwd` is the checkout the command runs in: the
 // rail's own by default, or a SECOND checkout whose identity scope cache is cold
@@ -780,6 +848,9 @@ test('S2: a click carrying an identity pins it with no identity probe and seeds 
   // checkout fresh (the drift test below refuses on exactly this).
   h.identity.remoteUrl.value = 'git@github.com:myfork/renamed.git';
   const before = { git: h.identity.calls.length, gh: h.gh.calls.length };
+  // The whole open's git children, including the checkout-root resolution the
+  // command always performs outside the identity read's injected seam.
+  const spawned = countGitChildren(h.loaded.mod);
 
   const { options } = await clickOpen(h, { row });
 
@@ -790,28 +861,56 @@ test('S2: a click carrying an identity pins it with no identity probe and seeds 
     'the first frame is seeded from the rail cache for the identity the ROW was read from');
   assert.equal(pageOf(options, 'assigned').total, 9, 'and reports the count that cache holds');
   const children = identityChildren(h, before);
-  assert.deepEqual(children.git, [], 'the clicked identity needed no git child at all');
+  assert.deepEqual(children.git, [], 'the identity read ran no git child: no config read, no remote read');
   assert.deepEqual(children.gh, [], 'and no gh repository probe either');
+  assert.deepEqual(spawned.map((call) => `${call.bin} ${call.argv.join(' ')}`),
+    ['git rev-parse --show-toplevel', 'git rev-parse --git-common-dir'],
+    'the only git children of the whole open are the checkout-root resolution the command always runs');
 });
 
-test('S2: the row identity hint is one-shot — the next numbered open takes the cached-scope pin', async () => {
+test('S2: the row identity hint is one-shot — the open that takes it consumes it', async () => {
+  // The hint is cleared TWICE: by the open that takes it, and by the click's guard
+  // release at the mount. This isolates the take from the release: the first open is
+  // held on its TUI helper load, which happens after it took the hint and before it
+  // can release anything, so a second open started in that window finds the hint
+  // only if taking it did not consume it.
   const h = await harness();
   // A SECOND checkout of the same repository: its scope cache is cold, so an open
   // that does NOT ride the hint has to read git to pin the identity.
   const cold = makeCheckout();
-  const beforeFirst = { git: h.identity.calls.length, gh: h.gh.calls.length };
-  const first = await clickOpen(h, { row: rowFor(h, 104), cwd: cold });
-  assert.equal(first.options.initialIssue, 104);
-  assert.deepEqual(identityChildren(h, beforeFirst), { git: [], gh: [] },
-    'the clicked open pinned the row identity with no probe at all');
+  let releaseFirst = null;
+  const held = new Promise((resolve) => { releaseFirst = resolve; });
+  let loads = 0;
+  let firstLoading = false;
+  h.loaded.mod.setIssuesTuiLoader(async () => {
+    loads += 1;
+    if (loads === 1) {
+      firstLoading = true;
+      await held;
+    }
+    return stubTui;
+  });
 
-  // The same number again, with no click behind it: the hint was consumed by the
-  // open above, so this one falls back to the checkout's cached scope.
-  const beforeSecond = { git: h.identity.calls.length, gh: h.gh.calls.length };
-  const second = await runOpen(h, { cwd: cold, args: '104' });
-  assert.equal(second.options.initialIssue, 104);
-  assert.ok(identityChildren(h, beforeSecond).git.length > 0,
-    'the second numbered open proved the identity again — the hint is one-shot');
+  const sentBefore = h.sent.length;
+  rowFor(h, 104).onClick();
+  await waitFor(() => h.sent.length > sentBefore, 'the click never dispatched its command');
+  // The command the click dispatched: it takes the hint, then waits on the helper
+  // load before it can mount (and release).
+  const firstCtx = commandCtx(cold);
+  const first = h.loaded.commands.get('issues').handler('104', firstCtx.ctx);
+  try {
+    await waitFor(() => firstLoading, 'the first open never reached its TUI helper load');
+
+    const before = { git: h.identity.calls.length, gh: h.gh.calls.length };
+    const second = await runOpen(h, { cwd: cold, args: '104' });
+    assert.equal(second.options.initialIssue, 104, 'the second open is the same number');
+    assert.ok(identityChildren(h, before).git.length > 0,
+      'the second open proved the identity again: taking the hint consumed it');
+  } finally {
+    releaseFirst();
+    await first;
+  }
+  assert.equal(firstCtx.customs.length, 1, 'the first open still mounted once its helper load answered');
 });
 
 test('S2: a hint for another number is ignored and that open takes the cached-scope pin', async () => {
@@ -831,31 +930,45 @@ test('S2: a hint for another number is ignored and that open takes the cached-sc
     'and still seeds from the cache for the identity it proved');
 });
 
-test('S2: a hint from a previous generation is ignored and the open takes the cached-scope pin', async () => {
-  const h = await harness();
-  const cold = makeCheckout();
-  const sentBefore = h.sent.length;
-  rowFor(h, 104).onClick();
-  await waitFor(() => h.sent.length > sentBefore, 'the click never dispatched its command');
-  // The session boundary moves the cache generation on, so a click left over by
-  // the previous session names nothing this one may pin. (The same boundary also
-  // releases the guard and with it the hint; the generation stamp is the second
-  // guard, and what this pins is the outcome: no pin without a proof.)
+test('S2: a click on a row retained from the previous session records no hint', async () => {
+  const other = otherCheckout();
+  const h = await harness({ identityOptions: { urlForCwd: checkoutRemotes(other) } });
+  const row = rowFor(h, 104);
+  // The session boundary moves the generation on and drops the section's snapshot,
+  // but the host still paints the row it kept. Its click dispatches `/<issues> N`
+  // exactly as before — the identity behind it, though, names the repository the
+  // session that READ it lived in.
   await fireSessionStart(h.loaded.hooks, h.ctx);
+  const sentBefore = h.sent.length;
+  row.onClick();
+  await waitFor(() => h.sent.length > sentBefore, 'the retained row never dispatched its command');
+  assert.deepEqual(h.sent[h.sent.length - 1], { text: '/issues 104', opts: { expandPromptTemplates: true } },
+    'a stale row still dispatches its own number, exactly as before');
 
+  // The open that follows takes the CACHED-scope pin of the checkout it runs in,
+  // which names ANOTHER repository than the row did: the pinned scope the detail
+  // read receives is that one.
   const before = { git: h.identity.calls.length, gh: h.gh.calls.length };
-  const { options } = await runOpen(h, { cwd: cold, args: '104' });
+  const { options } = await runOpen(h, { cwd: other, args: '104' });
   assert.equal(options.initialIssue, 104);
   assert.ok(identityChildren(h, before).git.length > 0,
-    'the previous generation\'s hint pinned nothing: the open proved its own identity');
+    'the open proved the identity: the stale row left no hint to pin');
+  const marker = h.gh.calls.length;
+  await options.loadIssuePage({ bucketId: 'assigned', limit: 5 });
+  const scopes = ghScopesSince(h, marker);
+  assert.ok(scopes.length > 0, 'the detail read reached gh');
+  assert.equal(scopes[scopes.length - 1], 'github.com/other/project',
+    'the read is bound to the cached-scope identity, never the retained row\'s repository');
 });
 
 test('S2: an action in a panel opened from a click still refuses when the checkout drifted', async () => {
-  const h = await harness();
-  const { options } = await clickOpen(h, { row: rowFor(h, 104) });
-  // The remote moves AFTER the click, which the row pinned without re-reading: this
-  // is the drift only `scopeDrift` can catch, and it is caught fresh on every action.
-  h.identity.remoteUrl.value = 'git@github.com:myfork/renamed.git';
+  const other = otherCheckout();
+  const h = await harness({ identityOptions: { urlForCwd: checkoutRemotes(other) } });
+  // The click pins the repository its ROW was read from; the command it dispatched
+  // runs in ANOTHER checkout, which names another repository — the drift every
+  // action must refuse. An open that ignored the hint would pin that other
+  // repository instead, see no drift at all and send the write.
+  const { options } = await clickOpen(h, { row: rowFor(h, 104), cwd: other });
   const before = { git: h.identity.calls.length, gh: h.gh.calls.length };
 
   const refused = await options.actions.setState(104, 'closed');
@@ -866,4 +979,97 @@ test('S2: an action in a panel opened from a click still refuses when the checko
   const mutations = h.gh.calls.slice(before.gh)
     .filter((call) => call.argv[0] === 'issue' && ['edit', 'comment', 'close', 'reopen'].includes(call.argv[1]));
   assert.deepEqual(mutations, [], 'no mutating gh command ran after the drift');
+});
+
+// ---------------------------------------------------------------------------
+// S2, correction: a hint is only as good as the identity and the generation
+// behind it.
+// ---------------------------------------------------------------------------
+
+// The dispatch a click performs, with the identity under test: the extension's own
+// seam, so a test can hand it a value no rail row would produce today. The
+// generation is the CURRENT one (a click whose row was read by this session), which
+// is what makes "did this click leave a hint?" a real question.
+function click(h, number, identity) {
+  const sentBefore = h.sent.length;
+  const outcome = h.loaded.mod.dispatchIssuesPanel(
+    h.loaded.api, number, identity, 'assigned', h.loaded.mod.issuesSidebarGeneration(),
+  );
+  assert.deepEqual(outcome, { ok: true }, 'the click answers at once');
+  assert.equal(h.sent.length, sentBefore + 1, 'and dispatches its command');
+  assert.deepEqual(h.sent[h.sent.length - 1], { text: `/issues ${number}`, opts: { expandPromptTemplates: true } },
+    'the number alone reaches the panel');
+}
+
+test('S2 (correction): a click with a malformed or blank identity records no hint', async () => {
+  const other = otherCheckout();
+  const h = await harness({ identityOptions: { urlForCwd: checkoutRemotes(other) } });
+  for (const identity of ['   ', 'myfork', 'a/b/c/d']) {
+    click(h, 104, identity);
+    // The open this click dispatched reads as every numbered open does: it pins the
+    // checkout's cached scope, so its reads are bound to that repository. A raw
+    // identity pinned instead makes every read fail before any gh child runs.
+    const { options } = await runOpen(h, { cwd: other, args: '104' });
+    const marker = h.gh.calls.length;
+    const page = await options.loadIssuePage({ bucketId: 'assigned', limit: 5 });
+    const scopes = ghScopesSince(h, marker);
+    assert.ok(scopes.length > 0,
+      `${JSON.stringify(identity)}: the read reached gh instead of failing on a pinned nonsense identity`);
+    assert.equal(scopes[scopes.length - 1], 'github.com/other/project',
+      `${JSON.stringify(identity)}: the read is bound to the cached-scope identity`);
+    assert.doesNotMatch(String(page.error || ''), /pinned repository/,
+      `${JSON.stringify(identity)}: no read carries a malformed pin`);
+  }
+});
+
+test('S2 (correction): a click identity is recorded normalized, so a bare owner/name keys the rail cache', async () => {
+  const savedHost = process.env.GH_HOST;
+  const savedRepo = process.env.GH_REPO;
+  delete process.env.GH_HOST;
+  delete process.env.GH_REPO;
+  try {
+    const h = await harness();
+    // `myfork/project` is a legal identity gh accepts; the hint is recorded as the
+    // same host-qualified `<host>/<owner>/<repo>` the rail cache is keyed by, so the
+    // open it dispatches seeds its first frame from that entry.
+    click(h, 104, 'myfork/project');
+    const { options } = await runOpen(h, { cwd: h.checkout, args: '104' });
+    assert.equal(options.initialIssue, 104);
+    assert.deepEqual(pageOf(options, 'assigned').issues.map((entry) => entry.number).sort((a, b) => a - b),
+      [100, 101, 102, 103, 104, 105, 106, 107, 108],
+      'the pin is github.com/myfork/project, the key the rail cache holds');
+  } finally {
+    if (savedHost === undefined) delete process.env.GH_HOST;
+    else process.env.GH_HOST = savedHost;
+    if (savedRepo === undefined) delete process.env.GH_REPO;
+    else process.env.GH_REPO = savedRepo;
+  }
+});
+
+test('S2 (correction): the browser opener normalizes the identity it hands to -R', async () => {
+  const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-guard-open-')));
+  const loaded = await loadExtension({});
+  // gh is stubbed, never spawned: the fixed argv is what this test reads.
+  const git = loaded.mod.libModule('worktree-git.js');
+  const original = git.runArgvAsync;
+  const spawned = [];
+  git.runArgvAsync = async (bin, argv) => {
+    spawned.push({ bin, argv: argv.slice() });
+    return { status: 0, stdout: '', stderr: '', error: null };
+  };
+  restores.push(() => { git.runArgvAsync = original; });
+  const opened = await loaded.mod.issuesOpenInBrowser(hostTui(), dir, 76, ' GitHub.com/MyFork/Project ');
+  assert.equal(opened.ok, true, 'the opener ran');
+  assert.deepEqual(spawned.map((call) => call.argv),
+    [['issue', 'view', '76', '--web', '-R', 'github.com/MyFork/Project']],
+    'the identity reaches -R normalized: host canonical, owner/name as given, no stray whitespace');
+  assert.equal(spawned[0].bin, 'gh', 'through the fixed-argv runner, never a shell');
+
+  for (const identity of ['   ', 'myfork', '']) {
+    const refused = await loaded.mod.issuesOpenInBrowser(hostTui(), dir, 76, identity);
+    assert.equal(refused.ok, false, `${JSON.stringify(identity)} is not an identity`);
+    assert.equal(refused.error, 'the issue list has not loaded a repository yet',
+      'and it keeps its existing no-identity refusal');
+  }
+  assert.equal(spawned.length, 1, 'no gh child runs for an identity that is not one');
 });

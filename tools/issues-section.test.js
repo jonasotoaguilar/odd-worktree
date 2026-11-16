@@ -553,7 +553,10 @@ test('S2 (correction): the open seam carries the generation the row was read und
   const schedBare = manualSchedule();
   const noGeneration = createIssuesSection({
     load: readyLoad([issue(12, 'Mine twelve', '2024-02-01T00:00:00Z')]),
-    open: (number, identity, bucket, generation) => { bare.push({ number, generation }); },
+    // The two seams this case does not speak about are named `_` so a reader sees
+    // that the SHAPE is the contract: only a bare opener proves what `generation`
+    // is when the read carried none.
+    open: (number, _identity, _bucket, generation) => { bare.push({ number, generation }); },
     openAll: () => {},
     schedule: schedBare.schedule,
   });
@@ -1308,6 +1311,31 @@ async function settleStartup(calls) {
   for (let attempt = 0; attempt < 100 && seen !== calls.length; attempt += 1) {
     seen = calls.length;
     await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+// S1/S2 (issues-startup-performance T1) / S10 (T8): quiet is NOT a barrier. The
+// session gate is DISPATCHED startup work, so its two identity probes
+// (`gh api user`, then `gh repo view`) land whenever the host gets to the probe —
+// on a loaded CI runner that is long after `session_start` returned, and after any
+// short quiet window a test uses to guess that startup went quiet. A test that
+// counts `gh` children therefore counts the gate's probes as the rail's read: it
+// is the `expected 1, actual 3` PR #89 reported, and the two extra children are
+// the gate's, in the gate's own order (a destroyed rail read is not involved).
+//
+// The barrier is the gate's OWN coalescing seam. `probeIssuesGateStatus` asks the
+// client one cached question — `cachedGhStatus({ cwd: checkoutRoot, scope: null })`
+// — and the client holds one promise per repository while that question is in
+// flight, so asking it here is either the same promise or the same cached answer.
+// Once it answers, the gate's children have already landed (or never will: the
+// gate finds the answer cached), and everything the injected runner records
+// afterwards belongs to the surfaces the test itself drives.
+async function awaitIssuesGateSettled(cwd) {
+  if (!ghIssues || typeof ghIssues.cachedGhStatus !== 'function') return;
+  try {
+    await ghIssues.cachedGhStatus({ cwd, scope: null });
+  } catch {
+    // A gate that refuses its own probe is still settled: nothing else spawns.
   }
 }
 
@@ -2121,6 +2149,10 @@ test('S3: session_shutdown drops the ended rows and clears the session context',
 
   const ctx = { cwd: checkout, ui: { notify: () => {} } };
   await fireSessionStart(loaded.hooks, ctx);
+  // S10 (T8): this test reads the `gh` children themselves, so the dispatched gate
+  // is settled through its own coalesced question before shutdown — a late probe
+  // must not be mistaken for a read the dead session started.
+  await awaitIssuesGateSettled(checkout);
   assert.equal(registered.length, 1);
   const section = registered[0];
   const rows = await waitForRows(section, ctx);
@@ -2722,6 +2754,11 @@ test('S3 (T13): a hidden section makes no gh call, and the drawn window gates th
     const ctx = { cwd: checkout, ui: { notify: () => {} } };
 
     await fireSessionStart(loaded.hooks, ctx);
+    // S1/S2 (T1) / S10 (T8): the gate's two identity probes are DISPATCHED startup
+    // work and land whenever the host gets to them — this test counts `gh`
+    // children, so it settles them through the gate's own coalesced question
+    // before taking a baseline, never through elapsed quiet.
+    await awaitIssuesGateSettled(checkout);
     assert.equal(registered.length, 1);
     const section = registered[0];
 
@@ -2777,6 +2814,9 @@ test('S3 (T13): a session that shut down reads nothing on a later activity', asy
   const ctx = { cwd: checkout, ui: { notify: () => {} } };
 
   await fireSessionStart(loaded.hooks, ctx);
+  // S10 (T8): the dispatched gate's probes are settled here for the same reason as
+  // the drawn-window case above: this test measures a `gh` child count.
+  await awaitIssuesGateSettled(checkout);
   assert.equal(registered.length, 1);
   const section = registered[0];
   // The section is on screen and drew its rows.
@@ -2884,6 +2924,104 @@ test('S10 (T8): a drawn section reads on the extension\'s own 20 s timer, and ac
     Date.now = realNow;
     globalThis.setTimeout = realSetTimeout;
     globalThis.clearTimeout = realClearTimeout;
+  }
+});
+
+// The rail's floor is a REAL 20 s timer (the extension's own constant) and no test
+// waits 20 s for it: a test that needs the floor fires the captured callback
+// itself, exactly like the host would. Every other delay still goes to the host.
+function captureFloorTimers() {
+  const armed = [];
+  const hostSetTimeout = globalThis.setTimeout;
+  const hostClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = (fn, ms, ...rest) => {
+    if (ms === 20000) {
+      const timer = { fn, ms, cleared: false, issuesFloorTimer: true, unref() {} };
+      armed.push(timer);
+      return timer;
+    }
+    return hostSetTimeout(fn, ms, ...rest);
+  };
+  globalThis.clearTimeout = (handle) => {
+    if (handle && handle.issuesFloorTimer === true) {
+      handle.cleared = true;
+      return;
+    }
+    return hostClearTimeout(handle);
+  };
+  return {
+    armed,
+    restore() {
+      globalThis.setTimeout = hostSetTimeout;
+      globalThis.clearTimeout = hostClearTimeout;
+    },
+  };
+}
+
+// S10 (T8) L9: ONE floor window is ONE read. The floor is the only thing that
+// buys a read — a drawn frame, a session event and a timer callback all ask the
+// section, and none of them may add a second read inside the same window: that
+// is the duplicate `gh` traffic this feature exists to remove. And a read that
+// LANDS starts the next window, so an answer arriving does not immediately start
+// another read (requirement 2): its own settling instant is the floor's zero.
+test('S10 (T8): one floor window is ONE read, however many frames, activity events and timer fires land in it', async () => {
+  const floor = captureFloorTimers();
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const gh = sectionGithub({
+      issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
+    });
+    ghIssues.setGhRunner(gh.runner);
+    const ctx = { cwd: checkout, ui: { notify: () => {} }, sessionManager: { getSessionId: () => 'session-one' } };
+
+    await fireSessionStart(loaded.hooks, ctx);
+    assert.equal(registered.length, 1);
+    const section = registered[0];
+    const reads = () => graphqlCalls(gh.calls).length;
+
+    // The drawn frame's own read, and the one floor it armed.
+    await waitForRows(section, ctx);
+    assert.equal(reads(), 1, 'the drawn frame made its own read');
+    assert.equal(floor.armed.length, 1, 'and armed ONE floor timer');
+
+    // Twenty more frames and ten session events, all inside that floor: not one
+    // read. The TTL has not expired and the activity floor is untouched.
+    for (let index = 0; index < 20; index += 1) section.lines(ctx);
+    section.meta(ctx);
+    for (let index = 0; index < 5; index += 1) {
+      await fireHook(loaded.hooks, 'turn_end', ctx);
+      await fireHook(loaded.hooks, 'before_agent_start', ctx);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(reads(), 1, 'a floor window is ONE read, whatever lands inside it');
+
+    // The floor timer firing to its floor is the window's one read.
+    offset = 25000;
+    floor.armed[0].fn();
+    await waitFor(() => reads() === 2, 'the floor timer started no read');
+    assert.equal(floor.armed.length, 2, 'and it armed the next floor');
+
+    // The same callback a second time (a host that had already queued it) is
+    // inert: the section moved its token on when it armed the next floor.
+    floor.armed[0].fn();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(reads(), 2, 'a repeated callback adds no read');
+
+    // The read has landed: its settling instant is the floor's zero, so neither
+    // frames nor activity nor a stale callback start a read on top of it.
+    for (let index = 0; index < 10; index += 1) section.lines(ctx);
+    await fireHook(loaded.hooks, 'turn_end', ctx);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(reads(), 2, 'an answer that landed started no further read');
+  } finally {
+    Date.now = realNow;
+    floor.restore();
   }
 });
 
@@ -3066,9 +3204,11 @@ test('S9 (T14): the first refresh reads 100 per bucket, the next reads 20 and me
     assert.equal(registered.length, 1);
     const section = registered[0];
     // S1 (issues-startup-performance T1) / S5 (T8): the session gate is dispatched
-    // startup work now, so its own identity probes are counted only once they have
+    // startup work now, so its own identity probes are counted once they have
     // landed — which is what makes the baseline below count the refreshes and
-    // nothing else.
+    // nothing else. The barrier is the gate's own coalescing seam, never elapsed
+    // quiet: a quiet window is exactly what a loaded runner breaks.
+    await awaitIssuesGateSettled(checkout);
     await settleStartup(calls);
     const baseline = calls.length; // the session gate's own identity probes
 
@@ -3099,6 +3239,74 @@ test('S9 (T14): the first refresh reads 100 per bucket, the next reads 20 and me
     assert.deepEqual(section.lines(ctx).map((row) => row.label),
       ['#13 Thirteen', '#12 Twelve (updated)', '#11 Eleven'],
       'the delta merged by number and kept the rows it did not mention');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+// S10 (T8) / PR #89: the child count a refresh is measured by must be the
+// refresh's OWN children. The session gate is dispatched startup work, so its two
+// identity probes land whenever the host gets to them — and on the loaded CI
+// runner that produced `expected 1, actual 3` they landed inside the measured
+// window, after a quiet call list had been taken as "startup is over". The gate's
+// answers are slowed here exactly where a loaded runner slows them (its first
+// child), which makes the window deterministic instead of machine-dependent: no
+// quiet window can fall between `gh api user` and `gh repo view`, so an
+// unguarded baseline always miscounts. The rail itself reads ONCE.
+test('S10 (T8): the dispatched session gate never inflates the rail read\'s child count (PR #89)', async () => {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const calls = [];
+    ghIssues.setGhRunner(async (_bin, argv, runOpts = {}) => {
+      calls.push({ argv: argv.slice(), env: { ...(runOpts.env || {}) }, cwd: runOpts && runOpts.cwd });
+      if (argv[0] === 'api' && argv[1] === 'user') {
+        // The gate's first child straddles the quiet window a barrier-free baseline
+        // uses, so its SECOND child (`gh repo view`, spawned only once this one
+        // answers) lands after that baseline — exactly what a loaded CI runner did
+        // to this count.
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return okJson('{"login":"me"}');
+      }
+      if (argv[0] === 'repo' && argv[1] === 'view') {
+        return okJson(JSON.stringify({ nameWithOwner: 'original/project' }));
+      }
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        // The rail's own read answers last, so the frame below cannot be drawn
+        // before the gate's second child has reached the runner.
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return okJson(JSON.stringify(relatedAnswer({
+          assigned: [
+            { number: 11, title: 'Eleven', updatedAt: '2024-01-01T00:00:00Z' },
+            { number: 12, title: 'Twelve', updatedAt: '2024-02-01T00:00:00Z' },
+          ],
+        })));
+      }
+      return okJson('');
+    });
+
+    const ctx = { cwd: checkout, ui: { notify: () => {} } };
+    await fireSessionStart(loaded.hooks, ctx);
+    assert.equal(registered.length, 1);
+    const section = registered[0];
+
+    // The barrier the counting test uses: the gate's own coalesced question, asked
+    // from here, so its children have landed before the baseline is taken.
+    await awaitIssuesGateSettled(checkout);
+    await settleStartup(calls);
+    const baseline = calls.length;
+
+    const rows = await waitForRows(section, ctx);
+    assert.deepEqual(rows.map((row) => row.label), ['#12 Twelve', '#11 Eleven']);
+    assert.equal(calls.length - baseline, 1, 'the refresh spawns exactly ONE gh child');
+    assert.equal(graphqlCalls(calls).length, 1, 'and that child is the ONE combined read');
+    assert.equal(graphqlCalls(calls).length, calls.length - baseline,
+      'so nothing the session gate dispatches is counted as the rail\'s read');
   } finally {
     Date.now = realNow;
   }

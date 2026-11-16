@@ -7364,6 +7364,15 @@ let issuesSidebarCache = null;
 // S4 (T3): the disk half, built lazily like the cache. Missing or broken, the
 // read is exactly the in-process one it always was.
 let issuesCacheStore = null;
+// S21 (T17): identities a panel write invalidated because it changed the
+// VIEWER's own assignment. Dropping the entry is what makes `plan` answer the
+// FULL read, but the disk half would hydrate that same stale entry back before
+// `plan` sees the drop (an entry past the window is the only one the store
+// refuses), so the identity is marked here until a full read lands: the next
+// read of it skips hydration. It is keyed by repository identity like the cache
+// itself, survives a session boundary for the same reason the disk half does,
+// and costs nothing once the read replaces the document.
+const issuesSidebarFullReadIdentities = new Set();
 // T15 (S9, defect 4): the cache wiring's generation. Every read captures it when
 // it STARTS and may write its answer only while it is still current; a session
 // boundary, a shutdown or a rebinding moves it on, so a read that outlived its
@@ -7885,11 +7894,18 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot) 
     })(), "cannot comment"),
     // Assignee toggles save only the add/remove delta through one fixed-argv
     // `gh issue edit`; the repository role check inside the client is the final
-    // authority, so a refused save is reported, never assumed.
+    // authority, so a refused save is reported, never assumed. S21 (T17): the
+    // write's own answer says whether it touched the VIEWER's assignment, and
+    // that is the one case where the rail's cache entry for this repository is
+    // no longer true — so only that case invalidates it.
     editAssignees: (number, { add, remove }) => issuesWrapFailure((async () => {
       const gate = await scopeDrift();
       if (gate.ok !== true) return gate;
-      return await gh.editAssignees(number, { add, remove }, { cwd: checkoutRoot, scope: gate.scope });
+      const result = await gh.editAssignees(number, { add, remove }, { cwd: checkoutRoot, scope: gate.scope });
+      if (result && result.ok === true && result.self === true) {
+        invalidateIssuesSidebarAssignment(gate.scope);
+      }
+      return result;
     })(), "cannot edit assignees"),
     setState: (number, state) => issuesWrapFailure((async () => {
       const gate = await scopeDrift();
@@ -8604,10 +8620,22 @@ async function loadIssuesSidebar() {
   }
   const identity = resolved.identity;
   const cache = issuesSidebarRelatedCache();
+  // S21 (T17): a panel write marked this identity, which means its entry was
+  // dropped on purpose and the disk half must not hand the stale one back: the
+  // write invalidated the buckets, so the next read of them is the full one.
+  const mustReadFull = issuesSidebarFullReadIdentities.has(identity);
+  if (mustReadFull && cache !== null && typeof cache.drop === "function") {
+    try {
+      cache.drop(identity);
+    } catch {
+      // The mark alone still refuses the hydration below.
+    }
+  }
   // S4 (T3): hydrate the identity from the disk half BEFORE `plan`, so a warm
   // identity's first read in a new process is already a delta. Lazy by identity,
-  // best effort, and only ever here.
-  await hydrateIssuesSidebarCache(cache, identity, cacheGeneration);
+  // best effort, and only ever here. S21: never for an identity a write just
+  // invalidated — that read exists to replace what the removed entry said.
+  if (!mustReadFull) await hydrateIssuesSidebarCache(cache, identity, cacheGeneration);
   const plan = cache !== null ? cache.plan(identity) : { full: true, first: 20 };
   let read;
   try {
@@ -8628,6 +8656,9 @@ async function loadIssuesSidebar() {
     } catch {
       // A cache that refuses the answer is no reason to lose the read itself.
     }
+    // S21 (T17): the full read a write asked for has landed, so the buckets the
+    // old entry held are replaced and the mark has done its job.
+    if (plan.full === true) issuesSidebarFullReadIdentities.delete(identity);
     // S4 (T3): and only after a successful apply is the entry offered to the disk
     // half, so the file never holds rows memory refused — and only by a read that
     // is still the newest one STARTED, so an older answer can never overwrite the
@@ -9312,6 +9343,39 @@ function forceIssuesSidebarRefreshForBash(event, ctx) {
     handle.forceRefresh(ISSUES_SIDEBAR_FORCED_FLOOR_MS);
   } catch {
     // A forced read is best effort: it never breaks the result it rides on.
+  }
+}
+
+// S21 (T17): a panel write changed the viewer's OWN assignment, so the rail's
+// `mine`+`assigned` merge for THIS repository is no longer what the cache
+// holds. A DELTA read can never say so: it merges by issue number, so a row
+// the viewer was removed from would survive it forever. The entry is dropped
+// (which is what makes `plan` answer the full size) and the identity is marked
+// so the disk half cannot hydrate it back before that plan, and the rail reads
+// NOW when it is on screen — a human's save is one action, so it is neither a
+// script that needs the bash anti-storm cap nor something to wait 20 s for.
+// Nothing here starts a read for a section nobody is drawing (S11).
+function invalidateIssuesSidebarAssignment(identity) {
+  if (typeof identity !== "string" || identity.length === 0) return;
+  issuesSidebarFullReadIdentities.add(identity);
+  const cache = issuesSidebarRelatedCache();
+  if (cache !== null && typeof cache.drop === "function") {
+    try {
+      cache.drop(identity);
+    } catch {
+      // A cache that refuses the drop still leaves the marked read full.
+    }
+  }
+  const handle = issuesSidebarHandle;
+  if (!handle) return;
+  try {
+    if (typeof handle.drawnWithin !== "function") return;
+    if (handle.drawnWithin(ISSUES_SIDEBAR_DRAWN_WINDOW_MS) !== true) return;
+    if (typeof handle.refresh !== "function") return;
+    const pending = handle.refresh();
+    if (pending && typeof pending.catch === "function") pending.catch(() => {});
+  } catch {
+    // The rail is optional: a failed refresh never breaks the panel's write.
   }
 }
 

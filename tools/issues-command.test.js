@@ -2398,3 +2398,266 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
     assert.ok(!/Assigned \(1\)(?!\+)/.test(first), 'and never with the exact total it cannot prove');
   });
 });
+
+// ---------------------------------------------------------------------------
+// S21 (T17), the human's own words: «me la asigne a mi o me quite la
+// asignacion … no se refresca altiro los tabs … actualmente eso demora o no
+// refrezca de hecho hasta que lo cierro y abro panel». This drives the REAL
+// panel over the injected `gh` client, and the REAL rail section over the
+// published bridge, so every assertion below is a read or a write that reached
+// `gh`:
+// - a save that changed the VIEWER's own assignment drops the rail's cached
+//   entry for this repository, so the rail's next read is the FULL one (a delta
+//   merges by issue number and can never express a removal) and it starts now,
+//   not on the 20 s floor;
+// - the panel reads the `assigned` bucket again and its count and rows follow;
+// - a write that did not land invalidates nothing: no rail read, no page read,
+//   the pre-write rows and count stay, and the draft stays open with the error.
+// ---------------------------------------------------------------------------
+describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)', () => {
+  const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+  const VIEWER = 'jonasotoaguilar';
+
+  // The one repository state both surfaces read. `assignees` is what makes an
+  // issue `assigned` to the viewer; `mine` is authorship, which an assignment
+  // never changes.
+  function repoState() {
+    return {
+      issues: new Map([
+        [12, { number: 12, title: 'Mine twelve', mine: true, assignees: [], updatedAt: '2026-02-02T00:00:00Z' }],
+        [21, { number: 21, title: 'Assigned twenty-one', mine: false, assignees: [VIEWER], updatedAt: '2026-02-03T00:00:00Z' }],
+      ]),
+    };
+  }
+
+  const authored = (state) => [...state.issues.values()].filter((row) => row.mine);
+  const assignedToViewer = (state) => [...state.issues.values()].filter((row) => row.assignees.includes(VIEWER));
+
+  function searchRow(row) {
+    return {
+      number: row.number,
+      title: row.title,
+      state: 'OPEN',
+      url: `https://example.test/issues/${row.number}`,
+      createdAt: row.updatedAt,
+      updatedAt: row.updatedAt,
+      author: { login: row.mine ? VIEWER : 'octocat' },
+    };
+  }
+
+  function relatedNode(row) {
+    return {
+      ...searchRow(row),
+      labels: { nodes: [] },
+      assignees: { nodes: row.assignees.map((login) => ({ login })) },
+      comments: { totalCount: 0 },
+      reactionGroups: [],
+      timelineItems: { nodes: [] },
+    };
+  }
+
+  function relatedAnswer(state) {
+    const bucket = (rows) => ({ issueCount: rows.length, nodes: rows.map(relatedNode) });
+    return { data: { mine: bucket(authored(state)), assigned: bucket(assignedToViewer(state)), involved: bucket([]) } };
+  }
+
+  function assignmentRunner(state, failure) {
+    const calls = [];
+    const ok = (stdout) => ({ status: 0, stdout, stderr: '', error: null });
+    const runner = async (bin, argv, opts) => {
+      calls.push({ bin, argv: argv.slice(), cwd: opts ? opts.cwd : undefined });
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        const query = graphqlField(argv, 'query', '-f') || '';
+        const search = graphqlField(argv, 'search');
+        if (query.includes('mine: search(')) return ok(JSON.stringify(relatedAnswer(state)));
+        if (search !== null) {
+          if (search.includes('assignee:@me')) return ok(graphqlSearchPage(argv, assignedToViewer(state).map(searchRow)));
+          if (search.includes('involves:@me')) return ok(graphqlSearchPage(argv, []));
+          return ok(graphqlSearchPage(argv, authored(state).map(searchRow)));
+        }
+        if (query.includes('assignableUsers')) {
+          return ok(JSON.stringify({ data: { repository: { assignableUsers: {
+            nodes: [{ login: VIEWER, name: 'Jonathan Soto' }, { login: 'octocat', name: 'Octo Cat' }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          } } } }));
+        }
+        // The assignee mutation's own permission read: it names the viewer too,
+        // which is what makes the save's answer able to say "this one was mine".
+        if (query.includes('viewer {')) {
+          return ok(JSON.stringify({ data: { repository: { viewerPermission: 'WRITE' }, viewer: { login: VIEWER } } }));
+        }
+        if (query.includes('projectItems')) {
+          return ok(JSON.stringify({ data: { repository: { issue: { projectItems: { nodes: [], pageInfo: { hasNextPage: false } } } } } }));
+        }
+        if (query.includes('viewerPermission')) {
+          const number = Number(graphqlField(argv, 'number', '-F'));
+          const row = state.issues.get(number);
+          return ok(JSON.stringify({ data: { repository: {
+            viewerPermission: 'WRITE',
+            issue: {
+              assignees: { nodes: (row ? row.assignees : []).map((login) => ({ login })), pageInfo: { hasNextPage: false } },
+              closedByPullRequestsReferences: { totalCount: 0 },
+            },
+          } } }));
+        }
+        return ok(JSON.stringify({ data: {} }));
+      }
+      if (argv[0] === 'api') return ok(fixture('gh-api-user.json'));
+      if (argv[0] === 'repo') return ok(fixture('gh-repo-view.json'));
+      if (argv[0] === 'issue' && argv[1] === 'view' && argv.includes('--json')) {
+        const number = Number(argv[2]);
+        const row = state.issues.get(number);
+        return ok(JSON.stringify({
+          number,
+          title: row.title,
+          state: 'OPEN',
+          body: `body of issue ${number}`,
+          author: { login: row.mine ? VIEWER : 'octocat' },
+          labels: [],
+          createdAt: row.updatedAt,
+          updatedAt: row.updatedAt,
+          url: `https://example.test/issues/${number}`,
+          comments: [],
+        }));
+      }
+      if (argv[0] === 'issue' && argv[1] === 'edit') {
+        if (failure && failure.on === true) return { status: 1, stdout: '', stderr: 'Forbidden', error: null };
+        const row = state.issues.get(Number(argv[2]));
+        for (let index = 3; index < argv.length; index += 1) {
+          const flag = argv[index];
+          const login = argv[index + 1];
+          if (flag === '--add-assignee' && row) row.assignees = [...new Set([...row.assignees, login])];
+          if (flag === '--remove-assignee' && row) row.assignees = row.assignees.filter((name) => name !== login);
+        }
+        return ok('');
+      }
+      if (argv[0] === 'label' && argv[1] === 'list') return ok(fixture('gh-label-list.json'));
+      return ok('');
+    };
+    return { runner, calls };
+  }
+
+  // The rail fills its cache exactly as a live session does: the bridge is
+  // published BEFORE the extension loads, `session_start` binds the checkout,
+  // and ONE drawn frame starts the read.
+  async function warmRail(root, state, options = {}) {
+    const registered = [];
+    globalThis[BRIDGE_SLOT] = {
+      schema: 'gentle-shell-bridge/api',
+      version: 1,
+      registerRows: () => {},
+      registerSection: (section) => { registered.push(section); return () => {}; },
+      createStore: () => ({}),
+      requestRepaint: () => {},
+    };
+    const loaded = await loadExtension();
+    const gh = assignmentRunner(state, options.failure);
+    ghIssues.setGhRunner(gh.runner);
+    await fireSessionStart(loaded.hooks, gateCtx(root, []));
+    assert.equal(registered.length, 1, 'the rail section is registered through the bridge');
+    const section = registered[0];
+    const ctx = { cwd: root, ui: { notify: () => {} } };
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      const rows = section.lines(ctx);
+      if (!(rows.length === 1 && rows[0].label === 'loading…')) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return { loaded, gh, section, ctx };
+  }
+
+  async function mountPanel(loaded, root) {
+    loaded.mod.setIssuesTuiLoader(async () => stubTui);
+    let factory = null;
+    const { ctx } = makeCtx({ cwd: root });
+    ctx.ui.custom = async (captured) => { factory = captured; return null; };
+    await loaded.commands.get('issues').handler('', ctx);
+    assert.ok(factory, 'the overlay opens');
+    const host = makeHostTui(24);
+    const { component } = openComponent(factory, host.tui);
+    return { component, host };
+  }
+
+  const isRailRead = (call) => call.argv[0] === 'api' && call.argv[1] === 'graphql'
+    && (graphqlField(call.argv, 'query', '-f') || '').includes('mine: search(');
+  const railReads = (gh) => gh.calls.filter(isRailRead);
+  const railQuery = (call) => graphqlField(call.argv, 'query', '-f');
+  const assigneeWrites = (gh) => gh.calls.filter((call) => call.argv[0] === 'issue'
+    && call.argv[1] === 'edit'
+    && (call.argv.includes('--add-assignee') || call.argv.includes('--remove-assignee')));
+  const frameOf = (component) => clean(component.render(240).join('\n'));
+
+  test('unassigning yourself repaints the tab, refetches the full rail entry and counts one less', async () => {
+    const root = makeRepo({ tag: 'issues-self-assign' });
+    const state = repoState();
+    const { loaded, gh, section, ctx } = await warmRail(root, state);
+    assert.equal(section.meta(ctx), '2 issues', 'the rail starts with both rows');
+
+    const { component } = await mountPanel(loaded, root);
+    // `Assigned` is where the viewer's own row lives; the tab reads it on entry.
+    component.handleInput('tab');
+    assert.ok(await waitFor(() => frameOf(component).includes('Assigned twenty-one')),
+      'the Assigned tab paints the viewer\'s row before the write');
+
+    // The editor key requires the repository role the DETAIL confirms, so the
+    // press waits for that answer exactly like the panel's other editor tests.
+    assert.ok(await waitFor(() => frameOf(component).includes('a assign')), 'the detail confirmed the role');
+    component.handleInput('a');
+    assert.ok(await waitFor(() => frameOf(component).includes('Assignees') && frameOf(component).includes('space toggle')),
+      'the assignee editor opened');
+    assert.ok(await waitFor(() => !frameOf(component).includes('loading assignees')),
+      'the assignable users answered');
+    component.handleInput('space');
+    component.handleInput('ctrl+s');
+    assert.ok(await waitFor(() => assigneeWrites(gh).length === 1), 'the assignee save reached gh');
+    assert.deepEqual(assigneeWrites(gh)[0].argv,
+      ['issue', 'edit', '21', '--remove-assignee', VIEWER],
+      'the write names the viewer exactly as the editor toggled it');
+
+    // The panel: the Assigned bucket was read again and its count follows.
+    assert.ok(await waitFor(() => frameOf(component).includes('Assigned (0)')),
+      'the Assigned tab count follows the removal without reopening the panel');
+    assert.ok(!frameOf(component).includes('Assigned twenty-one'), 'and the row is gone');
+    const assignedReads = gh.calls
+      .filter((call) => call.argv[0] === 'api' && call.argv[1] === 'graphql')
+      .map((call) => graphqlField(call.argv, 'search'))
+      .filter((value) => value !== null && value.includes('assignee:@me'));
+    assert.ok(assignedReads.length >= 2, 'the write invalidated the Assigned page, so it was read again');
+
+    // The rail: one read started by the write itself, and it is the FULL one —
+    // a delta could only merge by issue number and could never drop the row.
+    assert.ok(await waitFor(() => railReads(gh).length >= 2), 'the write started a rail read of its own');
+    assert.match(railQuery(railReads(gh)[1]), /first: 100/,
+      'the dropped entry makes the next rail read the full size, so a removal can land');
+    assert.ok(await waitFor(() => section.meta(ctx) === '1 issues'), 'the rail count follows the removal');
+    assert.deepEqual(section.lines(ctx).map((row) => row.label), ['#12 Mine twelve'],
+      'and the merged rows are the ones the full read answered');
+  });
+
+  test('a rejected assignee save repaints nothing and keeps the row and the count', async () => {
+    const root = makeRepo({ tag: 'issues-self-assign-fail' });
+    const state = repoState();
+    // GitHub refuses the write: the answer is the only source of truth here, so
+    // a rejection that reached the surface must leave every row and count alone.
+    const failure = { on: false };
+    const { loaded, gh, section, ctx } = await warmRail(root, state, { failure });
+    const { component } = await mountPanel(loaded, root);
+    component.handleInput('tab');
+    assert.ok(await waitFor(() => frameOf(component).includes('Assigned twenty-one')), 'the row is on screen');
+    assert.ok(await waitFor(() => frameOf(component).includes('a assign')), 'the detail confirmed the role');
+    component.handleInput('a');
+    assert.ok(await waitFor(() => !frameOf(component).includes('loading assignees')), 'the users answered');
+    component.handleInput('space');
+    const before = railReads(gh).length;
+    failure.on = true;
+    component.handleInput('ctrl+s');
+    assert.ok(await waitFor(() => /Forbidden/.test(frameOf(component))), 'the rejection is visible');
+    await tick();
+    await tick();
+    assert.equal(component.state.mode, 'assignees', 'the editor keeps the draft');
+    assert.equal(railReads(gh).length, before, 'a failed write invalidates nothing, so no rail read starts');
+    assert.equal(section.meta(ctx), '2 issues', 'the rail keeps the pre-write count');
+    assert.match(frameOf(component), /Assigned \(1\)/, 'and the panel keeps the pre-write count');
+    assert.ok(frameOf(component).includes('Assigned twenty-one'), 'the row never left');
+  });
+});

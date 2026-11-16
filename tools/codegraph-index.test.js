@@ -930,7 +930,11 @@ test('S3: the staged copy is judged by what the injected fs seam reads, and an u
     fs.copyFileSync(from, to);
     return true;
   };
-  const seed = (fsSeam) => seedWorktreeIndex({ worktree, commonRoot: repo, sourceBusy: no, copy, fs: fsSeam });
+  // Each case starts from an absent directory: a seed only ever creates its own, so a fresh one is what a publish means.
+  const seed = (fsSeam) => {
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    return seedWorktreeIndex({ worktree, commonRoot: repo, sourceBusy: no, copy, fs: fsSeam });
+  };
 
   // A read that answers nothing, or throws, is not an index: it fails closed exactly like a failed copy.
   assert.equal(seed({ readFileSync: () => undefined }), false);
@@ -1046,6 +1050,110 @@ test('S3: a directory another session published is never removed, not even by a 
   assert.deepEqual(result, { action: 'seed', ok: true, joined: true });
   assert.deepEqual(calls, [], 'this session ran nothing over an index it does not own');
   assert.equal(fs.readFileSync(otherDb, 'utf8'), fakeIndex('other session'), "another session's index is untouched");
+});
+
+test('S3: a directory another actor created after the recheck is never published into', async () => {
+  const base = temp('cg-seed-race-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const targetDir = path.join(worktree, '.codegraph');
+  const accepted = path.join(targetDir, 'accepted');
+  let checks = 0;
+  // The second check is the one inside the seed: another actor creates the directory in between, so the directory this
+  // session finds is not one it created, and it holds no index yet.
+  const sourceBusy = () => {
+    checks += 1;
+    if (checks === 2) {
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(accepted, 'other session');
+    }
+    return false;
+  };
+  const calls = [];
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists: fs.existsSync,
+    hasBinary: yes,
+    lock: fakeLock([], false),
+    sourceBusy,
+    run: fakeRun(calls),
+  });
+  assert.deepEqual(result, { action: 'seed', ok: false }, 'a directory holding no index is an honest failure, not a join');
+  assert.deepEqual(calls, [], 'no sync runs over a directory this session did not publish');
+  assert.equal(fs.existsSync(path.join(targetDir, 'codegraph.db')), false, 'nothing of this session is written into it');
+  assert.equal(fs.existsSync(targetDir), true, 'a directory this session did not create is never removed');
+  assert.equal(fs.readFileSync(accepted, 'utf8'), 'other session', "another actor's file survives untouched");
+});
+
+test("S3: a foreign index created inside this session's creation window is never published over", async () => {
+  const base = temp('cg-seed-window-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const targetDir = path.join(worktree, '.codegraph');
+  const foreignDb = path.join(targetDir, 'codegraph.db');
+  const foreign = Buffer.from(fakeIndex('other accepted index'));
+  // The other actor lands in the very window this session's creation opens: the injected fs seam is where the module
+  // tries to create the directory, and the EEXIST it answers with is what says the directory is not this session's.
+  const seam = {
+    mkdirSync: (target, options) => {
+      if (path.basename(target) === '.codegraph' && !fs.existsSync(target)) {
+        fs.mkdirSync(target);
+        fs.writeFileSync(foreignDb, foreign);
+        const error = new Error(`EEXIST: file already exists, mkdir '${target}'`);
+        error.code = 'EEXIST';
+        throw error;
+      }
+      return fs.mkdirSync(target, options);
+    },
+  };
+  const calls = [];
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists: fs.existsSync,
+    hasBinary: yes,
+    lock: fakeLock([], false),
+    fs: seam,
+    run: fakeRun(calls),
+  });
+  assert.deepEqual(result, { action: 'seed', ok: true, joined: true }, 'the joined shape this module already uses for an index it does not own');
+  assert.deepEqual(calls, [], 'no sync runs over an index this session never published');
+  assert.deepEqual(fs.readFileSync(foreignDb), foreign, 'the index another actor accepted is byte-identical');
+});
+
+test('S3: a directory another actor replaced during the post-seed sync is left byte-identically', async () => {
+  const base = temp('cg-seed-replaced-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const targetDir = path.join(worktree, '.codegraph');
+  const replacement = path.join(targetDir, 'codegraph.db');
+  let theirs;
+  const run = async () => {
+    // The replacement lands while this session syncs the seed it published: the directory on disk is no longer ours.
+    fs.renameSync(targetDir, `${targetDir}.ours`);
+    fs.mkdirSync(targetDir);
+    fs.writeFileSync(replacement, fakeIndex('other accepted index'));
+    theirs = fs.readFileSync(replacement);
+    return false;
+  };
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists: fs.existsSync,
+    hasBinary: yes,
+    lock: fakeLock([], false),
+    run,
+  });
+  assert.deepEqual(result, { action: 'seed', ok: false }, 'the seed is still reported as failed');
+  assert.equal(fs.existsSync(replacement), true, 'the index another actor published is never removed');
+  assert.deepEqual(fs.readFileSync(replacement), theirs, 'and it is left byte-identical');
 });
 
 // ---- The CLI seam (S1, S2) ----

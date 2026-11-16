@@ -544,6 +544,53 @@ test('S2: a search joins a post-init sync already in flight', async () => {
   assert.equal(await returned, undefined);
 });
 
+test('S2: a search joins the compaction sync already in flight, bounded by the same budget', async () => {
+  const gate = gateOf();
+  const budgets = [];
+  const compacted = [];
+  const { pi, ctx } = setup({
+    impl: {
+      compactionSync: (input) => {
+        compacted.push(input);
+        return gate.gate;
+      },
+    },
+    delay: (ms) => {
+      budgets.push(ms);
+      return gate.gate;
+    },
+  });
+  assert.equal(pi.handlers.get('session_compact')[0]({}, ctx), undefined, 'the host is still handed nothing');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(compacted.length, 1, 'the compaction asked for one sync');
+  const returned = pi.handlers.get('tool_call')[0](searchCall(), ctx);
+  assert.equal(typeof returned?.then, 'function', 'the search waits for the compaction sync in flight');
+  let settled = false;
+  void returned.then(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(settled, false, 'the join was still in flight while the compaction sync had not finished');
+  gate.release({ outcome: 'synced' });
+  assert.equal(await returned, undefined, 'the handler answers undefined, never a block');
+  assert.deepEqual(budgets, [5000], 'the same five-second budget bounds the wait');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pi.handlers.get('tool_call')[0](searchCall(), ctx), undefined, 'once it settled, a search waits for nothing');
+});
+
+test('S2: a compaction sync that throws never reaches the host and leaves a search unblocked', async () => {
+  const { pi, ctx } = setup({
+    impl: {
+      compactionSync: () => {
+        throw new Error('boom');
+      },
+    },
+  });
+  assert.equal(pi.handlers.get('session_compact')[0]({}, ctx), undefined, 'the host is handed nothing');
+  for (let tick = 0; tick < 3; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pi.handlers.get('tool_call')[0](searchCall(), ctx), undefined, 'a failed compaction is not something to join');
+});
+
 test('S2: a search joins a running edit-sync window, bounded by the same budget', async () => {
   const gate = gateOf();
   const asked = [];

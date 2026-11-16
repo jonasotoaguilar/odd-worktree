@@ -102,6 +102,8 @@ for each is in [`invariants.md`](invariants.md).
 | [21](invariants.md) | The two CodeGraph reminders advise; they never block and never add a surface. |
 | [22](invariants.md) | The `bash` guards read text, fail open and add no surface. |
 | [23](invariants.md) | The file card only draws, and it claims exactly three tools. |
+| [24](invariants.md) | CodeGraph never holds the host. |
+| [25](invariants.md) | An index write is complete or undone. |
 
 ## Common Change Paths
 
@@ -128,7 +130,7 @@ Work on a branch, never on `main`: an ODD gets its own checkout at
 
 ## Related Decisions / Contracts
 
-- [`invariants.md`](invariants.md) — the 23 rules above, in full, with their tests and limits.
+- [`invariants.md`](invariants.md) — the 25 rules above, in full, with their tests and limits.
 - [`code-map.md`](code-map.md) — every module and the one responsibility it owns.
 - [`../reference.md`](../reference.md) — panel keys, refusals, and how each surface behaves.
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) — the Node versions the suite runs on.

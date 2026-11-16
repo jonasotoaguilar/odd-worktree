@@ -525,3 +525,30 @@ The question this page answers: which rules must every change preserve, and what
     body role, while the frame, the background and the padding stay ours. A host
     with no TUI package, a renderer that throws and a document that draws no row
     all fall back to the wrapped plain source, unstyled.
+
+24. **CodeGraph never holds the host.** A lifecycle handler returns `undefined`, never a promise the host
+    would await: `session_start` fires the index preparation and the daemon warm-up and returns,
+    `session_compact` fires its sync and returns, and `before_agent_start` and `session_shutdown` are
+    synchronous. `tool_result` is the one handler that answers with a promise, and its only host-visible
+    wait is the post-init sync race, bounded by `POST_INIT_SYNC_WAIT_MS` and reached only after a
+    successful native `codegraph init`. `tool_call` answers with a promise too, but only for a CodeGraph
+    search and only when this process already has index work in flight for that checkout: the wait is
+    bounded by `ODD_WORKTREE_CODEGRAPH_JOIN_MS` (5000 ms by default, `0` turns it off), it never starts
+    an index write, every other tool is answered synchronously in the same tick, and it can neither throw
+    nor return a block a host would treat as a veto — a `tool_call` error blocks the tool. A wait whose own
+    clock seam fails still settles, so an injected timer can never remove the cap.
+    `tools/codegraph-session.test.js` pins the return-value contract for every registered handler, the
+    bounded-join cases and the fail-safe paths.
+
+25. **An index write is complete or undone.** A seed validates the staged copy before publishing it
+    (non-empty and starting with the SQLite magic, read through the injected seam rather than inferred
+    from a stat), publishes it with a single move so no half-written database is ever visible, and — when
+    the reconciliation sync that follows fails — removes exactly the directory this session published:
+    nothing this session published survives a failure, and an index another session accepted is never
+    removed. A run that timed out is never reported as a success, and the hard kill fires inside the same
+    reporting grace whatever escalation delay a caller injects. A lock or lease release clears the record
+    only when it still carries the token the releaser acquired; the takeover path is never undone by the
+    holder it displaced, and a lease abandoned without a record is reclaimed only once it is older than
+    the write grace, so neither a stale holder nor a dead session can wedge a checkout.
+    `tools/codegraph-index.test.js` and `tools/codegraph-lock.test.js` pin these rules, including the
+    failure and takeover paths.

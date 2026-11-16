@@ -70,6 +70,7 @@ replacing those seams.
   primero y luego lo demas».
   *Superseded by S20 (round L9): the step always opens, `main` included. Kept as the record of the first cut.*
 - S10: **Listing orders.** `ctrl+o` cycles the order and the footer names it: `modified` (the
+  *Renamed by S33 (round L11): the flat order is `files`; `modified` named it imprecisely.*
   default, most recently modified first, painted as a flat file list), `path` (an IDE-style folder
   tree: inside a folder its subfolders come first and then its own files, so at the top level every
   folder group paints first and the files at the repository root last) and `ext` (one group per
@@ -190,6 +191,47 @@ Round L9 (all reopen the delivered surfaces: S1, S3, S4, S9, S13, S18, S19):
   `GENTLE_PI_FILES_KEY` and assignable in the bridge's Keymaps page, because Pi claims `alt+p` for
   `app.model.cycleBackward` on Windows and WSL. "alt+f mejor"
 
+Round L11 (all reopen the delivered surfaces: S3, S4, S10, S22, S24):
+
+- S29: **`tree` and `ext` start folded, and say so.** Both tree orders open with every group collapsed, and every
+  group row paints a chevron at its left — `▾` expanded, `▸` collapsed — so the state is visible without
+  folding anything to find out. "Ademas que en ese orden vienen por defecto todas collapsadas. [Image#1] y deben
+  tenr ese icono ▾ a su izquierda de si esta collapsado o expandido"
+- S30: **Only the focused file's path opens on an order change.** Switching order or complementing the listing
+  leaves expanded exactly the groups holding the highlighted file — `src` and `web` for `src/web/test.ts` in
+  `tree`, only `ts` in `ext` — and every other group collapsed. "al cambiar todas se collapsan excepto la del
+  que tengo focus claro, o sea si el archivo focus est src/web/tes.ts al cambiar a tree src y web nomas quedarian
+  expandidos y si cambio a exp solo ts extension quedaria expandido todo lo demas colapsado"
+- S31: **Group rows read in the grey role.** A folder or extension row paints in the theme's neutral grey rather
+  than the text tone a file row uses, so the tree's structure is distinguishable at a glance from its files.
+  "las extension y carpeta en eso orden tenga otro color para que se distinga, el rol gris tipico diria"
+- S32: **`space fold` belongs to the trees.** The footer names `space fold` only while the active order paints
+  groups, and in the flat order `space` does nothing at all instead of folding something invisible.
+  "ademas keybinding space fold solo se verian por logica si el orden es tree o ext, en el base no hace nada en
+  \"modified\""
+- S33: **The flat order is `files`.** The order S10 called `modified` is named `files` in the footer, the code and
+  the docs: it is the listing without groups, not a filter by modification. The ordering it paints (changed
+  first, newest first) is unchanged. "y no lo llamaria modified, es impreciso, diria que se llame \"files\" u otro
+  porque ese orden es el de mostrar por file (sin subcarpetas o cosas asi)"
+- S34: **`shift+space` folds or unfolds every other group.** In `tree` and `ext`, `shift+space` toggles the whole
+  tree: when every group except the highlighted file's own is already expanded, it collapses them; otherwise it
+  expands them. The highlighted file's groups stay as they are, so the cursor never loses its row. The footer
+  names it in those orders only. "Ademas en tree y ext falta un atajo para expadir todas (excepto la del focus o
+  seleecion del file claro) y si estan todas expandidad (excepto la del file focus) el mismo cambiaria a
+  collapsar todas."
+
+- S35: **The default scope list is the session's, not the clone's.** The default rows of the scope step are `main`,
+  the session's own checkout (deduplicated when it *is* `main`) and the worktrees this session registered through
+  `worktree_register` — never every worktree the package created for an ODD. `a` is what widens the list to every
+  worktree Git reports, which includes the ODD worktrees and the ones created outside this package. S20's "always
+  opens" and its `a` toggle stand; this supersedes only which rows are built for the default list, and S20's own
+  reading of "the worktrees this session registered" is now explicit instead of inferred from ownership.
+  "que por defecto muestre ciempre main + el checkout actual (que puede ser main ahi no se duplica) y los worktrees
+  registratos con worktree_register, y al presionar atajo \"a\" se ven todos, pues actualmente en ambos se ven todos,
+  no confundir worktree register con worktree list. worktree register es por sesion y es para registar los worktree
+  que trabaja la sesion, worktree list son todo asociados a un odd, por eso por defecto son los register nomas pues
+  son los asociados a la sesion, con all ya ve todos los worktree"
+
 ## Tasks
 
 | ID | Specs | Route | Commit |
@@ -205,6 +247,9 @@ Round L9 (all reopen the delivered surfaces: S1, S3, S4, S9, S13, S18, S19):
 | T9 | S22, S23, S24, S25, S26 | worker: `lib/files-picker-view.js`, `lib/files-orders.js` and their tests — the info row with the order at the list's edge, `path` renamed `tree`, a cursor that only rests on file rows, the full-height preview geometry and the rule row, and the mark bar in a theme role . Landed at `91245c2` (188/188 focused across the six picker suites) |
 | T10 | S20, S27, S28 | worker: `lib/files-scope-view.js`, `extensions/odd-worktree-tools.ts` and their tests — the scope step that always opens with `a` for every worktree, the `ctrl+e` handoff that repaints and disposes, and `alt+f` as the default key . Landed at `cb6954a` (command 12/12, scope 42/42, bridge 11/11) |
 | T11 | S17, S20-S28 | parent: docs truth — README, `docs/reference.md`, `docs/codebase/invariants.md` and `docs/codebase/code-map.md`, plus S9 marked superseded . Landed at this commit |
+| T12 | S29, S30, S31, S32, S33, S34 | worker: `lib/files-orders.js`, `lib/files-picker-view.js` and their tests — folded-by-default trees with chevrons, the focused path as the only expansion, group rows in the grey role, `space fold` only in the trees, `modified` renamed `files`, and `shift+space` as the fold-all toggle . Landed at `d2cc328` (orders 50/50, view 88/88) |
+| T14 | S35, S20 | worker: `extensions/odd-worktree-tools.ts`, `lib/files-scope-view.js` and their tests — the default list built from the session's own registration (`main`, the session checkout, `worktree_register` entries) and `a` alone widening it to every Git worktree root . Landed at `7933a79` (command 15/15, scope 42/42) |
+| T13 | S17, S29-S34 | parent: docs truth in README, `docs/reference.md`, `docs/codebase/code-map.md` and the footer tables . Landed at this commit |
 
 ### Module contracts (fixed here so T6 can be written against T1, T4 and T5)
 
@@ -290,3 +335,13 @@ Plain JS, no dependencies, every child injected. Shapes:
 - L10 (parent, closing evidence): round L9 landed on `feat/files-picker` in three units, each with its tests and docs: `91245c2` (T9, S22-S26), `cb6954a` (T10, S20, S27, S28) and this docs commit (T11). Full stage on the final tree, `node --test --test-timeout=120000 tools/*.test.js`: **2179 tests, 2179 pass, 0 fail** (the baseline before this round was 1952; the round added 227). Focused sets: picker 70/70, orders 35/35, preview 18/18, command 12/12, scope view 42/42, bridge 11/11.
   Corrections the workers made to the parent's spec, each one right: (1) `CHROME_ROWS = 5` cannot also hold the new rule row, so the constant keeps its meaning and a `BODY_RULE_ROWS = 1` is subtracted from the body — `bodyRows = height - CHROME_ROWS - BODY_RULE_ROWS`, `BODY_TOP` and `MIN_CARD_HEIGHT` unchanged; (2) the info row's preview column is not blank: the box's top border rides it, so S25 wins over the task's wording; (3) the parent asked for the editor handoff to follow the reference end to end, and the worker found that the order defect lived in the extension's `onOpen` (it spawned before the overlay settled), not in the view's `finish()` — so the fix stopped `onOpen` from spawning and starts the editor after the overlay resolves, which is the reference's shape exactly.
   Honest limits: the `a` list costs two bounded Git reads per checkout before the step paints, so a clone with many worktrees opens the step a moment slower than the registered list alone; and the workers' own reports note that `tools/files-command.test.js` was not in T9's authorized commands, so the command path through the changed view was pinned only by T10's run of it (12/12), which does drive the same view. `Risk: none` — no irreversible data, security surface, concurrency, delivery or consumed contract changed, and every changed behaviour is pinned by the suites above.
+
+- L11 (user, verbatim): the picker's tree orders need one more round: groups in a distinguishable grey role, folded
+  by default with a `▾`/`▸` chevron, only the focused file's path expanded when the order changes, `space fold`
+  advertised and working only in the trees, the flat order renamed `files`, and a `shift+space` toggle that expands
+  or collapses every group except the focused file's own. The parent asked the two open decisions rather than
+  choosing: the toggle key is `shift+space` and the flat order is named `files`.
+- L12 (parent, closing evidence): round L11 and the scope report that followed landed on `feat/files-picker-groups` in three units: `d2cc328` (T12, S29-S34), `7933a79` (T14, S35) and this docs commit (T13). Full suite on the worktree, `node --test --test-timeout=120000 tools/*.test.js`: **2206 tests, 2206 pass, 0 fail**. Focused: orders 50/50, picker view 88/88, command 15/15, scope view 42/42.
+  Slice boundary: the two code units are 915 and 270 authored lines, past the ~400-line slice, because the view's tree rules (folded seed, chevrons, re-seed per order, `shift+space`) are one behaviour and splitting them would leave a commit whose tests contradict its code. They stay separate from each other and from the docs.
+  Corrections the workers made to the spec: (1) S30 says a root file expands no group; that holds for `tree` only, because in `ext` a root file still belongs to an extension group (`README.md` -> `md`) and S30's own `ts` example needs it open; (2) the helper the task named (`Key`) is the painting helper, so matching goes through the host's `matchesKey` plus the view's own sequence fallback; (3) `shift+space` only reaches the app under the Kitty keyboard protocol or xterm modifyOtherKeys, so a legacy terminal keeps `space` and no second key was invented.
+  Not delivered by this repo: the `files` row in `/gentle:customize` -> Keymaps and the palette's `Session` page. This package registers both through the bridge exactly as the bridge's own example does; the installed gentle-shell (`95179bd6d`, upstream) has no reader of the bridge's plugin surface (`lib/plugin-surface.ts` is absent), so nothing can list a contributed row. The host half exists only as the fork's merged PR and as a hand-applied patch that a package update removed. `Risk: none` for this repo's change.

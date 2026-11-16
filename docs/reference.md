@@ -356,6 +356,24 @@ the checkout's remote moves while the reader is open, mutations refuse with
 …); reopen /issues`, and the reads keep the displayed repository. An issue
 number on screen can never be sent to another repository.
 
+A NUMBERED open — `/issues <n>`, the form a rail click sends — first takes the
+ROW's identity: the click carries the repository the rail proved when it READ that
+row, and the open pins that exact `<host>/<owner>/<repo>` with no probe at all — no
+`git`, no `gh` — so the first frame paints as soon as the TUI helper is loaded. The
+number belongs to the repository the row was read from, so that is the right target
+even if the checkout has moved since; the hint is used once, cleared with the click,
+and only in the session generation that read the row, so a row the host retained
+across a session boundary still dispatches its number but leaves no hint behind. The
+identity is normalized with the same function every pinned read uses, and a value
+that does not normalize into `<host>/<owner>/<repo>` records no hint at all.
+Without it (a typed `/issues 12`, a hint that is gone) the open pins the checkout's
+CACHED scope instead of forcing a fresh `git`/`gh` proof before the first frame, and
+a cached pin that cannot be read falls back to the fresh proof once. A typed
+`/issues` always proves freshly. The `o` opener binds the same identity to `-R`,
+normalized the same way, so a raw value never reaches gh.
+Nothing that mutates is loosened: every action re-proves the checkout with a fresh
+read and refuses on drift, as above.
+
 ## The `ISSUES` rail section
 
 When Gentle Shell draws its rail, a section titled `ISSUES` lists this checkout's
@@ -398,6 +416,14 @@ on screen are the last good ones.
   names no issue, so it sends plain `/issues`. Both are deferred off the paint
   path, run once per click, and a failure never escapes into the rail; a dispatch
   reports that the command was sent, never that a panel opened.
+- **One open at a time, and a swallowed click is invisible.** While a click is
+  being opened, any further click — the same row, another issue, the overflow row
+  — does NOTHING: no second `/issues` message, no second overlay, nothing painted
+  or announced, and no refusal either; the click just has no effect. The effect
+  comes back when the panel mounts, when an open ends without one (the command
+  refused, the identity could not be proven, the dispatch threw), or after a
+  bounded safety interval of about ten seconds if the host never ran the command
+  at all. A typed `/issues` is never held back.
 - **It reaches the host only through gentle-shell-bridge.** The section is read
   from that package's published sidebar-section API — the object in the
   `Symbol.for("gentle-shell-bridge/api/v1")` slot, after its schema and version gate

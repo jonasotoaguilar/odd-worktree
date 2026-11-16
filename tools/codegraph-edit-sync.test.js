@@ -147,3 +147,149 @@ test('dispose clears every pending window', async () => {
   editSync.dispose();
   assert.ok(timers.every((timer) => timer.cleared));
 });
+
+// ---- S2: the bounded join (T6) ----
+//
+// A search that arrives while a window writes the index may join it: `whenIdle(root, budgetMs)` settles when
+// the running sync and the one follow-up it owes have finished, at once when nothing is in flight, and never
+// later than the budget. It starts nothing, and `inFlight(root)` answers synchronously so a caller that finds
+// nothing to join can decline to wait at all. Debounce and budget differ here so the fake timers tell them apart.
+
+const DEBOUNCE = 7;
+const BUDGET = 5000;
+
+/** Fires the fake timers armed for one duration only, so a test can end a window without ending a budget. */
+async function fireMs(timers, ms) {
+  for (const timer of timers.filter((one) => one.ms === ms && !one.cleared)) {
+    timers.splice(timers.indexOf(timer), 1);
+    await timer.fn();
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+function gateOf() {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  return { gate, release: () => release(undefined) };
+}
+
+test('S2: whenIdle settles when the sync already running finishes, and starts none', async () => {
+  const gate = gateOf();
+  const started = [];
+  const { editSync, timers } = harness({
+    debounceMs: DEBOUNCE,
+    sync: async (root) => {
+      started.push(root);
+      await gate.gate;
+      return { status: 'synced' };
+    },
+  });
+  await editSync.onToolResult(edit('/work/repo/a.js'));
+  assert.equal(editSync.inFlight('/work/repo'), false, 'a debounced window is scheduled, not in flight');
+  const firing = fireMs(timers, DEBOUNCE);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(editSync.inFlight('/work/repo'), true);
+  let settled;
+  const joined = editSync.whenIdle('/work/repo', BUDGET).then((why) => {
+    settled = why;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, undefined, 'the join waits for the sync in flight');
+  gate.release();
+  await firing;
+  await joined;
+  assert.equal(settled, 'done');
+  assert.equal(editSync.inFlight('/work/repo'), false);
+  assert.deepEqual(started, ['/work/repo'], 'joining starts no sync of its own');
+});
+
+test('S2: whenIdle also waits for the one follow-up sync a running window owes', async () => {
+  const gate = gateOf();
+  const started = [];
+  const { editSync, timers } = harness({
+    debounceMs: DEBOUNCE,
+    sync: async (root) => {
+      started.push(root);
+      if (started.length === 1) await gate.gate;
+      return { status: 'synced' };
+    },
+  });
+  await editSync.onToolResult(edit('/work/repo/a.js'));
+  const firing = fireMs(timers, DEBOUNCE);
+  await new Promise((resolve) => setImmediate(resolve));
+  await editSync.onToolResult(edit('/work/repo/b.js'));
+  let settled;
+  const joined = editSync.whenIdle('/work/repo', BUDGET).then((why) => {
+    settled = why;
+  });
+  gate.release();
+  await firing;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, undefined, 'the follow-up the window owes is part of the join');
+  await fireMs(timers, DEBOUNCE);
+  await joined;
+  assert.equal(settled, 'done');
+  assert.equal(started.length, 2, 'the window still runs exactly one follow-up');
+});
+
+test('S2: whenIdle settles at once when nothing is in flight, and arms no timer', async () => {
+  const { editSync, timers } = harness({ debounceMs: DEBOUNCE });
+  assert.equal(await editSync.whenIdle('/work/repo', BUDGET), 'idle');
+  assert.equal(timers.length, 0, 'no budget is armed when there is nothing to join');
+  await editSync.onToolResult(edit('/work/repo/a.js'));
+  assert.equal(await editSync.whenIdle('/work/repo', BUDGET), 'idle', 'waiting out a debounce is not a join');
+  assert.equal(await editSync.whenIdle('/work/never-seen', BUDGET), 'idle');
+});
+
+test('S2: whenIdle never outlasts its budget, and a zero budget joins nothing', async () => {
+  const { editSync, timers } = harness({ debounceMs: DEBOUNCE, sync: () => new Promise(() => {}) });
+  await editSync.onToolResult(edit('/work/repo/a.js'));
+  void fireMs(timers, DEBOUNCE);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(editSync.inFlight('/work/repo'), true);
+  const joined = editSync.whenIdle('/work/repo', BUDGET);
+  await new Promise((resolve) => setImmediate(resolve));
+  await fireMs(timers, BUDGET);
+  assert.equal(await joined, 'budget', 'the budget ends the wait, not the sync');
+  assert.equal(await editSync.whenIdle('/work/repo', 0), 'budget', 'a zero budget waits for nothing');
+  assert.equal(await editSync.whenIdle('/work/repo', Number.NaN), 'budget', 'nor does a budget that is not a number');
+});
+
+test('S2: dispose releases a joined search instead of leaving it waiting', async () => {
+  const gate = gateOf();
+  const { editSync, timers } = harness({ debounceMs: DEBOUNCE, sync: () => gate.gate });
+  await editSync.onToolResult(edit('/work/repo/a.js'));
+  void fireMs(timers, DEBOUNCE);
+  await new Promise((resolve) => setImmediate(resolve));
+  const joined = editSync.whenIdle('/work/repo', BUDGET);
+  editSync.dispose();
+  assert.equal(await joined, 'disposed', 'shutdown ends the wait of a search that joined');
+  gate.release();
+});
+
+test('S2: a join changes nothing about the window it waits on', async () => {
+  const gate = gateOf();
+  const started = [];
+  const { editSync, timers } = harness({
+    debounceMs: DEBOUNCE,
+    sync: async (root) => {
+      started.push(root);
+      if (started.length === 1) await gate.gate;
+      return { status: 'synced' };
+    },
+  });
+  await editSync.onToolResult(edit('/work/repo/a.js'));
+  const firing = fireMs(timers, DEBOUNCE);
+  await new Promise((resolve) => setImmediate(resolve));
+  const joined = editSync.whenIdle('/work/repo', BUDGET);
+  await editSync.onToolResult(edit('/work/repo/b.js'));
+  await editSync.onToolResult(edit('/work/repo/c.js'));
+  gate.release();
+  await firing;
+  await fireMs(timers, DEBOUNCE);
+  await joined;
+  assert.equal(started.length, 2, 'one follow-up, exactly as without a join');
+  assert.equal(editSync.inFlight('/work/repo'), false);
+});

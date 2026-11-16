@@ -62,7 +62,7 @@
 // os.tmpdir() and are removed in `after()`. The bridge slot is process-wide, so
 // it is always deleted again.
 
-const { test, after, afterEach } = require('node:test');
+const { test, after, afterEach, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -108,6 +108,15 @@ afterEach(() => {
     ghIssues.setGhRunner(null);
     ghIssues.setGitRunner(null);
   }
+});
+
+// S4 (T3): the read cache has a disk half, so every test starts from an EMPTY
+// cache directory of its own: no test can inherit a warm identity from another
+// (which would silently turn a full read into a delta), and nothing here ever
+// touches a real `$XDG_CACHE_HOME` or home. A test that needs the directory to
+// survive two loads names its own and restores this one.
+beforeEach(() => {
+  process.env.XDG_CACHE_HOME = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-cache-home-')));
 });
 
 function track(dir) {
@@ -359,6 +368,40 @@ test('S12 (T11): a checkout that is not a repository paints one dim line, never 
   assert.deepEqual(handle.section.lines({}), [{ label: 'not a git repository', tone: 'dim' }],
     'one short gray line, with no path and no git advice');
   assert.equal(handle.section.meta({}), undefined, 'and no count to report');
+});
+
+// S3 (T2): outside a repository there is nothing to check, so the state is not a
+// failure to retry. The line stays until a session boundary supersedes it: a
+// frame, the activity seam and the TTL re-read nothing, so a session that is not
+// in a checkout costs no child process and no timer however long it lives.
+test('S3 (T2): a non-repository line is a state, so no frame and no activity retries it', async () => {
+  let reads = 0;
+  const sched = manualSchedule();
+  const handle = createIssuesSection({
+    load: async () => {
+      reads += 1;
+      return { ok: false, error: 'not a git repository', errorTone: 'dim' };
+    },
+    open: () => {},
+    openAll: () => {},
+    schedule: sched.schedule,
+    // A clock far past every window: nothing here is excused by being fresh.
+    now: () => Date.now() + 3600000,
+  });
+  handle.section.lines({});
+  await sched.flush();
+  assert.deepEqual(handle.section.lines({}), [{ label: 'not a git repository', tone: 'dim' }]);
+  assert.equal(reads, 1, 'the first read is the one that stated it');
+
+  assert.equal(handle.refreshIfStale(0), false, 'the activity seam starts nothing');
+  handle.section.lines({});
+  handle.section.meta({});
+  await sched.flush();
+  assert.equal(reads, 1, 'no refresh: a non-repository session has nothing to check');
+
+  // An EXPLICIT refresh is still the caller's own decision, exactly as before.
+  await handle.refresh();
+  assert.equal(reads, 2);
 });
 
 // S7 (T8): the rows are one merged list, but each row remembers the bucket it
@@ -1132,6 +1175,20 @@ async function waitForRows(section, ctx) {
   throw new Error('the section never left loading');
 }
 
+// S1/S2 (issues-startup-performance T1): the `gh` gate is DISPATCHED startup work
+// now, not an awaited step of `session_start`, so it settles a moment after the
+// host's handlers return. A test that counts `gh` children waits for that work to
+// go quiet first, instead of racing it. `fireSessionStart` cannot wait for it here
+// (the extension module the fixture imports is private to the fixture), so the
+// observable — the injected runner's own call list — is what settles.
+async function settleStartup(calls) {
+  let seen = -1;
+  for (let attempt = 0; attempt < 100 && seen !== calls.length; attempt += 1) {
+    seen = calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 test('S2: a published bridge receives exactly one section with the decided identity', async () => {
   const { registered } = installBridge();
   const loaded = await loadExtension({});
@@ -1293,7 +1350,7 @@ test('S4: nine assigned issues paint seven rows plus an overflow row that dispat
   assert.equal(sent.length, 1, 'one click is one dispatch');
 });
 
-test("S6: a failed scope resolution is one error row and makes no gh call", async () => {
+test("S6: a failed scope resolution is one error row and reads no gh", async () => {
   const checkout = makeCheckout();
   const { registered } = installBridge();
   const loaded = await loadExtension({});
@@ -1318,7 +1375,14 @@ test("S6: a failed scope resolution is one error row and makes no gh call", asyn
   assert.equal(rows[0].tone, 'error');
   assert.match(rows[0].label, /cannot read this checkout's git configuration/);
   assert.equal(section.meta(ctx), undefined);
-  assert.equal(gh.calls.length, 0, 'no gh call runs without a proven identity');
+  // S1/S3 (T1, T2): the session gate asks gh whether gh is USABLE (`gh api user`,
+  // `gh repo view`) and passes `scope: null`, so it never resolves this checkout's
+  // identity through gh — the local checkout check is what decides whether there is
+  // anything to read. What must never happen is a READ without a proven identity.
+  assert.deepEqual(graphqlCalls(gh.calls), [], 'no issue read runs without a proven identity');
+  assert.ok(gh.calls.every((call) => (call.argv[0] === 'api' && call.argv[1] === 'user')
+    || (call.argv[0] === 'repo' && call.argv[1] === 'view')),
+  `every child is the gate's own health probe (saw ${JSON.stringify(gh.calls.map((call) => call.argv))})`);
 });
 
 // S12 (T11): a cwd that is not a repository is not an ERROR — nothing is broken,
@@ -2403,6 +2467,9 @@ test('S9 (T14): the first refresh reads 100 per bucket, the next reads 20 and me
     await fireSessionStart(loaded.hooks, ctx);
     assert.equal(registered.length, 1);
     const section = registered[0];
+    // S1 (issues-startup-performance T1): the session gate is dispatched startup
+    // work now, so its own identity probes are counted only once they have landed.
+    await settleStartup(calls);
     const baseline = calls.length; // the session gate's own identity probes
 
     const firstRows = await waitForRows(section, ctx);
@@ -2581,7 +2648,13 @@ test('S9 (T14): a failed read keeps the cache and the section stale, so the next
   }
 });
 
-test('S9 (T14): session_shutdown clears the cache, so the next session reads in full', async () => {
+// S4 (issues-startup-performance T3, L7): a session boundary is NOT a cache
+// boundary. `session_shutdown` still drops the section's snapshot (no frame drawn
+// afterwards shows the ended session's rows) and still advances the cache
+// generation (an answer the ended session is holding lands nowhere) — but the
+// ENTRIES stay, so the next session's first read is a delta instead of a full
+// re-read. Before T3 the shutdown cleared them and this test asserted a full read.
+test('S4 (T3): the cache survives a session_shutdown/start pair, so the next read is a delta', async () => {
   const checkout = makeCheckout();
   const { registered } = installBridge();
   const loaded = await loadExtension({});
@@ -2611,18 +2684,19 @@ test('S9 (T14): session_shutdown clears the cache, so the next session reads in 
   await fireSessionStart(loaded.hooks, ctx);
   const section = registered[0];
   await waitForRows(section, ctx);
-  assert.equal((graphqlQueryOf(graphqlCalls(calls)[0]).match(/first: 100/g) || []).length, 3);
+  assert.equal((graphqlQueryOf(graphqlCalls(calls)[0]).match(/first: 100/g) || []).length, 3,
+    'the first read of a cold cache is the full one');
 
   await fireHook(loaded.hooks, 'session_shutdown', ctx);
-  // A new session on the same checkout: without the clear, the recent entry
-  // would answer a delta plan (`first: 20`) at once.
+  assert.equal(section.meta(ctx), undefined,
+    'the snapshot is still dropped: no frame drawn afterwards shows the ended rows');
+
   await fireSessionStart(loaded.hooks, ctx);
   section.lines(ctx);
   await waitFor(() => graphqlCalls(calls).length === 2, 'the new session never read its issues');
   const query = graphqlQueryOf(graphqlCalls(calls)[1]);
-  assert.equal((query.match(/first: 20/g) || []).length, 0, 'no delta plan survived the shutdown');
-  assert.equal((query.match(/first: 100/g) || []).length, 3,
-    'a cleared cache reads every bucket in full again');
+  assert.equal((query.match(/first: 20/g) || []).length, 3,
+    'the surviving entry answers a delta plan, so the new session asks only for the newest rows');
 });
 
 // ---------------------------------------------------------------------------
@@ -2935,16 +3009,262 @@ test('S9 (T10): the click path holds no proof a session move could outlive', asy
     return original(bin, argv, opts);
   };
   try {
-    // The click answers BEFORE the session moves, and the move that follows
-    // changes nothing: the dispatch already happened, in the session that made it.
+    // The click answers BEFORE the session moves, and it proves nothing: no
+    // checkout probe runs on the click path at all.
     const outcome = mod.dispatchIssuesPanel(dispatch, 11, 'github.com/myfork/project');
     assert.deepEqual(outcome, { ok: true });
     assert.deepEqual(sent, [{ text: '/issues 11', opts: { expandPromptTemplates: true } }],
       'the click dispatched its issue');
-    await fireSessionStart(hooks, { cwd: checkoutB, ui: { notify: () => {} } });
     assert.deepEqual(held, [], 'no checkout proof ran on the click path');
+    // The session then moves. Its own startup work may well read the checkout —
+    // that is the session's start, not the click — and the dispatch is untouched:
+    // nothing re-sends it and nothing drops it.
+    await fireSessionStart(hooks, { cwd: checkoutB, ui: { notify: () => {} } });
     assert.equal(sent.length, 1, 'a later session move never re-dispatches or drops it');
   } finally {
     worktreeGit.runArgvAsync = original;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// T2 (S3) and T3 (S4): what a session costs outside a repository, and how long
+// the read cache lives.
+// ---------------------------------------------------------------------------
+
+// S3 (T2): a cwd outside a repository is stated, not probed. The rail's own read
+// already answers the short dim line without a `gh` child; the session gate used
+// to probe `gh` there anyway (two children per session start), which is exactly
+// the "no frequent checks" the user asked to stop.
+test('S3 (T2): a session outside a repository paints the dim row and spawns no gh child', async () => {
+  const outside = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-outside-')));
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub();
+  ghIssues.setGhRunner(gh.runner);
+
+  const ctx = { cwd: outside, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctx);
+  const rows = await waitForRows(registered[0], ctx);
+  assert.deepEqual(rows, [{ label: 'not a git repository', tone: 'dim' }],
+    'one dim row, never the error tone');
+  assert.equal(registered[0].meta(ctx), undefined, 'and no count');
+
+  // The session gate runs off the awaited startup path now, so it gets its own
+  // window before "spawned nothing" is asserted.
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.deepEqual(gh.calls, [],
+    'no gh child and no network call at all: the checkout answers this, and the gate never asks gh either');
+});
+
+// S4 (T3): the entries also outlive the PROCESS. A new load is a new in-process
+// cache, so the identity is hydrated from the disk half under
+// `$XDG_CACHE_HOME/odd-worktree/` before `plan`, and the first read is a delta.
+test('S4 (T3): a warm identity survives a process restart, so its first read is a delta', async () => {
+  const cacheHome = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-warm-home-')));
+  const savedCacheHome = process.env.XDG_CACHE_HOME;
+  process.env.XDG_CACHE_HOME = cacheHome;
+  try {
+    const checkout = makeCheckout();
+    const row = { number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' };
+
+    // One process: load the extension, draw the rail, shut the session down.
+    const runProcess = async () => {
+      const { registered } = installBridge();
+      const loaded = await loadExtension({});
+      ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+      const gh = sectionGithub({ issues: [row] });
+      ghIssues.setGhRunner(gh.runner);
+      const ctx = { cwd: checkout, ui: { notify: () => {} } };
+      await fireSessionStart(loaded.hooks, ctx);
+      await waitForRows(registered[0], ctx);
+      // S4 (T3 correction): the write is fired, never awaited by the read, so the
+      // test waits for the document it produces — the one observable the next
+      // process reads.
+      await waitFor(
+        () => fs.existsSync(path.join(cacheHome, 'odd-worktree', 'issues-cache.json')),
+        'the disk half never wrote its document',
+      );
+      await fireHook(loaded.hooks, 'session_shutdown', ctx);
+      return graphqlCalls(gh.calls);
+    };
+
+    const firstReads = await runProcess();
+    assert.equal(firstReads.length, 1);
+    assert.ok(graphqlQueryOf(firstReads[0]).includes('first: 100'), 'a cold process reads everything');
+
+    const secondReads = await runProcess();
+    assert.equal(secondReads.length, 1);
+    assert.ok(graphqlQueryOf(secondReads[0]).includes('first: 20'),
+      'the restarted process hydrates the identity from disk before `plan`, so it only asks for the delta');
+  } finally {
+    if (savedCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = savedCacheHome;
+  }
+});
+
+// S4 (T3): persistence never defeats the correctness rules the in-memory cache
+// already enforces. An entry that is `inconsistent` (its rows no longer match the
+// count the response reported) or older than the full-read TTL is NOT hydrated,
+// so `plan` still answers the full read it always did.
+test('S4 (T3): a stored entry past its full TTL, or inconsistent, is still read whole', async () => {
+  const cacheHome = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-stale-home-')));
+  const savedCacheHome = process.env.XDG_CACHE_HOME;
+  process.env.XDG_CACHE_HOME = cacheHome;
+  try {
+    const checkout = makeCheckout();
+    const row = { number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' };
+    const { createIssuesCacheStore } = require('../lib/issues-cache-store.js');
+    const seeded = createIssuesCacheStore({ dir: path.join(cacheHome, 'odd-worktree') });
+    const seed = (overrides) => seeded.save(IDENTITY, {
+      buckets: { mine: [], assigned: [row], involved: [] },
+      counts: { mine: 0, assigned: 1, involved: 0 },
+      truncated: { mine: false, assigned: false, involved: false },
+      inconsistent: false,
+      full: true,
+      syncedAt: Date.now(),
+      lastApplied: 1,
+      ...overrides,
+    });
+
+    const readQuery = async () => {
+      const { registered } = installBridge();
+      const loaded = await loadExtension({});
+      ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+      const gh = sectionGithub({ issues: [row] });
+      ghIssues.setGhRunner(gh.runner);
+      const ctx = { cwd: checkout, ui: { notify: () => {} } };
+      await fireSessionStart(loaded.hooks, ctx);
+      await waitForRows(registered[0], ctx);
+      return graphqlQueryOf(graphqlCalls(gh.calls)[0]);
+    };
+
+    await seed({ syncedAt: Date.now() - 3600000 });
+    assert.ok((await readQuery()).includes('first: 100'),
+      'an entry older than the full-read TTL is re-read whole, exactly like the in-memory cache plans it');
+
+    await seed({ inconsistent: true });
+    assert.ok((await readQuery()).includes('first: 100'),
+      'an inconsistent entry is never trusted for a total either');
+  } finally {
+    if (savedCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = savedCacheHome;
+  }
+});
+
+// S4 (T3, correction): the disk half is FIRE AND FORGET. The read has already
+// answered — `apply` made it visible in memory — so waiting for a file write puts
+// the filesystem back on the rail's path: the section's own `running` gate refuses
+// to schedule while a read is in flight, so one slow or stalled write postpones
+// every later read and the rail paints late. The two tests below hold the write
+// and watch what the rail does while it never settles.
+test('S4 (T3): a held save defers no read, and the newest entry waits behind it instead of interleaving', async () => {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  const checkout = makeCheckout();
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  // The extension's OWN disk half, held: nothing is written until the test says so.
+  // The module instance is required AFTER the load (the load purges the lib cache
+  // once), so this is the very object the extension's `libRequire` gets.
+  const store = require(path.join(LIB_DIR, 'issues-cache-store.js'));
+  const originalFactory = store.createIssuesCacheStore;
+  const saves = [];
+  const held = [];
+  store.createIssuesCacheStore = () => ({
+    load: async () => null,
+    directory: () => null,
+    save: (identity, snapshot) => {
+      saves.push({ identity, snapshot });
+      return new Promise((resolve) => { held.push(resolve); });
+    },
+  });
+  try {
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const gh = sectionGithub({
+      issues: [
+        { number: 11, title: 'Eleven', state: 'OPEN', updatedAt: '2024-01-01T00:00:00Z' },
+        { number: 12, title: 'Twelve', state: 'OPEN', updatedAt: '2024-02-01T00:00:00Z' },
+      ],
+    });
+    ghIssues.setGhRunner(gh.runner);
+    const ctx = { cwd: checkout, ui: { notify: () => {} } };
+    await fireSessionStart(loaded.hooks, ctx);
+    const section = registered[0];
+
+    // 1) The first answer paints although its write has not settled: the read path
+    // never waits for the disk.
+    const rows = await waitForRows(section, ctx);
+    assert.deepEqual(rows.map((row) => row.label), ['#12 Twelve', '#11 Eleven'],
+      'the read settles and the rail paints while the disk half is still pending');
+    assert.equal(saves.length, 1, 'the answer was still offered to the disk half');
+    assert.equal(saves[0].identity, IDENTITY, 'for the identity the read was proven against');
+    assert.equal(held.length, 1, 'and that one write is the one in flight');
+
+    // 2) A held write is not a running READ: the next stale frame starts its own
+    // read on time instead of queueing behind the filesystem.
+    offset = 61000;
+    section.lines(ctx);
+    await waitFor(() => graphqlCalls(gh.calls).length === 2,
+      'a held save blocked the next read');
+    assert.deepEqual(section.lines(ctx).map((row) => row.label), ['#12 Twelve', '#11 Eleven'],
+      'and the rail keeps painting the rows the cache holds');
+    assert.equal(saves.length, 1,
+      'the second answer is COALESCED behind the write in flight — never a second interleaved save');
+
+    // 3) When the held write settles, the newest entry is the very next thing
+    // written, so the stalled save cost the file nothing.
+    held[0](true);
+    await waitFor(() => saves.length === 2, 'the coalesced entry never followed the held one');
+    assert.equal(saves[1].snapshot.lastApplied, 2, 'the write that follows carries the LATEST read');
+    assert.equal(held.length, 2, 'exactly one write is in flight again — never two');
+
+    // 4) And a save that NEVER settles defers nothing either: the third stale frame
+    // still reads, and the stalled write keeps the only in-flight slot.
+    offset = 122000;
+    section.lines(ctx);
+    await waitFor(() => graphqlCalls(gh.calls).length === 3,
+      'a save that never settles blocked a later read');
+    assert.equal(saves.length, 2, 'a stalled write accumulates no second save');
+  } finally {
+    store.createIssuesCacheStore = originalFactory;
+    Date.now = realNow;
+  }
+});
+
+test('S4 (T3): a save that REJECTS never escapes as an unhandled rejection and never blocks the rail', async () => {
+  const checkout = makeCheckout();
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  // The extension's OWN disk half, refusing every write.
+  const store = require(path.join(LIB_DIR, 'issues-cache-store.js'));
+  const originalFactory = store.createIssuesCacheStore;
+  store.createIssuesCacheStore = () => ({
+    load: async () => null,
+    directory: () => null,
+    save: async () => { throw new Error('EACCES: the cache directory is not writable'); },
+  });
+  const unhandled = [];
+  const onUnhandled = (reason) => { unhandled.push(reason); };
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const gh = sectionGithub({
+      issues: [{ number: 11, title: 'Eleven', state: 'OPEN', updatedAt: '2024-01-01T00:00:00Z' }],
+    });
+    ghIssues.setGhRunner(gh.runner);
+    const ctx = { cwd: checkout, ui: { notify: () => {} } };
+    await fireSessionStart(loaded.hooks, ctx);
+    const rows = await waitForRows(registered[0], ctx);
+    assert.deepEqual(rows.map((row) => row.label), ['#11 Eleven'],
+      'a write that cannot be committed costs the entry, never the read');
+    // Two turns of the loop is enough for a rejected save to surface if it were
+    // going to: it never does.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(unhandled, [], 'a refused save is silence, not an unhandled rejection');
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled);
+    store.createIssuesCacheStore = originalFactory;
   }
 });

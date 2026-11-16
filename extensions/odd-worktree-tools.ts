@@ -7106,6 +7106,12 @@ const ISSUES_SIDEBAR_ACTIVITY_FLOOR_MS = 30000;
 // human hid stops the network entirely — no child process, no timer — and
 // showing it again starts from `loading…`.
 const ISSUES_SIDEBAR_DRAWN_WINDOW_MS = 120000;
+// S4 (issues-startup-performance T3): the ONE bound the read cache and its disk
+// half share. `lib/related-issues-cache.js` measures how long a FULL read stays
+// authoritative from the last full apply; the loader holds a stored entry to the
+// SAME bound before it hydrates it, so persistence can never turn a stale entry
+// into a fresh one.
+const ISSUES_CACHE_FULL_TTL_MS = 600000;
 // The most recent `session_start` context: the section's `load` and `open`
 // belong to the checkout the session runs in, not to whatever cwd this process
 // happens to have.
@@ -7115,14 +7121,19 @@ let issuesSidebarDisposer = null;
 let issuesSidebarSubscribed = false;
 // S9 (issues-sidebar T14): the process-local cache of the three scoped issue
 // views. It is pure (`lib/related-issues-cache.js`), keyed by the PROVEN repository
-// identity and never written to disk; the extension owns its lifetime so a
-// session's shutdown clears it beside the section's snapshot.
+// identity, and it is the layer that decides what a read means. Its DISK half is
+// `lib/issues-cache-store.js` (S4/T3 of issues-startup-performance), reached from
+// the async loader alone; a session boundary no longer clears these entries.
 let issuesSidebarCache = null;
+// S4 (T3): the disk half, built lazily like the cache. Missing or broken, the
+// read is exactly the in-process one it always was.
+let issuesCacheStore = null;
 // T15 (S9, defect 4): the cache wiring's generation. Every read captures it when
-// it STARTS and may write its answer only while it is still current; a shutdown
-// clear (or a rebinding) moves it on, so a read that outlived its session can
-// never repopulate the cache it just cleared. A discarded answer still returns
-// its rows to the section, whose own token decides whether they paint.
+// it STARTS and may write its answer only while it is still current; a session
+// boundary, a shutdown or a rebinding moves it on, so a read that outlived its
+// session can never apply its answer to the cache the next session reads. A
+// discarded answer still returns its rows to the section, whose own token decides
+// whether they paint.
 let issuesSidebarCacheGeneration = 0;
 // T15 (S9, defect 5): every read is numbered when it STARTS (before any await), so
 // the cache can ignore an answer that is older than the last one applied for the
@@ -7419,20 +7430,24 @@ async function issuesBrowserRepoIdentity(gh, checkoutRoot, fresh) {
 // where `openIssuesPanel` releases it, before the human is looking at it). The
 // release is scoped to the token captured HERE, so a typed `/issues` (which owns
 // no token) releases nothing and can never clear a newer click's guard.
-async function executeIssues(rawArgs, ctx) {
+async function executeIssues(rawArgs, ctx, checkoutRoot) {
   const openToken = issuesPanelOpenToken;
   const releaseOpen = () => {
     if (openToken === null) return;
     releaseIssuesPanelOpen(openToken);
   };
   try {
-    return await openIssuesPanel(rawArgs, ctx, releaseOpen);
+    return await openIssuesPanel(rawArgs, ctx, releaseOpen, checkoutRoot);
   } finally {
     releaseOpen();
   }
 }
 
-async function openIssuesPanel(rawArgs, ctx, releaseOpen) {
+// S3 (issues-startup-performance T2): `checkoutRoot` is the local resolution the
+// command's own gate ALREADY performed (one `git rev-parse` pair) — handed over so
+// the open never pays for a second one. Absent, the open resolves it itself exactly
+// as before.
+async function openIssuesPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
   // S7: `/issues <number>` (also `#<number>`) opens the same panel on one
@@ -7454,7 +7469,9 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen) {
   // The reader belongs to the checkout the session runs in: inside a worktree
   // that is the worktree, never the principal. Anything that cannot resolve to
   // a Git root fails closed instead of guessing.
-  const checkoutRoot = await oddCheckoutRootAsync(cwd);
+  const checkoutRoot = typeof resolvedCheckoutRoot === "string" && resolvedCheckoutRoot.length > 0
+    ? resolvedCheckoutRoot
+    : await oddCheckoutRootAsync(cwd);
   if (!checkoutRoot) {
     if (typeof notify === "function") notify(notGitRepositoryLine(cwd), "info");
     return;
@@ -7752,13 +7769,39 @@ function issuesGateMessage(error) {
   return `issues: ${text} — /issues cannot open until then`;
 }
 
-async function checkIssuesGate(_pi, ctx) {
+// S1/S3 (issues-startup-performance T1, T2): the session gate. It is STARTUP
+// WORK, never an awaited step of `session_start`: the host awaits every handler it
+// is handed, so awaiting this probe put `gh api user` (≈485 ms) and `gh repo view`
+// (≈550 ms) — serially — in front of the first prompt of every session start AND
+// every session switch. `/issues` probes `gh` on demand when it opens
+// (`probeIssuesGate`), so nothing is lost by answering it in the background.
+//
+// T2: repository-ness comes FIRST, through the same local checkout seam every
+// other surface uses, so a session outside a repository costs one `git rev-parse`
+// and no `gh` child at all — and says nothing, because that is a state, not an
+// error. A late answer is dropped by the startup epoch: it sets no state and
+// notifies no dead UI, and `issuesGateNotified` stays clear so the next session's
+// gate can still speak.
+async function checkIssuesGate(_pi, ctx, epoch) {
   try {
     const gh = libRequire("gh-issues.js");
     const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
-    const res = await gh.ghStatus({ cwd });
-    issuesGateOpen = !!(res && res.ok === true);
-    if (issuesGateOpen) return { ok: true };
+    const checkoutRoot = await oddCheckoutRootAsync(cwd);
+    if (!checkoutRoot) {
+      return { ok: false, notRepository: true, error: ISSUES_SIDEBAR_NOT_REPOSITORY };
+    }
+    // S3 (T2): the gate asks gh ONE thing — is it usable this session (installed,
+    // authenticated, and able to report a repository)? `scope: null` keeps the
+    // checkout's own repository OUT of it: a checkout whose remote is not a GitHub
+    // repository is the READ's question, and the panel answers it with its own
+    // honest error instead of being refused before it can even open.
+    const res = await gh.ghStatus({ cwd: checkoutRoot, scope: null });
+    const ok = !!(res && res.ok === true);
+    // S1: nothing the ended session learned is written into the one that replaced
+    // it, and nothing is announced to a UI that is already gone.
+    if (epoch !== undefined && !startupTaskLive(epoch)) return { ok };
+    issuesGateOpen = ok;
+    if (ok) return { ok: true };
     const error = (res && res.error) || "gh check failed";
     if (!issuesGateNotified && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
       try {
@@ -7775,22 +7818,44 @@ async function checkIssuesGate(_pi, ctx) {
   }
 }
 
+// S1 (T1): the ONE dispatch site. The probe is tracked startup work captured with
+// the epoch `session_shutdown` advances, so it is honest about which session it
+// belongs to and the host never waits for it.
+function dispatchIssuesGate(pi, ctx) {
+  try {
+    trackStartupTask(checkIssuesGate(pi, ctx, beginStartupTask()));
+  } catch {
+    // The gate is optional: a dispatch that throws never breaks startup.
+  }
+}
+
 // The command stays discoverable even before the session gate resolves, so
 // running it probes `gh` on demand. A session that already answered `ok` never
 // re-probes; a failure notifies the same honest fix every time it is asked.
+//
+// S3 (T2): outside a repository there is nothing to probe and nothing `gh` could
+// answer, so the checkout is resolved first (one local check) and the caller is
+// handed the state instead of a `gh` error string.
 async function probeIssuesGate(ctx) {
-  if (issuesGateOpen === true) return { ok: true };
+  const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
+  let checkoutRoot = null;
+  try {
+    checkoutRoot = await oddCheckoutRootAsync(cwd);
+  } catch {
+    checkoutRoot = null;
+  }
+  if (!checkoutRoot) return { ok: false, notRepository: true, error: ISSUES_SIDEBAR_NOT_REPOSITORY };
+  if (issuesGateOpen === true) return { ok: true, checkoutRoot };
   let gate;
   try {
     const gh = libRequire("gh-issues.js");
-    const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
-    const res = await gh.ghStatus({ cwd });
+    const res = await gh.ghStatus({ cwd: checkoutRoot, scope: null });
     gate = res && res.ok === true ? { ok: true } : { ok: false, error: (res && res.error) || "gh check failed" };
   } catch (err) {
     gate = { ok: false, error: (err && err.message) || String(err) };
   }
   issuesGateOpen = gate.ok === true;
-  return gate;
+  return { ...gate, checkoutRoot };
 }
 
 function registerIssuesCommand(pi) {
@@ -7804,10 +7869,16 @@ function registerIssuesCommand(pi) {
         // S1 (issues-sidebar-click T1): the rail click whose command refuses here
         // is over, so the guard goes with it instead of waiting for its timer.
         releaseIssuesPanelOpen();
+        // S3 (T2): a cwd outside a repository is the shared statement every
+        // surface makes, at info — never a `gh` error and never an error tone.
+        if (gate.notRepository === true) {
+          if (typeof notify === "function") notify(notGitRepositoryLine(toolCwd(ctx)), "info");
+          return;
+        }
         if (typeof notify === "function") notify(issuesGateMessage(gate.error), "error");
         return;
       }
-      await executeIssues(args, ctx);
+      await executeIssues(args, ctx, gate.checkoutRoot);
     },
   });
 }
@@ -7843,23 +7914,186 @@ function issuesSidebarRelatedCache() {
   try {
     const factory = libRequire("related-issues-cache.js");
     if (!factory || typeof factory.createIssuesCache !== "function") return null;
-    issuesSidebarCache = factory.createIssuesCache();
+    // S4 (T3): the full-read TTL is named ONCE, so the in-memory cache and the
+    // loader's hydration hold a stored entry to the same bound.
+    issuesSidebarCache = factory.createIssuesCache({ fullTtlMs: ISSUES_CACHE_FULL_TTL_MS });
   } catch {
     issuesSidebarCache = null;
   }
   return issuesSidebarCache;
 }
 
-function clearIssuesSidebarCache() {
-  // T15 (defect 4): the bump comes FIRST, so a read still holding the previous
-  // generation can never write the entry this clear is about to remove.
-  issuesSidebarCacheGeneration += 1;
-  if (issuesSidebarCache === null) return;
+// S4 (T3): the DISK half of the same cache, built lazily exactly like it. A
+// missing module is not fatal — the read is then the in-process one it always
+// was — and nothing is created here: a host that never draws the rail never
+// touches the file.
+function issuesSidebarCacheStore() {
+  if (issuesCacheStore !== null) return issuesCacheStore;
   try {
-    issuesSidebarCache.clear();
+    const factory = libRequire("issues-cache-store.js");
+    if (!factory || typeof factory.createIssuesCacheStore !== "function") return null;
+    issuesCacheStore = factory.createIssuesCacheStore();
   } catch {
-    // The cache is optional: a failed clear never breaks the end of a session.
+    issuesCacheStore = null;
   }
+  return issuesCacheStore;
+}
+
+// S4 (T3): the read the loader replays into the cache for a stored entry. It is
+// the SAME `{ ok, buckets: { <id>: { issueCount, issues } } }` shape a real answer
+// has, so the cache's own `apply` re-applies every invariant it owns (the count
+// per bucket, the truncation rule, the sort and the cap) instead of this file
+// inventing a second way to write an entry.
+function issuesSidebarHydratedRead(entry) {
+  const buckets = {};
+  const source = entry && entry.buckets && typeof entry.buckets === "object" ? entry.buckets : {};
+  const counts = entry && entry.counts && typeof entry.counts === "object" ? entry.counts : {};
+  for (const spec of ISSUES_PAGE_QUERIES) {
+    const rows = Array.isArray(source[spec.id]) ? source[spec.id] : [];
+    const count = Number.isInteger(counts[spec.id]) ? counts[spec.id] : rows.length;
+    buckets[spec.id] = { issueCount: count, issues: rows };
+  }
+  return { ok: true, buckets };
+}
+
+// S4 (T3): hydrate ONE identity from the disk half, lazily, before `plan` — so a
+// warm identity's first read in a new process is already a delta. It runs on the
+// async loader alone: never at `session_start`, never on `lines()`/`meta()` and
+// never on a paint path, and it answers `false` for every reason it could not
+// (an identity already warm in memory, no store, no entry, a late session, an
+// entry the cache's own rules would not trust, a hostile document).
+async function hydrateIssuesSidebarCache(cache, identity, cacheGeneration) {
+  if (cache === null || typeof identity !== "string" || identity.length === 0) return false;
+  let warm = null;
+  try {
+    warm = cache.get(identity);
+  } catch {
+    warm = null;
+  }
+  if (warm !== null) return false;
+  const store = issuesSidebarCacheStore();
+  if (store === null) return false;
+  let entry = null;
+  try {
+    entry = await store.load(identity);
+  } catch {
+    entry = null;
+  }
+  if (!entry) return false;
+  // T15 (defect 4): a load that answered after its session ended fills nothing.
+  if (cacheGeneration !== issuesSidebarCacheGeneration) return false;
+  // S4 (T3): persistence never defeats the correctness rules the cache already
+  // enforces — an entry whose rows no longer match the count its response reported,
+  // or one past the full-read TTL, is one `plan` must answer a FULL read for, so it
+  // is never hydrated at all.
+  //
+  // Nuance accepted here (S4/T3 correction): `cache.apply(..., { full: false })` on a
+  // COLD cache takes the `!previous` branch, so it stamps `fullAt` at hydration time
+  // — a hydrated entry restarts the full-read clock instead of inheriting the stored
+  // one. That is safe: every later read is a delta, and a delta MERGES by issue
+  // number and is held to the cache's count invariant, so the moment the cached rows
+  // stop matching the `issueCount` its own answer reports the entry is
+  // `inconsistent` and `plan` answers a FULL read. The stored `fullAt` still decides
+  // WHETHER an entry is hydrated (the TTL check below), so a stale document is never
+  // trusted; only the clock of a trusted one is renewed, by at most this
+  // process's own lifetime.
+  if (entry.inconsistent === true) return false;
+  const age = Date.now() - entry.fullAt;
+  if (!Number.isFinite(age) || age >= ISSUES_CACHE_FULL_TTL_MS) return false;
+  try {
+    cache.apply(identity, issuesSidebarHydratedRead(entry), { full: false });
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+// S4 (T3): the snapshot one answer's `apply` left in the cache, in the shape the
+// disk half stores. The rows and the cache's own facts come from the cache (so the
+// file can never disagree with memory); the counts come from the response, which is
+// the only place the authoritative total lives. Synchronous and side-effect free:
+// the write it feeds is queued below.
+function issuesSidebarCacheSnapshot(cache, identity, read, plan, sequence) {
+  let entry = null;
+  try {
+    entry = cache.get(identity);
+  } catch {
+    return null;
+  }
+  if (!entry || !entry.buckets) return null;
+  const readBuckets = read && read.buckets && typeof read.buckets === "object" ? read.buckets : {};
+  const counts = {};
+  for (const spec of ISSUES_PAGE_QUERIES) {
+    const rows = Array.isArray(entry.buckets[spec.id]) ? entry.buckets[spec.id] : [];
+    const bucket = readBuckets[spec.id];
+    counts[spec.id] = bucket && Number.isInteger(bucket.issueCount) ? bucket.issueCount : rows.length;
+  }
+  return {
+    buckets: entry.buckets,
+    counts,
+    truncated: entry.truncated,
+    inconsistent: entry.inconsistent === true,
+    full: plan.full === true,
+    syncedAt: Number.isFinite(entry.syncedAt) ? entry.syncedAt : Date.now(),
+    lastApplied: Number.isFinite(sequence) ? sequence : issuesSidebarReadSequence,
+  };
+}
+
+// S4 (T3 correction): the disk half is FIRE AND FORGET, because the read must
+// settle the moment `apply` made its answer visible in memory — the section's own
+// `running` gate refuses to schedule while a read is in flight, so a read that
+// waits for a file write postpones every later read and the rail paints late. Two
+// rules keep that freedom safe:
+//   - ONE write is in flight per process, so a second save can never interleave
+//     its own read-modify-write over the one document;
+//   - a save that arrives while one runs lands in a single PENDING slot that the
+//     latest entry overwrites, so a stalled disk accumulates nothing and the next
+//     finished write carries the newest state (coalescing costs at most one full
+//     read later, never correctness).
+// A save that never settles therefore defers nothing: the read has already
+// returned, the pending slot keeps the newest entry, and no rejection can escape —
+// the tracked promise swallows both outcomes.
+let issuesCacheWriteInFlight = null;
+let issuesCacheWritePending = null;
+
+function drainIssuesSidebarCacheWrites() {
+  if (issuesCacheWriteInFlight !== null || issuesCacheWritePending === null) return;
+  const job = issuesCacheWritePending;
+  issuesCacheWritePending = null;
+  let run;
+  try {
+    run = Promise.resolve(job.store.save(job.identity, job.snapshot));
+  } catch {
+    run = Promise.resolve(false);
+  }
+  const settled = run.then(() => undefined, () => undefined);
+  issuesCacheWriteInFlight = settled;
+  settled.then(() => {
+    if (issuesCacheWriteInFlight === settled) issuesCacheWriteInFlight = null;
+    drainIssuesSidebarCacheWrites();
+  });
+}
+
+function queueIssuesSidebarCacheWrite(cache, identity, read, plan, sequence) {
+  const store = issuesSidebarCacheStore();
+  if (store === null) return false;
+  const snapshot = issuesSidebarCacheSnapshot(cache, identity, read, plan, sequence);
+  if (snapshot === null) return false;
+  issuesCacheWritePending = { store, identity, snapshot };
+  drainIssuesSidebarCacheWrites();
+  return true;
+}
+
+// S4 (T3, L7): a session boundary no longer throws the cache away — the entries
+// are the whole point of it, and the next session's first read is a delta because
+// they are still there. What a boundary DOES still do is move the generation on,
+// so an answer the ended session is still holding can never land in the cache the
+// next session reads; the section's snapshot is dropped by `invalidateIssuesSidebar`
+// beside it, so no frame drawn afterwards shows the ended session's rows.
+function clearIssuesSidebarCache() {
+  // The bump comes FIRST, so a read still holding the previous generation can
+  // never write an entry this boundary has already moved past.
+  issuesSidebarCacheGeneration += 1;
 }
 
 // S9 consumer half (issues-sidebar) / S8 (issues panel, T4): the panel READS the
@@ -7999,6 +8233,10 @@ async function loadIssuesSidebar() {
   }
   const identity = resolved.identity;
   const cache = issuesSidebarRelatedCache();
+  // S4 (T3): hydrate the identity from the disk half BEFORE `plan`, so a warm
+  // identity's first read in a new process is already a delta. Lazy by identity,
+  // best effort, and only ever here.
+  await hydrateIssuesSidebarCache(cache, identity, cacheGeneration);
   const plan = cache !== null ? cache.plan(identity) : { full: true, first: 20 };
   let read;
   try {
@@ -8018,6 +8256,14 @@ async function loadIssuesSidebar() {
       cache.apply(identity, read, { full: plan.full === true, sequence });
     } catch {
       // A cache that refuses the answer is no reason to lose the read itself.
+    }
+    // S4 (T3): and only after a successful apply is the entry offered to the disk
+    // half, so the file never holds rows memory refused — and only by a read that
+    // is still the newest one STARTED, so an older answer can never overwrite the
+    // file a newer read just wrote. It is QUEUED, never awaited: the answer is
+    // already visible, and a slow disk must not hold the rail's next read.
+    if (issuesSidebarReadSequence === sequence) {
+      queueIssuesSidebarCacheWrite(cache, identity, read, plan, sequence);
     }
   }
   const cached = canWriteCache ? cache.get(identity) : null;
@@ -8682,14 +8928,19 @@ export default function (pi) {
   // session context the section's reads belong to.
   // S6 (issues-sidebar): the supersede of a previous checkout's read happens
   // FIRST and synchronously — the session context is remembered and the section
-  // is invalidated BEFORE the `gh` gate below is awaited. `checkIssuesGate` waits
-  // on a `gh` probe, and an answer the previous checkout's read settles with
-  // during that wait must find no latest token to win and no snapshot to keep.
+  // is invalidated BEFORE anything else is dispatched. No answer the previous
+  // checkout's read is still holding can then find a latest token to win or a
+  // snapshot to keep.
   // S3 amended (T13, L11): NO read happens here. A hidden section costs nothing,
   // so the first DRAW is what starts the section's read: an absent snapshot is
   // stale inside `lines()`, which schedules its own refresh. The hidden section
   // therefore makes no child process and no network call, and starts no timer.
-  pi.on("session_start", async (event, ctx) => {
+  // S1/S2 (issues-startup-performance T1): and NOTHING awaited here spawns a child
+  // process or makes a network call. The `gh` gate is dispatched as tracked
+  // startup work (one epoch per session) instead of being awaited, so the host's
+  // own await of this handler returns at once — on every session start and every
+  // session switch.
+  pi.on("session_start", (event, ctx) => {
     // S18/S19 (files-picker T8): the second moment the bridge contribution comes
     // from. It is idempotent, and it is what binds the key once the shell on this
     // session has published its keymap resolver.
@@ -8711,7 +8962,9 @@ export default function (pi) {
     // boundary as the section's own state, and it says nothing yet when the
     // host could still announce.
     checkIssuesSidebarInstall(pi, ctx);
-    await checkIssuesGate(pi, ctx);
+    // S1/S3 (T1, T2): the gate is dispatched, never awaited — and it resolves the
+    // checkout first, so outside a repository it does not even start a `gh` child.
+    dispatchIssuesGate(pi, ctx);
   });
   // A queued warp is session state: shutdown clears its record and its timer so
   // nothing outlives the session that asked for the move. S6 (issues-sidebar):
@@ -8721,6 +8974,10 @@ export default function (pi) {
   // nowhere and never repaints a torn-down host, and the remembered context is
   // cleared, so a frame drawn after shutdown can never read with a dead
   // session's cwd.
+  // S4 (issues-startup-performance T3, L7): the READ CACHE is not session state.
+  // `clearIssuesSidebarCache` still moves the generation on — a late answer lands
+  // nowhere — but the entries STAY, so the next session's first read is a delta
+  // and a rail click opens `/issues` already populated.
   pi.on("session_shutdown", (event, ctx) => {
     forgetPendingWarp(ctx);
     forgetInFlightWarpTools();

@@ -26,7 +26,7 @@
 // under os.tmpdir() and are removed in `after()`. The bridge slot is
 // process-wide, so it is always deleted again.
 
-const { test, after, afterEach } = require('node:test');
+const { test, after, afterEach, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -73,6 +73,14 @@ afterEach(() => {
     try { restore(); } catch {}
   }
   restores = [];
+});
+
+// S4 (issues-startup-performance T3): the issues read cache has a disk half, and
+// this file DRAWS the rail, so every test gets an empty cache directory of its
+// own — nothing here can read or write the real `$XDG_CACHE_HOME`/`~/.cache`
+// document, and no test inherits a warm identity from another.
+beforeEach(() => {
+  process.env.XDG_CACHE_HOME = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-guard-cache-')));
 });
 
 function track(dir) {

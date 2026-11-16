@@ -29,7 +29,7 @@
 // instance the extension loads via GENTLE_WORKTREE_LIB_DIR), so no live `gh`
 // runs and no real GitHub mutation is possible.
 
-const { test, describe, after, afterEach } = require('node:test');
+const { test, describe, after, afterEach, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -87,6 +87,13 @@ afterEach(() => {
   delete globalThis[Symbol.for('gentle-shell-bridge/api/v1')];
 });
 
+// S4 (T3): the read cache has a disk half now, so every test gets its own cache
+// directory — no test inherits a warm identity from another, and nothing here can
+// touch the real `$XDG_CACHE_HOME`/home.
+beforeEach(() => {
+  process.env.XDG_CACHE_HOME = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-cache-')));
+});
+
 const FIXTURES = path.join(__dirname, 'fixtures');
 function fixture(name) {
   return fs.readFileSync(path.join(FIXTURES, name), 'utf8');
@@ -112,6 +119,7 @@ async function loadExtension() {
   factory(api);
   ghIssues = mod.libModule('gh-issues.js');
   worktreeGit = mod.libModule('worktree-git.js');
+  modsFor.set(hooks, mod);
   return { commands, hooks, api, mod, factory };
 }
 
@@ -119,10 +127,23 @@ function sessionStartHandlers(hooks) {
   return hooks.filter(([event]) => event === 'session_start').map(([, handler]) => handler);
 }
 
+// The module one load produced, keyed by the hooks it registered: the startup work
+// `session_start` DISPATCHES (never awaits, T1) is reachable only through it.
+const modsFor = new Map();
+
 async function fireSessionStart(hooks, ctx) {
   for (const handler of sessionStartHandlers(hooks)) {
     const out = handler({}, ctx);
     if (out && typeof out.then === 'function') await out;
+  }
+  // S1/S2 (T1): the `gh` gate is no longer on the AWAITED path — it is dispatched
+  // as tracked startup work — so a test that asserts on the gate's own answer
+  // waits for that work here, the way the host's shutdown barrier does, instead of
+  // racing it. The one test that proves the awaited path is free of it fires the
+  // handlers itself and never reaches this helper.
+  const mod = modsFor.get(hooks);
+  if (mod && typeof mod.awaitPendingStartupTasks === 'function') {
+    await mod.awaitPendingStartupTasks();
   }
 }
 
@@ -496,6 +517,55 @@ describe('/issues gate (S3)', () => {
   });
 });
 
+// S1/S2 (T1, T2 of the startup theory): `session_start` must resolve without
+// waiting on any child process or network call. The `gh` gate used to be AWAITED
+// there — `gh api user` (≈485 ms) then `gh repo view` (≈550 ms), serially, on
+// every session start AND every session switch — and `/issues` probes `gh` on
+// demand anyway, so nothing is lost by dispatching it as startup work instead.
+// Outside a repository there is nothing to check at all, so the gate resolves the
+// checkout first and spawns nothing (T2/S3).
+describe('session startup takes no gh call (S1, S2)', () => {
+  test('the awaited session_start resolves while the injected gh runner is still pending', async () => {
+    const { hooks } = await loadExtension();
+    const calls = [];
+    let release = null;
+    ghIssues.setGhRunner((bin, argv) => {
+      calls.push({ bin, argv: argv.slice() });
+      return new Promise((resolve) => {
+        release = () => resolve({ status: 0, stdout: '{"login":"me"}', stderr: '', error: null });
+      });
+    });
+    const root = makeRepo({ tag: 'startup-nonblocking' });
+    // The handlers are fired HERE, not through `fireSessionStart`: that helper
+    // waits for the dispatched startup work, and this is precisely the work the
+    // awaited path must not wait for.
+    const fired = sessionStartHandlers(hooks).map((handler) => Promise.resolve(handler({}, gateCtx(root, []))));
+    const settled = await Promise.race([
+      Promise.all(fired).then(() => 'resolved'),
+      new Promise((resolve) => { setTimeout(() => resolve('blocked'), 500); }),
+    ]);
+    assert.equal(settled, 'resolved',
+      'the awaited session_start path never waits on a child process or a network call');
+
+    // Dispatched, not dropped: the probe is still startup work, so the session's
+    // own gate answer still arrives in the background.
+    assert.equal(await waitFor(() => calls.length > 0), true,
+      'the gh gate still probes, off the awaited path');
+    if (typeof release === 'function') release();
+  });
+
+  test('a session outside a repository makes no gh call at startup, and stays silent', async () => {
+    const { hooks } = await loadExtension();
+    const { runner, calls } = makeIssuesRunner();
+    ghIssues.setGhRunner(runner);
+    const outside = fs.realpathSync(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-startup-plain-'))));
+    const notes = [];
+    await fireSessionStart(hooks, gateCtx(outside, notes));
+    assert.deepEqual(calls, [], 'outside a repository there is nothing to check, so no gh child runs');
+    assert.deepEqual(notes, [], 'and nothing is said: a non-repository cwd is not an error');
+  });
+});
+
 describe('/issues overlay and arguments', () => {
   test('opens full screen fed by the three scoped searches, and leaves All until it is asked for', async () => {
     const root = makeRepo({ tag: 'issues-open' });
@@ -636,9 +706,10 @@ describe('/issues overlay and arguments', () => {
     assert.deepEqual(notes[0], ['Unknown option "extra". Use /issues.', 'error']);
   });
 
-  test('outside a Git checkout notifies the shared line at info and opens nothing', async () => {
+  test('outside a Git checkout notifies the shared line at info and spawns no gh', async () => {
     const { commands, mod, hooks } = await loadExtension();
-    ghIssues.setGhRunner(makeIssuesRunner().runner);
+    const { runner, calls } = makeIssuesRunner();
+    ghIssues.setGhRunner(runner);
     const scratch = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-gate-')));
     await fireSessionStart(hooks, gateCtx(scratch, []));
     mod.setIssuesTuiLoader(async () => stubTui);
@@ -648,6 +719,8 @@ describe('/issues overlay and arguments', () => {
     assert.equal(customs.length, 0, 'no overlay outside a checkout');
     assert.equal(selects.length, 0, 'no fallback selector outside a checkout');
     assert.deepEqual(notes, [[`not a git repository: ${outside}; run 'git init' first`, 'info']]);
+    assert.deepEqual(calls, [],
+      'the refusal is the checkout’s own answer: it never asks gh, which could only report its own error');
   });
 });
 
@@ -1225,7 +1298,15 @@ describe('/issues repository identity (S5)', () => {
       assert.equal(opened.ok, false, 'the opener refuses instead of opening another repository');
       assert.match(opened.error, /is a local path, not a GitHub repository/);
       assert.deepEqual(gitCalls, [], 'the browser opener never ran');
-      assert.ok(gh.calls.every((call) => call.cwd !== root), 'no gh command ran in this checkout');
+      // S1/S3 (T1, T2): the session gate is dispatched startup work now and no
+      // longer warms a session-wide `ok` from a scratch cwd, so THIS command's own
+      // on-demand health probe (`gh api user`, `gh repo view`) runs here. That probe
+      // asks gh whether it is usable; it reads nothing of this repository. No READ
+      // and no opener reaches gh from a checkout it cannot name.
+      const reads = gh.calls.filter((call) => call.argv[0] === 'issue'
+        || call.argv[0] === 'label'
+        || (call.argv[0] === 'api' && call.argv[1] === 'graphql'));
+      assert.deepEqual(reads, [], 'no repository read left this checkout');
     } finally {
       worktreeGit.runArgvAsync = original;
       run.restore();

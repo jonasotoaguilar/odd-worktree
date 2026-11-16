@@ -25,6 +25,10 @@ const {
   fileResultRows,
 } = require('../lib/file-card.js');
 const { createFileCardResolver, registerFileCard } = require('../lib/file-card-resolver.js');
+// The design this package registers on the bridge's `Card tools` line: the card's one
+// switch is that line's answer for the tool being drawn, so the card is only painted
+// for a tool the line actually covers.
+const { toolsActivityDesign } = require('../lib/bash-design.js');
 const { CARD_CONTENT_SLOT } = require('../lib/card-content.js');
 const { CARD_STYLE, CARD_STYLE_SLOT } = require('../lib/card-style.js');
 
@@ -306,6 +310,21 @@ test('a heading that fits keeps every role through the expansion too', () => {
   assert.equal(heading.includes('<mdHeading>odd</mdHeading>'), true, heading);
 });
 
+test('an expanded heading that overflows states its identity on the rule and its path once', () => {
+  const resolver = fileResolver();
+  const rows = callRows(resolver, 'read', { path: ODD }, plainTheme, 40, { isPartial: false, expanded: true });
+  const text = rows.map(unpaint).join('\n');
+  // The continued layout drops the detail AND the segments it is drawn from: the rule
+  // states the identity alone, exactly as the baseline did, and the full detail follows
+  // on the rows below it.
+  assert.equal(unpaint(rows[0]), `╭─ 📑 odd ${'─'.repeat(30)}╮`, `the identity alone on the rule: ${unpaint(rows[0])}`);
+  assert.equal(text.includes('odd/tasks'), true, 'the whole path is stated below');
+  assert.equal(text.split('odd/tasks/cards-skill-odd.md').length - 1, 1, `the path is stated once: ${text}`);
+  assert.equal(text.split('·').length - 1, 1, `one separator, never two: ${text}`);
+  assert.match(unpaint(rows[1]), /^│ · read odd\/tasks\/cards-skill-odd\.md +│$/u, `the detail continues once: ${unpaint(rows[1])}`);
+  assertFramed(rows, 40);
+});
+
 test('only a read names a line range', () => {
   const resolver = fileResolver();
   assert.match(unpaint(callRow(resolver, 'read', { path: ODD, offset: 10, limit: 30 }, plainTheme)), /read cards-skill-odd\.md:10-39/u);
@@ -460,6 +479,35 @@ test('a foreign, hostile or unreadable bridge never hides the card', () => {
   // An answer in a shape this build does not know is unreadable, not a refusal.
   globalThis[BRIDGE_API_SLOT] = publishedBridge({ kind: 'future-kind' });
   assert.match(draw(), /📑 odd/u, 'an unknown kind keeps the card');
+});
+
+test('S1: a write is covered by the Card tools line, so its file card paints and `default` restores the host row', () => {
+  // A bridge answers from the design's own `tools` list, exactly as it resolves
+  // coverage: a tool the line does not name is `not-covered`, which is the host's own
+  // card. `write` is declared on that line so the file card can be asked about it.
+  const design = toolsActivityDesign();
+  const asked = [];
+  publishBridge((tool) => (design.tools.includes(tool) ? { kind: 'design', design } : { kind: 'not-covered' }), asked);
+  const resolver = fileResolver();
+  for (const tool of ['read', 'write']) {
+    assert.equal(design.tools.includes(tool), true, `${tool} is covered by the Card tools line`);
+    const row = callRow(resolver, tool, { path: ODD, content: '# x\n' }, plainTheme);
+    assert.match(unpaint(row), /📑 odd/u, `${tool}: the file card paints its heading`);
+    assert.match(unpaint(row), new RegExp(`${tool} cards-skill-odd\\.md`, 'u'), `${tool}: and names the call`);
+  }
+  // A tool the line does not cover is still the host's row: a write is declared, but
+  // nothing else is.
+  const edit = resolver('edit', () => HOST).renderCall({ path: ODD }, plainTheme, { isPartial: false }).render(60);
+  assert.deepEqual(forwardedText(edit), ['host read call'], 'an uncovered tool keeps the host card');
+  assert.deepEqual(asked, ['read', 'write', 'edit'], 'each paint asked about the tool it draws');
+
+  // `default` is the bridge's `native`: the host draws every row again.
+  publishBridge(NATIVE);
+  assert.deepEqual(
+    forwardedText(resolver('write', () => HOST).renderCall({ path: ODD, content: '# x\n' }, plainTheme, { isPartial: false }).render(60)),
+    ['host read call'],
+    'default: no write file card',
+  );
 });
 
 // ---- the host's own outer box, reproduced for every row this card hands back ----
@@ -858,6 +906,34 @@ test('a document the renderer cannot draw falls back to the plain source, unstyl
     assert.equal(body.includes('# Design'), true, `${label}: the source is shown`);
     assert.equal(body.includes('## Specs'), true, `${label}: every line of it`);
     assert.equal(body.includes('<mdHeading>'), false, `${label}: in no Markdown role`);
+  }
+});
+
+test('a write whose document cannot be drawn shows the document it wrote, never the result (S3)', () => {
+  const source = ['# Design', '', '## Specs', '', 'Body text'].join('\n');
+  const drawsNothing = class { render() { return []; } invalidate() {} };
+  const throws = class { render() { throw new Error('renderer exploded'); } invalidate() {} };
+  const cases = [
+    ['no renderer', null],
+    ['a renderer that throws', throws],
+    ['a renderer that draws nothing', drawsNothing],
+  ];
+  for (const [label, markdownClass] of cases) {
+    const resolver = fileResolver({ markdownClass });
+    const args = { path: ODD, content: source };
+    const result = textResult('Successfully wrote 42 bytes');
+    for (const options of [{ isPartial: false }, { expanded: true, isPartial: false }]) {
+      const written = resultRows(resolver, 'write', args, result, options, taggedTheme, 60);
+      const body = written.slice(0, -1).join('\n');
+      assert.equal(unpaint(body).includes('Successfully wrote'), false, `${label}: the result is never a write's body`);
+      assert.equal(body.includes('# Design'), true, `${label}: the document is`);
+      // Expanded, the whole document; collapsed, its first rows, exactly as a read's.
+      assert.equal(body.includes('Body text'), options.expanded === true, `${label}: ${JSON.stringify(options)}`);
+      assert.equal(body.includes('<mdHeading>'), false, `${label}: and it is drawn as plain source`);
+    }
+    // A read keeps the text it read, exactly as before.
+    const read = resultRows(resolver, 'read', { path: ODD }, textResult(source), { expanded: true, isPartial: false }, taggedTheme, 60);
+    assert.equal(read.slice(0, -1).join('\n').includes('## Specs'), true, `${label}: a read keeps its result text`);
   }
 });
 

@@ -782,10 +782,32 @@ const designFor = (version) => {
 };
 
 describe('the Card tools line', () => {
+  test('the line declares `write` so the file card can be asked about it, and the design paints nothing for it', () => {
+    // S1: the file card is painted only while this line resolves to the activity design
+    // for the tool being drawn, and a bridge resolves coverage from the line's own
+    // `tools`. `write` is declared for the card's question — the design itself answers
+    // `undefined` for it (`computeActivity` knows only bash and the read-only marks), so
+    // a write's rows come back byte for byte and the host's own card is never lost.
+    const design = designFor('0.6.0');
+    assert.deepEqual(design.tools, ['bash', 'grep', 'find', 'ls', 'read', 'write']);
+    const answer = (tool) => (design.tools.includes(tool) ? { kind: 'design', design } : { kind: 'not-covered' });
+    assert.equal(answer('write').kind, 'design', 'a write is covered by the line');
+    assert.equal(answer('write').design.id, BASH_DESIGN_ID);
+    assert.equal(answer('edit').kind, 'not-covered', 'and nothing else is');
+
+    // The design's own rows for a write, both parts: untouched, so the file card — not
+    // an activity status line — is what a write shows.
+    const render = { args: { path: 'odd/tasks/a.md', content: '# A' }, isPartial: false, durationMs: 142 };
+    const call = [`╭─ ✎ write odd/tasks/a.md ${'─'.repeat(50)} ctrl+o to expand ─╮`];
+    const result = [`│ ${'x'.repeat(86)} │`, `╰${'─'.repeat(88)}╯`];
+    assert.deepEqual(design.apply(call, { tool: 'write', part: 'call', width: 90, theme, render }), call);
+    assert.deepEqual(design.apply(result, { tool: 'write', part: 'result', width: 90, theme, render }), result);
+  });
+
   test('a 0.6.0 bridge gets ONE grouped registration over bash and the read-only tools', () => {
     const design = designFor('0.6.0');
     assert.equal(design.line, 'tools');
-    assert.deepEqual(design.tools, ['bash', 'grep', 'find', 'ls', 'read']);
+    assert.deepEqual(design.tools, ['bash', 'grep', 'find', 'ls', 'read', 'write']);
     assert.equal(Object.hasOwn(design, 'tool'), false, 'never both shapes');
     assert.equal(design.id, BASH_DESIGN_ID);
     assert.equal(design.label, BASH_DESIGN_LABEL);

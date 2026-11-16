@@ -2701,10 +2701,12 @@ function oddRelFor(absPath, worktreePath, principalRoot) {
 // relative to it (`tasks/plan.md`). Never throws: any unreadable directory
 // contributes nothing.
 // Hot path: `repoIdentity` spawns two git children (~17ms here) and the ODD
-// naming hook runs on EVERY tool_call and tool_result. A session's cwd resolves to
-// the same root/common dir for its whole life, so the answer is memoized per
+// naming hook rides every `tool_call` and `tool_result`. A session's cwd resolves
+// to the same root/common dir for its whole life, so the answer is memoized per
 // cwd instead of respawned twice per tool call. Bounded LRU: a long session
 // visiting many checkouts keeps the most recent ones, never unbounded state.
+// S8 (T6): the filter below answers most events before this memo is even reached,
+// so the common tool call pays neither a `git` nor a lookup.
 const REPO_IDENTITY_CACHE_LIMIT = 32;
 const repoIdentityCache = new Map();
 
@@ -2725,10 +2727,119 @@ function cachedRepoIdentity(git, cwd) {
   return value;
 }
 
+// S8 (T6): the listing behind `git worktree list` is memoized per repository
+// root for a SHORT window, so a burst of tool events in one turn costs ONE `git`
+// instead of one per event. It is deliberately shorter than a turn, and a listing
+// taken BEFORE a checkout was created is never trusted — that is what
+// `notBefore` carries, so the memo cannot hide the checkout the agent just made.
+const WORKTREE_LISTING_MEMO_MS = 1500;
+const WORKTREE_LISTING_CACHE_LIMIT = 32;
+const worktreeListingCache = new Map();
+// When this process last OBSERVED a checkout being created, or null. Only a
+// timestamp: nothing is read from it and no git runs for it.
+let worktreeCreatedAt = null;
+// The one tool that creates a checkout, so its result is what a memoized listing
+// may not predate.
+const WORKTREE_CREATE_TOOL = "worktree_create";
+
+function cachedWorktreeListing(git, root, notBefore) {
+  const key = String(root);
+  const at = Date.now();
+  const hit = worktreeListingCache.get(key);
+  const age = hit === undefined ? Number.NaN : at - hit.at;
+  const recent = Number.isFinite(age) && age >= 0 && age < WORKTREE_LISTING_MEMO_MS;
+  // A listing older than `notBefore` — a checkout created after it — answers
+  // about a world that no longer exists, so it is bypassed instead of trusted.
+  const afterCreation = notBefore === null || notBefore === undefined
+    || (hit !== undefined && Number.isFinite(hit.at) && hit.at >= notBefore);
+  if (recent && afterCreation) {
+    // Refresh recency so the checkout in use is never the one evicted.
+    worktreeListingCache.delete(key);
+    worktreeListingCache.set(key, hit);
+    return hit.live;
+  }
+  const live = git.listWorktrees(key);
+  worktreeListingCache.set(key, { at, live });
+  if (worktreeListingCache.size > WORKTREE_LISTING_CACHE_LIMIT) {
+    worktreeListingCache.delete(worktreeListingCache.keys().next().value);
+  }
+  return live;
+}
+
+// S8 (T6): a touched path names a session only when it is an ODD TASK document
+// (`odd/tasks/*.md`), which is exactly what `lib/session-auto-name.js` derives a
+// label from. The test is lexical — the worktree's own `odd/` may be a symlink to
+// the principal's, and the document behind either spelling carries the same
+// segments — so it costs no child process and no file read.
+const ODD_TASK_PARENT = "tasks";
+const ODD_ROOT = "odd";
+
+function oddTaskDocumentPath(rawPath, cwd) {
+  if (typeof rawPath !== "string" || rawPath.length === 0) return false;
+  if (!rawPath.endsWith(".md")) return false;
+  let resolved;
+  try {
+    const abs = path.isAbsolute(rawPath) ? rawPath : path.join(cwd, rawPath);
+    resolved = path.resolve(abs);
+  } catch {
+    return false;
+  }
+  const segments = resolved.split(path.sep);
+  // The file itself is the last segment, so the parent pair is what is looked for.
+  for (let i = segments.length - 2; i >= 1; i -= 1) {
+    if (segments[i] === ODD_TASK_PARENT && segments[i - 1] === ODD_ROOT) return true;
+  }
+  return false;
+}
+
+// The gentle-pi ODD phase tool, read from `lib/session-auto-name.js` (the module
+// that owns the name) once per load instead of per event: this runs on every
+// non-naming `tool_result`, so the answer is memoized here.
+let oddPhaseToolNameCache;
+
+function oddPhaseToolName() {
+  if (oddPhaseToolNameCache === undefined) {
+    try {
+      const auto = libRequire("session-auto-name.js");
+      oddPhaseToolNameCache = typeof auto.ODD_PHASE_TOOL_NAME === "string" ? auto.ODD_PHASE_TOOL_NAME : "";
+    } catch {
+      oddPhaseToolNameCache = "";
+    }
+  }
+  return oddPhaseToolNameCache;
+}
+
+// S8 (T6): can this event name a session at all? The naming path only ever
+// applies to the `read`/`edit`/`write` tools touching an `odd/tasks/*.md`
+// document, plus the phase trigger, which carries no path and re-applies a label
+// the session already derived. Everything else answers `false` HERE — before any
+// `git`, which is the whole point: the observer used to spawn two blocking child
+// processes per tool call to learn there was nothing to name.
+function oddNamingCandidate(event, cwd, allowPhaseTrigger) {
+  const toolName = oddToolNameOf(event);
+  if (ODD_NAMING_TOOLS.has(toolName)) {
+    for (const raw of oddTouchedPaths(oddArgsOf(event))) {
+      if (oddTaskDocumentPath(raw, cwd)) return true;
+    }
+    return false;
+  }
+  if (allowPhaseTrigger !== true) return false;
+  const phaseTool = oddPhaseToolName();
+  return phaseTool.length > 0 && toolName === phaseTool;
+}
+
 // The pipeline hook proper (M1): every event is observed. Whether a session is
 // renamed at all is decided in lib/session-auto-name.js.
 function observeOddWriteForNaming(event, ctx, pi, allowPhaseTrigger) {
+  // S8 (T6): the create's own result is the fact that a memoized listing may now
+  // be wrong. It costs a timestamp and no git, and it is recorded before the
+  // filter so the events that follow it in the same turn see the new checkout.
+  if (allowPhaseTrigger === true && oddToolNameOf(event) === WORKTREE_CREATE_TOOL) {
+    worktreeCreatedAt = Date.now();
+  }
   const cwd = oddEventCwd(event, ctx);
+  // S8 (T6): filter first, synchronously, with no child process.
+  if (!oddNamingCandidate(event, cwd, allowPhaseTrigger)) return;
   const git = libRequire("worktree-git.js");
   const registry = libRequire("worktree-registry.js");
   let repo;
@@ -2741,10 +2852,13 @@ function observeOddWriteForNaming(event, ctx, pi, allowPhaseTrigger) {
     ? path.dirname(repo.commonDir)
     : repo.root;
   // Git's listing supplies the checkout this write happened in and its branch. There
-  // is no stored row to read (S3): the checkout's own path is the record.
+  // is no stored row to read (S3): the checkout's own path is the record. S8 (T6):
+  // the listing rides a short per-root memo, so a turn's burst of events pays one
+  // `git` — and a listing that predates a create is bypassed, so the memo can never
+  // hide the checkout the agent just made.
   let live;
   try {
-    live = git.listWorktrees(repo.root);
+    live = cachedWorktreeListing(git, repo.root, worktreeCreatedAt);
   } catch {
     return;
   }
@@ -7096,15 +7210,25 @@ const ISSUES_SIDEBAR_INSTALL_WINDOW_MS = 2000;
 const ISSUES_SIDEBAR_WARN_SLOT = Symbol.for("odd-worktree/issues-sidebar/install-warned");
 // S3 (activity floor): a frame only exists when the host has a reason to produce
 // one, so the TTL never fires on a session that is merely in use. The session's
-// own events ask for a read at most once per this floor: in use, the rail is
-// never more than about half a minute behind, and an idle session still makes no
-// `gh` call and starts no timer.
+// own events ask for a read at most once per this floor.
 const ISSUES_SIDEBAR_ACTIVITY_FLOOR_MS = 30000;
+// S10 (T8, L9): what the user asked for in his own words ("deberia ser algo que
+// compruebe cada cierto tiempo nomas, como cada 10seg o 20seg") and what the
+// parent decided: while the section is DRAWN, one self-scheduled, unref'd timer
+// reads the rail at this floor. It is the reason an idle session is no longer
+// stale, and the activity hooks below never add a read on top of it.
+const ISSUES_SIDEBAR_TIME_FLOOR_MS = 20000;
+// S10 (T9, L9): a `bash` command that mutates an issue or a pull request forces
+// ONE read after its result — capped to one per this floor, so a script running
+// several `gh` writes cannot storm the API.
+const ISSUES_SIDEBAR_FORCED_FLOOR_MS = 5000;
 // S3 amended (T13, L11: "estas comprobaciones se hacen solo si la sidebar de
 // issues esta mostrada, o sea, no hidden"): the DRAWN WINDOW. The activity hooks
-// read only while the section was drawn in the last two minutes, so a section the
-// human hid stops the network entirely — no child process, no timer — and
-// showing it again starts from `loading…`.
+// read only while the section was drawn in the last two minutes, and S10 (T8)
+// makes it the floor timer's own stop window — the timer stops by itself once the
+// section leaves it — so a section the human hid stops the network for good once
+// the window passes (no child process, no timer), and showing it again starts
+// from `loading…`.
 const ISSUES_SIDEBAR_DRAWN_WINDOW_MS = 120000;
 // S4 (issues-startup-performance T3): the ONE bound the read cache and its disk
 // half share. `lib/related-issues-cache.js` measures how long a FULL read stays
@@ -8482,6 +8606,12 @@ function mountIssuesSidebar(pi, api) {
   try {
     handle = factory.createIssuesSection({
       load: () => loadIssuesSidebar(),
+      // S10 (T8, L9): the rail re-reads on TIME, not on the session's activity.
+      // The section owns the timer (armed by a draw, unref'd, cleared by
+      // `invalidate()`/`dispose()`) and stops it once the section leaves the
+      // drawn window below, so a hidden section keeps no timer (S11).
+      refreshFloorMs: ISSUES_SIDEBAR_TIME_FLOOR_MS,
+      timerDrawnWindowMs: ISSUES_SIDEBAR_DRAWN_WINDOW_MS,
       // T12/T17/S9: a row click and the overflow row dispatch the panel command.
       // The row's number and the bucket it came from ride the seam; the panel
       // proves the repository itself when it opens, so no proof runs on the click
@@ -8891,6 +9021,54 @@ function refreshIssuesSidebarIfDrawn() {
     // A failed activity read never breaks the session; the next frame retries.
   }
 }
+
+// S10 (T9): the result of a `bash` call whose COMMAND mutates a GitHub issue or
+// pull request is the one moment the plugin knows something changed, so it forces
+// ONE read right after that tool ends. The decision is the classifier's
+// (`lib/issues-bash-mutation.js`, text only, no child process), and the cap is the
+// section's (`forceRefresh`, L9: one forced read per 5 s, so a script running
+// several `gh` writes cannot storm the API). Nothing happens for a non-`bash`
+// tool — the classifier never even runs — and nothing happens while the section
+// is not drawn (S11) or for a result the session that is running did not produce.
+// Best effort like its neighbours: a throwing seam never breaks the result it
+// rides on.
+function forceIssuesSidebarRefreshForBash(event, ctx) {
+  try {
+    // S10 (T9): the event is read through the SAME accessors every other handler
+    // uses — `oddToolNameOf`/`oddArgsOf` accept the host's other spellings, so a
+    // result that arrives as `tool`/`args` is the same bash call and forces the
+    // same read instead of silently matching nothing.
+    if (oddToolNameOf(event) !== "bash") return;
+    const handle = issuesSidebarHandle;
+    if (!handle) return;
+    // S11: the whole feature only serves a section that is on screen.
+    if (typeof handle.drawnWithin !== "function") return;
+    if (handle.drawnWithin(ISSUES_SIDEBAR_DRAWN_WINDOW_MS) !== true) return;
+    // A result from a session that already ended forces nothing: the ctx it
+    // carries is not the session this rail belongs to.
+    if (!oddSessionStillCurrent(ctx)) return;
+    if (typeof handle.forceRefresh !== "function") return;
+    const input = oddArgsOf(event);
+    const command = input && typeof input === "object" ? input.command : undefined;
+    if (typeof command !== "string" || command.length === 0) return;
+    const mutation = libRequire("issues-bash-mutation.js");
+    if (!mutation || typeof mutation.bashMutatesIssuesOrPullRequests !== "function") return;
+    if (mutation.bashMutatesIssuesOrPullRequests(command) !== true) return;
+    handle.forceRefresh(ISSUES_SIDEBAR_FORCED_FLOOR_MS);
+  } catch {
+    // A forced read is best effort: it never breaks the result it rides on.
+  }
+}
+
+// The event's own session, against the one this rail was bound to. A host that
+// gives no id on either side is answered by the drawn window instead, and a rail
+// with no remembered session (a `/reload`, a shutdown) is answered with `false`.
+function oddSessionStillCurrent(ctx) {
+  const current = issuesSidebarCtx === null ? undefined : oddSessionId(issuesSidebarCtx);
+  if (current === undefined) return false;
+  const event = oddSessionId(ctx);
+  return event === undefined || event === current;
+}
 export default function (pi) {
   // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
   // moves the session, so the command is where a handoff waits and lands.
@@ -9001,6 +9179,11 @@ export default function (pi) {
   // exactly as the host proposed it. Nothing about it is callable by the agent (S7).
   pi.on("tool_call", (event, ctx) => guardWorktreeBashCall(event, ctx));
   pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
+  // S10 (T9): ONE `tool_result` observation for the rail's forced refresh. It
+  // answers the `bash` tool only — every other tool returns before the classifier
+  // is even loaded — and it is separate from the naming handler because the two
+  // answer different questions about the same event.
+  pi.on("tool_result", (event, ctx) => forceIssuesSidebarRefreshForBash(event, ctx));
   // S10: the host's execution pair feeds the queue's in-flight tool counter for
   // EVERY tool of the session, not only this package's.
   pi.on("tool_execution_start", (event) => warpNoteToolExecution(event, false));

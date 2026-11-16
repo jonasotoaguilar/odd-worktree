@@ -103,9 +103,21 @@ after(() => {
   }
 });
 
+// T8 (S10): the drawn section now keeps a real, unref'd floor timer, and a test
+// that ends while the section is still drawn would leave that timer to fire 20 s
+// later — in a later test, with no runner of its own. The clock jumps ten minutes
+// between tests, so every such timer finds the section OUTSIDE its drawn window
+// and stops without reading (and without arming another one). Nothing else about
+// the suite notices: every assertion measures a distance between two instants of
+// the same test.
+let suiteClockSkewMs = 0;
+const realDateNow = Date.now;
+Date.now = () => realDateNow() + suiteClockSkewMs;
+
 afterEach(() => {
   delete globalThis[BRIDGE_SLOT];
   delete globalThis[WARNED_SLOT];
+  suiteClockSkewMs += 10 * 60 * 1000;
   if (ghIssues) {
     ghIssues.setGhRunner(null);
     ghIssues.setGitRunner(null);
@@ -1212,6 +1224,16 @@ async function fireHook(hooks, event, ctx) {
 async function fireSessionStart(hooks, ctx) {
   for (const handler of sessionStartHandlers(hooks)) {
     const out = handler({}, ctx);
+    if (out && typeof out.then === 'function') await out;
+  }
+}
+
+// Fire one host event with a SPECIFIC payload: `fireHook` sends the
+// `turn_end`-shaped event, while a `tool_call`/`tool_result` handler must see the
+// tool it rides on.
+async function fireEvent(hooks, name, event, ctx) {
+  for (const handler of hooksFor(hooks, name)) {
+    const out = handler(event, ctx);
     if (out && typeof out.then === 'function') await out;
   }
 }
@@ -2330,6 +2352,207 @@ test('S6: a read in flight at session_shutdown never repaints the rail', async (
 });
 
 // ---------------------------------------------------------------------------
+// T8 (S10, S11, L9): the rail re-reads on TIME, not on activity. While the
+// section is DRAWN it keeps ONE self-scheduled, unref'd timer at the floor L9
+// names (20 s): one read per floor, never a burst, never two reads in flight.
+// The timer keeps no clock of its own — it fires through the same injected
+// `setTimer`/`clearTimer` seams as everything else here — and it stops by itself
+// the moment the section is no longer drawn (the `drawnWithin` window), and it
+// is cleared by `invalidate()` and `dispose()`.
+// ---------------------------------------------------------------------------
+
+// The injected clock plus one list of pending timers: a test fires exactly the
+// timer the section armed, at the instant that timer was armed for.
+function fakeTimerSeam(start = 100000) {
+  const seam = {
+    clock: start,
+    armed: [],
+    setTimer(fn, ms) {
+      const timer = {
+        at: seam.clock + ms,
+        ms,
+        fn,
+        fired: false,
+        cleared: false,
+        unrefCalls: 0,
+        unref() { this.unrefCalls += 1; },
+      };
+      seam.armed.push(timer);
+      return timer;
+    },
+    clearTimer(timer) {
+      if (!timer) return;
+      timer.cleared = true;
+      seam.armed = seam.armed.filter((pending) => pending !== timer);
+    },
+    take() {
+      const timer = seam.armed.shift();
+      if (!timer) throw new Error('the section armed no timer to fire');
+      // A fire never rewinds the clock: a test that jumped the clock forward
+      // (to model a section nobody drew for a while) keeps that instant.
+      seam.clock = Math.max(seam.clock, timer.at);
+      timer.fired = true;
+      timer.fn();
+      return timer;
+    },
+  };
+  return seam;
+}
+
+// Let the section's own deferred read settle: its `schedule` runs inline, so
+// only the promise chain is left.
+async function settleFrames() {
+  for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+test('S10 (T8): a drawn section reads on its own timer at the floor, one read per floor', async () => {
+  const timers = fakeTimerSeam();
+  let loads = 0;
+  const handle = createIssuesSection({
+    load: async () => {
+      loads += 1;
+      return { ok: true, identity: IDENTITY, issues: [], truncated: false };
+    },
+    schedule: (fn) => { fn(); },
+    now: () => timers.clock,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    refreshFloorMs: 20000,
+    timerDrawnWindowMs: 120000,
+  });
+
+  // A section nobody draws starts nothing: no read and no timer (S11).
+  await settleFrames();
+  assert.equal(loads, 0, 'an undrawn section reads nothing');
+  assert.equal(timers.armed.length, 0, 'an undrawn section keeps no timer');
+
+  // The first frame arms the floor's timer, and it never keeps the process alive.
+  handle.section.lines({});
+  await settleFrames();
+  assert.equal(loads, 1, 'the drawn frame made its own TTL read');
+  assert.equal(timers.armed.length, 1, 'one timer, armed by the drawn frame');
+  assert.equal(timers.armed[0].ms, 20000, 'the floor L9 names');
+  assert.equal(timers.armed[0].unrefCalls, 1, 'the timer is unref\'d, so it never holds the process');
+
+  // More frames while it is armed never add a timer: one read per floor, never a burst.
+  handle.section.lines({});
+  handle.section.meta({});
+  assert.equal(timers.armed.length, 1, 'a frame never stacks a second timer');
+
+  // The fire is the read, and it arms exactly the next floor.
+  timers.take();
+  await settleFrames();
+  assert.equal(loads, 2, 'the timer fired exactly one read');
+  assert.equal(timers.armed.length, 1, 'and armed the next floor, once');
+  assert.equal(timers.armed[0].ms, 20000);
+
+  // The next fire reads again: the rail keeps itself current on an idle session.
+  timers.take();
+  await settleFrames();
+  assert.equal(loads, 3, 'the second floor fired its own read');
+  assert.equal(timers.armed.length, 1);
+});
+
+test('S10/S11 (T8): the timer never overlaps a read, and it stops once the section is not drawn', async () => {
+  const timers = fakeTimerSeam();
+  const pending = [];
+  let loads = 0;
+  const handle = createIssuesSection({
+    load: () => {
+      loads += 1;
+      return new Promise((resolve) => pending.push(resolve));
+    },
+    schedule: (fn) => { fn(); },
+    now: () => timers.clock,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    refreshFloorMs: 20000,
+    timerDrawnWindowMs: 120000,
+  });
+
+  handle.section.lines({});
+  await settleFrames();
+  assert.equal(loads, 1, 'the drawn frame started its read');
+
+  // The timer fires while that read is still in flight: it starts nothing.
+  timers.take();
+  await settleFrames();
+  assert.equal(loads, 1, 'never two reads in flight');
+  assert.equal(timers.armed.length, 1, 'the timer still arms the next floor');
+
+  pending.shift()({ ok: true, identity: IDENTITY, issues: [], truncated: false });
+  await settleFrames();
+  assert.equal(handle.snapshot().status, 'ready');
+
+  // Nobody drew the section for longer than the drawn window: the fire starts
+  // nothing and the timer keeps nothing.
+  timers.clock += 121000;
+  timers.take();
+  await settleFrames();
+  assert.equal(loads, 1, 'a section outside the drawn window reads nothing');
+  assert.equal(timers.armed.length, 0, 'and it keeps no timer');
+});
+
+test('S10/S11 (T8): invalidate and dispose clear the timer, and a queued callback is inert', async () => {
+  const timers = fakeTimerSeam();
+  let loads = 0;
+  const handle = createIssuesSection({
+    load: async () => {
+      loads += 1;
+      return { ok: true, identity: IDENTITY, issues: [], truncated: false };
+    },
+    schedule: (fn) => { fn(); },
+    now: () => timers.clock,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    refreshFloorMs: 20000,
+    timerDrawnWindowMs: 120000,
+  });
+
+  handle.section.lines({});
+  await settleFrames();
+  assert.equal(loads, 1);
+  const onInvalidate = timers.armed.shift();
+  handle.invalidate();
+  assert.equal(onInvalidate.cleared, true, 'invalidate clears the floor timer');
+  // A host that already queued the callback still runs it: it must be inert.
+  timers.clock = onInvalidate.at;
+  onInvalidate.fn();
+  await settleFrames();
+  assert.equal(loads, 1, 'a cleared timer reads nothing');
+  assert.equal(timers.armed.length, 0, 'and arms nothing');
+
+  handle.section.lines({});
+  await settleFrames();
+  assert.equal(loads, 2, 'the redrawn section reads again');
+  const onDispose = timers.armed.shift();
+  handle.dispose();
+  assert.equal(onDispose.cleared, true, 'dispose clears the floor timer');
+  timers.clock = onDispose.at;
+  onDispose.fn();
+  await settleFrames();
+  assert.equal(loads, 2, 'a disposed section reads nothing');
+  assert.equal(timers.armed.length, 0);
+});
+
+test('S11 (T8): a caller that names no floor keeps the module timer-free', async () => {
+  const timers = fakeTimerSeam();
+  const handle = createIssuesSection({
+    load: async () => ({ ok: true, identity: IDENTITY, issues: [], truncated: false }),
+    schedule: (fn) => { fn(); },
+    now: () => timers.clock,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+
+  handle.section.lines({});
+  await settleFrames();
+  assert.equal(handle.snapshot().status, 'ready');
+  assert.equal(timers.armed.length, 0, 'no floor, no timer: the module schedules nothing by itself');
+  handle.dispose();
+});
+
+// ---------------------------------------------------------------------------
 // T13 (S3 amended, L11): a hidden section costs nothing — no child process, no
 // network, no timer. The module records when it was last DRAWN (`lines()` and
 // `meta()` are the drawing calls), answers `drawnWithin(window)`, and the
@@ -2477,6 +2700,226 @@ test('S3 (T13): a session that shut down reads nothing on a later activity', asy
   await fireHook(loaded.hooks, 'before_agent_start', ctx);
   await new Promise((resolve) => setTimeout(resolve, 150));
   assert.equal(gh.calls.length, before, 'a shut-down session reads nothing on a later activity');
+});
+
+// ---------------------------------------------------------------------------
+// T8/T9 (S10, S11, L9): the rail refreshes on TIME and after a mutating `bash`.
+// The extension arms the section's own floor timer at 20 s (L9) while the
+// section is drawn, its activity hooks add no read on top of a fresh one, and a
+// `bash` result whose command mutates an issue or a pull request forces ONE read
+// behind the 5 s anti-storm cap. Nothing at all happens while the section is not
+// drawn (S11), and a result from a session that already ended forces nothing.
+// ---------------------------------------------------------------------------
+
+test('S10 (T8): a drawn section reads on the extension\'s own 20 s timer, and activity adds nothing', async () => {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  // The section's floor timer is the ONE timer this test owns: it is captured
+  // instead of waited for, so the 20 s floor is exercised without 20 idle
+  // seconds. Every other delay goes to the host's own `setTimeout`.
+  const armed = [];
+  globalThis.setTimeout = (fn, ms, ...rest) => {
+    if (ms === 20000) {
+      const timer = { fn, ms, fired: false, cleared: false, issuesFloorTimer: true, unref() {} };
+      armed.push(timer);
+      return timer;
+    }
+    return realSetTimeout(fn, ms, ...rest);
+  };
+  globalThis.clearTimeout = (handle) => {
+    if (handle && handle.issuesFloorTimer === true) {
+      handle.cleared = true;
+      return;
+    }
+    return realClearTimeout(handle);
+  };
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const gh = sectionGithub({
+      issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
+    });
+    ghIssues.setGhRunner(gh.runner);
+    const ctx = { cwd: checkout, ui: { notify: () => {} }, sessionManager: { getSessionId: () => 'session-one' } };
+
+    await fireSessionStart(loaded.hooks, ctx);
+    assert.equal(registered.length, 1);
+    const section = registered[0];
+
+    // A hidden section: no frame, no timer, no read (S11).
+    await fireHook(loaded.hooks, 'before_agent_start', ctx);
+    await fireHook(loaded.hooks, 'turn_end', ctx);
+    await new Promise((resolve) => realSetTimeout(resolve, 120));
+    assert.equal(armed.length, 0, 'a hidden section keeps no timer');
+    assert.equal(graphqlCalls(gh.calls).length, 0, 'a hidden section reads nothing');
+
+    // The drawn frame arms ONE unref'd timer at the floor L9 names.
+    await waitForRows(section, ctx);
+    assert.equal(armed.length, 1, 'the drawn frame armed one timer');
+    assert.equal(armed[0].ms, 20000, 'the floor is 20 s (L9)');
+    const reads = graphqlCalls(gh.calls).length;
+    assert.equal(reads, 1, 'the drawn frame made its own read');
+
+    // The timer fires at its floor: exactly one read, and the next floor armed.
+    offset = 25000;
+    armed[0].fired = true;
+    armed[0].fn();
+    await waitFor(() => graphqlCalls(gh.calls).length === reads + 1,
+      'the drawn section\'s floor timer started no read');
+    assert.equal(armed.length, 2, 'the fire armed the next floor');
+
+    // The session's own activity adds no read on top of the timer's own.
+    await fireHook(loaded.hooks, 'turn_end', ctx);
+    await fireHook(loaded.hooks, 'before_agent_start', ctx);
+    await new Promise((resolve) => realSetTimeout(resolve, 150));
+    assert.equal(graphqlCalls(gh.calls).length, reads + 1, 'activity added no read inside the floor');
+
+    // The session boundary clears the timer, and a callback already queued by
+    // the host reads nothing.
+    await fireHook(loaded.hooks, 'session_shutdown', ctx);
+    assert.equal(armed[1].cleared, true, 'session_shutdown cleared the floor timer');
+    offset = 50000;
+    armed[1].fired = true;
+    armed[1].fn();
+    await new Promise((resolve) => realSetTimeout(resolve, 150));
+    assert.equal(graphqlCalls(gh.calls).length, reads + 1, 'a cleared timer reads nothing');
+  } finally {
+    Date.now = realNow;
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+  }
+});
+
+test('S10 (T9): a mutating bash result forces one read, capped to one per 5 s', async () => {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const gh = sectionGithub({
+      issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
+    });
+    ghIssues.setGhRunner(gh.runner);
+    const ctx = { cwd: checkout, ui: { notify: () => {} }, sessionManager: { getSessionId: () => 'session-one' } };
+
+    await fireSessionStart(loaded.hooks, ctx);
+    assert.equal(registered.length, 1);
+    const section = registered[0];
+    await waitForRows(section, ctx);
+    const reads = graphqlCalls(gh.calls).length;
+    assert.equal(reads, 1);
+
+    const bashResult = (command) => ({ toolName: 'bash', input: { command }, toolResults: [] });
+
+    // The mutating result forces exactly one read, right after it.
+    await fireEvent(loaded.hooks, 'tool_result', bashResult('gh issue close 11'), ctx);
+    await waitFor(() => graphqlCalls(gh.calls).length === reads + 1,
+      'a mutating bash result forced no read');
+
+    // A second write inside the 5 s cap forces nothing (L9).
+    await fireEvent(loaded.hooks, 'tool_result', bashResult('gh pr merge 3'), ctx);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(graphqlCalls(gh.calls).length, reads + 1, 'the anti-storm cap held');
+
+    // A read-only command and a non-bash tool force nothing either.
+    await fireEvent(loaded.hooks, 'tool_result', bashResult('gh issue list --limit 5'), ctx);
+    await fireEvent(loaded.hooks, 'tool_result', { toolName: 'write', input: { command: 'gh issue close 12' }, toolResults: [] }, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(graphqlCalls(gh.calls).length, reads + 1, 'only a mutating bash forces a read');
+
+    // Past the cap the next mutation forces its own read.
+    offset = 6000;
+    await fireEvent(loaded.hooks, 'tool_result', bashResult('gh issue reopen 11'), ctx);
+    await waitFor(() => graphqlCalls(gh.calls).length === reads + 2,
+      'a mutation past the cap forced no read');
+
+    // A result from a session that already ended forces nothing.
+    await fireEvent(loaded.hooks, 'tool_result', bashResult('gh issue close 11'), {
+      ...ctx,
+      sessionManager: { getSessionId: () => 'session-that-ended' },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(graphqlCalls(gh.calls).length, reads + 2, 'an ended session\'s result forces nothing');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+// S10 (T9): the host does not have to spell a tool event the way our other
+// handlers read it first. `oddToolNameOf` accepts `toolName`, `tool` and `name`,
+// and `oddArgsOf` accepts `args`, `input`, `params` and `arguments`, so the one
+// handler that forces a read has to read the event through the same pair — a
+// `tool`/`args` result is the same bash call and must force the same read.
+test('S10 (T9): a mutating bash named under `tool`/`args` forces the same read', async () => {
+  const realNow = Date.now;
+  Date.now = () => realNow();
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const gh = sectionGithub({
+      issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
+    });
+    ghIssues.setGhRunner(gh.runner);
+    const ctx = { cwd: checkout, ui: { notify: () => {} }, sessionManager: { getSessionId: () => 'session-one' } };
+
+    await fireSessionStart(loaded.hooks, ctx);
+    const section = registered[0];
+    await waitForRows(section, ctx);
+    const reads = graphqlCalls(gh.calls).length;
+
+    await fireEvent(loaded.hooks, 'tool_result', { tool: 'bash', args: { command: 'gh issue close 11' }, toolResults: [] }, ctx);
+    await waitFor(() => graphqlCalls(gh.calls).length === reads + 1,
+      'a mutating bash carried under `tool`/`args` forced no read');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('S11 (T9): a hidden section forces no read, and a mutating result after shutdown does nothing', async () => {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const gh = sectionGithub({
+      issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
+    });
+    ghIssues.setGhRunner(gh.runner);
+    const ctx = { cwd: checkout, ui: { notify: () => {} }, sessionManager: { getSessionId: () => 'session-one' } };
+
+    await fireSessionStart(loaded.hooks, ctx);
+    assert.equal(registered.length, 1);
+
+    // Nothing was ever drawn, so nothing is forced (S11).
+    await fireEvent(loaded.hooks, 'tool_result', { toolName: 'bash', input: { command: 'gh issue close 11' }, toolResults: [] }, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(graphqlCalls(gh.calls).length, 0, 'a hidden section forces no read at all');
+
+    // Drawn, then shut down: the section is showing nothing again.
+    const section = registered[0];
+    await waitForRows(section, ctx);
+    const reads = graphqlCalls(gh.calls).length;
+    await fireHook(loaded.hooks, 'session_shutdown', ctx);
+    offset = 6000;
+    await fireEvent(loaded.hooks, 'tool_result', { toolName: 'bash', input: { command: 'gh issue close 11' }, toolResults: [] }, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(graphqlCalls(gh.calls).length, reads, 'a result after shutdown forces nothing');
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 // ---------------------------------------------------------------------------

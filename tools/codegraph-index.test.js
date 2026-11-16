@@ -13,6 +13,8 @@ const { spawn } = require('node:child_process');
 
 const {
   INIT_TIMEOUT_MS,
+  KILL_ESCALATION_MS,
+  KILL_WAIT_MS,
   POST_INIT_SYNC_WAIT_MS,
   SYNC_TIMEOUT_MS,
   autoIndex,
@@ -896,6 +898,258 @@ test('S2: a timed-out runCodegraph resolves only once the killed process is gone
     if (oldPidFile === undefined) delete process.env.CODEGRAPH_STUB_PID_FILE;
     else process.env.CODEGRAPH_STUB_PID_FILE = oldPidFile;
   }
+});
+
+/** A stand-in for a spawned child: it records every signal it is asked for and lets the test end it. */
+function fakeChild(pid) {
+  const handlers = { error: [], close: [] };
+  const signals = [];
+  const child = {
+    pid,
+    exitCode: null,
+    signalCode: null,
+    signals,
+    kill(signal = 'SIGTERM') {
+      signals.push(signal);
+      return true;
+    },
+    on(event, handler) {
+      if (!handlers[event]) handlers[event] = [];
+      handlers[event].push(handler);
+      return child;
+    },
+    end(code, signal) {
+      child.exitCode = code;
+      child.signalCode = signal;
+      for (const handler of handlers.close) handler(code, signal);
+      return child;
+    },
+  };
+  return child;
+}
+
+const sleep = (ms) => new Promise((resolve) => {
+  setTimeout(resolve, ms);
+});
+
+/** Whether a pid is gone, polled because a hard kill is asynchronous on every platform. */
+async function gone(pid, deadlineMs = 5_000) {
+  const limit = Date.now() + deadlineMs;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    if (Date.now() > limit) return false;
+    await sleep(25);
+  }
+}
+
+/**
+ * Waits for a marker a child process writes once it is ready. It polls with a deadline, so a slow start costs the
+ * deadline and never a guessed sleep, and the caller proceeds on the evidence instead of on elapsed time.
+ */
+async function ready(file, deadlineMs = 10_000) {
+  const limit = Date.now() + deadlineMs;
+  for (;;) {
+    if (fs.existsSync(file)) return true;
+    if (Date.now() > limit) return false;
+    await sleep(5);
+  }
+}
+
+test('S5: a child that ignores SIGTERM is escalated to SIGKILL, and the timed-out run still reports failure', {
+  // A POSIX signal trap is what this case is about; on Windows the escalation is the repeated taskkill the fake-child
+  // case pins, and a soft `kill` ends the process outright, so there would be nothing to trap.
+  skip: process.platform === 'win32' ? 'POSIX signal trapping' : false,
+}, async () => {
+  const dir = temp('cg-run-trap-');
+  const pidFile = path.join(dir, 'trap.pid');
+  const readyFile = path.join(dir, 'trap.ready');
+  const termLog = path.join(dir, 'trap.term');
+  const stub = path.join(dir, 'trap-cli.js');
+  // A real child that traps SIGTERM: only a hard kill ends it. The trap is installed before the marker is written, so
+  // the marker is the proof that a soft kill cannot end this process — and the trap records the signal it survived.
+  fs.writeFileSync(stub, [
+    "'use strict';",
+    "const fs = require('node:fs');",
+    `const pidFile = ${JSON.stringify(pidFile)};`,
+    `const readyFile = ${JSON.stringify(readyFile)};`,
+    `const termLog = ${JSON.stringify(termLog)};`,
+    'fs.writeFileSync(pidFile, String(process.pid));',
+    "process.on('SIGTERM', () => fs.appendFileSync(termLog, 'SIGTERM\\n'));",
+    "fs.writeFileSync(readyFile, 'trap installed');",
+    'setInterval(() => {}, 1000);',
+  ].join('\n'));
+  // The child is started and announces itself first, so the run below cannot signal it before its trap exists: no
+  // startup is guessed, and the timeout this case measures starts on a process that is already ready.
+  const child = spawn(process.execPath, [stub], { stdio: 'ignore' });
+  try {
+    assert.equal(await ready(readyFile), true, 'the stub installed its SIGTERM trap before anything signals it');
+    const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+    assert.equal(pid, child.pid, 'the stub that installed the trap is the process this run will kill');
+    const ok = await runCodegraph(['init', '-y'], dir, 30, () => {}, {
+      escalationMs: 200,
+      killWaitMs: 1_000,
+      spawn: () => child,
+    });
+    assert.equal(ok, false, 'the escalation still reports the timeout, never a success');
+    assert.equal(fs.readFileSync(termLog, 'utf8'), 'SIGTERM\n', 'the trap ran: the soft kill reached the child and did not end it');
+    assert.equal(await gone(pid, 2_000), true, `the child that trapped SIGTERM (pid ${pid}) is gone`);
+  } finally {
+    try {
+      child.kill('SIGKILL'); // cleanup of this case's own child
+    } catch {
+      // Already gone.
+    }
+  }
+});
+
+test('S5: a child that dies on SIGTERM is not killed a second time and its failure is reported as before', async () => {
+  const dir = temp('cg-run-term-');
+  let child;
+  const run = runCodegraph(['sync', '-q'], dir, 30, () => {}, {
+    platform: 'linux',
+    escalationMs: 60,
+    spawn: () => {
+      child = fakeChild(7001);
+      const asked = child.kill;
+      // The process really dies of the signal it was sent: the close event follows the kill.
+      child.kill = (signal = 'SIGTERM') => {
+        const ok = asked(signal);
+        setImmediate(() => child.end(null, signal));
+        return ok;
+      };
+      return child;
+    },
+  });
+  assert.equal(await run, false, 'a killed run is a failed run');
+  assert.deepEqual(child.signals, ['SIGTERM'], 'only the soft kill was sent');
+  await sleep(120); // well past the escalation delay this run armed
+  assert.deepEqual(child.signals, ['SIGTERM'], 'a child that already died is never escalated');
+});
+
+test('S5: a run that finishes normally neither escalates nor kills anything after it settled', async () => {
+  const dir = temp('cg-run-ok-');
+  let child;
+  const run = runCodegraph(['sync', '-q'], dir, 1_000, () => {}, {
+    platform: 'linux',
+    escalationMs: 20,
+    spawn: () => {
+      child = fakeChild(7002);
+      setTimeout(() => child.end(0, null), 5);
+      return child;
+    },
+  });
+  assert.equal(await run, true, 'a command that came back with 0 succeeded');
+  await sleep(60);
+  assert.deepEqual(child.signals, [], 'nothing is signalled after a successful run settled');
+});
+
+test('S5: the escalation delay is measured from the soft kill, so no hard kill lands before it', async () => {
+  const dir = temp('cg-run-escalate-');
+  const ESCALATION_MS = 200;
+  // The only discount is the millisecond a signal timestamp and the timer queue can disagree by. Nothing is taken off
+  // the delay itself: a shorter gap than this is a hard kill that did not wait.
+  const SIGNAL_CLOCK_TOLERANCE_MS = 5;
+  const received = [];
+  const run = runCodegraph(['sync', '-q'], dir, 40, () => {}, {
+    platform: 'linux',
+    killWaitMs: 1_000,
+    escalationMs: ESCALATION_MS,
+    spawn: () => {
+      const child = fakeChild(7003);
+      const asked = child.kill;
+      // The child's own record of when each signal reached it: the gap between the two is what "the delay" means here,
+      // and it is the one interval this case can measure without the run's own start standing in for it.
+      child.kill = (signal = 'SIGTERM') => {
+        received.push({ signal, at: Date.now() });
+        // Only the hard kill ends it, which is what a SIGTERM-trapping child looks like.
+        if (signal === 'SIGKILL') setImmediate(() => child.end(null, signal));
+        return asked(signal);
+      };
+      return child;
+    },
+  });
+  assert.equal(await run, false, 'the escalated run reports the timeout');
+  assert.deepEqual(received.map((entry) => entry.signal), ['SIGTERM', 'SIGKILL'], 'exactly one soft kill and one hard kill, in that order');
+  const gap = received[1].at - received[0].at;
+  assert.ok(gap >= ESCALATION_MS - SIGNAL_CLOCK_TOLERANCE_MS, `the hard kill waited the escalation delay after the soft one (${gap}ms)`);
+});
+
+test('S5: a requested escalation beyond the reporting grace is clamped, so the hard kill still lands', async () => {
+  const dir = temp('cg-run-clamp-');
+  const killWaitMs = 200;
+  const requestedMs = 10_000;
+  const killedAt = [];
+  const started = Date.now();
+  const run = runCodegraph(['sync', '-q'], dir, 40, () => {}, {
+    platform: 'linux',
+    killWaitMs,
+    escalationMs: requestedMs,
+    spawn: () => {
+      const child = fakeChild(7006);
+      const asked = child.kill;
+      child.kill = (signal = 'SIGTERM') => {
+        killedAt.push({ signal, at: Date.now() });
+        // Only the hard kill ends it, which is what a SIGTERM-trapping child looks like.
+        if (signal === 'SIGKILL') setImmediate(() => child.end(null, signal));
+        return asked(signal);
+      };
+      return child;
+    },
+  });
+  // The hard kill has to land inside the grace, so it is looked for before the run is allowed to report.
+  const deadline = Date.now() + 1_000;
+  while (!killedAt.some((entry) => entry.signal === 'SIGKILL') && Date.now() < deadline) await sleep(10);
+  const hard = killedAt.filter((entry) => entry.signal === 'SIGKILL');
+  assert.equal(hard.length, 1, `a requested ${requestedMs}ms escalation is clamped into the ${killWaitMs}ms grace: ${JSON.stringify(killedAt)}`);
+  assert.equal(await run, false, 'the escalation still reports the timeout, never a success');
+  assert.ok(hard[0].at - started <= killWaitMs, `the hard kill landed inside the reporting grace (${hard[0].at - started}ms)`);
+});
+
+test('S5: a run that already timed out never reports success, even when the child exits 0 afterwards', async () => {
+  const dir = temp('cg-run-late-ok-');
+  const run = runCodegraph(['sync', '-q'], dir, 30, () => {}, {
+    platform: 'linux',
+    escalationMs: 500,
+    spawn: () => {
+      const child = fakeChild(7004);
+      // A child that traps SIGTERM and then exits cleanly on its own: the timeout already happened.
+      setTimeout(() => child.end(0, null), 80);
+      return child;
+    },
+  });
+  assert.equal(await run, false, 'the timeout is the outcome, not the exit code that came after it');
+});
+
+test('S5: on Windows the hard kill is a second taskkill /T /F, run only while the pid lives', async () => {
+  const dir = temp('cg-run-win-');
+  const taskkills = [];
+  const cli = fakeChild(7005);
+  const run = runCodegraph(['sync', '-q'], dir, 20, () => {}, {
+    platform: 'win32',
+    escalationMs: 40,
+    spawn: (command, args) => {
+      if (command === 'taskkill') {
+        taskkills.push((args || []).join(' '));
+        return { on: () => {} };
+      }
+      // A shell proxy that only goes away once it is asked twice.
+      setTimeout(() => cli.end(null, 'SIGKILL'), 200);
+      return cli;
+    },
+  });
+  assert.equal(await run, false, 'the timeout is reported');
+  assert.deepEqual(taskkills, ['/pid 7005 /T /F', '/pid 7005 /T /F'], 'the escalation re-runs the hard kill while the pid lives');
+  assert.deepEqual(cli.signals, [], 'Windows escalates through taskkill, not a POSIX signal');
+});
+
+test('S5: the escalation fires inside the reporting grace, never instead of it', () => {
+  assert.ok(KILL_ESCALATION_MS > 0, 'the default delay is a positive number of milliseconds');
+  assert.ok(KILL_ESCALATION_MS <= 2_000, 'a couple of seconds, not minutes');
+  assert.ok(KILL_ESCALATION_MS < KILL_WAIT_MS, 'the hard kill lands inside the grace the run already reports on');
 });
 
 test('S2: the constant bounds of a run are the ones the commands use', () => {

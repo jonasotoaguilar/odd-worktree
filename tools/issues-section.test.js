@@ -1464,7 +1464,9 @@ test('S8 (T9): the ONE combined read supplies both the rows and the pull-request
 
   const rows = section.lines(ctx);
   assert.deepEqual(rows.map((row) => row.label), ['#13 Two PRs', '#12 No PR', '#11 Has a PR']);
-  assert.equal(rows[0].meta, '#70', 'an issue with several pull requests marks the FIRST number');
+  // S3 (issues-sidebar-click): the mark is the NEWEST pull request's number, so
+  // the fixture's later event (#71) wins over the earlier one (#70).
+  assert.equal(rows[0].meta, '#71', 'an issue with several pull requests marks the NEWEST number');
   assert.equal('meta' in rows[1], false, 'an issue no pull request references carries no marker');
   assert.equal(rows[2].meta, '#69');
   assert.deepEqual(rows.map((row) => row.tone), ['text', 'text', 'text'],
@@ -1486,8 +1488,8 @@ test('S8 (T9): the ONE combined read supplies both the rows and the pull-request
     assert.ok(query.includes(`repo:myfork/project is:issue is:open ${qualifier} sort:updated-desc`),
       `the combined read carries ${qualifier}`);
   }
-  assert.ok(query.includes('timelineItems(first: 10, itemTypes: [CROSS_REFERENCED_EVENT])'),
-    'the marker selection rides each row');
+  assert.ok(query.includes('timelineItems(last: 10, itemTypes: [CROSS_REFERENCED_EVENT])'),
+    'the marker selection rides each row and reads the newest events');
   assert.ok(query.includes('... on PullRequest { number }'),
     'and the selection asks for the number the mark prints (S8)');
 });

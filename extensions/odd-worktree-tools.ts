@@ -6737,16 +6737,16 @@ function filesRunner(git) {
 }
 
 /**
- * S9: the checkouts `/files` can browse — the principal checkout and every
- * checkout this package created. Which checkouts are ours is the registry's one
- * rule (the path under `<repo-name>-worktrees`), and only a LIVE checkout is
- * offered: a directory Git still records but that no longer exists is no place to
- * read files from. The reads are the awaited ones, so opening the picker never
- * freezes the session.
+ * S9/S35: the checkouts Git reports for this clone — the principal checkout and
+ * the whole live listing behind it. Which of them the step offers by DEFAULT is
+ * the session's own business, not this package's (`filesSessionScopes`): a
+ * worktree this package created for some ODD is not necessarily one this session
+ * works in, and that difference is exactly what `a` is for. `repo.root` is the
+ * session's own checkout, whichever worktree it is. The reads are the awaited
+ * ones, so opening the picker never freezes the session.
  */
 async function filesCheckouts(cwd) {
   const git = libRequire('worktree-git.js');
-  const registry = libRequire('worktree-registry.js');
   const runAsync = libRunner(git);
   const repo = await git.repoIdentityAsync(cwd, { runAsync });
   let entries = [];
@@ -6762,10 +6762,7 @@ async function filesCheckouts(cwd) {
   } catch {
     // Git's own spelling is all it answered.
   }
-  const others = registry
-    .ownedCheckouts(entries.slice(main === undefined ? 0 : 1), mainRoot)
-    .filter((entry) => isLiveGitRecord(entry, repo.root));
-  return { repo, mainRoot, others, entries };
+  return { repo, mainRoot, entries };
 }
 
 // S9: the ODD directory IS a checkout's identity in this package (invariant 12),
@@ -6786,11 +6783,13 @@ function filesCanonicalPath(value) {
 }
 
 /**
- * S20: every worktree of the clone, minus its principal checkout — the list `a`
- * toggles to. Discovered the way `worktree_list` discovers them (Git's own
- * `git worktree list --porcelain` listing) and kept by the SAME liveness rule the
- * registered list uses, so a record whose directory is gone is never offered. The
- * root keeps Git's spelling, which is the spelling the registered rows carry, so a
+ * S20/S35: every worktree of the clone, minus its principal checkout — the list
+ * `a` toggles to, and the ONLY row source that asks "which worktrees does Git
+ * know", never "which did this session register". Discovered the way
+ * `worktree_list` discovers them (Git's own `git worktree list --porcelain`
+ * listing) and kept by the SAME liveness rule the default list uses, so a record
+ * whose directory is gone is never offered. The root keeps Git's spelling, which
+ * is the spelling the default rows carry, so a
  * scope both lists hold is the same scope to the view's cursor.
  */
 function filesAllWorktrees(checkouts) {
@@ -6849,27 +6848,99 @@ async function filesScopeFacts(index, detailLib, run, scope) {
 }
 
 /**
- * S9/S20: the two lists the scope step offers. `registered` is the default — the
- * session's own checkout first and then the worktrees this package created — and
- * `all` is every worktree of the clone, which `a` switches to. Both are built
- * here, before the step opens, because the view takes finished lists and never
- * reads Git itself; and both read their facts whether or not there is a second
- * checkout, because S20 always shows the step.
+ * S35: the worktrees THIS SESSION registered through the host's
+ * `worktree_register` tool (`session_worktree_register`, reached here through
+ * lib/session-worktree-register.js). The tool's durable store is the session
+ * itself: one `custom` entry per registration under the shared
+ * `gentle-pi.session-worktree/v1` type, carrying `{ sessionId, root, evidence }`.
+ * Only the current session's records count — the same current-session check the
+ * registry on the host side makes — so a forked or resumed session reads its own
+ * rows. An unreadable session manager, a missing session id and a malformed entry
+ * all read as "nothing registered", never as a throw.
  */
-async function filesScopeLists(cwd) {
+function filesSessionWorktreeRoots(ctx) {
+  const sm = ctx && ctx.sessionManager ? ctx.sessionManager : null;
+  if (!sm) return [];
+  const safe = (fn) => {
+    try {
+      return fn();
+    } catch {
+      return undefined;
+    }
+  };
+  const sessionId = typeof sm.getSessionId === 'function' ? safe(() => sm.getSessionId()) : undefined;
+  if (typeof sessionId !== 'string' || sessionId.length === 0) return [];
+  const entries = typeof sm.getEntries === 'function' ? safe(() => sm.getEntries()) : undefined;
+  if (!Array.isArray(entries)) return [];
+  const warpSessions = libRequire('worktree-warp-sessions.js');
+  const roots = [];
+  for (const entry of entries) {
+    if (!entry || entry.type !== 'custom' || entry.customType !== warpSessions.SESSION_WORKTREE_CUSTOM_TYPE) continue;
+    const data = entry.data;
+    if (!data || typeof data !== 'object') continue;
+    if (data.sessionId !== sessionId) continue;
+    if (typeof data.root !== 'string' || data.root.length === 0) continue;
+    roots.push(data.root);
+  }
+  return roots;
+}
+
+/**
+ * S35: the DEFAULT rows of the scope step — `main`, the session's own checkout
+ * (deduplicated when it IS `main`) and the worktrees this session registered,
+ * each only while it is still live. A worktree this package created for another
+ * ODD is NOT one of them: that is `a`'s list (`filesAllWorktrees`), and keeping the
+ * two apart is the rule. Every root keeps the spelling Git's listing gave it when
+ * Git lists it, which is the spelling the `a` list carries, so a scope both lists
+ * hold is the same scope to the view's cursor.
+ */
+function filesSessionScopes(checkouts, cwd, registeredRoots) {
+  const byCanonical = new Map();
+  for (const entry of Array.isArray(checkouts.entries) ? checkouts.entries : []) {
+    if (!entry || typeof entry.path !== 'string' || entry.path.length === 0) continue;
+    const canonical = filesCanonicalPath(entry.path);
+    if (!byCanonical.has(canonical)) byCanonical.set(canonical, entry);
+  }
+  const seen = new Set([filesCanonicalPath(checkouts.mainRoot)]);
+  const sessionRoot = typeof checkouts.repo.root === 'string' && checkouts.repo.root.length > 0
+    ? checkouts.repo.root
+    : cwd;
+  const scopes = [{ root: checkouts.mainRoot, kind: 'main', label: 'main' }];
+  for (const root of [sessionRoot, ...(Array.isArray(registeredRoots) ? registeredRoots : [])]) {
+    if (typeof root !== 'string' || root.length === 0) continue;
+    const canonical = filesCanonicalPath(root);
+    if (seen.has(canonical)) continue;
+    const listed = byCanonical.get(canonical);
+    const entry = listed === undefined ? { path: root } : listed;
+    if (!isLiveGitRecord(entry, checkouts.repo.root)) continue;
+    seen.add(canonical);
+    scopes.push({
+      root: entry.path,
+      kind: 'worktree',
+      label: filesWorktreeLabel(entry.path, entry.branch),
+    });
+  }
+  return scopes;
+}
+
+/**
+ * S9/S20/S35: the two lists the scope step offers. `registered` is the default —
+ * `main`, the session's own checkout and the worktrees this session registered
+ * through `worktree_register` (`filesSessionScopes`) — and `all` is every worktree
+ * of the clone Git's listing reports, which is what `a` alone switches to. Both are
+ * built here, before the step opens, because the view takes finished lists and
+ * never reads Git itself; and both read their facts whether or not there is a
+ * second checkout, because S20 always shows the step.
+ */
+async function filesScopeLists(cwd, ctx) {
   const checkouts = await filesCheckouts(cwd);
   const index = libRequire('files-index.js');
   const detailLib = libRequire('files-scope-detail.js');
   const run = filesRunner(libRequire('worktree-git.js'));
   const read = (scope) => filesScopeFacts(index, detailLib, run, scope);
-  const registered = await Promise.all([
-    read({ root: checkouts.mainRoot, kind: 'main', label: 'main' }),
-    ...checkouts.others.map((entry) => read({
-      root: entry.path,
-      kind: 'worktree',
-      label: filesWorktreeLabel(entry.path, entry.branch),
-    })),
-  ]);
+  const registered = await Promise.all(
+    filesSessionScopes(checkouts, cwd, filesSessionWorktreeRoots(ctx)).map((scope) => read(scope)),
+  );
   const all = await Promise.all([
     read({ root: checkouts.mainRoot, kind: 'main', label: 'main' }),
     ...filesAllWorktrees(checkouts).map((scope) => read(scope)),
@@ -7051,7 +7122,7 @@ async function executeFiles(rawArgs, ctx) {
   const cwd = toolCwd(ctx);
   let lists;
   try {
-    lists = await filesScopeLists(cwd);
+    lists = await filesScopeLists(cwd, ctx);
   } catch (err) {
     const message = (err && err.message) || String(err);
     if (notify) {

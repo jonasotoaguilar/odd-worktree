@@ -6,9 +6,10 @@
 // `rev-list --left-right --count` line parsed as behind/ahead or rejected whole;
 // the `±n files` cell singular at one; the focused scope's line with the last
 // commit subject first, then the count, the age and the distance from the
-// comparison ref, with every zero or absent field unpainted; and the two fixed
-// argv reads behind the line with every Git failure degrading to an absent field
-// instead of throwing.
+// comparison ref, with every zero or absent field unpainted; the age field
+// reading `33s ago` rather than a bare `33s` (S42) in the same s/m/h/d units and
+// from the same fixed-at-open clock; and the two fixed argv reads behind the line
+// with every Git failure degrading to an absent field instead of throwing.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
@@ -104,7 +105,7 @@ describe('scopeDetailLine (S9)', () => {
       behind: 1,
       comparison: 'main',
     }, NOW);
-    assert.equal(line, 'add the scope step · ±3 files · 5m · ↑2 main · ↓1 main');
+    assert.equal(line, 'add the scope step · ±3 files · 5m ago · ↑2 main · ↓1 main');
   });
 
   test('the main row names the remote ref it is measured against', () => {
@@ -116,7 +117,7 @@ describe('scopeDetailLine (S9)', () => {
       behind: 4,
       comparison: REMOTE_MAIN,
     }, NOW);
-    assert.equal(line, 'bump deps · ±1 file · 2h · ↓4 origin/main');
+    assert.equal(line, 'bump deps · ±1 file · 2h ago · ↓4 origin/main');
     assert.equal(REMOTE_MAIN, 'origin/main');
     assert.equal(LOCAL_MAIN, 'main');
   });
@@ -139,11 +140,39 @@ describe('scopeDetailLine (S9)', () => {
     assert.equal(scopeDetailLine({ changedFiles: 2, ahead: 3, behind: 1, comparison: '   ' }, NOW), '±2 files');
   });
 
-  test('ages use s/m/h/d units of the clock read once at open', () => {
-    assert.equal(scopeDetailLine({ lastModifiedMs: NOW - 30_000 }, NOW), '30s');
-    assert.equal(scopeDetailLine({ lastModifiedMs: NOW - 3 * MINUTE }, NOW), '3m');
-    assert.equal(scopeDetailLine({ lastModifiedMs: NOW - 3 * HOUR }, NOW), '3h');
-    assert.equal(scopeDetailLine({ lastModifiedMs: NOW - 3 * DAY }, NOW), '3d');
+  test('ages use s/m/h/d units of the clock read once at open, suffixed `ago` (S42)', () => {
+    assert.equal(scopeDetailLine({ lastModifiedMs: NOW - 30_000 }, NOW), '30s ago');
+    assert.equal(scopeDetailLine({ lastModifiedMs: NOW - 3 * MINUTE }, NOW), '3m ago');
+    assert.equal(scopeDetailLine({ lastModifiedMs: NOW - 3 * HOUR }, NOW), '3h ago');
+    assert.equal(scopeDetailLine({ lastModifiedMs: NOW - 3 * DAY }, NOW), '3d ago');
+    // Same units, same fixed-at-open clock: the label grows with `nowMs` alone.
+    const modified = NOW - 33_000;
+    assert.equal(scopeDetailLine({ lastModifiedMs: modified }, NOW), '33s ago');
+    assert.equal(scopeDetailLine({ lastModifiedMs: modified }, NOW + 27_000), '1m ago');
+    assert.equal(scopeDetailLine({ lastModifiedMs: modified }, NOW + DAY), '1d ago');
+  });
+
+  test('the whole line pins the age as `33s ago`, never a bare `33s` (S42)', () => {
+    const line = scopeDetailLine({
+      lastCommitSubject: 'land the scope step',
+      changedFiles: 14,
+      lastModifiedMs: NOW - 33_000,
+      ahead: 13,
+      behind: 0,
+      comparison: 'origin/main',
+    }, NOW);
+    assert.equal(line, 'land the scope step · ±14 files · 33s ago · ↑13 origin/main');
+    assert.ok(line.includes(' · 33s ago · '), 'the age field names what the number measures');
+  });
+
+  test('no age field when the last modification is absent or non-positive (S42)', () => {
+    for (const lastModifiedMs of [undefined, null, 0, -1, -33_000, Number.NaN, 'nope', {}]) {
+      assert.equal(
+        scopeDetailLine({ lastCommitSubject: 'subject', changedFiles: 2, lastModifiedMs }, NOW),
+        'subject · ±2 files',
+        JSON.stringify(lastModifiedMs),
+      );
+    }
   });
 
   test('a blank subject and hostile input paint nothing instead of throwing', () => {

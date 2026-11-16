@@ -260,7 +260,7 @@ describe('the focused detail line (S9)', () => {
     const rows = rowsOf(view);
     const detailRow = rows[rows.length - 3];
     const footer = rows[rows.length - 2];
-    assert.equal(detailRow, `│ ${'main subject · ±2 files · 5m · ↑1 origin/main'}${' '.repeat(WIDTH - 4 - 'main subject · ±2 files · 5m · ↑1 origin/main'.length)} │`);
+    assert.equal(detailRow, `│ ${'main subject · ±2 files · 5m ago · ↑1 origin/main'}${' '.repeat(WIDTH - 4 - 'main subject · ±2 files · 5m ago · ↑1 origin/main'.length)} │`);
     assert.ok(footer.includes('↑/↓ move'), footer);
   });
 
@@ -269,7 +269,7 @@ describe('the focused detail line (S9)', () => {
     assert.ok(rowsOf(view)[HEIGHT - 3].includes('main subject'));
     view.handleInput('down');
     const moved = rowsOf(view);
-    assert.ok(moved[HEIGHT - 3].includes('add the scope step · ±3 files · 2m · ↑2 main · ↓1 main'), moved[HEIGHT - 3]);
+    assert.ok(moved[HEIGHT - 3].includes('add the scope step · ±3 files · 2m ago · ↑2 main · ↓1 main'), moved[HEIGHT - 3]);
   });
 
   test('an absent or empty detail keeps a blank row of the same geometry', () => {

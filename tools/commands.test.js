@@ -12,7 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
-const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
+const { LIB_DIR, stubbedSource, installDefaultBridge } = require('./fixtures/load-extension.js');
 
 const scratch = [];
 function track(dir) {
@@ -106,6 +106,9 @@ before(async () => {
 // exported seams: how the panel's pending-changes answer and its specific-path
 // selection are driven through the panel front (never through the tool).
 async function loadExtensionWithModule(pi) {
+  // S18 (T14): nothing loads without gentle-shell-bridge, so this file's own host
+  // publishes the shared fixture's bridge before the factory runs.
+  installDefaultBridge();
   process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-cmd-ext-'));
   try {

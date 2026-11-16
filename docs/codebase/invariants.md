@@ -40,8 +40,13 @@ The question this page answers: which rules must every change preserve, and what
    its `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
    gate, or the one `gentle-shell-bridge:ready` announcement when the bridge
    publishes later. There is NO dependency on that package and no import of it
-   anywhere in this repo. Without a bridge the section never appears at all:
-   nothing is registered and no other surface changes. A host
+   anywhere in this repo. Without a bridge this package loads NOTHING — no command,
+   no tool, no message or entry renderer, no card, no rail, no hook and no prompt
+   append: the whole surface is deferred behind that gate and registers the moment
+   the bridge is known present (published at load, or announced later), at most
+   once. What stays registered while the gate is closed is the ONE `session_start`
+   observer the missing-plugin notice needs, because `ctx.ui.notify` lives on a
+   session; it is released when the surface registers. A host
    that HAS the bridge but draws no rail registers the section and never paints it,
    which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the bridge, not by this package (invariant 2 keeps every customize
@@ -54,7 +59,8 @@ The question this page answers: which rules must every change preserve, and what
    session only (`GENTLE_PI_AGENTS_CHILD` is not `1`), naming
    `pi install npm:gentle-shell-bridge`, timed after the announcement window because
    an empty slot at `session_start` may still be a bridge that has not loaded, and
-   immediate on a host with no event bus to announce on.
+   immediate on a host with no event bus to announce on. That warning is the ONLY
+   thing a host without the bridge ever receives from this package.
 
    **`/files` is a panel and nothing else.** It mounts its OWN overlay through
    `ctx.ui.custom` (the scope step's small card, then the picker), and a host with

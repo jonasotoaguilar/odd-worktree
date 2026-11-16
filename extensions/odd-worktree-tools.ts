@@ -7893,6 +7893,35 @@ function issuesGateMessage(error) {
   return `issues: ${text} — /issues cannot open until then`;
 }
 
+// S13 (issues-startup-performance T11): a MISSING `gh` is its own state, and it is
+// answered LOCALLY — one PATH walk through `lib/which-command.js`, never a child
+// process and never a `gh` invocation "to see whether gh exists". The verbatim
+// requirement: "el que el panel issues y sidebar requieren claramente gh cli, si no
+// la tiene el so nunca activa sus funciones". So a host without the CLI gets ONE
+// honest line naming it (and the install), the session gate stops before its
+// health probe, `/issues` refuses instead of opening, and the rail paints the
+// line as a settled state: no read, no timer, no child.
+const ISSUES_GH_CLI_MISSING = "the gh CLI is not installed or not on PATH";
+const ISSUES_GH_CLI_INSTALL = "https://cli.github.com";
+// The one line `/issues` and the session gate say. One sentence, one dash clause.
+const ISSUES_GH_CLI_MISSING_MESSAGE = `issues: ${ISSUES_GH_CLI_MISSING}; install it from ${ISSUES_GH_CLI_INSTALL} — /issues cannot open until then`;
+// The rail's own line is the short one, like its `not a git repository` sibling:
+// the body has a row's width, and it still names the missing CLI.
+const ISSUES_GH_CLI_MISSING_RAIL = "gh CLI not installed";
+
+// True only when the local probe can PROVE the CLI is absent. A host whose probe
+// cannot answer at all is not a missing CLI: failing the surfaces off on an
+// internal error would hide the reader for a working install.
+function issuesGhCliMissing() {
+  try {
+    const gh = libRequire("gh-issues.js");
+    if (!gh || typeof gh.ghCliPresent !== "function") return false;
+    return gh.ghCliPresent({ env: process.env }) === false;
+  } catch {
+    return false;
+  }
+}
+
 // S1/S3 (issues-startup-performance T1, T2): the session gate. It is STARTUP
 // WORK, never an awaited step of `session_start`: the host awaits every handler it
 // is handed, so awaiting this probe put `gh api user` (≈485 ms) and `gh repo view`
@@ -7909,6 +7938,24 @@ function issuesGateMessage(error) {
 async function checkIssuesGate(_pi, ctx, epoch) {
   try {
     const gh = libRequire("gh-issues.js");
+    // S13 (T11): the CLI is answered LOCALLY first, so a host without `gh` costs
+    // no child of any kind — not the checkout probe, not a doomed `gh` — and the
+    // state it reaches is the same settled one the rail paints.
+    if (issuesGhCliMissing()) {
+      if (epoch !== undefined && !startupTaskLive(epoch)) {
+        return { ok: false, missingCli: true, error: ISSUES_GH_CLI_MISSING };
+      }
+      issuesGateOpen = false;
+      if (!issuesGateNotified && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
+        try {
+          ctx.ui.notify(ISSUES_GH_CLI_MISSING_MESSAGE, "info");
+          issuesGateNotified = true;
+        } catch {
+          // Notifying never breaks startup.
+        }
+      }
+      return { ok: false, missingCli: true, error: ISSUES_GH_CLI_MISSING };
+    }
     const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
     const checkoutRoot = await oddCheckoutRootAsync(cwd);
     if (!checkoutRoot) {
@@ -7962,6 +8009,11 @@ function dispatchIssuesGate(pi, ctx) {
 // handed the state instead of a `gh` error string.
 async function probeIssuesGate(ctx) {
   const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
+  // S13 (T11): the missing CLI is refused before the checkout probe and before any
+  // `gh` child, with the one line that names it.
+  if (issuesGhCliMissing()) {
+    return { ok: false, missingCli: true, error: ISSUES_GH_CLI_MISSING };
+  }
   let checkoutRoot = null;
   try {
     checkoutRoot = await oddCheckoutRootAsync(cwd);
@@ -7993,6 +8045,12 @@ function registerIssuesCommand(pi) {
         // S1 (issues-sidebar-click T1): the rail click whose command refuses here
         // is over, so the guard goes with it instead of waiting for its timer.
         releaseIssuesPanelOpen();
+        // S13 (T11): without the CLI the consequence is not `gh auth login` — it is
+        // the install — so the missing state carries its own one line.
+        if (gate.missingCli === true) {
+          if (typeof notify === "function") notify(ISSUES_GH_CLI_MISSING_MESSAGE, "error");
+          return;
+        }
         // S3 (T2): a cwd outside a repository is the shared statement every
         // surface makes, at info — never a `gh` error and never an error tone.
         if (gate.notRepository === true) {
@@ -8331,6 +8389,14 @@ function issuesSidebarInitialBucket(pinned, number) {
 async function loadIssuesSidebar() {
   const sequence = (issuesSidebarReadSequence += 1);
   const cacheGeneration = issuesSidebarCacheGeneration;
+  // S13 (T11): without the CLI there is nothing to read here — no `gh` child, no
+  // cache hydrate, not even the git checkout probe (so this settled state costs
+  // zero children, which is what the rail's own test measures). The line is the
+  // short dim one, exactly like the non-repository state below, so the section's
+  // `stateSettled` keeps NO timer and no later frame retries it.
+  if (issuesGhCliMissing()) {
+    return { ok: false, error: ISSUES_GH_CLI_MISSING_RAIL, errorTone: "dim" };
+  }
   if (issuesSidebarCtx === null) {
     return { ok: false, error: "cannot read issues: the session has ended" };
   }
@@ -9069,7 +9135,106 @@ function oddSessionStillCurrent(ctx) {
   const event = oddSessionId(ctx);
   return event === undefined || event === current;
 }
+// ---------------------------------------------------------------------------
+// S18 (T14, L13): the bridge gate. This package is a guest of
+// gentle-shell-bridge — the rail, the bash design, the `Cards` rows and the
+// picker's keymap action all live on its published object — and the human's
+// answer for what to do without it was exactly "Desactivar todo el plugin":
+// register NOTHING. No command, no tool, no message or entry renderer, no card,
+// no rail, no hook, no prompt append.
+//
+// The bridge publishes ASYNCHRONOUSLY, and Pi may load this package before or after
+// it, so the registration is DEFERRED rather than eager: everything registers the
+// moment the bridge is known present (already on its slot at load, or announced on
+// its ready event later), and if the announcement never comes the package registers
+// nothing and only says how to install it. Nothing may register twice, whichever
+// path arrives first.
+//
+// The one thing that is NOT deferred is the notice's observer: `ctx.ui.notify`
+// lives on a session, so the only way to name the missing plugin in a primary
+// session is to observe `session_start` until the gate opens — one hook, kept sole
+// while the gate is closed and released the moment the surface registers.
+let oddSurfaceRegistered = false;
+let bridgeGateDisposer = null;
+
+function releaseBridgeGateObserver() {
+  const dispose = bridgeGateDisposer;
+  bridgeGateDisposer = null;
+  if (typeof dispose !== "function") return;
+  try {
+    dispose();
+  } catch {
+    // A host that will not release the observer still has a harmless one.
+  }
+}
+
+// ONE registration per gate episode. The flag is set FIRST, so a path that fails
+// half way can never re-register the parts that did land, and the two gate paths
+// (already published at load, announced later) share it: whichever arrives first
+// registers, the other is a no-op.
+function registerOddWorktreeSurface(pi) {
+  if (oddSurfaceRegistered) return false;
+  // The bridge is the precondition, whichever path arrives: an announcement with
+  // no published object is not a bridge this package may load on.
+  if (issuesSidebarBridge() === null) return false;
+  oddSurfaceRegistered = true;
+  try {
+    registerOddWorktreeSurfaceEntries(pi);
+  } catch {
+    // A host that refuses a registration keeps the rest of the surface.
+  }
+  releaseBridgeGateObserver();
+  return true;
+}
+
+// While the bridge is absent: ONE ready-announcement subscription (the bridge may
+// publish after us) and ONE session_start observer (the missing-plugin notice).
+// Nothing else is registered.
+function holdSurfaceForBridge(pi) {
+  try {
+    subscribeBridgeReady(pi, () => {
+      try {
+        registerOddWorktreeSurface(pi);
+      } catch {
+        // The gate stays closed; the announcement is not retried.
+      }
+    });
+  } catch {
+    // No bus: a bridge that publishes later is noticed at the next session start.
+  }
+  if (typeof pi?.on !== "function") return;
+  try {
+    const dispose = pi.on("session_start", (event, ctx) => {
+      // A bridge that was there all along, or arrived without an announcement,
+      // makes the notice untrue: register instead of warning.
+      if (issuesSidebarBridge() !== null) {
+        registerOddWorktreeSurface(pi);
+        return;
+      }
+      checkIssuesSidebarInstall(pi, ctx);
+    });
+    bridgeGateDisposer = typeof dispose === "function" ? dispose : null;
+  } catch {
+    // A host that refuses the observer still gets the install line nowhere else.
+  }
+}
+
 export default function (pi) {
+  // A factory call is one registration episode. Pi builds a fresh registry for a
+  // `/reload` and expects the same surfaces again, which is why the episode starts
+  // HERE; the gate's own two paths share the episode, so neither of them can
+  // register the surface twice.
+  oddSurfaceRegistered = false;
+  // S18 (T14): no bridge, no package. The published object is read from its slot
+  // after its own schema and version gate — never imported, never a dependency.
+  if (issuesSidebarBridge() !== null) {
+    registerOddWorktreeSurface(pi);
+    return;
+  }
+  holdSurfaceForBridge(pi);
+}
+
+function registerOddWorktreeSurfaceEntries(pi) {
   // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
   // moves the session, so the command is where a handoff waits and lands.
   warpHandoffPi = pi;

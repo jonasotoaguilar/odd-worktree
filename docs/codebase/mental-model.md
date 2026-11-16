@@ -12,8 +12,9 @@ optional sidebar section, one bash design on the bridge and two preferences —
 works in, reading a checkout's `odd/tasks/*.md`, browsing and previewing a
 checkout's files, reading and — role permitting — editing that
 checkout's GitHub issues, and the drawing of its own cards. `git` is the only
-external requirement; Gentle Shell is recommended, and gentle-shell-bridge adds
-only five control surfaces: the rail section, the bash design, the two file-card
+external tool requirement, and gentle-shell-bridge is the plugin's own
+prerequisite: without it the package loads nothing at all. With it, the bridge
+carries five control surfaces: the rail section, the bash design, the two file-card
 switches, and the file picker's keymap action and palette row.
 
 ## What It Does Not Own
@@ -41,9 +42,10 @@ switches, and the file picker's keymap action and palette row.
 ## Main Flow
 
 1. `extensions/odd-worktree-tools.ts` — the only entry point the host loads:
-   registers the four commands, the two tools, the message renderer, the file
-   card, the optional rail section, the bash design, the `Cards` row group and
-   the hooks.
+   behind the bridge gate it registers the four commands, the two tools, the
+   message renderer, the file card, the rail section, the bash design, the
+   `Cards` row group and the hooks — deferred until gentle-shell-bridge is present,
+   and nothing at all without it.
 2. `lib/worktree-*.js` — a create validates and plans in
    `lib/worktree-create.js`, prepares through `lib/worktree-hooks.js`, then
    `lib/worktree-setup-runner.js` starts the install as a tracked background

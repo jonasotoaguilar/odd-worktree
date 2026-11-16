@@ -71,7 +71,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { LIB_DIR, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
+const { LIB_DIR, loadExtension, stubbedSource, installDefaultBridge } = require('./fixtures/load-extension.js');
 const { pathToFileURL } = require('node:url');
 const { createIssuesSection } = require('../lib/issues-section.js');
 
@@ -121,6 +121,7 @@ afterEach(() => {
   if (ghIssues) {
     ghIssues.setGhRunner(null);
     ghIssues.setGitRunner(null);
+    ghIssues.setGhWhich(null);
   }
 });
 
@@ -451,6 +452,40 @@ test('S3 (T2): a non-repository line is a state, so no frame and no activity ret
   // An EXPLICIT refresh is still the caller's own decision, exactly as before.
   await handle.refresh();
   assert.equal(reads, 2);
+});
+
+// S13 (T11): a missing `gh` CLI is that same kind of state — nothing to check —
+// so the floor timer a draw armed is dropped the moment the toned line lands,
+// instead of surviving to its next fire only to find the state already settled.
+// The line stays, and no later frame arms another one.
+test('S13 (T11): a settled (dim) state owns no floor timer', async () => {
+  const timers = [];
+  let reads = 0;
+  const handle = createIssuesSection({
+    load: async () => {
+      reads += 1;
+      return { ok: false, error: 'gh CLI not installed', errorTone: 'dim' };
+    },
+    open: () => {},
+    openAll: () => {},
+    schedule: () => {},
+    refreshFloorMs: 20000,
+    setTimer: (fn, ms) => {
+      const timer = { fn, ms, cleared: false };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimer: (timer) => { timer.cleared = true; },
+  });
+  handle.section.lines({});
+  assert.equal(timers.length, 1, 'the draw armed the one floor timer');
+  await handle.refresh();
+  assert.deepEqual(handle.section.lines({}), [{ label: 'gh CLI not installed', tone: 'dim' }]);
+  assert.equal(reads, 1, 'the read that stated it is the only read');
+  assert.equal(timers[0].cleared, true, 'the settled line cleared the timer the draw had armed');
+  handle.section.lines({});
+  handle.section.meta({});
+  assert.equal(timers.length, 1, 'and a settled state arms no second timer');
 });
 
 // S7 (T8): the rows are one merged list, but each row remembers the bucket it
@@ -1288,15 +1323,27 @@ test('S2: a published bridge receives exactly one section with the decided ident
   assert.equal(loaded.commands.has('issues'), true, 'every other surface still registers');
 });
 
-test('S2: with no bridge and no events, nothing registers and nothing throws', async () => {
+// RE-SCOPED (was "with no bridge and no events, nothing registers and nothing
+// throws", which asserted that `/issues` and both worktree tools still registered
+// without a bridge — the old policy, where only the bridge surfaces waited).
+// S18 (T14, the human's "Desactivar todo el plugin"): with no bridge NOTHING of
+// this package loads, not one command, tool, renderer, card or rail.
+test('S18 (T14): with no bridge and no events, NOTHING registers and nothing throws', async () => {
   delete globalThis[BRIDGE_SLOT];
-  const loaded = await loadExtension({});
-  assert.equal(loaded.commands.has('issues'), true);
-  assert.equal(loaded.tools.has('worktree_create'), true);
-  assert.equal(loaded.tools.has('worktree_list'), true);
+  const loaded = await loadExtension({}, { bridge: false });
+  assert.deepEqual([...loaded.commands.keys()], [], 'no command at all');
+  assert.deepEqual([...loaded.tools.keys()], [], 'no tool at all');
+  assert.deepEqual([...loaded.messageRenderers.keys()], [], 'no message renderer');
+  assert.deepEqual([...loaded.entryRenderers.keys()], [], 'no entry renderer');
+  assert.deepEqual(loaded.hooks.map(([event]) => event), ['session_start'],
+    'only the observer the missing-plugin notice needs');
 });
 
-test('S2: with no bridge but events, the ready announcement is subscribed once', async () => {
+// RE-SCOPED (was "with no bridge but events, the ready announcement is subscribed
+// once", which also asserted `/issues` was registered). The subscription is still
+// exactly one — it now carries the whole gate — and an announcement with no bridge
+// on the slot still registers nothing.
+test('S2/S18 (T14): with no bridge but events, the ready announcement is subscribed once and registers nothing yet', async () => {
   delete globalThis[BRIDGE_SLOT];
   const subscriptions = [];
   const loaded = await loadExtension({
@@ -1306,12 +1353,22 @@ test('S2: with no bridge but events, the ready announcement is subscribed once',
         return () => {};
       },
     },
-  });
+  }, { bridge: false });
   assert.equal(subscriptions.length, 1);
   assert.equal(subscriptions[0].event, 'gentle-shell-bridge:ready');
+  assert.deepEqual([...loaded.commands.keys()], [], 'still nothing registered');
   subscriptions[0].handler();
   assert.equal(subscriptions.length, 1, 'a ready announcement is never a second subscription');
-  assert.equal(loaded.commands.has('issues'), true);
+  assert.deepEqual([...loaded.commands.keys()], [], 'an announcement with no published bridge registers nothing');
+
+  // The bridge publishes and the SAME subscription registers the surface, once.
+  installBridge();
+  subscriptions[0].handler();
+  assert.equal(loaded.commands.has('issues'), true, 'the published bridge brings the command');
+  assert.equal(loaded.tools.has('worktree_list'), true, 'and the tools');
+  const counted = loaded.hooks.length;
+  subscriptions[0].handler();
+  assert.equal(loaded.hooks.length, counted, 'a second announcement registers nothing twice');
 });
 
 // S7 (T8): ONE combined read, and the rail draws the UNION of the two buckets the
@@ -1502,6 +1559,43 @@ test('S12 (T11): a session outside a repository paints one short dim line, and t
   assert.equal(notes.length, 1);
   assert.equal(notes[0][0], `not a git repository: ${notGit}; run 'git init' first`,
     'the command notice keeps its own wording');
+});
+
+// S13 (T11): without the `gh` CLI the rail activates NOTHING. The CLI is answered
+// LOCALLY — a PATH walk, the module answers `ghCliPresent`, no child — so the
+// settled state costs no `gh` child, no git child and no read, the way the
+// non-repository line beside it already does. One dim line names what is missing
+// and the section stops there: a later frame and the session's own activity read
+// nothing either, and the floor timer a draw armed is dropped with the state.
+test('S13 (T11): a missing gh CLI paints one dim line and spawns no gh child at all', async () => {
+  const checkout = makeCheckout();
+  const { registered } = installBridge();
+  const loaded = await loadExtension({});
+  ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+  const gh = sectionGithub();
+  ghIssues.setGhRunner(gh.runner);
+  ghIssues.setGhWhich(() => null);
+
+  const ctx = { cwd: checkout, ui: { notify: () => {} } };
+  await fireSessionStart(loaded.hooks, ctx);
+  assert.equal(registered.length, 1, 'the rail is installed: it simply has nothing to read');
+  const section = registered[0];
+  const rows = await waitForRows(section, ctx);
+  assert.deepEqual(rows, [{ label: 'gh CLI not installed', tone: 'dim' }],
+    'one line naming the missing CLI, in the gray tone and never the error one');
+  assert.equal(section.meta(ctx), undefined, 'and no count to report');
+
+  await settleStartup(gh.calls);
+  assert.deepEqual(gh.calls, [], 'no gh child at all — not even the session gate\'s health probe');
+
+  // Settled: a later frame and the session's own activity start nothing.
+  await fireHook(loaded.hooks, 'turn_end', ctx);
+  section.lines(ctx);
+  section.meta(ctx);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(gh.calls, [], 'a settled line never retries: no activity read and no timer read');
+  assert.deepEqual(section.lines(ctx), [{ label: 'gh CLI not installed', tone: 'dim' }],
+    'and the line stays until a session boundary supersedes it');
 });
 
 // S6: the supersede is synchronous. A session that starts in ANOTHER checkout
@@ -1733,7 +1827,9 @@ function warningTexts(notices) {
 // real `session_start`, so no child may ever reach the real `gh`.
 async function bridgeWarnHarness({ events } = {}) {
   const checkout = makeCheckout();
-  const loaded = await loadExtension(events ? { events } : {});
+  // S18 (T14): the shared fixture publishes a default bridge, and this harness is
+  // about the ABSENT one, so it opts out: the slot is exactly what the test left.
+  const loaded = await loadExtension(events ? { events } : {}, { bridge: false });
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub({
     issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
@@ -2218,6 +2314,9 @@ test('S9 (T10): a retained row dispatches its number, and the panel proves its o
 // defers, and it is where the click's whole behaviour is observable without a
 // host. It loads the extension the way the host does, with a stub `pi`.
 async function loadSeam(pi = {}) {
+  // S18 (T14): this file's own loader needs the bridge its host would have, or the
+  // extension registers nothing and there is no session at all to reach a notice.
+  installDefaultBridge();
   process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
   const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-seam-')));
   const copy = path.join(dir, 'odd-worktree-tools.mjs');

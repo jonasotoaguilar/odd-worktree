@@ -36,7 +36,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
+const { LIB_DIR, stubbedSource, installDefaultBridge } = require('./fixtures/load-extension.js');
 
 // The client and git seam the extension itself loaded. One extension load compiles
 // its own lib modules, so a fake must reach THAT instance — the extension's
@@ -82,6 +82,7 @@ after(() => {
 
 afterEach(() => {
   ghIssues.setGhRunner(null);
+  ghIssues.setGhWhich(null);
   // S8 (T4): the rail's published bridge is process-wide, so no test may leave
   // one behind for the next.
   delete globalThis[Symbol.for('gentle-shell-bridge/api/v1')];
@@ -102,6 +103,9 @@ function fixture(name) {
 // A fresh copy per load: module-level gate state belongs to one runtime load,
 // exactly like the host's rebuilt command registry.
 async function loadExtension() {
+  // S18 (T14): the extension registers nothing without gentle-shell-bridge, so
+  // this file's own host publishes the shared fixture's bridge before the load.
+  installDefaultBridge();
   const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-ext-')));
   const copy = path.join(dir, 'odd-worktree-tools.mjs');
   fs.writeFileSync(copy, stubbedSource());
@@ -480,6 +484,12 @@ describe('/issues gate (S3)', () => {
 
   test('a missing gh notifies the fix once at startup and again on invocation, opening nothing', async () => {
     const { commands, hooks, mod } = await loadExtension();
+    // T11 (S13): the CLI's PRESENCE is pinned here, because this test is about the
+    // other failure — a `gh` that is installed and whose own child cannot be
+    // spawned (an ENOENT from the runner). The local presence check would
+    // otherwise answer first on a machine that has no `gh` at all, which is a
+    // different state with its own line.
+    ghIssues.setGhWhich(() => '/usr/local/bin/gh');
     ghIssues.setGhRunner(async (bin) => ({
       status: null, stdout: '', stderr: '', error: `spawn ${bin} ENOENT: gh CLI is not available`,
     }));
@@ -514,6 +524,74 @@ describe('/issues gate (S3)', () => {
     assert.equal(customs.length, 0, 'no overlay while unauthenticated');
     assert.equal(notes.length, 1);
     assert.match(notes[0][0], /gh auth login/, 'the note names the login fix');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S13 (T11): without the `gh` CLI the issues surfaces activate NOTHING. The CLI
+// is answered LOCALLY — a PATH walk, no child process, no `gh` invocation to find
+// out whether `gh` exists — so a host without it never pays a doomed child: the
+// session gate stops before its health probe, and `/issues` refuses with ONE
+// honest line naming what is missing. A `gh` that is present but unauthenticated
+// is NOT this state and keeps the login fix it always had.
+// ---------------------------------------------------------------------------
+describe('a missing gh CLI activates nothing (S13, T11)', () => {
+  const CLI_MISSING_LINE = 'issues: the gh CLI is not installed or not on PATH; install it from https://cli.github.com — /issues cannot open until then';
+
+  test('the session gate stops before any gh child and says the one line once', async () => {
+    const { commands, hooks } = await loadExtension();
+    const { runner, calls } = makeIssuesRunner();
+    ghIssues.setGhRunner(runner);
+    ghIssues.setGhWhich(() => null);
+
+    const root = makeRepo({ tag: 'cli-missing-gate' });
+    const notes = [];
+    await fireSessionStart(hooks, gateCtx(root, notes));
+    await fireSessionStart(hooks, gateCtx(root, notes));
+
+    assert.ok(commands.has('issues'), 'the command stays discoverable');
+    assert.deepEqual(calls, [], 'a missing CLI is answered locally: no gh child is ever spawned');
+    assert.deepEqual(notes, [[CLI_MISSING_LINE, 'info']],
+      'one honest line naming the missing CLI and the install, once per session');
+  });
+
+  test('/issues refuses with that line and opens nothing', async () => {
+    const { commands, mod } = await loadExtension();
+    const { runner, calls } = makeIssuesRunner();
+    ghIssues.setGhRunner(runner);
+    ghIssues.setGhWhich(() => null);
+    mod.setIssuesTuiLoader(async () => stubTui);
+
+    const { ctx, customs, notes } = makeCtx({
+      cwd: makeRepo({ tag: 'cli-missing-open' }),
+      customImpl: async () => null,
+    });
+    await commands.get('issues').handler('', ctx);
+
+    assert.equal(customs.length, 0, 'the reader never mounts without the CLI');
+    assert.deepEqual(calls, [], 'and no gh child runs trying to find that out');
+    assert.deepEqual(notes, [[CLI_MISSING_LINE, 'error']], 'one line, naming the missing CLI');
+  });
+
+  test('an unauthenticated gh that IS present keeps the login fix (PRESERVE)', async () => {
+    const { commands, mod } = await loadExtension();
+    ghIssues.setGhWhich(() => '/usr/local/bin/gh');
+    ghIssues.setGhRunner(async () => ({
+      status: 1, stdout: '', stderr: 'Failed to log in: authentication required', error: null,
+    }));
+    mod.setIssuesTuiLoader(async () => stubTui);
+
+    const { ctx, customs, notes } = makeCtx({
+      cwd: makeRepo({ tag: 'cli-present-unauth' }),
+      customImpl: async () => null,
+    });
+    await commands.get('issues').handler('', ctx);
+
+    assert.equal(customs.length, 0, 'no overlay while unauthenticated');
+    assert.equal(notes.length, 1);
+    assert.match(notes[0][0], /gh auth login/, 'the presence check never intercepts an authentication failure');
+    assert.equal(notes[0][1], 'error');
+    assert.equal(/not installed/.test(notes[0][0]), false, 'a present gh is never reported as missing');
   });
 });
 

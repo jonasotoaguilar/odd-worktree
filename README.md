@@ -14,7 +14,7 @@ Two agent tools, four panels, one sidebar section, one bash design and two prefe
 | `/odd-list` | panel | Reads this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
 | `/files` | panel | Browses one checkout's files with a live, language-coloured preview: `enter` pastes the chosen paths into your prompt, `ctrl+e` opens the file in `$EDITOR`. |
 | `/issues` | panel | Reads this checkout's GitHub issues — the three scoped tabs on open, every open issue behind `g` — and, when your role allows it, edits them. |
-| `ISSUES` rail section | sidebar section | Lists the open issues of this checkout's repository assigned to you, seven at a time plus a count of the rest; a click opens that issue in `/issues` on `Assigned` and the overflow row opens `/issues`. Needs `gh` and gentle-shell-bridge with its rail. |
+| `GITHUB` rail section | sidebar section | Lists the open issues of this checkout's repository assigned to you, seven at a time plus a count of the rest; a click opens that issue in `/issues` on `Assigned` and the overflow row opens `/issues`. Needs `gh` and gentle-shell-bridge with its rail. |
 | `activity` bash design | design on the bridge's `bash` line | Optional: `/gentle:customize` → `Cards` → `bash`, with `native` (the host's own card, the default) and `activity` (the card's heading names what the command does: `⌕ exploring`, `✓ checking`, …). Registered through gentle-shell-bridge's `registerToolDesign`; the bridge owns the choice, remembers it and repaints cards already on screen. |
 | `Card skill`, `Card odd` | customize rows | The two preferences: draw a `read`, `edit` or `write` call on a skill (a `SKILL.md` a `skills` folder holds) or on an ODD artifact (any file below an `odd/tasks` folder) as that file's own card, and leave every other file call to the host. Both on by default, both in `/gentle:customize` → `Cards`, through gentle-shell-bridge. |
 
@@ -30,17 +30,22 @@ The two preferences are the file cards' switches, `Card skill` and `Card odd`, b
 | --- | --- |
 | Pi (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`) | Peer dependencies supplied by the host; the package installs no runtime dependencies. |
 | Node.js >= 18 and `git` | Every repository operation is a `git` child process. |
-| `gh`, authenticated (`gh auth login`) | `/issues` and the `ISSUES` rail section. Without it the command stays registered and says what is missing, and the section shows its error row. |
+| `gh`, authenticated (`gh auth login`) | `/issues` and the `GITHUB` rail section, and them alone. Without it neither activates anything: no child, no read and no timer — the command says what is missing and the section shows one line naming it. |
 | Gentle Shell (recommended) | Supplies the session records the deletion guard reads to see other sessions. |
-| Gentle Shell with `gentle-shell-bridge` (and its rail, for the section) | The `Card skill` and `Card odd` rows and the `activity` value of the `bash` line in `/gentle:customize` → `Cards`, and the file picker's `files` keymap action (`alt+p`, rebindable in `Keymaps`) with its palette row in `Session` — all of which need only the bridge — plus the `ISSUES` rail section, which needs the rail too. Without the bridge none of them is registered and no other surface changes, apart from one warning in a primary session naming `pi install npm:gentle-shell-bridge`; the package has no dependency on it. |
+| Gentle Shell with `gentle-shell-bridge` (and its rail, for the section) | Every Gentle Shell surface this package has: the `Card skill` and `Card odd` rows, the `activity` value of the `bash` line in `/gentle:customize` → `Cards`, the file picker's `files` keymap action (`alt+p`, rebindable in `Keymaps`) with its palette row in `Session` — all of which need only the bridge — plus the `GITHUB` rail section, which needs the rail too. Install it with `pi install npm:gentle-shell-bridge`, or `gentle-shell install npm:gentle-shell-bridge` inside a Gentle Shell session. Without it the package loads nothing at all — no command, no tool, no card, no rail — and only names that install line, in a primary session. |
 
 ```bash
+# plain Pi
 pi install npm:pi-odd-worktree
+
+# inside a Gentle Shell session: its launcher, same place
+# (the bridge above is the prerequisite for every Gentle Shell surface)
+gentle-shell install npm:pi-odd-worktree
 ```
 
-Inside a Gentle Shell session, use its launcher instead: `gentle-shell install npm:pi-odd-worktree`. From a local clone, `pi install .` installs the working copy.
+From a local clone, `pi install .` installs the working copy, and `gentle-shell install .` does the same from inside a Gentle Shell session.
 
-Expected result: `/warp`, `/odd-list`, `/files` and `/issues` are available as commands, the agent is offered `worktree_create` and `worktree_list`, a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows an `ISSUES` section for this checkout, and its `/gentle:customize` → `Cards` page offers `activity` on its `bash` line together with the `Card skill` and `Card odd` rows.
+Expected result: `/warp`, `/odd-list`, `/files` and `/issues` are available as commands, the agent is offered `worktree_create` and `worktree_list`, a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows a `GITHUB` section for this checkout, and its `/gentle:customize` → `Cards` page offers `activity` on its `bash` line together with the `Card skill` and `Card odd` rows.
 
 ## Core Workflow
 

@@ -31,7 +31,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
+const { LIB_DIR, stubbedSource, installDefaultBridge } = require('./fixtures/load-extension.js');
 // The queue the extension itself loaded: one extension load compiles its own lib
 // modules, so every fake and every assertion below addresses THAT instance by the
 // extension's `libModule` seam instead of a separate `require` of the same path.
@@ -360,6 +360,9 @@ before(async () => {
 // that fills it must belong to the same instance (tools/package-surface.test.js
 // pins the freshness; this file pins that one load serves both).
 async function loadStubbedModule(pi) {
+  // S18 (T14): the extension registers nothing without gentle-shell-bridge, so this
+  // file's own host publishes the shared fixture's bridge before the factory runs.
+  installDefaultBridge();
   process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-busy-mod-'));
   try {

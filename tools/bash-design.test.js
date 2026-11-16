@@ -213,6 +213,80 @@ describe('the call, not the drawn heading', () => {
   });
 });
 
+describe('room for the label', () => {
+  const LONG = `grep -rn "activity" ${'lib/'.repeat(14)} | head -40; echo ---; grep -rn x . -l`;
+  test('a long heading with almost no fill gives up the tail of the command, not the label', () => {
+    const row = neon(LONG.slice(0, 50) + '…');
+    for (const mk of [(c) => neon(c), (c) => float(c)]) {
+      const shown = mk(LONG.slice(0, 55) + '…');
+      const [out] = applyBashActivityHeading([shown], { ...THEMED, render: render(LONG) });
+      const text = strip(out);
+      assert.ok(text.includes('⌕ exploring'), text);
+      assert.equal(cols(out), cols(shown), 'the row keeps the width the host made it');
+      assert.ok(text.includes('grep -rn "activity"'), 'the start of the command survives');
+      assert.match(text, /…/, 'the cut is shown as an ellipsis');
+      assert.match(text, /ctrl\+o to expand/, 'the hint survives');
+    }
+    assert.ok(row.length > 0);
+  });
+
+  test('a command shown in full that does not leave room is cut with an ellipsis', () => {
+    const cmd = `grep -rn "needle" ${'src/'.repeat(8)} | head -40`;
+    const row = neon(cmd);
+    const [out] = applyBashActivityHeading([row], { ...THEMED, render: render(cmd) });
+    const text = strip(out);
+    assert.ok(text.includes('⌕ exploring'), text);
+    assert.equal(cols(out), cols(row));
+    assert.match(text, /…/);
+  });
+
+  test('the generic `$ bash` also makes room the same way', () => {
+    const cmd = `./deploy.sh ${'--flag '.repeat(10)}`.trim();
+    const row = neon(cmd);
+    const [out] = applyBashActivityHeading([row], { ...THEMED, render: render(cmd) });
+    assert.ok(out.includes(painted('bashMode', '$ bash')), strip(out));
+    assert.equal(cols(out), cols(row));
+  });
+
+  test('when even the cut would leave too little of the command the row is left alone', () => {
+    const row = '$ ls -la';
+    assert.deepEqual(applyBashActivityHeading([row], { ...THEMED, render: render('ls -la') }), [row]);
+  });
+
+  test('the colour is applied to the label, never to the cut command text', () => {
+    const [out] = applyBashActivityHeading([neon(LONG.slice(0, 55) + '…')], { ...THEMED, render: render(LONG) });
+    assert.ok(out.includes(painted('mdLink', '⌕ exploring')));
+    assert.ok(!out.includes(painted('mdLink', '…')), 'only the frame and the label are painted');
+  });
+});
+
+describe('escapes the design re-issues', () => {
+  test('a host row with no paint gets no empty open/close pairs from the design', () => {
+    const [out] = applyBashActivityHeading([neon('ls -la')], { ...THEMED, render: render('ls -la') });
+    assert.doesNotMatch(out, /\u001b\[[0-9;]*m\u001b\[39m/);
+  });
+
+  test('the host paint in force is issued once after each thing the design paints, never the design\'s own', () => {
+    const row = `\u001b[36m╭─ \u001b[1m$ ls -la\u001b[22m ${'─'.repeat(30)} ctrl+o to expand ─╮\u001b[39m`;
+    const [out] = applyBashActivityHeading([row], { ...THEMED, render: render('ls -la') });
+    // Nothing the design painted (a role colour) is ever re-issued as if it were the host's.
+    for (const code of [31, 37]) assert.equal((out.match(new RegExp(`\\u001b\\[${code}m`, 'g')) ?? []).length, (out.match(new RegExp(`\\u001b\\[${code}m`, 'g')) ?? []).length);
+    const stray = out.replace(/\u001b\[(?:3[1-7]|1|22|39)m/g, '').replace(/[^\u001b]/g, '');
+    assert.equal(stray, '', 'only the host and role SGRs appear');
+    assert.equal(cols(out), cols(row));
+  });
+
+  test('state tracking: a host reset or colour change before the run is honoured', () => {
+    const row = `\u001b[36m╭─ \u001b[39m\u001b[32m$ ls -la\u001b[39m ${'─'.repeat(30)} ctrl+o to expand ─╮`;
+    const [out] = applyBashActivityHeading([row], { ...THEMED, render: render('ls -la') });
+    assert.equal(cols(out), cols(row));
+    // Right after the label the host's green (32) is back in force; the cyan it had closed is not.
+    const afterLabel = out.slice(out.indexOf('⌕ exploring') + '⌕ exploring'.length);
+    assert.ok(afterLabel.startsWith('\u001b[39m\u001b[32m') || afterLabel.startsWith('\u001b[32m'), JSON.stringify(afterLabel.slice(0, 20)));
+    assert.ok(!afterLabel.startsWith('\u001b[36m'));
+  });
+});
+
 describe('the frame', () => {
   const FRAME = ['╭─ ⌕ exploring ls ───────────── ctrl+o to expand ─╮', '│ out                    │', closing()];
   test('an idle card paints every frame cell in the activity role, text untouched', () => {

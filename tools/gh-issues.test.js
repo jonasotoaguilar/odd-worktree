@@ -1587,8 +1587,10 @@ describe('listRelatedIssues: one combined read of the three scoped views', () =>
     }
     assert.equal((query.match(/type: ISSUE/g) || []).length, 3);
     assert.ok(query.includes('issueCount'), 'each alias reports its exact count');
-    assert.ok(query.includes('timelineItems(first: 10, itemTypes: [CROSS_REFERENCED_EVENT])'),
-      'the pull-request marker rides the same node selection');
+    assert.ok(query.includes('timelineItems(last: 10, itemTypes: [CROSS_REFERENCED_EVENT])'),
+      'the pull-request marker rides the same node selection, reading the NEWEST events');
+    assert.equal(/timelineItems\(first:/.test(query), false,
+      'never the oldest window: the marker names the newest pull request (S3)');
     // T9 (S8): the marker is a NUMBER, so the cross-referenced source carries it.
     assert.ok(query.includes('... on PullRequest { number }'),
       'the pull-request source selection asks for its number');
@@ -1658,14 +1660,172 @@ describe('listRelatedIssues: one combined read of the three scoped views', () =>
       [true, true, false, false],
       'one or many pull requests are the same true, and an Issue source is false',
     );
-    // S8 (T9): the row carries the number, and the FIRST one when an issue has
-    // several pull requests; an issue source or no reference is `null`, never a
-    // number nobody opened.
+    // S8 (T9) + S3 (issues-sidebar-click T2): the row carries the number, and
+    // the LAST one when an issue has several pull requests — the timeline is
+    // read with `last:`, so the newest event is the newest pull request; an
+    // issue source or no reference is `null`, never a number nobody opened.
     assert.deepEqual(
       result.buckets.assigned.issues.map((row) => row.pullRequestNumber),
-      [69, 70, null, null],
-      'the first pull-request number rides the row, and an issue reference is none',
+      [69, 71, null, null],
+      'the newest pull-request number rides the row, and an issue reference is none',
     );
+  });
+
+  // S3 (issues-sidebar-click T2): GraphQL returns `timelineItems` in
+  // chronological order, so `first: 10` is the OLDEST ten events and its first
+  // pull request is the oldest one referencing the issue. The mark the rail
+  // paints must name the MOST RECENT referencing pull request, and the cost
+  // must stay ONE request for the three views: reading the window from the end
+  // costs nothing extra.
+  test('asks for the last events, so the marker window holds the newest ones', async () => {
+    const calls = [];
+    ghIssues.setGhRunner(async (bin, argv, runOpts = {}) => {
+      calls.push({ bin, argv: argv.slice(), env: { ...(runOpts.env || {}) } });
+      return okJson(relatedJson({ assigned: [issueNode(31)] }));
+    });
+
+    const result = await ghIssues.listRelatedIssues({ first: 20 }, { scope: IDENTITY });
+    assert.equal(result.ok, true);
+    assert.equal(calls.length, 1, 'the three views still cost exactly ONE graphql request');
+    assert.deepEqual(calls[0].argv.slice(0, 3), ['api', 'graphql', '-f']);
+    const query = queryOf(calls[0]);
+    assert.ok(query.includes('timelineItems(last: 10, itemTypes: [CROSS_REFERENCED_EVENT])'),
+      'the window is the last ten cross-reference events');
+    assert.equal(/timelineItems\(first:/.test(query), false, 'no oldest-first window survives');
+    assert.equal((query.match(/first: 20/g) || []).length, 3,
+      'the window change touches no search bound and adds no request');
+  });
+
+  test('marks the number of the most recent pull request, not the oldest', async () => {
+    ghIssues.setGhRunner(async () => okJson(relatedJson({
+      assigned: [
+        // Chronological, as GraphQL answers: the oldest event first.
+        issueNode(41, {
+          timelineItems: {
+            nodes: [
+              { source: { __typename: 'PullRequest', number: 70 } },
+              { source: { __typename: 'Issue', number: 9 } },
+              { source: { __typename: 'PullRequest', number: 71 } },
+              { source: { __typename: 'Issue', number: 10 } },
+              { source: { __typename: 'PullRequest', number: 35 } },
+            ],
+          },
+        }),
+      ],
+    })));
+
+    const result = await ghIssues.listRelatedIssues({ first: 20 }, { scope: IDENTITY });
+    assert.equal(result.ok, true);
+    const row = result.buckets.assigned.issues[0];
+    assert.equal(row.pullRequestNumber, 35,
+      'the newest event that is a pull request supplies the mark, even behind an issue reference');
+    assert.equal(row.hasPullRequest, true, 'several pull requests are still simply true');
+  });
+
+  test('one pull request is its own newest, so it still marks its number', async () => {
+    ghIssues.setGhRunner(async () => okJson(relatedJson({
+      assigned: [issueNode(42, {
+        timelineItems: {
+          nodes: [
+            { source: { __typename: 'Issue', number: 4 } },
+            { source: { __typename: 'PullRequest', number: 69 } },
+          ],
+        },
+      })],
+    })));
+
+    const result = await ghIssues.listRelatedIssues({ first: 20 }, { scope: IDENTITY });
+    assert.equal(result.ok, true);
+    const row = result.buckets.assigned.issues[0];
+    assert.equal(row.pullRequestNumber, 69, 'the previous single-pull-request behaviour still holds');
+    assert.equal(row.hasPullRequest, true);
+  });
+
+  test('no pull request keeps the mark off: null and false', async () => {
+    ghIssues.setGhRunner(async () => okJson(relatedJson({
+      assigned: [
+        issueNode(43, { timelineItems: { nodes: [] } }),
+        issueNode(44, {
+          timelineItems: {
+            nodes: [
+              { source: { __typename: 'Issue', number: 5 } },
+              { source: { __typename: 'Issue', number: 6 } },
+            ],
+          },
+        }),
+        issueNode(45, { timelineItems: undefined }),
+      ],
+    })));
+
+    const result = await ghIssues.listRelatedIssues({ first: 20 }, { scope: IDENTITY });
+    assert.equal(result.ok, true);
+    assert.deepEqual(
+      result.buckets.assigned.issues.map((row) => row.pullRequestNumber),
+      [null, null, null],
+      'an issue cross reference or no timeline is no number at all',
+    );
+    assert.deepEqual(
+      result.buckets.assigned.issues.map((row) => row.hasPullRequest),
+      [false, false, false],
+      'and no marked row either',
+    );
+  });
+
+  test('a malformed event never throws and never becomes a number', async () => {
+    ghIssues.setGhRunner(async () => okJson(relatedJson({
+      assigned: [
+        issueNode(46, {
+          timelineItems: {
+            nodes: [
+              null,
+              'nope',
+              42,
+              {},
+              { source: null },
+              { source: 'PullRequest' },
+              { source: { __typename: 'PullRequest' } },
+              { source: { __typename: 'PullRequest', number: 'x' } },
+              { source: { __typename: 'PullRequest', number: 0 } },
+              { source: { __typename: 'PullRequest', number: -3 } },
+            ],
+          },
+        }),
+        issueNode(47, { timelineItems: { nodes: 'nope' } }),
+      ],
+    })));
+
+    const result = await ghIssues.listRelatedIssues({ first: 20 }, { scope: IDENTITY });
+    assert.equal(result.ok, true, 'a decoration never costs the caller its rows');
+    assert.deepEqual(
+      result.buckets.assigned.issues.map((row) => row.pullRequestNumber),
+      [null, null],
+      'a number the answer did not carry is no number, never a NaN or a #0',
+    );
+    assert.deepEqual(
+      result.buckets.assigned.issues.map((row) => row.hasPullRequest),
+      [true, false],
+      'a pull-request source without a number is still a pull request',
+    );
+  });
+
+  // A newest pull request whose number the answer omitted is not a number: the
+  // newest one the answer DID number is the newest mark available. `#0`/`#NaN`
+  // never reaches a row.
+  test('a numberless newest pull request yields the newest numbered one', async () => {
+    ghIssues.setGhRunner(async () => okJson(relatedJson({
+      assigned: [issueNode(48, {
+        timelineItems: {
+          nodes: [
+            { source: { __typename: 'PullRequest', number: 70 } },
+            { source: { __typename: 'PullRequest' } },
+          ],
+        },
+      })],
+    })));
+
+    const result = await ghIssues.listRelatedIssues({ first: 20 }, { scope: IDENTITY });
+    assert.equal(result.ok, true);
+    assert.equal(result.buckets.assigned.issues[0].pullRequestNumber, 70);
   });
 
   // T10 (S9): the rail's cached row IS the panel's first frame, so the assignees

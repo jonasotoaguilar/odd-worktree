@@ -86,6 +86,21 @@ open the document in `$VISUAL`/`$EDITOR`, `s` toggles the order between `recent`
 and `name`, `r` reload, `esc` close. `←`/`→` and `[`/`]` scroll the list; the
 document pane pages with `ctrl+j`/`ctrl+k`.
 
+`/files` — one option per key. The scope step, when it appears, is `↑`/`↓`,
+`enter` and `esc`.
+
+| Key | Action |
+| --- | --- |
+| `↑`/`↓` | Move the selection |
+| `tab` | Select or unselect the highlighted file |
+| `ctrl+j`/`ctrl+k` | Scroll the preview one line |
+| `ctrl+o` | Cycle the order: `modified`, `path`, `ext` |
+| `space` | Fold or unfold the focused group |
+| `ctrl+u` | Clear the query |
+| `ctrl+e` | Open the highlighted file in `$VISUAL`/`$EDITOR` |
+| `enter` | Insert the selected files plus the highlighted one, and close |
+| `esc`, `ctrl+c` | Close the panel |
+
 `/issues` — the tab bar reads `My issues (<n>)`, `Assigned (<n>)` and
 `Involved (<n>)`; `All` is not a tab, it is the `g` shortcut's own view, and there
 the bar reads only `All (<n>)`.
@@ -356,6 +371,24 @@ the checkout's remote moves while the reader is open, mutations refuse with
 …); reopen /issues`, and the reads keep the displayed repository. An issue
 number on screen can never be sent to another repository.
 
+A NUMBERED open — `/issues <n>`, the form a rail click sends — first takes the
+ROW's identity: the click carries the repository the rail proved when it READ that
+row, and the open pins that exact `<host>/<owner>/<repo>` with no probe at all — no
+`git`, no `gh` — so the first frame paints as soon as the TUI helper is loaded. The
+number belongs to the repository the row was read from, so that is the right target
+even if the checkout has moved since; the hint is used once, cleared with the click,
+and only in the session generation that read the row, so a row the host retained
+across a session boundary still dispatches its number but leaves no hint behind. The
+identity is normalized with the same function every pinned read uses, and a value
+that does not normalize into `<host>/<owner>/<repo>` records no hint at all.
+Without it (a typed `/issues 12`, a hint that is gone) the open pins the checkout's
+CACHED scope instead of forcing a fresh `git`/`gh` proof before the first frame, and
+a cached pin that cannot be read falls back to the fresh proof once. A typed
+`/issues` always proves freshly. The `o` opener binds the same identity to `-R`,
+normalized the same way, so a raw value never reaches gh.
+Nothing that mutates is loosened: every action re-proves the checkout with a fresh
+read and refuses on drift, as above.
+
 ## The `ISSUES` rail section
 
 When Gentle Shell draws its rail, a section titled `ISSUES` lists this checkout's
@@ -398,6 +431,14 @@ on screen are the last good ones.
   names no issue, so it sends plain `/issues`. Both are deferred off the paint
   path, run once per click, and a failure never escapes into the rail; a dispatch
   reports that the command was sent, never that a panel opened.
+- **One open at a time, and a swallowed click is invisible.** While a click is
+  being opened, any further click — the same row, another issue, the overflow row
+  — does NOTHING: no second `/issues` message, no second overlay, nothing painted
+  or announced, and no refusal either; the click just has no effect. The effect
+  comes back when the panel mounts, when an open ends without one (the command
+  refused, the identity could not be proven, the dispatch threw), or after a
+  bounded safety interval of about ten seconds if the host never ran the command
+  at all. A typed `/issues` is never held back.
 - **It reaches the host only through gentle-shell-bridge.** The section is read
   from that package's published sidebar-section API — the object in the
   `Symbol.for("gentle-shell-bridge/api/v1")` slot, after its schema and version gate
@@ -412,7 +453,12 @@ on screen are the last good ones.
   has the bridge but draws no rail registers the section and never paints it — that
   is the bridge's answer to a host without a sidebar, not a failure here. Its
   `/gentle:customize` → `Sections` visibility toggle belongs to the bridge, so a
-  host without the bridge has neither the section nor the toggle.
+  host without the bridge has neither the section nor the toggle. The section
+  declares no preview of its own: every `Sections` row draws the host's single
+  shared list of active sections — `[changes] [rdd] [agents] [todo] [usageCost] …` —
+  and the bridge appends this section's `rowLabel` (`issues`) to it while the
+  section is shown, leaving it out of a `hidden` row's hypothetical. There is
+  nothing to opt into, and `registerSection` has no `preview` field.
 - **A frame never waits on `gh`.** The host calls `lines()` and `meta()` once per
   frame and both return synchronously: they read one in-memory snapshot and only
   ever schedule the refresh. Nothing is read at `session_start`; a snapshot older
@@ -510,9 +556,93 @@ on screen are the last good ones.
   `session_shutdown`. A verdict that lands after its session was replaced is
   discarded.
 
+## `/files`: the picker, its scopes and its orders
+
+`/files` browses one checkout's files: the list on the left, a live preview on
+the right, and a search row that is always active directly under the title.
+Typing filters immediately — there is no mode to enter and no "type to search"
+hint — so navigation and scrolling use modifier combinations, and a query that
+matches nothing paints `No files match "<query>"`. The list is Git's own
+(`git ls-files --cached --others --exclude-standard`), so tracked files and
+untracked-but-not-ignored files appear and `.gitignore` is respected. A file
+changed in the working tree sorts above the unchanged ones, wears this package's
+own badge — `M` for a tracked file with an uncommitted change, `U` for an
+untracked one — and its age in `s`/`h`/`d` at the right; the ages are computed
+when the panel opens and never refreshed live.
+
+**A scope step, only when there is a choice.** When this clone has more than its
+principal checkout, `/files` first asks which one to browse: `main` first, then
+every other checkout this package created, most recently modified first, each row
+reading `<odd> · <branch>` and its `±n files` (`±1 file`). Above that card's
+footer sits the focused scope's detail line: the last commit subject, then
+`±n files`, the age of the last modification, and `↑n main` / `↓n main` — the
+`main` row compares with `origin/main`, every other checkout with the local
+`main` — and a field that is zero or absent is not painted at all. With no other
+checkout the step never appears and the picker opens on the principal checkout.
+
+**One option per key.** The footer names one binding per action even when several
+work, and both keys stay live. The compatibility bindings it never names all
+work: `home`/`end` (first and last file), `ctrl+home`/`ctrl+end` (the preview's
+first and last line), `ctrl+shift+j`/`ctrl+shift+k` and `ctrl+c`.
+
+**The three orders.** `ctrl+o` cycles `modified` (the default: one flat list,
+most recently modified first), `path` (an IDE-style folder tree — inside a folder
+its subfolders come first and then its own files, so at the top level every
+folder group paints before the files at the repository root) and `ext` (one group
+per extension named with its dot, alphabetical by path inside, the extensionless
+group last). The active order is painted at the right of the footer. `path` and
+`ext` are foldable: groups start expanded, the fold state is kept per order while
+the panel is open, `space` toggles the focused group and `enter` on a group does
+the same while `enter` on a file still inserts. A non-empty query forces every
+group open, and the fold keys do nothing until it is cleared. In `modified` and
+`ext` a file row paints its parent directory at the right; in `path` it does not,
+because the tree already places the file under that folder.
+
+**What `enter` inserts.** Every file selected with `tab` plus the highlighted
+one, each once, in list order, space-separated — and nothing is sent: the panel
+closes, focus stays in the input and the message still waits for you. A file
+below the session's cwd is inserted as `@` plus its path from that cwd
+(`@AGENTS.md`, `@lib/view-layout.js`); any other file — one of another checkout,
+or one outside the cwd — is inserted as its real absolute path, because `@`
+resolves against the current directory and would name the wrong file.
+
+**The preview is bounded.** It is one `open`/`read` of at most 64 KiB, at most
+200 lines and at most 400 columns per line, so no file can stall a paint: a file
+the read cut short ends with `… preview truncated.`, and a binary file paints
+`Binary file — preview not available.` instead of its bytes. The pane sits in its
+own rounded box, with the top visible line as `line/total` on that box's top
+border and a dim gutter numbering each line once; a line wider than the pane
+wraps onto continuation rows aligned under the same text column instead of being
+cut with an ellipsis, and when the body is too short for the box plus one content
+row the preview paints unbordered rather than squeezing its content.
+
+**Coloured, from your theme.** The preview paints the file's syntax through the
+host's own `highlightCode` / `getLanguageFromPath`, so the colours are the active
+theme's and never a foreign palette; the gutter keeps its dim tone and is never
+highlighted. An unknown language, a grammar the host has not loaded, an absent
+highlighter and a highlighter that throws all degrade to plain text — never
+blank, never an error, never a partial line — and highlighting runs once per
+preview load, never per repaint.
+
+**Read-only, and reachable from Gentle Shell.** The panel reads and paints: it writes
+nothing, stages nothing and opens no network, and every child is a fixed argv
+with a bounded timeout — `git` through this package's async runner, plus the one
+`$VISUAL`/`$EDITOR` `ctrl+e` starts (a missing variable is reported in its own
+sentence). With `gentle-shell-bridge` published, `/files` contributes one keymap
+action (`files`, "File picker", default `alt+p`, overridable in
+`/gentle:customize` → `Keymaps` and through `GENTLE_PI_FILES_KEY`; a changed key
+applies after `/reload`) and one row in the command palette's `Session` section.
+The bridge carries no handler, so this package asks `resolveKeymap("files")` for the
+effective key and binds it itself; without the bridge nothing is registered, bound
+or announced, and `/files` still opens from the palette and as a command.
+It mounts its own overlay, so a host without `ctx.ui.custom` gets one line saying
+the picker needs an interactive session with overlay support, and no second
+surface in its place.
+
 ## Card style follows your shell
 
-The worktree tool cards follow the card style chosen in Gentle Shell — the
+The tool cards — the two worktree tools, the file cards and CodeGraph's rows —
+follow the card style chosen in Gentle Shell — the
 rounded `╭ ╮ ╰ ╯` frame (`neon`) or the `▎` rail over a painted band (`float`,
 the default). Content, order, truncation, the collapsed three-row preview and
 the elapsed time are identical in both; only the chrome differs.
@@ -566,10 +696,10 @@ the elapsed time are identical in both; only the chrome differs.
   shows its heading and at most three body rows; at `minimal` it is the heading
   alone, closed by the rule that carries the elapsed time. A failure still says why at
   either level, and `ctrl+o` expands any card to everything. A host without Gentle
-  Shell reads as `default`. This holds for `/warp` and the CodeGraph card. The two
-  worktree tool cards are the exception (S2): their three info rows are their point,
-  so a collapsed `worktree_create`/`worktree_list` result keeps them at both
-  levels.
+  Shell reads as `default`. This holds for `/warp`, the CodeGraph card and the
+  file cards. The two worktree tool cards are the exception (S2): their three info
+  rows are their point, so a collapsed `worktree_create`/`worktree_list` result
+  keeps them at both levels.
 - **A row is clipped while it is still plain, and painted after.** Text is
   wrapped, clipped to the card's inner width (with the `…` mark) and padded first;
   the role wraps that result and nothing this package painted is measured again.
@@ -686,11 +816,121 @@ separates the cards.
 The CodeGraph card is separate: with the `codegraph` CLI installed it still claims
 `codegraph …` bash rows through its own resolver (invariant 19).
 
+## The file cards and their switches
+
+A `read`, `edit` or `write` call whose `path` names one of two things is drawn as
+that file rather than as a bare tool row: a **customized skill** — a file called
+`SKILL.md`, in any case, that a `skills` folder holds — or an **ODD artifact**,
+any file below an `odd/tasks` folder. The identity is the path's components and
+nothing else (`lib/skill-odd-card.js`): both separators are read, so a Windows
+path classifies like a POSIX one; `lib/skillset/notes.md`, `docs/oddity.md`, the
+notes beside a skill and a `SKILL.md` outside a `skills` folder are ordinary
+files. A path naming both kinds is decided by the marker closest to the file, so
+a `SKILL.md` below a `skills` folder is a skill even when an `odd/tasks` folder
+sits above it, while one whose closest marker is `odd/tasks` is an ODD artifact
+like every other file there.
+
+| The path names | Mark | Label | The role the label wears |
+| --- | --- | --- | --- |
+| a `SKILL.md` a `skills` folder holds | `▤` | `skill` | the theme's `toolTitle` |
+| any file below an `odd/tasks` folder | `📑` | `odd` | the theme's `mdHeading` |
+
+**The heading** is that mark and label, then the tool, the path and — for a read
+only — the line range the call asked for (`:10-39` for `offset: 10, limit: 30`,
+`:7` for an `offset` alone). Only a read states a range because only a read asks
+for one: a write knows how many lines it writes, never where they land, and an
+edit's real range is the diff its result carries. A range stated in a shape the
+card cannot read names nothing rather than half of itself.
+
+**Collapsed and expanded.** Collapsed, an ODD call names the file itself (`📑 odd ·
+read cards-skill-odd.md`) because its folder is long and the file's own name is
+what a reader looks for; expanding the call draws the whole path in its place, so
+a deep path is never lost behind an ellipsis. A skill's path is short enough to
+be stated either way. A call still running wears the warning tone and closes its
+own frame; the result that follows closes it in the info tone (or the error tone)
+and carries the elapsed time bottom-right, in the form the other cards use
+(`61ms`, `1.2s`). The host's expand key hint is offered on a settled call, and the
+host's `expanded` flag (`ctrl+o`) decides what is drawn.
+
+**What the body is.** Collapsed it is the first three rows of what the result
+reported — a document previews from its top, unlike a command's output, whose
+summary is written last — and expanded it is the whole text. A call that failed
+says why at either level and wears the `error` role. Markdown is the shape a
+document is written in, not a property of where it lives: an expanded `read` of
+any `.md` file, and an expanded `write` to one, render as a document through the
+package's own renderer (`lib/odd-markdown.js`) — headings, bullets, fences — with
+the card's body role as the token colour, and a write draws the content its call
+carries, which the result does not echo. A collapsed card keeps its rows, because
+its preview is the first rows of the file; a failed one keeps its error; every
+non-Markdown file keeps its rows. **An edit is never a document**: its rows are
+the diff the host carries (`details.diff`) — its own text when it carries none —
+and expanding it shows the whole diff.
+
+**The two switches.** Each card has one, labelled `Card skill` and `Card odd`,
+both in `/gentle:customize` → `Cards` and both on by default.
+
+```json
+{ "schema": "gentle-pi.card-files/v1", "skill": true, "odd": true }
+```
+
+- **The document** is `<home>/card-files.json`, and it is strict: that schema
+  string, the two booleans and nothing else. `<home>` is the one `card-style.json`
+  resolves: `GENTLE_PI_CONFIG_HOME` → `GENTLE_SHELL_CONFIG_HOME` →
+  `~/.pi/gentle-ai`.
+- **The switch is read live**, in the order and with the reasons the card style
+  uses: the process-wide slot a toggle sets, then the document read fresh, then
+  both on. A missing, unreadable, malformed, wrong-schema or non-boolean document
+  reads as on, and an unknown name is never on.
+- **The write is atomic and owner-only**, document first and slot second, so a
+  failed write leaves both on the old state and there is nothing to roll back. It
+  merges the one switch into the state it can see, so saving `odd` keeps `skill`
+  as it was, and a document it cannot parse is never overwritten.
+- **The rows.** The switches reach `/gentle:customize` → `Cards` through
+  gentle-shell-bridge's `registerRows` alone (`lib/cards-customize.js`, provider
+  `odd-worktree.cards.file-switches`): each setting is two consecutive rows, `on`
+  then `off`, sharing one setting name under the bridge's own cursor, with a
+  `current()` read at build time and an `action()` that persists before the host
+  repaints. A refusal is a throw from that action — the writer refused, so nothing
+  was saved — and the customize menu catches it and shows its message (`Card odd
+  was not switched on: the card-files document is malformed (malformed_file); the
+  switch is unchanged.`) as one error notice, with the stored value and the drawn
+  switch exactly as they were. The bridge gate is the issues section's: the
+  published API's schema and major version, then the one hook used, and the one
+  `gentle-shell-bridge:ready` announcement for a bridge that publishes later. With
+  no bridge nothing registers and no other surface changes; there is no customize
+  command, no tool and no settings file here.
+- **A flip repaints what is on screen.** Both switches are read inside the card's
+  build, which the host calls on every frame, so flipping one repaints the rows
+  already drawn.
+- **Style and content level are the shell's.** The cards are on the same substrate
+  as the others, so `float`'s painted band (the default) and `neon`'s rounded
+  frame draw the same content. The content level applies too: at `default` a
+  collapsed result shows at most three body rows, at `minimal` it draws no body at
+  all — its closing rule, with the elapsed time, is the one row — while the call
+  above it keeps its heading; `ctrl+o` expands it to everything, and a failure
+  still says why at either level. Both slots are read at paint time, so a change
+  reaches a card already on screen.
+
+**The host's box is reproduced, because the hook decides per tool name.** The host
+resolves a tool's renderers by NAME (`registerToolRenderer`) and never shows them
+a call's arguments, so the shell a resolver declares is fixed for every call of
+that tool. Declaring `self` — which this card does for the rows it draws — takes
+the host's own box off all of them, so a forwarded row is drawn exactly as the
+host would have drawn it: inside the host's box — `Box(outputPad, 1, bgFn)`,
+`outputPad` columns of padding each side, one painted blank row above the call and
+one below the result, in `toolPendingBg` while the call streams, `toolErrorBg`
+once its result failed and `toolSuccessBg` otherwise — for a row of a renderer
+whose own shell is the default (`read`, `write`), and untouched, with no box, no
+padding and no background, for one that frames itself (Pi's `edit`). A path that
+names neither identity is that same forwarded row, so an ordinary file call looks
+exactly as it did before the card existed.
+
 ## The list
 
-`worktree_list` prints the main checkout first and unnumbered, then one numbered
+`worktree_list` prints the main checkout first and unnumbered, as the `base: <branch>@<sha>`
+line `worktree_create` also prints (the branch it stands on is always named), then one numbered
 row per checkout this package created under `<repo-name>-worktrees`, by name.
-A row is its directory's basename — which IS the ODD — and the branch Git
+A row is its directory's basename — which IS the ODD — then ` · ` and the branch Git
 reports. With `all: true`, the worktrees Git knows outside that directory follow,
 and a footer counts them while they are hidden. The text is fixed-field and
 undecorated, so it reads the same on every run:
@@ -698,9 +938,9 @@ undecorated, so it reads the same on every run:
 ```text
 project: repo
 path: /code/repo
-main: 1a2b3c4
-1 worktree-tools feat/worktree-tools
-2 billing feat/billing
+base: main@1a2b3c4
+1 worktree-tools · feat/worktree-tools
+2 billing · feat/billing
 ```
 
 There is no `odd:` field, no date, no setup line, no hooks line and no stored
@@ -726,8 +966,11 @@ Session names derived from an ODD write, and the warp's fork/resume bookkeeping,
 travel in the Pi session files the host already owns. The setup logs live under
 the system temp directory (`odd-worktree-setup-*`), one directory per create.
 
-No preference document is written either: the design's choice belongs to the
-bridge ([the cards](#the-cards-the-activity-design-paints)). Nothing in user
+One document holds a preference rather than worktrees: `<home>/card-files.json`,
+the two file-card switches the `Cards` rows write; its format, reader and writer
+are in [the file cards and their switches](#the-file-cards-and-their-switches).
+The design's choice is not stored here at all: it belongs to the bridge
+([the cards](#the-cards-the-activity-design-paints)). Nothing else in user
 configuration is written by this package, except — with the `codegraph` CLI
 installed — the one `codegraph` entry of `<agent dir>/mcp.json` (see [CodeGraph:
 index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry)); Gentle
@@ -934,7 +1177,7 @@ its own last segment. No filesystem is read to decide it. It is
 registered through the host's tool-renderer hook, adds no tool or command, and
 hands every other tool back exactly as the host resolved it; a `bash` command that is not
 CodeGraph's is forwarded to the host's own renderer. A host without that hook draws nothing of
-ours. Every card in this package, the two worktree tools and the CodeGraph rows alike, declares `renderShell: "self"`: it frames itself in float or neon, and the host's own filled box is never drawn under it. The collapsed card is one factual row per operation (an init, a sync, a query or explore
+ours. Every card in this package, the two worktree tools, the file cards and the CodeGraph rows alike, declares `renderShell: "self"`: it frames itself in float or neon, and the host's own filled box is never drawn under it. The collapsed card is one factual row per operation (an init, a sync, a query or explore
 count); `ctrl+o` expands it to the whole output, except an `init`, which expands to
 its `→ initialized`/`→ already initialized` row plus the index facts it printed and
 never the CLI's `Use "codegraph index" …` advisory. The Gentle Shell card content
@@ -948,13 +1191,16 @@ classifier's `codegraph` identity.
 
 ## Deliberately absent
 
-This package is the worktree / ODD / issues surface only: two agent tools, three
-panels, one optional rail section and one tool design on the bridge, no customize panel, no plugin-tools
+This package is the worktree / ODD / files / issues surface only: two agent
+tools, four panels, one optional rail section, one tool design on the bridge and
+the two file-card switches, no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
-companion-app integration, and no worktree↔issue association. Its one
-customize-side contribution is the `activity` value of the bridge's `Card tools` line (or its `Card bash`
-line, on a bridge older than 0.6.0), which adds no
-command, tool or row of its own. There is nothing to configure here, and `/warp`, `/odd` and `/issues` are always
+companion-app integration, and no worktree↔issue association. Its
+customize-side contributions are the `activity` value of the bridge's `Card tools` line
+(or its `Card bash` line, on a bridge older than 0.6.0), the `Card skill` / `Card odd`
+rows and the file picker's `files` keymap action with its palette row, none of which
+adds a command, tool or row of its own. There is nothing to configure here beyond those
+two switches, and `/warp`, `/odd`, `/files` and `/issues` are always
 on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 

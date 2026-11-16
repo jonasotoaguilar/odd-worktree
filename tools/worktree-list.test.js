@@ -58,9 +58,9 @@ test('prints project, path, the unnumbered main checkout and the created worktre
 	assert.equal(view.text, [
 		'project: demo',
 		'path: /work/demo',
-		'main: 1a2b3c4',
-		'1 alpha feat/alpha',
-		'2 zeta feat/zeta',
+		'base: main@1a2b3c4',
+		'1 alpha · feat/alpha',
+		'2 zeta · feat/zeta',
 	].join('\n'));
 	assertPlainLines(view.text);
 });
@@ -79,7 +79,7 @@ test('a linked worktree outside the canonical directory is hidden without all, a
 	const view = viewOf({
 		entries: [MAIN, entry(`${WORKTREES}/alpha`, 'feat/alpha'), entry('/elsewhere/other', 'feat/other')],
 	});
-	assert.equal(view.text.split('\n').includes('2 other feat/other'), false, 'the outside worktree is not listed');
+	assert.equal(view.text.split('\n').includes('2 other · feat/other'), false, 'the outside worktree is not listed');
 	assert.equal(view.text.split('\n').at(-1), '1 worktrees outside the list (--all to list them)');
 	assert.equal(view.details.hiddenOutside, 1);
 });
@@ -108,10 +108,10 @@ test('all adds the worktrees outside the canonical directory, after ours and by 
 	assert.equal(view.text.split('\n').join('|'), [
 		'project: demo',
 		'path: /work/demo',
-		'main: 1a2b3c4',
-		'1 alpha feat/alpha',
-		'2 beta feat/beta',
-		'3 gamma -',
+		'base: main@1a2b3c4',
+		'1 alpha · feat/alpha',
+		'2 beta · feat/beta',
+		'3 gamma · -',
 	].join('|'));
 	assert.deepEqual(worktreeListFooters(view.details), [], 'nothing is hidden when everything is listed');
 	assert.equal('foreign' in view.details, false, 'no state field decides what a row is');
@@ -120,25 +120,34 @@ test('all adds the worktrees outside the canonical directory, after ours and by 
 test('a detached checkout prints a dash instead of inventing a branch', () => {
 	const view = viewOf({ entries: [MAIN, entry(`${WORKTREES}/alpha`, null)] });
 	assert.equal(view.details.worktrees[1].branch, '-');
-	assert.equal(view.text.split('\n').at(-1), '1 alpha -');
+	assert.equal(view.text.split('\n').at(-1), '1 alpha · -');
 });
 
 test('the main row prints first and unnumbered, as Git lists it', () => {
 	const view = viewOf({ entries: [MAIN, entry(`${WORKTREES}/alpha`, 'feat/alpha')] });
 	assert.equal(view.details.worktrees[0].path, MAIN_ROOT);
 	assert.equal(view.details.worktrees[0].index, undefined);
-	assert.equal(view.text.split('\n')[2], 'main: 1a2b3c4');
+	assert.equal(view.text.split('\n')[2], 'base: main@1a2b3c4');
 });
 
-test('the main row never repeats its own label', () => {
-	// `main:` already names the main checkout, so a branch called `main` adds nothing
-	// and the row states only its head.
-	assert.equal(viewOf({ entries: [MAIN] }).text.split('\n')[2], 'main: 1a2b3c4');
+test('the main row names its base the way worktree_create does: branch@sha', () => {
+	// The same `base: <branch>@<sha>` shape the create prints for the checkout it forks from.
+	assert.equal(viewOf({ entries: [MAIN] }).text.split('\n')[2], 'base: main@1a2b3c4');
 
-	// A main checkout standing on another branch still names it: that IS information.
+	// A main checkout standing on another branch names that branch, never `main`.
 	const elsewhere = viewOf({ entries: [entry(MAIN_ROOT, 'feat/main-checkout')] });
-	assert.equal(elsewhere.text.split('\n')[2], 'main: feat/main-checkout 1a2b3c4');
+	assert.equal(elsewhere.text.split('\n')[2], 'base: feat/main-checkout@1a2b3c4');
+
+	// No stored head: the row states the branch alone instead of a dangling `@`.
+	const unborn = viewOf({ entries: [entry(MAIN_ROOT, 'main', '')] });
+	assert.equal(unborn.text.split('\n')[2], 'base: main');
+
+	// A detached main checkout prints the same dash the numbered rows print.
+	const detached = viewOf({ entries: [entry(MAIN_ROOT, null)] });
+	assert.equal(detached.text.split('\n')[2], 'base: -@1a2b3c4');
+	assert.equal(/^main:/m.test(viewOf({ entries: [MAIN] }).text), false, 'the old `main:` label is gone');
 });
+
 
 // ---- The pieces ----
 

@@ -796,10 +796,39 @@ test('the card source writes no colour and no raw escape literal', () => {
 
 test('the tone to background table has exactly one owner in lib/', () => {
 	// S5/S6: the visible cards (/warp included) name a tone and nothing else. The
-	// role a tone paints behind a float card is decided here, once, so no card can
-	// drift into its own palette.
-	const owners = readdirSync(join(__dirname, '..', 'lib'))
+	// role a tone paints behind a float card is decided in `shell-card.js`, once, so
+	// no card can drift into its own palette.
+	//
+	// `file-card.js` is the one exception, and for a different job: it names the HOST's
+	// own three box roles (`toolPendingBg`, `toolErrorBg`, `toolSuccessBg`) only to
+	// reproduce the box the host itself draws around a row this card hands back (a
+	// `registerToolRenderer` resolver runs per tool name, so its `renderShell: 'self'`
+	// would otherwise strip the host's box from every forwarded read/write row). Every
+	// tone role `file-card.js` DRAWS still comes from here.
+	const lib = join(__dirname, '..', 'lib');
+	const source = (file) => readFileSync(join(lib, file), 'utf8');
+	const roles = /tool(?:Success|Pending|Error)Bg/;
+	const owners = readdirSync(lib)
 		.filter((file) => file.endsWith('.js'))
-		.filter((file) => /tool(?:Success|Pending|Error)Bg/.test(readFileSync(join(__dirname, '..', 'lib', file), 'utf8')));
-	assert.deepEqual(owners, ['shell-card.js']);
+		.filter((file) => roles.test(source(file)));
+	// A THIRD module naming one of these roles is a second palette.
+	assert.deepEqual(owners, ['file-card.js', 'shell-card.js']);
+
+	// The host box names each of the host's roles exactly once IN CODE, inside its own
+	// table: a fourth background role, a copy of ours, or a second table would all
+	// break it. Prose is not a palette, so comments are stripped first.
+	const card = source('file-card.js')
+		.replace(/\/\*[\s\S]*?\*\//g, '')
+		.replace(/^\s*\/\/.*$/gm, '');
+	const named = [...card.matchAll(/\btool(?:Success|Pending|Error)Bg\b/g)].map((match) => match[0]).sort();
+	assert.deepEqual(named, ['toolErrorBg', 'toolPendingBg', 'toolSuccessBg'], 'file-card.js names the host box roles and no other');
+	assert.match(
+		card,
+		/const HOST_BOX = Object\.freeze\(\{[\s\S]*?PENDING: 'toolPendingBg',[\s\S]*?ERROR: 'toolErrorBg',[\s\S]*?SUCCESS: 'toolSuccessBg',?[\s\S]*?\}\);/,
+		'the roles belong to the host box table, keyed by the host\'s own states',
+	);
+	// And no tone is mapped to a background role there: that would be a tone table of
+	// its own, which is exactly what this assertion protects.
+	assert.doesNotMatch(card, /(?:CARD_TONE\.\w+|['"]?(?:info|success|warning|error)['"]?)\s*:\s*['"]tool\w+Bg['"]/, 'file-card.js owns no tone -> background table');
+	assert.doesNotMatch(card, /['"]tool\w+Bg['"]\s*:\s*(?:CARD_TONE|[A-Z_]{2,})/, 'no background role is a key of a table of its own');
 });

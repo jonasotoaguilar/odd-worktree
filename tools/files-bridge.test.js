@@ -275,14 +275,18 @@ test('S18/S19: a bridge that publishes later lands both registrations from the r
     },
   });
 
-  assert.equal(subscriptions.length, 1, 'the package answers the announcement with ONE subscription');
-  assert.equal(subscriptions[0].event, READY_EVENT);
+  // This extension answers the announcement with ONE shared subscription for
+  // every surface it contributes (the rail and the picker); the only other
+  // listener is the `Cards` row provider's own, once per process.
+  const ready = subscriptions.filter((entry) => entry.event === READY_EVENT);
+  assert.ok(ready.length >= 1 && ready.length <= 2, `one shared subscription (plus the Cards provider's): ${ready.length}`);
+  assert.equal(subscriptions.every((entry) => entry.event === READY_EVENT), true, 'and nothing else is listened to');
   assert.equal(host.shortcuts.length, 0, 'nothing is bound while no bridge is published');
   assert.equal(loaded.commands.has('files'), true);
 
   // The bridge publishes and announces.
   const bridge = installBridge();
-  subscriptions[0].handler();
+  for (const entry of ready) entry.handler();
 
   assert.deepEqual(bridge.keymaps, [{
     id: 'files',

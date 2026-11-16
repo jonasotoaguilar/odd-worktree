@@ -58,7 +58,7 @@ test('prints project, path, the unnumbered main checkout and the created worktre
 	assert.equal(view.text, [
 		'project: demo',
 		'path: /work/demo',
-		'main: main 1a2b3c4d5e'.replace(' 1a2b3c4d5e', ' 1a2b3c4'),
+		'main: 1a2b3c4',
 		'1 alpha feat/alpha',
 		'2 zeta feat/zeta',
 	].join('\n'));
@@ -108,7 +108,7 @@ test('all adds the worktrees outside the canonical directory, after ours and by 
 	assert.equal(view.text.split('\n').join('|'), [
 		'project: demo',
 		'path: /work/demo',
-		'main: main 1a2b3c4',
+		'main: 1a2b3c4',
 		'1 alpha feat/alpha',
 		'2 beta feat/beta',
 		'3 gamma -',
@@ -127,7 +127,17 @@ test('the main row prints first and unnumbered, as Git lists it', () => {
 	const view = viewOf({ entries: [MAIN, entry(`${WORKTREES}/alpha`, 'feat/alpha')] });
 	assert.equal(view.details.worktrees[0].path, MAIN_ROOT);
 	assert.equal(view.details.worktrees[0].index, undefined);
-	assert.equal(view.text.split('\n')[2], 'main: main 1a2b3c4');
+	assert.equal(view.text.split('\n')[2], 'main: 1a2b3c4');
+});
+
+test('the main row never repeats its own label', () => {
+	// `main:` already names the main checkout, so a branch called `main` adds nothing
+	// and the row states only its head.
+	assert.equal(viewOf({ entries: [MAIN] }).text.split('\n')[2], 'main: 1a2b3c4');
+
+	// A main checkout standing on another branch still names it: that IS information.
+	const elsewhere = viewOf({ entries: [entry(MAIN_ROOT, 'feat/main-checkout')] });
+	assert.equal(elsewhere.text.split('\n')[2], 'main: feat/main-checkout 1a2b3c4');
 });
 
 // ---- The pieces ----

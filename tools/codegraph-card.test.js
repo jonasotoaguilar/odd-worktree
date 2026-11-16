@@ -12,10 +12,13 @@
 // this package has no node_modules, so width measurement, truncation and
 // wrapping are injected, and colour only ever arrives as `theme.fg(role, text)`.
 const assert = require('node:assert/strict');
-const { mkdtempSync, readFileSync, rmSync } = require('node:fs');
+const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { after, before, test } = require('node:test');
+const { pathToFileURL } = require('node:url');
+
+const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
 
 const {
   CARD_CONTENT,
@@ -281,6 +284,46 @@ test('the native tool, the MCP explore tool and a bash call are one card', () =>
   }
 });
 
+test('S6: the MCP heading names the explored checkout briefly, and never its full path', () => {
+  const resolver = cardFor({ cwd: '/work/repo' });
+  const EXPLORED = '/home/jona/.pi/agent/git/github.com/Gentleman-Programming/gentle-shell';
+  const heading = (args, width = 120) => stripAnsi(callRows(resolver, MCP_PREFIXED_TOOL, args, plainTheme, { isPartial: false }, width)[0]);
+
+  const elsewhere = heading({ query: 'auth login', projectPath: EXPLORED });
+  assert.ok(elsewhere.includes(`${CODEGRAPH_MARK} codegraph · explore auth login · gentle-shell`), 'the last segment continues the heading');
+  assert.doesNotMatch(elsewhere, /Gentleman-Programming|\/home\/jona/, 'the full path never appears');
+
+  for (const projectPath of [undefined, '', '/work/repo', '/work/repo/']) {
+    const rows = heading({ query: 'auth login', ...(projectPath === undefined ? {} : { projectPath }) });
+    assert.match(rows, /codegraph · explore auth login/);
+    assert.doesNotMatch(rows, / · gentle-shell| · repo/, `${String(projectPath)} names no other checkout`);
+  }
+  assert.match(heading({ query: 'auth login', projectPath: 'gentle-shell' }), / · gentle-shell/, 'a bare name other than this checkout is named');
+  assert.doesNotMatch(
+    stripAnsi(callRows(cardFor({ cwd: '/work/repo/gentle-shell' }), MCP_PREFIXED_TOOL, { query: 'auth login', projectPath: 'gentle-shell' }, plainTheme, { isPartial: false }, 120)[0]),
+    / · gentle-shell/,
+    'a bare name equal to the cwd name names no other checkout',
+  );
+
+  // The shape carries the segment for the MCP tool only, and reads the seam per paint.
+  assert.deepEqual(codegraphShape(MCP_PREFIXED_TOOL, { query: 'auth', projectPath: EXPLORED }, '/work/repo'), {
+    surface: 'mcp',
+    operation: 'explore',
+    query: 'auth',
+    project: 'gentle-shell',
+  });
+  assert.deepEqual(codegraphShape(MCP_PREFIXED_TOOL, { query: 'auth', projectPath: '/work/repo' }, '/work/repo'), { surface: 'mcp', operation: 'explore', query: 'auth' });
+  assert.deepEqual(codegraphShape(MCP_PREFIXED_TOOL, { query: 'auth', projectPath: EXPLORED }), { surface: 'mcp', operation: 'explore', query: 'auth', project: 'gentle-shell' }, 'an unanswerable seam shows the explicit argument');
+
+  // A seam that moves with the session re-decides on the next paint.
+  let cwd = '/work/repo';
+  const live = cardFor({ cwd: () => cwd });
+  const liveHeading = () => stripAnsi(callRows(live, MCP_PREFIXED_TOOL, { query: 'auth', projectPath: '/work/repo' }, plainTheme, { isPartial: false }, 120)[0]);
+  assert.doesNotMatch(liveHeading(), / · repo/);
+  cwd = '/work/other';
+  assert.match(liveHeading(), / · repo/, 'the same renderer follows the session it now belongs to');
+});
+
 test('a call whose operation is not known yet says so instead of guessing one', () => {
   assert.deepEqual(codegraphShape(CODEGRAPH_TOOL, {}), { surface: 'tool', operation: '...' });
   // The MCP tool's own name is the operation it runs.
@@ -317,7 +360,7 @@ test('a call draws one heading with the CodeGraph mark and the operation as its 
   const mcp = callRows(resolver, MCP_PREFIXED_TOOL, { query: 'auth' }, plainTheme, { isPartial: false }, 60);
   const bash = callRows(resolver, 'bash', { command: 'codegraph explore auth' }, plainTheme, { isPartial: false }, 60);
   assert.match(stripAnsi(mcp[0]), /󰆼 codegraph · explore auth/, 'the query is part of the detail');
-  assert.match(stripAnsi(bash[0]), /󰆼 codegraph · codegraph explore auth/, 'a bash call names the command it ran');
+  assert.match(stripAnsi(bash[0]), /󰆼 codegraph · explore auth/, 'a bash call names the input it ran, without repeating the program');
 
   // A call still streaming its arguments says so rather than guessing an operation.
   const streaming = callRows(resolver, CODEGRAPH_TOOL, {}, plainTheme, { isPartial: false }, 60);
@@ -405,23 +448,56 @@ test('a collapsed result is the one factual row the output supports, in the mute
   assert.equal(bodyText(explore[0]), '→ 2 symbols in 1 file');
 });
 
-test('expanding the card draws the whole CLI output it printed', () => {
+test('S4: an expanded init draws its outcome row and the index facts, never the CLI advisory', () => {
   const resolver = cardFor();
-  const args = { command: 'codegraph init -y /tmp/ws' };
-  const collapsed = resultRows(resolver, 'bash', textResult(INIT_FRESH), { isPartial: false }, plainTheme, { args }, 60);
-  assert.equal(collapsed.length, 2, 'a collapsed result is bounded');
+  const expanded = resultRows(resolver, CODEGRAPH_TOOL, textResult(INIT_EXISTING), { expanded: true, isPartial: false }, plainTheme, { args: { operation: 'init' } }, 80);
+  assert.deepEqual(expanded.slice(0, -1).map(bodyText), ['→ already initialized'], 'the same one-row outcome the collapsed card states');
+  assert.doesNotMatch(expanded.slice(0, -1).map(bodyText).join('\n'), /Use "codegraph index"/, 'the CLI advisory line never reaches the card');
 
-  const expanded = resultRows(resolver, 'bash', textResult(INIT_FRESH), { expanded: true, isPartial: false }, plainTheme, { args }, 60);
-  assert.ok(expanded.length > collapsed.length, 'expanded shows all of it');
-  assertFramed(expanded, 60);
-  const body = expanded.slice(0, -1).map(bodyText).join('\n');
-  assert.equal(body, INIT_FRESH.trimEnd(), 'the expanded body is the output itself, row for row');
-  assert.match(body, /Indexed 1 files/);
-  assert.match(body, /└  Done/);
-  // Expanding is the reader's own ask, so the full output arrives at any content level.
+  const fresh = resultRows(resolver, CODEGRAPH_TOOL, textResult(INIT_FRESH), { expanded: true, isPartial: false }, plainTheme, { args: { operation: 'init' } }, 80);
+  assert.deepEqual(
+    fresh.slice(0, -1).map(bodyText),
+    ['→ initialized', 'Indexed 1 files', '3 nodes, 2 edges in 208ms'],
+    'the outcome row plus the index facts, and nothing else',
+  );
+  assert.doesNotMatch(fresh.slice(0, -1).map(bodyText).join('\n'), /Initializing CodeGraph|└  Done|Scanning files/, 'the progress chrome is not an index fact');
+  assertFramed(fresh, 80);
+
+  // Expanding is the reader's own ask, so the rows arrive at any content level.
   withContent(CARD_CONTENT.MINIMAL, () => {
-    const atMinimal = resultRows(resolver, 'bash', textResult(INIT_FRESH), { expanded: true, isPartial: false }, plainTheme, { args }, 60);
-    assert.deepEqual(atMinimal, expanded, 'the reader asked for everything and gets everything');
+    const atMinimal = resultRows(resolver, CODEGRAPH_TOOL, textResult(INIT_FRESH), { expanded: true, isPartial: false }, plainTheme, { args: { operation: 'init' } }, 80);
+    assert.deepEqual(atMinimal, fresh, 'the reader asked for everything and gets the facts');
+  });
+
+  // The same card for a bash `codegraph init`.
+  const bash = resultRows(resolver, 'bash', textResult(INIT_EXISTING), { expanded: true, isPartial: false }, plainTheme, { args: { command: 'codegraph init -y /tmp/ws' } }, 80);
+  assert.deepEqual(bash.slice(0, -1).map(bodyText), ['→ already initialized']);
+  assert.doesNotMatch(bash.slice(0, -1).map(bodyText).join('\n'), /Use "codegraph index"/);
+});
+
+test('S4: the collapsed init outcome row is drawn at both content levels', () => {
+  const resolver = cardFor();
+  for (const [text, expected] of [[INIT_FRESH, '→ initialized'], [INIT_EXISTING, '→ already initialized']]) {
+    withContent(CARD_CONTENT.MINIMAL, () => {
+      const rows = resultRows(resolver, CODEGRAPH_TOOL, textResult(text), { isPartial: false }, plainTheme, { args: { operation: 'init' } }, 80);
+      assert.deepEqual(rows.slice(0, -1).map(bodyText), [expected], 'a card of this package never loses its outcome row to minimal');
+      assertFramed(rows, 80);
+    });
+    const atDefault = resultRows(resolver, CODEGRAPH_TOOL, textResult(text), { isPartial: false }, plainTheme, { args: { operation: 'init' } }, 80);
+    assert.deepEqual(atDefault.slice(0, -1).map(bodyText), [expected], 'the default level draws the same row');
+  }
+
+  withContent(CARD_CONTENT.MINIMAL, () => {
+    const rows = resultRows(resolver, CODEGRAPH_TOOL, textResult(INIT_FRESH), { isPartial: false }, plainTheme, { args: { operation: 'init' } }, 80);
+    assert.equal(rows.slice(0, -1).map(bodyText).join('\n').includes('Indexed 1 files'), false,
+      'minimal keeps the outcome alone; the index facts wait for the expansion');
+
+    // Preserved: minimal hides every other operation's body...
+    const sync = resultRows(resolver, 'bash', textResult(SYNC_CHANGED), { isPartial: false }, plainTheme, { args: { command: 'codegraph sync' } }, 80);
+    assert.deepEqual(sync.slice(0, -1).map(bodyText), [], 'a minimized sync still draws the call alone');
+    // ...and a failure still says why, at either level.
+    const failed = resultRows(resolver, CODEGRAPH_TOOL, textResult(INIT_FAILED, true), { isPartial: false }, plainTheme, { args: { operation: 'init' } }, 80);
+    assert.match(failed.slice(0, -1).map(bodyText).join('\n'), /Failed: EACCES/, 'a minimized failure still says why');
   });
 });
 
@@ -478,21 +554,21 @@ test('a bash call that runs codegraph is the CodeGraph card, and names the comma
   const collapsed = callRows(resolver, 'bash', { command: HELP_AND_STATUS }, taggedTheme, { isPartial: false }, 40);
   assert.equal(collapsed.length, 1, 'a collapsed call is one line: no operation label and no second heading');
   assert.match(collapsed[0], /<mdCode>󰆼 codegraph<\/mdCode>/, 'the CodeGraph mark and name');
-  assert.match(collapsed[0], /<muted>·<\/muted> <muted>codegraph --help 2>&…<\/muted>/, 'the command is the heading detail');
-  assert.match(collapsed[0], /codegraph --help 2>&…/, 'a command too wide for the rule ends in an ellipsis instead of a second row');
+  assert.match(collapsed[0], /<muted>·<\/muted> <muted>--help/, 'the input after the program is the heading detail');
+  assert.match(collapsed[0], /--help .*…/, 'a command too wide for the rule ends in an ellipsis instead of a second row');
   assert.doesNotMatch(collapsed[0], /STATUS/, 'only what fits stays visible collapsed');
   assertFramed(collapsed, 40);
 
   // Expanded, the whole command is drawn: every line of it, wrapped, and nothing lost.
   const expanded = callRows(resolver, 'bash', { command: HELP_AND_STATUS }, taggedTheme, { isPartial: false, expanded: true }, 80);
   assert.ok(expanded.length > 1, 'the command continues on the rows below the rule');
-  assert.equal(headingText(expanded), HELP_AND_STATUS, 'the complete command is the heading detail');
+  assert.equal(headingText(expanded), HELP_AND_STATUS.slice('codegraph '.length), 'the complete input after the program is the heading detail');
   assertFramed(expanded, 80);
 
   // A multi-line command keeps every line too, once the reader expands it.
   const script = 'codegraph status\necho done';
-  assert.equal(headingText(callRows(resolver, 'bash', { command: 'codegraph status; echo done' }, plainTheme, { isPartial: false, expanded: true }, 80)), 'codegraph status; echo done');
-  assert.equal(headingText(callRows(resolver, 'bash', { command: script }, plainTheme, { isPartial: false, expanded: true }, 80)), 'codegraph status echo done', 'a multi-line command keeps both of its lines');
+  assert.equal(headingText(callRows(resolver, 'bash', { command: 'codegraph status; echo done' }, plainTheme, { isPartial: false, expanded: true }, 80)), 'status; echo done');
+  assert.equal(headingText(callRows(resolver, 'bash', { command: script }, plainTheme, { isPartial: false, expanded: true }, 80)), 'status echo done', 'a multi-line command keeps both of its lines');
 });
 
 test('any codegraph subcommand counts, and several of them in one command are one card', () => {
@@ -512,7 +588,31 @@ test('any codegraph subcommand counts, and several of them in one command are on
     assert.equal(rows.length, 1, command);
     assert.match(stripAnsi(rows[0]), /󰆼 codegraph · /, command);
     const detail = headingText(rows);
-    assert.ok(command.startsWith(detail.endsWith('…') ? detail.slice(0, -1) : detail), `${command} is the detail the card names`);
+    assert.ok(command.includes(detail.endsWith('…') ? detail.slice(0, -1) : detail), `${command} is the detail the card names`);
+  }
+});
+
+test('S5: a bash codegraph call names the input after the program, its arguments included', () => {
+  const resolver = cardFor();
+  const detail = (command) => headingText(callRows(resolver, 'bash', { command }, plainTheme, { isPartial: false, expanded: true }, 120));
+  assert.equal(detail('codegraph status .'), 'status .', 'the argument after the subcommand is part of the detail');
+  assert.equal(detail('codegraph init /tmp/ws'), 'init /tmp/ws');
+  assert.equal(detail('codegraph'), '', 'a bare call has no input to name');
+
+  for (const command of [
+    '/usr/local/bin/codegraph status .',
+    'npx codegraph status .',
+    'pnpm exec codegraph status .',
+    'yarn codegraph status .',
+    'bunx codegraph status .',
+    'cd /tmp/ws && codegraph status .',
+    'codegraph status .; echo done',
+    'codegraph status . | head',
+    'codegraph status . || true',
+  ]) {
+    const rows = callRows(resolver, 'bash', { command }, plainTheme, { isPartial: false }, 120);
+    assert.match(stripAnsi(rows[0]), /󰆼 codegraph/, `${command} is the CodeGraph card`);
+    assert.doesNotMatch(stripAnsi(rows[0]), /\$ bash/, `${command} never falls back to the generic heading`);
   }
 });
 
@@ -539,7 +639,7 @@ test('a bash CodeGraph card keeps the three content levels: the command, a three
   const resolver = cardFor();
   const output = Array.from({ length: 8 }, (_, index) => `row ${index + 1}`).join('\n');
   const args = { command: 'codegraph status' };
-  assert.match(stripAnsi(callRows(resolver, 'bash', args, plainTheme, { isPartial: false }, 60)[0]), /󰆼 codegraph · codegraph status/, 'the collapsed default shows the command line');
+  assert.match(stripAnsi(callRows(resolver, 'bash', args, plainTheme, { isPartial: false }, 60)[0]), /󰆼 codegraph · status/, 'the collapsed default shows the input it ran');
 
   const preview = resultRows(resolver, 'bash', textResult(output), { isPartial: false }, plainTheme, { args }, 60);
   assert.equal(preview.length, 4, 'at most three rows of output preview and the closing rule');
@@ -670,7 +770,7 @@ test('every tool the card does not own is handed back exactly as the chain resol
 
   // A bash call whose command DOES run CodeGraph is the card's.
   const codegraph = bash.renderCall({ command: 'codegraph init' }, plainTheme, { isPartial: false }).render(60);
-  assert.match(stripAnsi(codegraph[0]), /󰆼 codegraph · codegraph init/);
+  assert.match(stripAnsi(codegraph[0]), /󰆼 codegraph · init/);
 });
 
 test('the resolver takes its host seams as options and degrades to drawing nothing without the hook', () => {
@@ -839,4 +939,138 @@ test('the modules carry no colour, no escape and no host package', () => {
     // S1: no model-facing tool is registered, executed or shadowed — the card only draws.
     assert.doesNotMatch(source, /registerTool\(|\.execute\b|registerCommand\(|registerToolRenderer\(/, `${file} registers and runs nothing`);
   }
+});
+
+// ---- S5: the composition, not the isolated resolver ----
+//
+// Every case above drives ONE resolver. The row the user reported wrong was decided
+// by the chain the host builds from ALL of them: `resolveToolRenderers` calls the
+// extension's resolvers in load order, each `next` resolving the following one, and
+// the tool's own renderers last. That order is a fact of the extension file, so this
+// block loads the extension itself against the fake host, collects the resolvers it
+// registers, and renders a bash call through the chain the host would run.
+//
+// Both cards wear the classifier's `codegraph` mark for such a command, so the
+// heading alone cannot say which one drew the row. What tells them apart is the body
+// the CodeGraph card composes from the CLI's own output, and whether the bash card's
+// slots were ever asked: they are captured here and stated to be untouched.
+
+/** The `codegraph` CLI, faked for the one probe the extension makes. */
+async function withCodegraphCli(run) {
+  // `cliAvailable` asks whether the binary is on PATH (`existsSync`, no spawn), and a
+  // host without it registers no CodeGraph card at all (invariant 19). The directory
+  // is scratch and PATH is restored before anything else runs.
+  const dir = mkdtempSync(join(tmpdir(), 'odd-worktree-codegraph-cli-'));
+  writeFileSync(join(dir, 'codegraph'), '');
+  const saved = process.env.PATH;
+  process.env.PATH = dir;
+  try {
+    return await run();
+  } finally {
+    process.env.PATH = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** The extension loaded as the host loads it, and the resolvers it registered, in order. */
+async function loadComposedExtension() {
+  const savedLibDir = process.env.GENTLE_WORKTREE_LIB_DIR;
+  const dir = mkdtempSync(join(tmpdir(), 'odd-worktree-composed-'));
+  const copy = join(dir, 'odd-worktree-tools.mjs');
+  writeFileSync(copy, stubbedSource());
+  process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
+  try {
+    const mod = await import(pathToFileURL(copy).href);
+    const resolvers = [];
+    const host = {
+      registerCommand: () => {},
+      registerTool: () => {},
+      registerMessageRenderer: () => {},
+      registerEntryRenderer: () => {},
+      appendEntry: () => {},
+      on: () => {},
+      registerToolRenderer: (resolver) => resolvers.push(resolver),
+    };
+    await withCodegraphCli(() => {
+      mod.default(host);
+    });
+    // The cards measure text through the extension's own injected seam, so the test
+    // supplies it after the load — the way the other card suites inject theirs.
+    mod.setWorktreeToolCardMetrics(metrics);
+    return { mod, resolvers };
+  } finally {
+    if (savedLibDir === undefined) delete process.env.GENTLE_WORKTREE_LIB_DIR;
+    else process.env.GENTLE_WORKTREE_LIB_DIR = savedLibDir;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** The host's chain for one tool: the registered resolvers in order, then what comes after them. */
+function hostChain(resolvers, toolName, base = HOST_BASH) {
+  const resolve = (index) => (index < resolvers.length ? resolvers[index](toolName, () => resolve(index + 1)) : base);
+  return resolve(0);
+}
+
+/** A resolver wrapped so a case can state whether its slots were ever asked for a row. */
+function countedResolver(resolver, asked = []) {
+  const wrapped = (toolName, next) => {
+    const renderers = resolver(toolName, next);
+    if (renderers === undefined || renderers === null) return renderers;
+    const observe = (name) => (...args) => {
+      asked.push(name);
+      return renderers[name](...args);
+    };
+    return { ...renderers, renderCall: observe('renderCall'), renderResult: observe('renderResult') };
+  };
+  return { asked, resolver: wrapped };
+}
+
+/** One bash row down a chain, as the host drives it: its call and its result, as drawn lines. */
+function drawThrough(resolvers, command, output) {
+  const slot = hostChain(resolvers, 'bash');
+  assert.equal(slot?.renderShell, 'self', `${command} is drawn as a self-framed card`);
+  const call = slot.renderCall({ command }, plainTheme, { isPartial: false }).render(64).map(unpaint);
+  const result = slot.renderResult(textResult(output), { isPartial: false }, plainTheme, { args: { command } }).render(64).map(unpaint);
+  return { call, result };
+}
+
+let composed;
+let codegraphAt;
+
+before(async () => {
+  composed = await loadComposedExtension();
+  // Only the CodeGraph card claims the native `codegraph` tool.
+  codegraphAt = composed.resolvers.findIndex((resolver) => resolver(CODEGRAPH_TOOL, () => HOST_BASH) !== HOST_BASH);
+});
+
+after(() => {
+  composed = undefined;
+});
+
+test('the extension registers the CodeGraph card through the host hook', () => {
+  assert.notEqual(codegraphAt, -1, 'the CodeGraph card is registered through the host hook');
+});
+
+test('a bash call that runs no CodeGraph is drawn exactly as the host draws it', () => {
+  // The activity heading is applied by the bridge's design (lib/bash-design.js), never by a
+  // resolver of this package: the chain hands this row to the host's own renderers.
+  const drawn = drawThrough(composed.resolvers, 'pnpm test', 'Tests 12 passed');
+  const host = drawThrough([], 'pnpm test', 'Tests 12 passed');
+  assert.deepEqual(drawn, host);
+});
+
+test('a `codegraph status .` bash call is drawn by the CodeGraph card', () => {
+  const output = ['┌  CodeGraph status', '│', '◆  Workspace: /tmp/ws', '●  42 nodes, 66 edges', '│', '└  Done'].join('\n');
+  const drawn = drawThrough(composed.resolvers, 'codegraph status .', output);
+  const heading = drawn.call.join('\n');
+  assert.ok(heading.includes(`${CODEGRAPH_MARK} ${CODEGRAPH_TOOL}`), `the heading carries the CodeGraph mark and name in "${heading}"`);
+  assert.match(heading, /codegraph · status \./, 'the subcommand and its argument are the heading detail');
+  assert.ok(drawn.result.some((row) => row.includes('◆  Workspace: /tmp/ws')), 'the body is the CLI output the CodeGraph card composes');
+});
+
+test('a `codegraph init` bash call is drawn by the CodeGraph card', () => {
+  const drawn = drawThrough(composed.resolvers, 'codegraph init', INIT_FRESH);
+  const heading = drawn.call.join('\n');
+  assert.ok(heading.includes(`${CODEGRAPH_MARK} ${CODEGRAPH_TOOL}`), `the heading carries the CodeGraph mark and name in "${heading}"`);
+  assert.match(heading, /codegraph · init/, 'the operation is the heading detail');
 });

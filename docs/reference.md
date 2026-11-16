@@ -2,7 +2,7 @@
 
 Detail behind the [README](../README.md): how each surface behaves, its keys, its limits and
 how the package is tested and released. The repository invariants live in
-[`AGENTS.md`](../AGENTS.md).
+[`codebase/invariants.md`](codebase/invariants.md).
 
 ## Create, list, move and delete, in detail
 
@@ -113,12 +113,12 @@ the bar reads only `All (<n>)`.
 | `]`/`[` | Scroll the list one page; the hint is deliberately absent from the footer | — |
 | `ctrl+j`/`ctrl+k` | Scroll the preview a page (`ctrl+shift+j/k`, `shift+J/K` and `pgUp`/`pgDn` also work; `ctrl+d`/`ctrl+u` scroll half a page) | — |
 | `t` | Open the search box (`T` and `/` also open it) | — |
-| `o` | Open the issue in the browser through `gh issue view <n> --web -R` | — |
+| `o` | Open the issue in the browser through `gh issue view <n> --web -R` | a loaded issue |
 | `r` | Re-read the list and the preview freshly, and re-read your repository role | — |
-| `l` | Labels editor: apply or remove an existing label | triage |
-| `a` | Assignee editor | triage |
-| `c` | Comment | read access |
-| `x` (and `X`) | Close the issue, after the host's confirmation; only `x` rides the legend | triage |
+| `l` | Labels editor: apply or remove an existing label | triage and a loaded issue |
+| `a` | Assignee editor | triage and a loaded issue |
+| `c` | Comment | read access and a loaded issue |
+| `x` (and `X`) | Close the issue, after the host's confirmation; only `x` rides the legend | triage and a loaded issue |
 | `esc`, `q`, `ctrl+c` | Close the reader | — |
 
 **The shortcut teaches itself.** Outside `All` the footer reads `g all issues`;
@@ -139,6 +139,32 @@ narrowest rows carry only `↑↓ move · esc close`: the key still works there,
 simply not taught. The footer is a guide, not a complete key list — `]`/`[`, `T`,
 `/`, `X`, `home`/`end`, `q` and the preview's paging alternates all work without a
 token.
+
+**The footer offers only what works now.** The five tokens that act on the
+selected issue — `l labels`, `a assign`, `c comment`, `x close`, `o web` — are
+painted only while an issue is focused AND loaded: an empty bucket, a read still
+in flight and a failed read all drop them, and the three repository actions keep
+their literal-`true` capability gate on top. Movement, the bucket switch, `t
+search`, `g all issues` and `esc close` stay on the row either way, so a token on
+it is always an action you can take at that moment. The keys keep their own
+guards, so a hint that has left the row can never fire an action.
+
+**A sub-mode's keys replace the legend.** While the labels, assignees or comment
+editor holds the keyboard, the same footer row — same place, same left-to-right
+shape — carries that editor's keys instead of the reading legend: `space toggle ·
+n new · ctrl+s apply · esc back` for labels (`n new` only with `write`), `space
+toggle · ctrl+s apply · esc back` for assignees, and `enter newline · ctrl+s post
+· esc discard` for a comment. The editor's title is its name alone (`Labels`,
+`Assignees`, `Leave a comment…`), so the keys are never in two places. Leaving
+the sub-mode — apply, `esc back` or `esc discard` — restores the reading legend.
+The search box keeps its own footer row, unchanged.
+
+The two nested sub-modes follow the same rule: naming a new label carries `enter
+add · esc cancel` on that row and the comment-discard ask carries `y discard ·
+n/esc keep editing`, while their body says only what is happening (`new: …`,
+`Discard this draft?`). While the labels or assignees list is still being read,
+the handlers accept the exit and nothing else, so the footer offers `esc back`
+alone; the editor's own keys arrive with the list.
 
 Creating a **new** label is a separate capability inside the labels editor and
 needs `write`, so a triage-only viewer opens the editor normally and sees
@@ -319,11 +345,18 @@ repository to paint three tabs was work nobody asked for.
   `All`'s loaded rows and total, so it can never list rows that belong to a
   previous one. Clearing the filter re-reads the three scoped tabs; `All` is read
   again when you enter it, or at once if you are in it when the query changes.
-- **`/issues <number>` opens on one issue.** `/issues 42` and `/issues #42` open
-  the panel on `Assigned` with #42 selected and its detail loaded. The view pages
-  up to five pages of that tab looking for it, the first page counting; a number it
-  does not find leaves the first row selected and says so on the note row:
-  `#42 is not in Assigned`. Any other argument keeps the command's refusal,
+- **`/issues <number>` opens on one issue, loaded.** `/issues 42` and
+  `/issues #42` open the panel on the tab the rail's cache says holds #42 —
+  `Assigned` when it is there (an issue that is both yours and assigned opens on
+  `Assigned`), `My issues` when it is only there, and `Assigned` when the cache is
+  cold or unknown — with #42 selected and its detail read. The view pages up to
+  five pages of that tab looking for it, the first page counting; when it is not
+  there it looks ONCE in the other of those two tabs (`assigned`/`mine`) before it
+  gives up, and only then leaves the first row of the requested tab selected and
+  says so on the note row: `#42 is not in Assigned`. The first frame carries the
+  facts the rail already knew — number, title, state, labels, assignees, author —
+  with the read named below them, so the body following behind never begins as a
+  bare `loading…` pane. Any other argument keeps the command's refusal,
   `Unknown option "<what you typed>". Use /issues.`, so a typo opens nothing. The
   selection is one-shot: the first key you press spends it, and a later filter,
   refresh, tab switch or page never moves the focus back to that number.
@@ -341,45 +374,45 @@ number on screen can never be sent to another repository.
 ## The `ISSUES` rail section
 
 When Gentle Shell draws its rail, a section titled `ISSUES` lists this checkout's
-related issues: the open issues of the checkout's repository ASSIGNED to you
-(`assignee:@me`) and nothing else. Rows are sorted by last update, seven are
-drawn, and when the read answered with more, an eighth and last dim row reads
-`and N more issues` (`N+` when the read was truncated at its cap, because the real
-total is larger). The section's own meta reports what it holds: `<n> assigned`,
-and `<n> assigned · stale` while the rows on screen are the last good ones.
+open issues that you AUTHORED (`author:@me`) or are ASSIGNED (`assignee:@me`),
+merged into one list: deduplicated by issue number (an issue that is both keeps
+the `assigned` row, since that is the tab its click opens), sorted by last update,
+seven drawn, and when the read answered with more, an eighth and last dim row
+reads `and N more issues` (`N+` when either contributing search was truncated at
+its cap, because the real total is larger). The section's own meta reports what it
+holds as the bare count — `8`, never `8 assigned` — and `8 · stale` while the rows
+on screen are the last good ones.
 
 - **One request per refresh.** A refresh is a single `gh api graphql` request with
   three aliased searches — `author:@me`, `assignee:@me` and
   `involves:@me -author:@me`, each open and each sorted by last update — and each
-  answers its own `issueCount` and rows. The section draws only the assigned
-  search; the other two are cached (below), and `/issues` paints its first frame
-  from that cache.
-- **A row is an issue.** It reads `#<number> <title>` with no relation text: with
-  one source every row would wear the same mark, and marking everything marks
-  nothing. The one marker a row can carry says something else: when one of the
-  issue's cross-reference events is a pull request (the read inspects the first ten
-  of them), the row wears the Nerd Font pull-request glyph, and a terminal without
-  a Nerd Font draws a box instead. That marker arrives in the same combined request
-  as the rows, so a failed read takes the rows and their markers together and lands
-  in the stale state below.
+  answers its own `issueCount` and rows. The section draws the merged `mine` +
+  `assigned` pair (the `involved` search is only cached, below), and `/issues`
+  paints its first frame from that cache.
+- **A row is an issue, and its one mark is a pull-request number.** It reads
+  `#<number> <title>`, and when one of the issue's cross-reference events is a
+  pull request (the read inspects the first ten of them) its right-hand mark is the
+  FIRST such pull request's number, `#69`, painted in the bridge's own `muted`
+  right-hand column — gray for that segment only, never the whole row. No pull
+  request, no mark; nowhere does the rail print an icon. That number arrives in the
+  same combined request as the rows, so a failed read takes the rows and their
+  marks together and lands in the stale state below. The line keeps ONE click
+  target — the issue — because a bridge row carries one `onClick` and has no
+  per-segment handler, so clicking the number opens the issue too.
 - **A row click opens the panel; the overflow row opens it with no number.**
-  Clicking an issue row sends `/issues <n>` to the host, so the panel opens on
-  `Assigned` with that issue selected and its detail loaded — not in a browser.
-  `/issues`' own `o` key is still the browser open,
-  `gh issue view <n> --web -R <host>/<owner>/<repo>`. Nothing is sent until the
-  click proves this checkout's repository is the one the row was read from,
-  because a row stays on screen across a checkout change: a row from another
-  checkout, or a checkout whose own repository cannot be proven, dispatches
-  nothing and the panel does not open. The proof is pinned to the session it was
-  made in: if `session_start` moves the session to another checkout while the
-  proof is still running, the click dispatches nothing either, because the number
-  was proven against the checkout you left. That refusal is recorded on the section's
-  snapshot instead of thrown, and the list on screen stays exactly as it was —
-  the rail paints no click error of its own, so what you see is that nothing
-  opened. The `and N more issues` row names no issue, so it sends plain `/issues`.
-  Both are deferred off the paint path, run once per click, and a failure never
-  escapes into the rail; a dispatch reports that the command was sent, never that
-  a panel opened.
+  Clicking an issue row sends `/issues <n>` to the host at once, so the panel opens
+  with that issue selected and its detail read — not in a browser. `/issues`' own
+  `o` key is still the browser open,
+  `gh issue view <n> --web -R <host>/<owner>/<repo>`. The click does NOT prove the
+  repository: the panel pins and proves it itself when it opens, exactly like a
+  typed `/issues <n>`, so a row retained across a checkout change still dispatches
+  its number and the panel decides what it opens. What the click still refuses is a
+  host that cannot dispatch at all, and that refusal is VISIBLE: one transcript
+  entry through the host's `appendEntry` seam, or the host's notice seam when it
+  has no entries — never only a field on the snapshot. The `and N more issues` row
+  names no issue, so it sends plain `/issues`. Both are deferred off the paint
+  path, run once per click, and a failure never escapes into the rail; a dispatch
+  reports that the command was sent, never that a panel opened.
 - **It reaches the host only through gentle-shell-bridge.** The section is read
   from that package's published sidebar-section API — the object in the
   `Symbol.for("gentle-shell-bridge/api/v1")` slot, after its schema and version gate
@@ -426,15 +459,17 @@ and `<n> assigned · stale` while the rows on screen are the last good ones.
   and not the host process's own directory.
 - **A failed refresh keeps the rows.** Once a list is on screen, a refresh that
   fails does not replace it: the same rows, in the same order, with the same
-  markers, stay where they are and the header reads `<n> assigned · stale`
-  instead. A transient `gh` stall is therefore a stale list, not an empty one, and
+  marks, stay where they are and the header reads `<n> · stale` instead. A transient `gh` stall is therefore a stale list, not an empty one, and
   the next successful read clears the mark.
 - **Every state is a row, none is a throw.** `loading…` (dim) before the first
   answer, `no open issues` (dim) for an empty result, and one error row naming the
   failure — but only while there is nothing to show; after that, a failure is the
   stale state above. The error row covers a failed `gh` read and a checkout whose
   own repository cannot be resolved; the resolution fails closed, exactly as
-  `/issues` reads it, and no `gh` call is made without a proven identity. A failing
+  `/issues` reads it, and no `gh` call is made without a proven identity. A cwd
+  that is not inside a repository is not that error: the section's one line is
+  exactly `not a git repository`, in the `dim` gray role and with no path, while
+  `/warp` and `/issues` keep their own, fuller sentence. A failing
   click is recorded instead of thrown, and it never turns the list into an error
   row.
 - **One cache, in memory, per repository.** The three scoped views live in one
@@ -568,10 +603,19 @@ surface in its place.
 
 ## Card style follows your shell
 
-The worktree tool cards follow the card style chosen in Gentle Shell — the
+The tool cards — the two worktree tools, the file cards and CodeGraph's rows —
+follow the card style chosen in Gentle Shell — the
 rounded `╭ ╮ ╰ ╯` frame (`neon`) or the `▎` rail over a painted band (`float`,
 the default). Content, order, truncation, the collapsed three-row preview and
 the elapsed time are identical in both; only the chrome differs.
+
+- **A collapsed result keeps three info rows in both content levels.** A
+  `worktree_create` result draws the created checkout's path, the branch with
+  `(created)`/`(adopted)`, and the odd; a `worktree_list` result draws its worktree
+  rows first — the main checkout's branch row included — and the `project:`/`path:`
+  metadata after them, and still expands to every row. The Gentle Shell
+  `minimal` level does not withhold those rows: they are the information the card
+  exists to show. A failure still says why, and `ctrl+o` still shows everything.
 
 - **Live.** Gentle Shell keeps the resolved style in a process-wide slot and
   refreshes it at startup, on every `session_start` and right after its
@@ -609,13 +653,15 @@ the elapsed time are identical in both; only the chrome differs.
   (`toolSuccessBg`, `toolPendingBg` for a running call, `toolErrorBg` for a
   failure). No hex value and no escape sequence is written by this package.
 - **The card content level decides how much a collapsed card shows.** Gentle Shell
-  publishes the level (`default` or `minimal`) and every card reads it on each paint,
-  so a switch applies to the next paint. At `default` a collapsed card shows its
-  heading and at most three body rows; at `minimal` it is the heading alone, closed by
-  the rule that carries the elapsed time. A failure still says why at either level,
-  and `ctrl+o` expands any card to everything. A host without Gentle Shell reads as
-  `default`. This holds for `worktree_create`, `worktree_list`, `/warp` and the
-  CodeGraph card alike.
+  publishes the level (`default` or `minimal`) and the cards that honor it read it on
+  each paint, so a switch applies to the next paint. At `default` a collapsed card
+  shows its heading and at most three body rows; at `minimal` it is the heading
+  alone, closed by the rule that carries the elapsed time. A failure still says why at
+  either level, and `ctrl+o` expands any card to everything. A host without Gentle
+  Shell reads as `default`. This holds for `/warp`, the CodeGraph card and the
+  file cards. The two worktree tool cards are the exception (S2): their three info
+  rows are their point, so a collapsed `worktree_create`/`worktree_list` result
+  keeps them at both levels.
 - **A row is clipped while it is still plain, and painted after.** Text is
   wrapped, clipped to the card's inner width (with the `…` mark) and padded first;
   the role wraps that result and nothing this package painted is measured again.
@@ -643,144 +689,144 @@ the elapsed time are identical in both; only the chrome differs.
   cannot paint the background role, draws the `neon` outline instead of a
   half-drawn float card.
 
-## The bash card, and its toggle
+## The bash card, and its preference
 
-`/card:bash` is this package's fourth command and its one preference. With no
-argument it flips between the two ways a `bash` tool call can be drawn — `own`,
-this package's activity card, which is the default, and `default`, the host's own
-drawing — reports the state in one line (`bash cards: own (activity)` or
-`bash cards: gentle default`) and remembers it. An argument is refused with
-`Unknown option "<what you typed>". Use /card:bash with no argument to flip the
-bash card.`, so a mistyped option never flips the mode by surprise.
+The bash card is a **design**, not a renderer and not a preference of this package.
+`lib/bash-design.js` registers one design (`odd-worktree.bash-activity`, label
+`activity`) through gentle-shell-bridge's `registerToolDesign`. The bridge owns Pi's one
+tool-renderer resolver, builds the host's own card (whatever `Card style` and
+`Card content` are chosen), reads its `bash` line in `/gentle:customize` → `Cards`
+(`native` | `activity`) on every render pass, and hands the design the rows the host
+drew. So the choice is the bridge's, survives a restart there, repaints cards already
+on screen as well as new ones, and does not depend on extension load order. With no
+bridge, or one older than `registerToolDesign`, nothing is registered.
 
-The choice lives in `<home>/card-bash.json`, and that document is strict: exactly
-two keys, this package's schema string and one of the two modes.
+What the design changes is one thing on the card's heading row: the host's `$` mark
+becomes the family the classifier (`lib/bash-activity.js`) names for the command —
+`⌕ exploring`, `✓ checking`, `⚠ destructive`, and so on — and the columns the longer
+mark adds are taken from the row's own fill, so the row keeps its width. Every other
+row comes back byte for byte, results are never touched, and the heading keeps the
+host's own paint.
+
+The rule is the classifier's: never guess. The design context carries no arguments, so
+the heading is the only evidence, and a call is named only when the heading provably
+shows the WHOLE command: no `…` abbreviation, no `… +N lines` fold, no continuation
+row, and nothing after the command but the host's fill and hint. A command the
+classifier cannot name, a heading that hides part of the command and a row with no
+fill to pay for the word all keep the host's `$` exactly as drawn. The default is
+`native`; the design draws nothing until the user picks `activity`.
+
+The CodeGraph card is separate: with the `codegraph` CLI installed it still claims
+`codegraph …` bash rows through its own resolver (invariant 19).
+
+## The file cards and their switches
+
+A `read`, `edit` or `write` call whose `path` names one of two things is drawn as
+that file rather than as a bare tool row: a **customized skill** — a file called
+`SKILL.md`, in any case, that a `skills` folder holds — or an **ODD artifact**,
+any file below an `odd/tasks` folder. The identity is the path's components and
+nothing else (`lib/skill-odd-card.js`): both separators are read, so a Windows
+path classifies like a POSIX one; `lib/skillset/notes.md`, `docs/oddity.md`, the
+notes beside a skill and a `SKILL.md` outside a `skills` folder are ordinary
+files. A path naming both kinds is decided by the marker closest to the file, so
+a `SKILL.md` below a `skills` folder is a skill even when an `odd/tasks` folder
+sits above it, while one whose closest marker is `odd/tasks` is an ODD artifact
+like every other file there.
+
+| The path names | Mark | Label | The role the label wears |
+| --- | --- | --- | --- |
+| a `SKILL.md` a `skills` folder holds | `▤` | `skill` | the theme's `toolTitle` |
+| any file below an `odd/tasks` folder | `📑` | `odd` | the theme's `mdHeading` |
+
+**The heading** is that mark and label, then the tool, the path and — for a read
+only — the line range the call asked for (`:10-39` for `offset: 10, limit: 30`,
+`:7` for an `offset` alone). Only a read states a range because only a read asks
+for one: a write knows how many lines it writes, never where they land, and an
+edit's real range is the diff its result carries. A range stated in a shape the
+card cannot read names nothing rather than half of itself.
+
+**Collapsed and expanded.** Collapsed, an ODD call names the file itself (`📑 odd ·
+read cards-skill-odd.md`) because its folder is long and the file's own name is
+what a reader looks for; expanding the call draws the whole path in its place, so
+a deep path is never lost behind an ellipsis. A skill's path is short enough to
+be stated either way. A call still running wears the warning tone and closes its
+own frame; the result that follows closes it in the info tone (or the error tone)
+and carries the elapsed time bottom-right, in the form the other cards use
+(`61ms`, `1.2s`). The host's expand key hint is offered on a settled call, and the
+host's `expanded` flag (`ctrl+o`) decides what is drawn.
+
+**What the body is.** Collapsed it is the first three rows of what the result
+reported — a document previews from its top, unlike a command's output, whose
+summary is written last — and expanded it is the whole text. A call that failed
+says why at either level and wears the `error` role. Markdown is the shape a
+document is written in, not a property of where it lives: an expanded `read` of
+any `.md` file, and an expanded `write` to one, render as a document through the
+package's own renderer (`lib/odd-markdown.js`) — headings, bullets, fences — with
+the card's body role as the token colour, and a write draws the content its call
+carries, which the result does not echo. A collapsed card keeps its rows, because
+its preview is the first rows of the file; a failed one keeps its error; every
+non-Markdown file keeps its rows. **An edit is never a document**: its rows are
+the diff the host carries (`details.diff`) — its own text when it carries none —
+and expanding it shows the whole diff.
+
+**The two switches.** Each card has one, labelled `Card skill` and `Card odd`,
+both in `/gentle:customize` → `Cards` and both on by default.
 
 ```json
-{ "schema": "gentle-pi.card-bash/v1", "mode": "own" }
+{ "schema": "gentle-pi.card-files/v1", "skill": true, "odd": true }
 ```
 
-- `<home>` is the one `card-style.json` resolves: `GENTLE_PI_CONFIG_HOME` →
-  `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`.
-- **The mode is read live.** The process-wide slot the toggle sets answers first,
-  then the document read fresh on every call, then `own`; there is no cache, so
-  no paint can answer with a mode the file no longer states. A missing,
-  unreadable, malformed or wrong-schema document reads as `own`, and the reader
-  reports which of those it was.
-- **The write is atomic and owner-only.** A temporary file beside the document is
-  written with `0o600` bits and renamed into place, so a reader sees the old
-  document or the new one and never half of either. The document goes first and
-  the live slot second, so a failure leaves both on the old mode and there is
-  nothing to roll back.
-- **A document this package cannot parse is never overwritten.** The toggle
-  reports `bash cards: could not save <file> (the existing file is malformed);
-  still own (activity)` and the state does not move.
+- **The document** is `<home>/card-files.json`, and it is strict: that schema
+  string, the two booleans and nothing else. `<home>` is the one `card-style.json`
+  resolves: `GENTLE_PI_CONFIG_HOME` → `GENTLE_SHELL_CONFIG_HOME` →
+  `~/.pi/gentle-ai`.
+- **The switch is read live**, in the order and with the reasons the card style
+  uses: the process-wide slot a toggle sets, then the document read fresh, then
+  both on. A missing, unreadable, malformed, wrong-schema or non-boolean document
+  reads as on, and an unknown name is never on.
+- **The write is atomic and owner-only**, document first and slot second, so a
+  failed write leaves both on the old state and there is nothing to roll back. It
+  merges the one switch into the state it can see, so saving `odd` keeps `skill`
+  as it was, and a document it cannot parse is never overwritten.
+- **The rows.** The switches reach `/gentle:customize` → `Cards` through
+  gentle-shell-bridge's `registerRows` alone (`lib/cards-customize.js`, provider
+  `odd-worktree.cards.file-switches`): each setting is two consecutive rows, `on`
+  then `off`, sharing one setting name under the bridge's own cursor, with a
+  `current()` read at build time and an `action()` that persists before the host
+  repaints. A refusal is a throw from that action — the writer refused, so nothing
+  was saved — and the customize menu catches it and shows its message (`Card odd
+  was not switched on: the card-files document is malformed (malformed_file); the
+  switch is unchanged.`) as one error notice, with the stored value and the drawn
+  switch exactly as they were. The bridge gate is the issues section's: the
+  published API's schema and major version, then the one hook used, and the one
+  `gentle-shell-bridge:ready` announcement for a bridge that publishes later. With
+  no bridge nothing registers and no other surface changes; there is no customize
+  command, no tool and no settings file here.
+- **A flip repaints what is on screen.** Both switches are read inside the card's
+  build, which the host calls on every frame, so flipping one repaints the rows
+  already drawn.
+- **Style and content level are the shell's.** The cards are on the same substrate
+  as the others, so `float`'s painted band (the default) and `neon`'s rounded
+  frame draw the same content. The content level applies too: at `default` a
+  collapsed result shows at most three body rows, at `minimal` it draws no body at
+  all — its closing rule, with the elapsed time, is the one row — while the call
+  above it keeps its heading; `ctrl+o` expands it to everything, and a failure
+  still says why at either level. Both slots are read at paint time, so a change
+  reaches a card already on screen.
 
-**The heading names the activity, never a guess.** `lib/bash-activity.js` reads
-the command alone and answers one family or nothing; `lib/bash-card.js` dresses
-that answer and restates no family of its own, so a family added to the classifier
-is drawn with no second table to keep in step.
-
-| Mark | Heading | The commands it names |
-| --- | --- | --- |
-| `⚠` | destructive | A segment that deletes something irreversible: `rm`, `shred`, `truncate`, `dd` to a file or a device, `git reset --hard` / `clean -f` / a path checkout, a `docker` or `kubectl` removal or prune, a shell body or `eval` that does one, and the SQL a pipe or a heredoc feeds `psql`, `mysql`, `mariadb` or `sqlite3`. |
-| `✓` | checking | The verification runners: `pnpm test`, `node --test`, `vitest`, `pytest`, `go test`, `cargo check`, `tsc`, `eslint`; a formatter told to report (`black --check`, `gofmt -l`); a listed `make` recipe or package-manager script; and a check behind `timeout`. |
-| `≋` | formatting | A formatter or lint fixer that rewrites what it reads: `prettier --write`, `black`, `cargo fmt`, `go fmt`, `gofmt -w`, `ruff check --fix`, `deno fmt`. |
-| `⚒ ` | preparing | Installing, scaffolding and storing configuration: `pnpm install`, `pip install`, `uv sync`, `brew install`, `cargo install`, `git init` / `clone`, `mkdir` / `touch` / `cp` / `ln`, `git config <key> <value>`, `pnpm config set`. |
-| `↑` | publishing | Remote writes: `git push`, and the `gh` verbs that create, edit, close, merge or review a pull request, issue, label, release, repository or stack. |
-| `⎇` | versioning | Local history: `git add`, `commit` (and `--amend`), `rebase`, `cherry-pick`, and a stack's local `gh stack init` / `add`. |
-| `󰆼` | codegraph | A `codegraph …` command in the command position, read exactly as the CodeGraph card reads it. |
-| `⌕` | exploring | Read-only inspection: `git status` / `log` / `diff` / `show`, `ls`, `cat`, `grep`, `head`, `find`, `gh pr view`, and `--help` on any program the classifier knows. |
-
-Preparing's mark carries one trailing space of its own: U+2692 is painted two
-cells wide by an emoji-fallback font while the host counts it as one, so the
-heading's counted width matches what the terminal paints.
-
-Among the segments of one command a deletion wins first, then CodeGraph: a call that
-runs the program is its card whatever else it does, because the card's detail is the
-command itself. Among the rest the strongest wins: a check, a remote write, a history
-change, a rewrite, a build-up, and plain inspection last.
-
-**The generic `$ bash` heading is what declining looks like.** A command no family
-names keeps the shell tool's own mark, word and theme role — never a family's mark
-with a generic word, because a reader must be able to tell a named activity from a
-declined one at a glance. It declines rather than half-naming when any single
-segment carries no reliable signal: an unknown program, a chain that mixes
-`pnpm test` with `./scripts/deploy.sh`, a command hidden in a substitution the
-segmenter does not follow (a backtick or `<(`), a redirect that puts the output in
-a file, a family whose own flags say it is not the thing it looks like, or a
-deletion it cannot prove. `lib/bash-destructive.js` is evidence, not a verdict: a
-deletion whose evidence is not provable is not called destructive, and a help
-request, a dry run or a recovery keeps the identity the call really has. Its
-header states the rule the package keeps: no permission, guard or execution
-decision may read it, because "would a reader want to see what this deletes?" is
-a different question from "may this run?".
-
-**Collapsed**, the card is one heading row with the command as its detail:
-
-- A leading `cd X &&` chain is folded, because it is setup rather than the work;
-  lines beyond the first are stated as `… +N lines` instead of swallowing the
-  card; and a command still too wide for the rule ends in `…`. Expanding the call
-  draws the complete command, so nothing is lost behind the ellipsis.
-- The body is what the command printed, plus nothing else: no label, no summary
-  and no invented line. Collapsed it is the last three rows — the end of an output
-  is where a summary, a count or a failure is written — painted in the theme's
-  `toolOutput` role, or in the `error` role when the call failed. An output with
-  no text draws no body row at all.
-- A call still running says `running…` in the muted role, is painted in the
-  warning tone and closes its own frame; the result that follows closes it in the
-  info tone (or the error tone) and carries the elapsed time bottom-right on the
-  closing rule, in the form the other cards use (`61ms`, `1.2s`). A streamed
-  result draws its rows and no closing rule: the rule and its time belong to the
-  final one.
-
-**Expanded**, the card draws the whole command on the rows below the heading and
-the whole output, row for row. Expansion is the host's own: the card offers the
-host's expand key hint on a settled call, and the host's `expanded` flag
-(`ctrl+o`) decides what is drawn.
-
-**The toggle repaints what is on screen.** The mode is read twice. When a row is
-created the resolver asks it, so a row created while the mode was `default` is the
-host's own row and stays the host's for its lifetime — its shell must never become
-ours. And a card already on screen reads it again on every paint: the card builds
-its rows inside the component's `render(width)`, which the host calls on every
-frame, so flipping `/card:bash` repaints the bash rows this card drew. There is no
-repaint hook to ask `ctx.ui` for, and the toggle does not pretend to have one: it
-writes the mode, and the next frame decides.
-
-**Composition with the CodeGraph card is load order.** `own` means every bash call
-is ours, a `codegraph …` command included, and the CodeGraph card is registered
-BEFORE this one, on purpose. With the `codegraph` CLI installed that card receives
-these slots as the chain's `next()`, reads `codegraph …` as its own and claims the
-row with its richer body, so this card's slots are never asked; without the CLI no
-CodeGraph card is registered at all (invariant 19), so the same command is drawn
-here with the `codegraph` identity. The two readers agree on which commands those
-are (`lib/codegraph-card-preview.js` and `lib/bash-activity.js`; a test states
-it), so no row falls between them, and there is no second copy of the rule to keep
-in step. Both cards declare `renderShell: "self"`, so the host never draws its own
-filled box under either of them.
-
-**What this is not.**
-
-- It only draws. The resolver chooses renderers for the `bash` tool and hands
-  every other row back exactly as the chain resolved it; nothing is registered,
-  spawned, guarded, intercepted or shadowed, and the command runs exactly as it
-  would have.
-- A host without the tool-renderer hook, or without a usable measurement seam,
-  keeps drawing its own bash rows: the card is cosmetic and announces nothing.
-- The gentle-shell reference's per-row reveal meter is dropped, not deferred: a
-  collapsed card already states whether its input was folded (`…` on the row and a
-  `… +N lines` suffix), so a measurement deciding whether to OFFER the expand key
-  answers a question the drawing already answers. Its `activity|output` sub-modes are
-  not ported either. The toggle here is ours-versus-the-host's, and the body is the
-  output.
-- A collapsed body states the last three output lines and does **not** announce the
-  cut, so a two-line output and a two-hundred-line one draw the same body. Expansion
-  is how a reader sees the rest; the count was left out on purpose, because the four
-  limits above are about what the card refuses to claim and this one is about what it
-  declines to add.
-- `default` is a drawing preference, not a guard: it never makes anything run or
-  stop running.
+**The host's box is reproduced, because the hook decides per tool name.** The host
+resolves a tool's renderers by NAME (`registerToolRenderer`) and never shows them
+a call's arguments, so the shell a resolver declares is fixed for every call of
+that tool. Declaring `self` — which this card does for the rows it draws — takes
+the host's own box off all of them, so a forwarded row is drawn exactly as the
+host would have drawn it: inside the host's box — `Box(outputPad, 1, bgFn)`,
+`outputPad` columns of padding each side, one painted blank row above the call and
+one below the result, in `toolPendingBg` while the call streams, `toolErrorBg`
+once its result failed and `toolSuccessBg` otherwise — for a row of a renderer
+whose own shell is the default (`read`, `write`), and untouched, with no box, no
+padding and no background, for one that frames itself (Pi's `edit`). A path that
+names neither identity is that same forwarded row, so an ordinary file call looks
+exactly as it did before the card existed.
 
 ## The list
 
@@ -794,7 +840,7 @@ undecorated, so it reads the same on every run:
 ```text
 project: repo
 path: /code/repo
-main: main 1a2b3c4
+main: 1a2b3c4
 1 worktree-tools feat/worktree-tools
 2 billing feat/billing
 ```
@@ -822,9 +868,11 @@ Session names derived from an ODD write, and the warp's fork/resume bookkeeping,
 travel in the Pi session files the host already owns. The setup logs live under
 the system temp directory (`odd-worktree-setup-*`), one directory per create.
 
-One document holds a preference rather than worktrees: `<home>/card-bash.json`,
-the bash card mode `/card:bash` flips. Its format, reader and writer are in [the
-bash card, and its toggle](#the-bash-card-and-its-toggle). Nothing else in user
+One document holds a preference rather than worktrees: `<home>/card-files.json`,
+the two file-card switches the `Cards` rows write; its format, reader and writer
+are in [the file cards and their switches](#the-file-cards-and-their-switches).
+The bash design's choice is not stored here at all: it belongs to the bridge
+([the bash card](#the-bash-card-and-its-preference)). Nothing else in user
 configuration is written by this package, except — with the `codegraph` CLI
 installed — the one `codegraph` entry of `<agent dir>/mcp.json` (see [CodeGraph:
 index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry)); Gentle
@@ -876,8 +924,9 @@ a worktree lives and that the directory is the ODD it serves, to call
 ODD's worktree when it has one, `worktree_create` it when it has none), to carry the
 current checkout's pending changes that belong to that work with `copy_changes`, that an
 ODD is an area of work with one worktree, to delegate agents in parallel unless they
-would edit the same files, and that after the merge the branch is kept and the checkout
-removed unless a live session stands in it. Moving the session stays the human's.
+would edit the same files, and that after the merge the default branch is updated, then the
+checkout is removed and its branch kept, unless a live session stands in it. Moving the
+session stays the human's.
 
 It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other
@@ -975,7 +1024,7 @@ children, and none of it can fail or wait for the host.
 | Session start (new, resume, fork; not `/reload`, not a subagent child) | The global MCP entry is ensured once per process. Then the checkout's index is created (`init`) or synced, and its daemon is warmed. A linked worktree without an index is seeded from the main checkout's index and synced once; it never shares it. |
 | A subagent child in its own linked worktree | The same seed or init for that worktree; any other child leaves the parent's index alone. |
 | After a compaction | One background sync of an existing index, never an `init`. |
-| After a successful native `codegraph init` | One coordinated sync, and its honest outcome appended to the tool's result. A failed init keeps its error and starts no sync. |
+| After a successful native `codegraph init` | One coordinated sync, in the background. A completed sync appends nothing to the tool result; a sync that did not complete appends one short line naming that failure. A failed init keeps its error and starts no sync. |
 | After a successful `edit` or `write` | A debounced sync of the checkout of the edited file (its git toplevel), unless a live daemon already watches that checkout. |
 
 **Coordination.** Every index write goes through one init lock and one per-project sync lease,
@@ -1014,42 +1063,81 @@ With the CLI installed the package also draws CodeGraph's tool rows as a card on
 substrate as the worktree tools: the native `codegraph` tool, the MCP `codegraph_explore` tool
 (bare or `mcp__codegraph__codegraph_explore`) and a `bash` call that runs CodeGraph: any
 command in which `codegraph` is the command word of some segment, with or without a launcher
-such as `npx` or `pnpm exec`, in any pipeline or `;`/`&&` sequence. A command that only
-mentions it (`echo codegraph init`, `cat codegraph.json`, `grep -r codegraph src`) stays the
-host's own `bash` row. A `bash` card shows the command itself as its detail, on one line
-collapsed and whole when expanded, with no operation label. It is registered through the host's tool-renderer hook, adds no tool or command, and
+such as `npx`, `pnpm exec`, `yarn` or `bunx`, in any pipeline or `;`/`&&`/`|`/`||`
+sequence, with or without arguments after the subcommand. A command that only
+mentions it (`echo codegraph init`, `git -C codegraph status`, `cat codegraph.json`,
+`grep -r codegraph src`) stays the host's own `bash` row. A `bash` card names the
+input after its program word (`codegraph status .` reads `· status .`), on one line
+collapsed and whole when expanded, with no operation label. The MCP explore card's
+heading is `codegraph · explore <query>` and continues ` · <last path segment>` only
+when its `projectPath` names a checkout other than the session's cwd; the full path
+never appears, and an absent, empty or same-checkout argument adds nothing. The
+comparison resolves `.` and `..` lexically and reads a relative argument against the
+session cwd, so `/work/repo/../repo`, `/work/repo/.` and `../repo` from `/work/repo`
+are all that same checkout and add no segment, while a resolved sibling still names
+its own last segment. No filesystem is read to decide it. It is
+registered through the host's tool-renderer hook, adds no tool or command, and
 hands every other tool back exactly as the host resolved it; a `bash` command that is not
 CodeGraph's is forwarded to the host's own renderer. A host without that hook draws nothing of
-ours. Every card in this package, the two worktree tools and the CodeGraph rows alike, declares `renderShell: "self"`: it frames itself in float or neon, and the host's own filled box is never drawn under it. The collapsed card is one factual row per operation (an init, a sync, a query or explore
-count); `ctrl+o` expands it to the whole output, and the Gentle Shell card content level
-(`minimal`) hides the result body while a failure still says why. A `codegraph …`
-`bash` call is that card's only while the CLI is installed; without it [the bash
-card](#the-bash-card-and-its-toggle) draws the same command with the classifier's
-`codegraph` identity.
+ours. Every card in this package, the two worktree tools, the file cards and the CodeGraph rows alike, declares `renderShell: "self"`: it frames itself in float or neon, and the host's own filled box is never drawn under it. The collapsed card is one factual row per operation (an init, a sync, a query or explore
+count); `ctrl+o` expands it to the whole output, except an `init`, which expands to
+its `→ initialized`/`→ already initialized` row plus the index facts it printed and
+never the CLI's `Use "codegraph index" …` advisory. The Gentle Shell card content
+level (`minimal`) hides the result body while a failure still says why — except an
+init's one outcome row (`→ initialized` / `→ already initialized`), which is what
+the call did rather than its body and is drawn at BOTH levels; a minimized init
+keeps that row alone and its index facts wait for the expansion. A `codegraph …`
+`bash` call is that card's only while the CLI is installed; without it the host draws
+it, and [the bash design](#the-bash-card-and-its-preference) may head it with the
+classifier's `codegraph` identity.
 
 ## Deliberately absent
 
 This package is the worktree / ODD / files / issues surface only: two agent
-tools, four panels, one optional rail section and the one bash-card preference,
-no customize panel, no plugin-tools
+tools, four panels, one optional rail section, one bash design on the bridge and
+the two file-card switches, no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
-companion-app integration, and no worktree↔issue association. There is nothing to
-configure beyond `/card:bash`, and `/warp`, `/odd-list`, `/files` and `/issues`
-are always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
+companion-app integration, and no worktree↔issue association. Its
+customize-side contributions are the `activity` value of the bridge's `bash` line,
+the `Card skill` / `Card odd` rows and the file picker's `files` keymap action
+with its palette row, none of which adds a command or tool of its own.
+There is nothing to configure here beyond those two switches, and `/warp`,
+`/odd-list`, `/files` and `/issues` are always
+on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
+never as a shell string.
 never as a shell string.
 
 ## Tests
 
 ```bash
-node --test tools/*.test.js        # package.json `test`
+node --test tools/*.test.js                # the whole suite (package.json `test`)
+node --test tools/issues-command.test.js   # one suite while iterating
 ```
 
-The suite uses Node builtins only — no install step, no lockfile, no network.
-Every temporary repository, stub binary and extension copy lives under the
-system temp directory and is removed on exit. `tools/fixtures/load-extension.js`
-copies the extension to a scratch `.mjs` with the two Pi imports stubbed and
-loads it against a fake host, which is how the registered commands, tools and
-manifest are asserted from the outside.
+The suite uses Node builtins only — no install step, no lockfile, no network —
+and adding a dependency so a test passes is not an option. Node 18 is the floor
+`engines` declares; CI additionally runs 20, 22 and 24. Keep it green at the
+whole-suite level: run the focused file while iterating, then the full command.
+
+- **Test the public surface.** Assert what a caller observes: the registered
+  commands/tools, the manifest, the command handlers' results, the view's
+  rendered lines, the files on disk. Do not read module-internal state.
+- **Inject the runners.** Every child process sits behind a seam (`runAsync`, an
+  injected `runner`, `hasBinary`, the TUI loader). Tests pass fakes; they never
+  spawn real `gh`, a package manager, or anything that reaches the network.
+  `tools/fixtures/load-extension.js` copies `extensions/odd-worktree-tools.ts` to
+  a scratch `.mjs` with the two Pi imports stubbed, loads it against a fake host,
+  and points it at this package's `lib/` through `GENTLE_WORKTREE_LIB_DIR` — which
+  is how the registered commands, tools and manifest are asserted from the
+  outside.
+- **No network, no live tools.** GitHub responses come from
+  `tools/fixtures/gh-*.json` through the injected runner.
+- **Temporary state lives outside the worktree.** Every temporary repository,
+  stub binary and extension copy lives under the system temp directory and is
+  removed on exit: use `fs.mkdtempSync(path.join(os.tmpdir(), …))`, remove it in
+  teardown/`after()`, and never point `TMPDIR` or a cache directory into the
+  repository. A test that must write inside the repository removes the path
+  before it ends.
 
 ## CI and releases
 
@@ -1057,26 +1145,60 @@ manifest are asserted from the outside.
 | --- | --- | --- |
 | `ci.yml` | push to `main`, every pull request | `node --test tools/*.test.js` on Node 18, 20, 22 and 24 — the range `engines` declares, 18 as its floor |
 | `pr-check.yml` | pull request opened, edited, reopened or synchronized | the PR title and every non-merge commit subject must follow [Conventional Commits](https://www.conventionalcommits.org/), plus one suite run on Node 22 |
-| `release.yml` | tag `v*` push, or a manual dispatch naming an existing tag | tag/`package.json` version parity, the suite, the GitHub Release, then `npm publish`, then verification |
+| `release.yml` | tag `v*` push (a `v*-*` tag is excluded), or a manual dispatch naming an existing tag | tag/`package.json` version parity, the suite, the GitHub Release, then `npm publish`, then verification |
 
 The npm package is `pi-odd-worktree`. A release is the tag `v` plus the exact
 `package.json` version — version 2.1.0 is `v2.1.0` — and preflight stops the run
 when the two disagree. Publication uses
 [Trusted Publishing](https://docs.npmjs.com/trusted-publishers): `id-token:
-write` is granted to the `release` job and nowhere else, and no npm credential
-exists in the workflow or in the protected environment. A version npm already
-serves is reported and left alone; a published version is immutable.
+write` is the only such grant in the repository and belongs to the `release` job,
+which also holds `contents: write`; no npm credential exists in the workflow or
+in the protected environment. A version npm already serves is reported and left
+alone; a published version is immutable, so fix the cause and cut the next patch
+tag.
 
-The `release` environment is where a release pauses for approval when reviewers
-are attached to it, and the trusted publisher binds to this workflow file plus
-that environment name. Publication therefore needs the trusted publisher bound
-to this repository, this workflow file and the `release` environment, and the
-provenance attestation binds to the public `repository` `package.json` names,
-case-sensitively.
+The `release` environment must exist in the repository: it is where a release
+waits for approval, so attach reviewers there if a release should pause. The
+trusted publisher binds to this workflow file plus that environment name.
+Publication therefore needs the trusted publisher bound to this repository,
+`release.yml` and the `release` environment, and the provenance attestation binds
+to the public `repository` `package.json` names, case-sensitively.
+`npm pack --dry-run` is the check that `files[]` still lists every shipped
+surface.
 
 Release notes are generated when the GitHub Release is created and curated
-afterwards by editing the published release (`gh release edit`); no notes file is
-committed.
+afterwards by editing the published release
+(`gh release edit v1.0.0 --title … --notes-file …`); no notes file is committed.
 
-Cutting a release, contributor rules and the repository invariants are in
-[`AGENTS.md`](../AGENTS.md).
+### Commits and pull requests
+
+`pr-check.yml` enforces Conventional Commits on the PR title (which becomes the
+squash subject) and on every non-merge commit subject:
+
+```
+<type>(<optional-scope>): <subject>
+feat(warp): keep the current checkout out of the selector
+fix(issues)!: refuse a mutation after the remote moves
+```
+
+Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `build`,
+`ci`, `style`, `revert`. Scopes are optional and lowercase. The subject is one
+line and has no trailing period. Merge commits are exempt. A failing check means
+rewrite the commits locally and force-push the branch. Name the invariant you are
+honouring or changing when a commit or a PR explains itself by one; the numbers
+in [`codebase/invariants.md`](codebase/invariants.md) are how this repository
+refers to them.
+
+### Cut a release
+
+1. Bump `version` in `package.json`, commit, and tag the exact commit:
+   `git tag -a v1.0.0 -m v1.0.0 && git push origin v1.0.0`.
+2. Preflight requires the tag to be `v` plus the `package.json` version and
+   stops the run otherwise; then the suite runs.
+3. The `release` job creates the GitHub Release, then publishes to npm with
+   provenance over OIDC Trusted Publishing, and `verify` reads the registry from
+   outside and confirms the release is published for the tag.
+
+The repository invariants are in [`codebase/invariants.md`](codebase/invariants.md),
+and the boundaries they defend are in
+[`codebase/mental-model.md`](codebase/mental-model.md).

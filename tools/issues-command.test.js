@@ -1532,6 +1532,9 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
       updatedAt: stamp,
       author: { login: 'me' },
       labels: { nodes: [] },
+      // T10 (S9): the assignees the panel's first frame can show without
+      // waiting for the detail read.
+      assignees: { nodes: Array.isArray(row.assignees) ? row.assignees.map((login) => ({ login })) : [] },
       comments: { totalCount: 0 },
       reactionGroups: [],
       timelineItems: { nodes: [] },
@@ -1566,15 +1569,43 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
     };
   }
 
+  // The detail `gh issue view` answers with when a test holds it and then
+  // releases it: one row's whole issue, with a body.
+  function defaultIssueDetail(row) {
+    return {
+      number: row.number,
+      title: row.title,
+      state: 'OPEN',
+      body: `body of issue ${row.number}`,
+      author: { login: 'me' },
+      labels: [],
+      assignees: [],
+      createdAt: '2026-02-01T00:00:00Z',
+      updatedAt: '2026-02-01T00:00:00Z',
+      url: `https://example.test/issues/${row.number}`,
+    };
+  }
+
   // A runner over the shared fixture runner: the rail's combined read answers
   // from `related`, and the panel's page reads can be HELD so the seeded first
   // frame is observable before any answer lands.
-  function cacheRunner({ related, holdPages = false }) {
+  function cacheRunner({ related, holdPages = false, holdDetail = false, fixtureIssue = defaultIssueDetail }) {
     const base = makeIssuesRunner();
     const calls = [];
     const held = [];
+    const heldDetails = [];
     const runner = async (bin, argv, opts) => {
       calls.push({ bin, argv: argv.slice(), env: { ...((opts && opts.env) || {}) }, cwd: opts ? opts.cwd : undefined });
+      if (holdDetail && argv[0] === 'issue' && argv[1] === 'view') {
+        const entry = { argv: argv.slice(), release: null };
+        entry.answer = new Promise((resolve) => {
+          entry.release = (row) => resolve({
+            status: 0, stdout: JSON.stringify(fixtureIssue(row)), stderr: '', error: null,
+          });
+        });
+        heldDetails.push(entry);
+        return entry.answer;
+      }
       if (argv[0] === 'api' && argv[1] === 'graphql') {
         const query = graphqlField(argv, 'query', '-f') || '';
         if (query.includes('mine: search(')) {
@@ -1593,7 +1624,7 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
       }
       return base.runner(bin, argv, opts);
     };
-    return { runner, calls, held };
+    return { runner, calls, held, heldDetails };
   }
 
   // Mount `/issues` over an already-loaded extension. The component is the real
@@ -1613,10 +1644,15 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
   // published BEFORE the extension loads (that is when the section is
   // registered), `session_start` binds the checkout, and ONE drawn frame starts
   // the section's read.
-  async function warmRail(root, related) {
+  async function warmRail(root, related, options = {}) {
     const registered = installBridge();
     const loaded = await loadExtension();
-    const gh = cacheRunner({ related, holdPages: true });
+    const gh = cacheRunner({
+      related,
+      holdPages: true,
+      holdDetail: options.holdDetail === true,
+      fixtureIssue: options.fixtureIssue || defaultIssueDetail,
+    });
     ghIssues.setGhRunner(gh.runner);
     await fireSessionStart(loaded.hooks, gateCtx(root, []));
     assert.equal(registered.length, 1, 'the rail section is registered through the bridge');
@@ -1644,8 +1680,9 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
     });
     const warmed = await warmRail(root, related);
     const { loaded, gh } = warmed;
-    assert.deepEqual(warmed.labels, ['#21 Assigned twenty-one'],
-      'the rail drew the assigned bucket it caches');
+    assert.deepEqual(warmed.labels,
+      ['#21 Assigned twenty-one', '#12 Newer twelve', '#11 Older eleven'],
+      'the rail draws the merged mine+assigned list it caches (S7/T8)');
     const railRead = gh.calls.filter((call) => call.argv[0] === 'api' && call.argv[1] === 'graphql')[0];
     assert.equal(railRead.env.GH_REPO, IDENTITY,
       'the cache entry is keyed by the identity the rail proved for this checkout');
@@ -1689,6 +1726,84 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
     await waitFor(() => gh.held.length === 3, 'the second open never read its own page');
     assert.deepEqual(searchQueries([gh.held[2]]), ['author:@me sort:updated-desc'],
       'the second open reads the visible bucket again');
+  });
+
+  // S7 (T8): an issue that is BOTH authored and assigned is one merged row, and
+  // the assigned bucket wins the collision — so clicking it opens on Assigned,
+  // exactly as the user asked ("assigned tiene prioridad").
+  test('a number in both mine and assigned opens on Assigned', async () => {
+    const root = makeRepo({ tag: 'issues-seed-both' });
+    const related = relatedAnswer({
+      mine: [{ number: 13, title: 'Both thirteen', updatedAt: '2026-02-03T00:00:00Z' }],
+      assigned: [{ number: 13, title: 'Both thirteen', updatedAt: '2026-02-03T00:00:00Z' }],
+    });
+    const { loaded } = await warmRail(root, related);
+    const { component } = await mountIssues(loaded, root, { args: '13' });
+    const frame = clean(component.render(240).join('\n'));
+    const bar = frame.split('\n').find((line) => line.includes('Assigned')) ?? '';
+    assert.match(bar, /▸ Assigned/, 'the assigned bucket wins the collision');
+    assert.ok(!frame.includes('is not in'), 'and the number is found, not reported missing');
+  });
+
+  // S9 (T10) part 2: the rail's cached row is the panel's seed, so the FIRST
+  // frame of a numbered open already carries the issue's identity — number,
+  // title, labels, assignees, author — while the body is still on its way. The
+  // defect was the opposite: a bare `loading…` pane for facts the rail knew.
+  test('a numbered open paints the seeded facts on its first frame, with the body behind them', async () => {
+    const root = makeRepo({ tag: 'issues-seed-detail' });
+    const related = relatedAnswer({
+      assigned: [{
+        number: 22,
+        title: 'Assigned twenty-two',
+        updatedAt: '2026-02-02T00:00:00Z',
+        assignees: ['ana'],
+      }],
+    });
+    const { loaded, gh } = await warmRail(root, related, { holdDetail: true });
+    const { component } = await mountIssues(loaded, root, { args: '22' });
+    await waitFor(() => gh.heldDetails.length === 1, 'the detail read never started');
+
+    const first = clean(component.render(240).join('\n'));
+    assert.match(first, /#22 Assigned twenty-two/, 'the number and title are on screen at once');
+    assert.match(first, /\[open\]/, 'and the state the row already carried');
+    assert.match(first, /assignees: ana/, 'so are the assignees the rail cached');
+    assert.match(first, /\(no labels\)/, 'and the labels line, honest about a row that carried none');
+    assert.match(first, /by me/, 'and the author');
+    // S9: the frame opens ON the issue. The body marker still names the read,
+    // but only under those facts — never a bare `loading…` pane.
+    assert.match(first, /loading…/, 'the body read still names itself under the facts');
+    assert.match(first, /#22 Assigned twenty-two[\s\S]*loading…/,
+      'the facts come first and the read is named below them — never a bare loading pane');
+    assert.ok(!first.includes('body of issue 22'),
+      'the body is not invented from a row that never carried it');
+
+    // The body follows behind the facts, in the same pane.
+    gh.heldDetails[0].release({ number: 22, title: 'Assigned twenty-two' });
+    assert.ok(await waitFor(() => clean(component.render(240).join('\n')).includes('body of issue 22')),
+      'the detail read replaced the pending frame');
+  });
+
+  // S9 (T10) part 3: the command picks the bucket from the cache — `assigned`
+  // when the number is there, `mine` when it is only there. A number that is
+  // only authored therefore opens on My issues, selected and loaded.
+  test('a number that is only in mine opens on My issues', async () => {
+    const root = makeRepo({ tag: 'issues-seed-mine' });
+    const related = relatedAnswer({
+      mine: [{ number: 61, title: 'Mine sixty-one', updatedAt: '2026-02-03T00:00:00Z' }],
+      assigned: [{ number: 21, title: 'Assigned twenty-one', updatedAt: '2026-02-02T00:00:00Z' }],
+    });
+    const { loaded, gh } = await warmRail(root, related);
+    assert.deepEqual(gh.held.length, 0, 'the rail read answers no page');
+
+    const { component } = await mountIssues(loaded, root, { args: '61' });
+    const frame = clean(component.render(240).join('\n'));
+    const bar = frame.split('\n').find((line) => line.includes('My issues')) ?? '';
+    assert.match(bar, /▸ My issues/, 'the reader lands on My issues, which holds the number');
+    assert.match(frame, /Mine sixty-one/, 'and its row is on screen');
+    assert.ok(!frame.includes('is not in'), 'no miss is reported for a number the rail had');
+    assert.ok(await waitFor(() => gh.held.length >= 1), 'the visible bucket still reads its own page');
+    assert.deepEqual(searchQueries([gh.held[0]]), ['author:@me sort:updated-desc'],
+      'and the page it reads is My issues, the bucket the cache chose');
   });
 
   test('with no cache the panel opens exactly as before', async () => {
@@ -1741,7 +1856,9 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
       '│ › Search │',
       '│ loading issues… │',
       ...new Array(19).fill('│ │'),
-      '│ ↑↓ move · ctrl+j/k scroll · ←→ bucket · c comment · o web · t search · g all issues · esc close │',
+      // S11: no issue is under the cursor on the first frame, so the five
+      // tokens that act on one are absent; every other hint stays.
+      '│ ↑↓ move · ctrl+j/k scroll · ←→ bucket · t search · g all issues · esc close │',
       '╰─…╯',
     ], 'the first frame is today\'s loading frame, byte for byte');
   });
@@ -1832,7 +1949,9 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
     assert.ok(roleBack, 'the refreshed detail confirms the role');
 
     component.handleInput('a');
-    assert.ok(await waitFor(() => frame().includes('Assignees (space toggle')), 'the assignee editor opened');
+    // S10: the editor's title is its name alone; its keys are the footer row.
+    assert.ok(await waitFor(() => frame().includes('Assignees') && frame().includes('space toggle')),
+      'the assignee editor opened');
     assert.ok(await waitFor(() => !frame().includes('loading assignees')), 'the assignable users answered');
     component.handleInput('space');
     component.handleInput('ctrl+s');

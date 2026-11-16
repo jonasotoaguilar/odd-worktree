@@ -603,6 +603,7 @@ test('a codegraph call names its own card identity', () => {
 		'codegraph --version',
 		'codegraph --help',
 		'codegraph status',
+		'codegraph status .',
 		'codegraph callers X',
 		'codegraph init > build.log',
 		'codegraph init && ./script',
@@ -612,6 +613,8 @@ test('a codegraph call names its own card identity', () => {
 		'pnpx codegraph explore -- alpha',
 		'bunx codegraph status',
 		'pnpm exec codegraph status',
+		'yarn codegraph status .',
+		'yarn exec codegraph status .',
 		'pnpm dlx codegraph init',
 		'npm exec codegraph init',
 	]) {

@@ -223,7 +223,7 @@ describe('worktree_list', () => {
     assert.deepEqual(resultText(result).split('\n'), [
       `project: ${path.basename(repo)}`,
       `path: ${fs.realpathSync(repo)}`,
-      `main: main ${shortHead(repo)}`,
+      `main: ${shortHead(repo)}`,
     ]);
     assert.equal(result.details.worktrees.length, 1);
     assert.equal(result.details.worktrees[0].path, fs.realpathSync(repo));
@@ -287,7 +287,7 @@ describe('worktree_create', () => {
     assert.deepEqual(resultText(listed).split('\n'), [
       `project: ${path.basename(repo)}`,
       `path: ${fs.realpathSync(repo)}`,
-      `main: main ${shortHead(repo)}`,
+      `main: ${shortHead(repo)}`,
       '1 odd-x feat/x',
     ]);
     assert.equal(listed.details.worktrees[1].name, 'odd-x', 'the ODD is the directory basename');
@@ -452,7 +452,7 @@ describe('the shared close the panel deletion drives', () => {
     assert.deepEqual(resultText(listed).split('\n'), [
       `project: ${path.basename(repo)}`,
       `path: ${fs.realpathSync(repo)}`,
-      `main: main ${shortHead(repo)}`,
+      `main: ${shortHead(repo)}`,
     ]);
   });
 

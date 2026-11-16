@@ -232,6 +232,16 @@ Round L11 (all reopen the delivered surfaces: S3, S4, S10, S22, S24):
   que trabaja la sesion, worktree list son todo asociados a un odd, por eso por defecto son los register nomas pues
   son los asociados a la sesion, con all ya ve todos los worktree"
 
+- S36: **`/files` does not use the bridge for a keymap row or a palette row.** The `files` action no longer goes
+  through `registerKeymap` and the `files` palette item no longer goes through `registerCommands`: the installed
+  host has no reader for the bridge's plugin surface, so neither row can ever be listed and registering them is a
+  claim the package cannot keep. The key itself stays: `/files` binds its shortcut directly through the host's
+  `registerShortcut`, `alt+f` by default (S28) and `GENTLE_PI_FILES_KEY` as the override. The command stays
+  reachable as `/files`. No legacy is kept: no dead constants, no bridge gate for this surface and no
+  `resolveKeymap` read. This supersedes S18 and S19 and the "Keymaps/palette" part of S28; the bridge reads the
+  issues rail and the bash design still use stay as they are. "bien, sacalo entonces, saca el uso de bridge para
+  command y keymap de momento, sin dejar legacy, pues no es viable actualmente, es un falso"
+
 ## Tasks
 
 | ID | Specs | Route | Commit |
@@ -249,6 +259,7 @@ Round L11 (all reopen the delivered surfaces: S3, S4, S10, S22, S24):
 | T11 | S17, S20-S28 | parent: docs truth — README, `docs/reference.md`, `docs/codebase/invariants.md` and `docs/codebase/code-map.md`, plus S9 marked superseded . Landed at this commit |
 | T12 | S29, S30, S31, S32, S33, S34 | worker: `lib/files-orders.js`, `lib/files-picker-view.js` and their tests — folded-by-default trees with chevrons, the focused path as the only expansion, group rows in the grey role, `space fold` only in the trees, `modified` renamed `files`, and `shift+space` as the fold-all toggle . Landed at `d2cc328` (orders 50/50, view 88/88) |
 | T14 | S35, S20 | worker: `extensions/odd-worktree-tools.ts`, `lib/files-scope-view.js` and their tests — the default list built from the session's own registration (`main`, the session checkout, `worktree_register` entries) and `a` alone widening it to every Git worktree root . Landed at `7933a79` (command 15/15, scope 42/42) |
+| T15 | S36, S28 | worker: `extensions/odd-worktree-tools.ts`, the files bridge/command tests, and every doc that names the keymap row or the palette row — the `files` shortcut bound directly (`alt+f`, `GENTLE_PI_FILES_KEY`) and the bridge keymap and palette registration removed without a trace . Landed at `dd6b8f4` (bridge 10/10, command 15/15, package surface 21/21; full suite 2205/2205) |
 | T13 | S17, S29-S34 | parent: docs truth in README, `docs/reference.md`, `docs/codebase/code-map.md` and the footer tables . Landed at this commit |
 
 ### Module contracts (fixed here so T6 can be written against T1, T4 and T5)
@@ -345,3 +356,5 @@ Plain JS, no dependencies, every child injected. Shapes:
   Slice boundary: the two code units are 915 and 270 authored lines, past the ~400-line slice, because the view's tree rules (folded seed, chevrons, re-seed per order, `shift+space`) are one behaviour and splitting them would leave a commit whose tests contradict its code. They stay separate from each other and from the docs.
   Corrections the workers made to the spec: (1) S30 says a root file expands no group; that holds for `tree` only, because in `ext` a root file still belongs to an extension group (`README.md` -> `md`) and S30's own `ts` example needs it open; (2) the helper the task named (`Key`) is the painting helper, so matching goes through the host's `matchesKey` plus the view's own sequence fallback; (3) `shift+space` only reaches the app under the Kitty keyboard protocol or xterm modifyOtherKeys, so a legacy terminal keeps `space` and no second key was invented.
   Not delivered by this repo: the `files` row in `/gentle:customize` -> Keymaps and the palette's `Session` page. This package registers both through the bridge exactly as the bridge's own example does; the installed gentle-shell (`95179bd6d`, upstream) has no reader of the bridge's plugin surface (`lib/plugin-surface.ts` is absent), so nothing can list a contributed row. The host half exists only as the fork's merged PR and as a hand-applied patch that a package update removed. `Risk: none` for this repo's change.
+- L13 (user, verbatim): "bien, sacalo entonces, saca el uso de bridge para command y keymap de momento, sin dejar legacy, pues no es viable actualmente, es un falso" — after the parent showed that the installed gentle-shell has no reader of the bridge's plugin surface, so the `files` row in Keymaps and the palette can never appear.
+- L14 (parent, closing evidence): T15 landed as `dd6b8f4`. `/files` registers no keymap action and no palette row through the bridge; `alt+f` is bound directly with `registerShortcut` and `GENTLE_PI_FILES_KEY` overrides it. Full suite, `node --test --test-timeout=120000 tools/*.test.js`: **2205 tests, 2205 pass, 0 fail** (the count is one below L12's 2206 because the rewritten bridge suite folds two idempotence cases whose subject no longer exists). The README, `docs/reference.md`, `docs/codebase/invariants.md`, `code-map.md` and `mental-model.md` now say so. The Keymaps/palette rows return only when an installed host reads the bridge's plugin surface. `Risk: none`.

@@ -13,6 +13,8 @@ const { spawn } = require('node:child_process');
 const {
   LOCK_MAX_AGE_MS,
   PROXY_TRUST_MS,
+  SYNC_LEASE_MAX_AGE_MS,
+  UNWRITTEN_GRACE_MS,
   codegraphWritingIndex,
   isInitLocked,
   isInitRunning,
@@ -165,6 +167,31 @@ test('S3: releasing never removes a lock that now belongs to someone else', () =
   mine.release();
   assert.equal(isInitLocked(project, { dir }), true, "the new owner's lock must survive the old owner's release");
   taken.release();
+});
+
+test('S3: a holder whose lock was taken over cannot undo the takeover, and the new owner keeps holding it', () => {
+  const { dir, project } = scratch();
+  const start = Date.now();
+  // A's record is older than the longest an init can run: B judges it stale although the pid it names is this one.
+  const a = tryAcquireInitLock(project, { dir, now: () => start - LOCK_MAX_AGE_MS - 1_000 });
+  assert.equal(a.status, 'acquired');
+  const lock = path.join(dir, lockEntries(dir)[0]);
+  const record = () => JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8'));
+  const aToken = record().token;
+  const b = tryAcquireInitLock(project, { dir });
+  assert.equal(b.status, 'acquired', 'B took the stale lock over');
+  const bToken = record().token;
+  assert.notEqual(bToken, aToken, 'the takeover wrote a record of its own');
+  // Everything A can still do points at a record that is no longer its own.
+  a.adopt(424242);
+  a.release();
+  assert.equal(record().token, bToken, "A's late release left the record B wrote");
+  assert.equal(isInitLocked(project, { dir }), true, 'B still holds the lock');
+  assert.equal(isInitRunning(project, { dir }), true);
+  assert.deepEqual(tryAcquireInitLock(project, { dir }), { status: 'busy' }, 'a third session answers to B, not to A');
+  // The true holder's release does remove it.
+  b.release();
+  assert.deepEqual(lockEntries(dir), []);
 });
 
 test('S3: an unusable lock directory never throws: the session simply goes on as if it had the lock', () => {
@@ -464,6 +491,73 @@ function lease(prefix) {
   return syncLease({ dir: temp(prefix), pollMs: 5, requestWaitMs: 20_000 });
 }
 
+/**
+ * The lease a reader outside the module sees in `dir`: its state folder and the record of its `run/`. Nobody else
+ * writes into the folder of a case, so one state folder per `dir` is what the coordination leaves there.
+ */
+function leaseOnDisk(dir) {
+  const entry = fs.readdirSync(dir).find((name) => name.startsWith('pcs-sync-'));
+  if (entry === undefined) return { state: undefined, record: undefined };
+  const state = path.join(dir, entry);
+  try {
+    return { state, record: JSON.parse(fs.readFileSync(path.join(state, 'run', 'owner.json'), 'utf8')) };
+  } catch {
+    return { state, record: undefined };
+  }
+}
+
+/**
+ * A clock pinned to the takeover folder's own recorded `mtime`, `offset` milliseconds into the grace the module gives a
+ * record that is still being written. "Fresh" becomes a property of the folder itself instead of an assumption about
+ * the real clock: a machine paused past the grace can no longer invert what these cases expect.
+ */
+function clockAt(runDir, offset) {
+  return fs.statSync(runDir).mtimeMs + offset;
+}
+
+/**
+ * The instant a takeover passes through: `run/` created again while its record is not written yet (`record`
+ * undefined) or is being replaced (an unreadable one). No case can pause another session inside that window, so it
+ * recreates exactly what a reader sees there and lets the holder's own release be the next thing to touch it.
+ */
+function takeoverWindow(state, record) {
+  const runDir = path.join(state, 'run');
+  fs.rmSync(runDir, { recursive: true, force: true });
+  fs.mkdirSync(runDir);
+  if (record !== undefined) fs.writeFileSync(path.join(runDir, 'owner.json'), record);
+  return runDir;
+}
+
+/**
+ * A session that holds the lease of `project` and blocks inside its attempt until the case lets it come back. Its own
+ * demand is removed first, as the takeover's run serves it, so it settles at once instead of asking again.
+ */
+async function holderBlockedInAttempt(dir, project, options = {}) {
+  const coordinator = syncLease({ dir, pollMs: 5, requestWaitMs: 20_000, ...options });
+  let release = () => {};
+  const blocked = new Promise((resolve) => {
+    release = resolve;
+  });
+  let started = false;
+  const settled = coordinator.request(project, async () => {
+    started = true;
+    await blocked;
+    return { ran: false };
+  });
+  await waitFor(() => started, "the holder's attempt to start");
+  const { state, record } = leaseOnDisk(dir);
+  assert.equal(typeof record.token, 'string', 'the holder wrote its lease record');
+  fs.rmSync(path.join(state, 'req', record.token), { force: true });
+  return {
+    state,
+    record,
+    go: () => {
+      release();
+      return settled;
+    },
+  };
+}
+
 /** A run that fails the test if two of them overlap, and records when each one started. */
 function guardedRun(runs, state, holdMs) {
   return async () => {
@@ -557,6 +651,117 @@ test('S3: different projects sync independently, and one folder spelled two ways
   const [c, d] = await Promise.all([first, second]);
   assert.deepEqual(c, { status: 'ran', ok: true });
   assert.deepEqual(d, { status: 'coalesced' }, 'another spelling of one folder is the same project');
+});
+
+test('S3: a stale lease token never releases the lease the session that took it over is running under', async () => {
+  const dir = temp('cg-lease-');
+  const { project } = scratch();
+  const runs = [];
+  // A's record speaks of a sync that started longer ago than any sync can last, so B rightly takes the lease over.
+  const stale = syncLease({ dir, pollMs: 5, requestWaitMs: 20_000, now: () => Date.now() - SYNC_LEASE_MAX_AGE_MS - 60_000 });
+  let finishA = () => {};
+  const aMayEnd = new Promise((resolve) => {
+    finishA = resolve;
+  });
+  let aStarted = false;
+  const a = stale.request(project, async () => {
+    aStarted = true;
+    await aMayEnd;
+    return { ran: false };
+  });
+  await waitFor(() => aStarted, "A's attempt to start");
+  const current = syncLease({ dir, pollMs: 5, requestWaitMs: 20_000 });
+  let bStarted = false;
+  const b = current.request(project, async () => {
+    runs.push('B');
+    bStarted = true;
+    await pause(800);
+    return { ran: true, ok: true };
+  });
+  await waitFor(() => bStarted, 'B to take the lease over');
+  const bToken = leaseOnDisk(dir).record.token;
+  assert.equal(typeof bToken, 'string', 'B wrote its lease record');
+  // A comes back from its attempt and releases, while B is still running under its own record.
+  finishA();
+  await pause(100);
+  const afterA = leaseOnDisk(dir);
+  assert.equal(afterA.record && afterA.record.token, bToken, "A's release left B's record in place");
+  // A session that arrives now finds B's lease: it waits for B instead of running beside it.
+  let cRan = false;
+  const c = current.request(project, async () => {
+    cRan = true;
+    runs.push('C');
+    return { ran: true, ok: true };
+  });
+  const [aOutcome, bOutcome, cOutcome] = await Promise.all([a, b, c]);
+  assert.equal(cRan, false, 'no second sync started while B held the lease');
+  assert.deepEqual(runs.filter((who) => who !== 'B'), [], `only B ran: ${JSON.stringify(runs)}`);
+  assert.deepEqual(aOutcome, { status: 'coalesced' }, 'A was served by B, never by a run of its own');
+  assert.deepEqual(bOutcome, { status: 'ran', ok: true });
+  assert.deepEqual(cOutcome, { status: 'coalesced' });
+  assert.equal(leaseOnDisk(dir).record, undefined, "the true holder's release removed its lease");
+});
+
+test('S3: a holder whose record another session is still writing never removes the lease of that session', async () => {
+  const dir = temp('cg-lease-');
+  const { project } = scratch();
+  // The holder reads the clock this case gives it, so the takeover window below can pin it to that folder's mtime.
+  let clock = Date.now();
+  const holder = await holderBlockedInAttempt(dir, project, { now: () => clock });
+  // The takeover window: `run/` is there again and its record is not written yet.
+  const runDir = takeoverWindow(holder.state);
+  // One millisecond short of the grace: the folder is still being written into, whatever the real clock did meanwhile.
+  clock = clockAt(runDir, UNWRITTEN_GRACE_MS - 1);
+  assert.deepEqual(await holder.go(), { status: 'coalesced' }, "the takeover's run served the holder's demand");
+  assert.equal(fs.existsSync(runDir), true, "the holder's release left the lease the takeover is creating");
+  // The takeover finishes: its record lands in the folder the holder must not have touched, and every later session
+  // answers to it instead of starting a sync of its own.
+  const bRecord = { pid: process.pid, startedAt: Date.now(), token: 'b-token' };
+  fs.writeFileSync(path.join(runDir, 'owner.json'), JSON.stringify(bRecord));
+  let lateRan = false;
+  const late = await syncLease({ dir, pollMs: 5, requestWaitMs: 300 }).request(project, async () => {
+    lateRan = true;
+    return { ran: true, ok: true };
+  });
+  assert.equal(lateRan, false, 'the session holding the new lease is not run beside');
+  assert.deepEqual(late, { status: 'queued' }, 'the late session waits for the lease it cannot take');
+  assert.deepEqual(leaseOnDisk(dir).record, bRecord, "the takeover's record is still the lease");
+});
+
+test("S3: a record that cannot be read is never proof that the lease is still the releasing session's", async () => {
+  const dir = temp('cg-lease-');
+  const { project } = scratch();
+  let clock = Date.now();
+  const holder = await holderBlockedInAttempt(dir, project, { now: () => clock });
+  // The same window read from the other side: a record is in place, and it proves nothing.
+  const runDir = takeoverWindow(holder.state, 'not a record');
+  clock = clockAt(runDir, UNWRITTEN_GRACE_MS - 1);
+  assert.deepEqual(await holder.go(), { status: 'coalesced' });
+  assert.equal(fs.existsSync(runDir), true, 'an unreadable record is not proof of ownership: the folder stays');
+  assert.equal(fs.readFileSync(path.join(runDir, 'owner.json'), 'utf8'), 'not a record', 'the holder removed nothing');
+});
+
+test('S3: a lease abandoned without a record is still removed, so an interrupted session never wedges the project', async () => {
+  const dir = temp('cg-lease-');
+  const { project } = scratch();
+  let clock = Date.now();
+  const holder = await holderBlockedInAttempt(dir, project, { now: () => clock });
+  const runDir = path.join(holder.state, 'run');
+  fs.rmSync(path.join(runDir, 'owner.json'), { force: true });
+  // Exactly the grace after the folder was last written to, read from the folder itself: the boundary the module
+  // documents, and one millisecond more than the cases above.
+  clock = clockAt(runDir, UNWRITTEN_GRACE_MS);
+  assert.deepEqual(await holder.go(), { status: 'coalesced' });
+  assert.equal(fs.existsSync(runDir), false, 'a record-less lease older than the grace is removed');
+});
+
+test("S3: the true holder's release still removes its own lease", async () => {
+  const dir = temp('cg-lease-');
+  const { project } = scratch();
+  const outcome = await syncLease({ dir, pollMs: 5, requestWaitMs: 20_000 }).request(project, async () => ({ ran: true, ok: true }));
+  assert.deepEqual(outcome, { status: 'ran', ok: true });
+  const { state } = leaseOnDisk(dir);
+  assert.equal(fs.existsSync(path.join(state, 'run')), false, "the holder's own release removed its lease");
 });
 
 test('S3: unusable coordination state starts no sync at all (fail closed)', async () => {

@@ -63,6 +63,8 @@ function setup(overrides = {}) {
     toplevel: overrides.toplevel,
     isDirectory: overrides.isDirectory || (() => true),
     hasBinary: overrides.hasBinary || (() => true),
+    joinIndexWork: overrides.joinIndexWork,
+    delay: overrides.delay,
     impl,
   });
   const ctx = {
@@ -250,6 +252,82 @@ test('a throwing collaborator never reaches the host', async () => {
   });
 });
 
+// ---- the host contract: a lifecycle handler is never awaited by the host ----
+//
+// The host applies what a `pi.on()` handler returns, and waits for a thenable, so an index preparation
+// handed back from `session_start` would sit on Pi's own startup path. No other test can see that: each
+// one calls the handler and awaits it itself, which works just as well for a promise as for `undefined`.
+// Two handlers may answer with a promise:
+//
+//   - `tool_result`, whose only host-visible wait is the bounded post-init race (`POST_INIT_SYNC_WAIT_MS`);
+//   - `tool_call` (S2), whose promise is the bounded join of index work this process had ALREADY started —
+//     Pi awaits that hook before the tool runs and blocks the tool when it throws (docs/extensions.md:3253),
+//     so it answers `undefined` whenever nothing is in flight and can neither throw nor answer a block.
+
+test('no lifecycle handler hands the host a promise, and only tool_result and tool_call answer with one', async () => {
+  const { pi, ctx } = setup();
+  const events = {
+    session_start: { reason: 'startup' },
+    session_compact: {},
+    before_agent_start: { systemPromptOptions: { selectedTools: ['read'] } },
+    session_shutdown: {},
+  };
+  assert.deepEqual([...pi.handlers.keys()].sort(), ['before_agent_start', 'session_compact', 'session_shutdown', 'session_start', 'tool_call', 'tool_result'], 'the wiring registers these and nothing else');
+  for (const [name, handlers] of pi.handlers) {
+    for (const handler of handlers) {
+      const returned = handler(events[name] || {}, ctx);
+      if (name === 'tool_result') {
+        assert.equal(typeof returned?.then, 'function', 'tool_result is the one handler whose patch is the answer');
+        await returned;
+        continue;
+      }
+      if (name === 'tool_call') {
+        // S2: the join may answer with a promise, but with nothing in flight it answers `undefined` and
+        // Pi runs the tool at once. Either way the answer settles on its own and is never a block.
+        if (returned !== undefined) assert.equal(typeof returned.then, 'function', 'tool_call answers a thenable or nothing');
+        assert.equal(await returned, undefined, 'and never a block');
+        continue;
+      }
+      assert.equal(returned, undefined, `${name} must hand the host nothing: its work runs off the host's path`);
+    }
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+});
+
+test('the work a synchronous handler starts still runs after it has answered the host', async () => {
+  let releasePrepare;
+  const prepareGate = new Promise((resolve) => {
+    releasePrepare = resolve;
+  });
+  let releaseCompaction;
+  const compactionGate = new Promise((resolve) => {
+    releaseCompaction = resolve;
+  });
+  const prepared = [];
+  const compacted = [];
+  const { pi, ctx } = setup({
+    impl: {
+      prepareProject: (input) => {
+        prepared.push(input);
+        return prepareGate;
+      },
+      compactionSync: (input) => {
+        compacted.push(input);
+        return compactionGate;
+      },
+    },
+  });
+  pi.handlers.get('session_start')[0]({ reason: 'startup' }, ctx);
+  pi.handlers.get('session_compact')[0]({}, ctx);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(prepared.length, 1, 'the index preparation is requested without the host waiting for it');
+  assert.equal(compacted.length, 1, 'the compaction sync is requested without the host waiting for it');
+  releasePrepare({ index: { action: 'none', ok: true }, warm: 'skipped' });
+  releaseCompaction('synced');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(prepared[0].cwd, '/work/repo', 'and it is the session checkout that is prepared');
+});
+
 // ---- the two reminders (T3: S1, S2, S5, S6, S7) ----
 //
 // One extra text part on the result of a search call, never a separate message and never a block. The
@@ -400,4 +478,249 @@ test('the guard is one injected collaborator, driven by the host events', async 
   assert.equal(seen.sessions, 2, 'the startup and the new session both reset');
   assert.deepEqual(seen.results, ['grep']);
   assert.deepEqual(patch.content, [{ type: 'text', text: 'REMINDER' }], 'the reminder rides the result as one more part');
+});
+
+// ---- S2: the bounded join on the pre-execution hook (T6) ----
+//
+// Before a CodeGraph search runs, the index work this process already has in flight for that checkout is
+// awaited — never started, never exceeded, and never able to fail the call. Pi awaits a `tool_call` handler
+// before the tool runs and BLOCKS the tool when that handler throws (docs/extensions.md:3253), so this handler
+// answers `undefined` for every other tool and whenever nothing is in flight, and the promise it does answer
+// with is bounded and never rejects.
+
+const searchCall = (toolName = 'codegraph', input = { operation: 'query' }) => ({ toolName, input, toolCallId: 'call-1' });
+
+function gateOf() {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  return { gate, release: (value) => release(value) };
+}
+
+test('S2: a search joins the session-start preparation already in flight, and starts none of its own', async () => {
+  const gate = gateOf();
+  const preparations = [];
+  const { pi, calls, ctx } = setup({
+    impl: {
+      prepareProject: (input) => {
+        preparations.push(input);
+        return gate.gate;
+      },
+    },
+  });
+  pi.handlers.get('session_start')[0]({ reason: 'startup' }, ctx);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(preparations.length, 1);
+  const returned = pi.handlers.get('tool_call')[0](searchCall(), ctx);
+  assert.equal(typeof returned?.then, 'function', 'the search waits for the preparation in flight');
+  // Settlement is tracked as a flag, not as a value: `undefined` is both what the handler answers and what a promise
+  // that has not settled yet looks like, so a value cannot tell an early answer from one still pending.
+  let releasedAt;
+  let settledAfter;
+  void returned.then(() => {
+    settledAfter = releasedAt;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(settledAfter, undefined, 'the join was still in flight while the preparation had not been released');
+  releasedAt = Date.now();
+  gate.release({ index: { action: 'sync', ok: true }, warm: 'skipped' });
+  assert.equal(await returned, undefined, 'the handler answers undefined, never a block');
+  assert.equal(settledAfter, releasedAt, 'the release is what ended the wait, nothing else');
+  assert.equal(preparations.length, 1, 'joining starts no preparation, sync, init or seed');
+  assert.equal(calls.init.length, 0);
+  assert.deepEqual(calls.edit, [], 'and nothing reaches the edit sync');
+});
+
+test('S2: a search joins a post-init sync already in flight', async () => {
+  const gate = gateOf();
+  const { pi, ctx, run } = setup({ impl: { syncAfterNativeInit: () => gate.gate } });
+  const result = run('tool_result', { toolName: 'codegraph', input: { operation: 'init' }, isError: false, content: [] });
+  await new Promise((resolve) => setImmediate(resolve));
+  const returned = pi.handlers.get('tool_call')[0](searchCall(), ctx);
+  assert.equal(typeof returned?.then, 'function', 'the index write the init hook started is joined');
+  gate.release('completed');
+  await result;
+  assert.equal(await returned, undefined);
+});
+
+test('S2: a search joins the compaction sync already in flight, bounded by the same budget', async () => {
+  const gate = gateOf();
+  const budgets = [];
+  const compacted = [];
+  const { pi, ctx } = setup({
+    impl: {
+      compactionSync: (input) => {
+        compacted.push(input);
+        return gate.gate;
+      },
+    },
+    delay: (ms) => {
+      budgets.push(ms);
+      return gate.gate;
+    },
+  });
+  assert.equal(pi.handlers.get('session_compact')[0]({}, ctx), undefined, 'the host is still handed nothing');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(compacted.length, 1, 'the compaction asked for one sync');
+  const returned = pi.handlers.get('tool_call')[0](searchCall(), ctx);
+  assert.equal(typeof returned?.then, 'function', 'the search waits for the compaction sync in flight');
+  let settled = false;
+  void returned.then(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(settled, false, 'the join was still in flight while the compaction sync had not finished');
+  gate.release({ outcome: 'synced' });
+  assert.equal(await returned, undefined, 'the handler answers undefined, never a block');
+  assert.deepEqual(budgets, [5000], 'the same five-second budget bounds the wait');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pi.handlers.get('tool_call')[0](searchCall(), ctx), undefined, 'once it settled, a search waits for nothing');
+});
+
+test('S2: a compaction sync that throws never reaches the host and leaves a search unblocked', async () => {
+  const { pi, ctx } = setup({
+    impl: {
+      compactionSync: () => {
+        throw new Error('boom');
+      },
+    },
+  });
+  assert.equal(pi.handlers.get('session_compact')[0]({}, ctx), undefined, 'the host is handed nothing');
+  for (let tick = 0; tick < 3; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pi.handlers.get('tool_call')[0](searchCall(), ctx), undefined, 'a failed compaction is not something to join');
+});
+
+test('S2: a search joins a running edit-sync window, bounded by the same budget', async () => {
+  const gate = gateOf();
+  const asked = [];
+  let busy = true;
+  const { pi, ctx } = setup({
+    impl: {
+      createEditSync: () => ({
+        onToolResult: async () => {},
+        dispose: () => {},
+        inFlight: () => busy,
+        whenIdle: (root, budgetMs) => {
+          asked.push([root, budgetMs]);
+          return gate.gate;
+        },
+      }),
+    },
+  });
+  const returned = pi.handlers.get('tool_call')[0](searchCall('mcp__codegraph__codegraph_explore'), ctx);
+  assert.equal(typeof returned?.then, 'function');
+  assert.deepEqual(asked, [['/work/repo', 5000]], 'the window of the same checkout, with the default budget');
+  busy = false;
+  assert.equal(pi.handlers.get('tool_call')[0](searchCall(), ctx), undefined, 'an idle window is not waited for');
+  gate.release('done');
+  assert.equal(await returned, undefined);
+});
+
+test('S2: an idle checkout adds no wait at all', () => {
+  const { pi, ctx } = setup();
+  const returned = pi.handlers.get('tool_call')[0](searchCall(), ctx);
+  assert.equal(returned, undefined, 'nothing in flight: the tool runs at once');
+});
+
+test('S2: every other tool answers undefined at once, even while the index is being written', async () => {
+  const gate = gateOf();
+  const { pi, ctx } = setup({ impl: { prepareProject: () => gate.gate } });
+  pi.handlers.get('session_start')[0]({ reason: 'startup' }, ctx);
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const event of [
+    { toolName: 'bash', input: { command: 'ls' } },
+    { toolName: 'read', input: { path: 'src/a.js' } },
+    { toolName: 'grep', input: { pattern: 'x' } },
+    { toolName: 'mcp__context7__query-docs', input: {} },
+    { toolName: 'codegraph', input: { operation: 'init' } },
+    { toolName: 'codegraph', input: { operation: 'sync' } },
+    { toolName: 'codegraph', input: { operation: 'status' } },
+    { toolName: 'codegraph', input: {} },
+    { toolName: 'codegraph' },
+    {},
+  ]) {
+    assert.equal(pi.handlers.get('tool_call')[0](event, ctx), undefined, JSON.stringify(event));
+  }
+  assert.equal(typeof pi.handlers.get('tool_call')[0](searchCall('codegraph', { operation: 'explore' }), ctx)?.then, 'function', 'the two search operations are the ones that join');
+  gate.release({ index: { action: 'none', ok: true }, warm: 'skipped' });
+});
+
+test('S2: a join that throws leaves the call unblocked', () => {
+  const { pi, ctx } = setup({
+    joinIndexWork: () => {
+      throw new Error('boom');
+    },
+  });
+  assert.equal(pi.handlers.get('tool_call')[0](searchCall(), ctx), undefined, 'a failing seam never reaches the host');
+});
+
+test('S2: a join that rejects is swallowed', async () => {
+  const { pi, ctx } = setup({ joinIndexWork: () => Promise.reject(new Error('boom')) });
+  assert.equal(await pi.handlers.get('tool_call')[0](searchCall(), ctx), undefined);
+});
+
+test('S2: a join that never settles is capped by its budget and never blocks the tool', async () => {
+  let askedMs;
+  const { pi, ctx } = setup({
+    joinIndexWork: () => new Promise(() => {}),
+    delay: (ms) => {
+      askedMs = ms;
+      return new Promise((resolve) => setImmediate(resolve));
+    },
+  });
+  const returned = pi.handlers.get('tool_call')[0](searchCall(), ctx);
+  assert.equal(typeof returned?.then, 'function');
+  assert.equal(await returned, undefined, 'the budget ends the wait, not the work');
+  assert.equal(askedMs, 5000, 'the default budget is five seconds');
+});
+
+test('S2: a delay seam that throws still ends the wait instead of awaiting work that never settles', async () => {
+  const { pi, ctx } = setup({
+    env: { ODD_WORKTREE_CODEGRAPH_JOIN_MS: '250' },
+    joinIndexWork: () => new Promise(() => {}),
+    delay: () => {
+      throw new Error('no timer here');
+    },
+  });
+  const started = Date.now();
+  const returned = pi.handlers.get('tool_call')[0](searchCall(), ctx);
+  assert.equal(typeof returned?.then, 'function', 'the search still gets an answer to wait for');
+  let guard;
+  const capped = new Promise((resolve) => {
+    guard = setTimeout(() => resolve('unbounded'), 1_000);
+  });
+  try {
+    assert.equal(await Promise.race([returned, capped]), undefined, 'a throwing timer seam answers at once, never with the joined work');
+  } finally {
+    clearTimeout(guard);
+  }
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 500, `the wait settled well inside the small bound (${elapsed}ms)`);
+});
+
+test('S2: the join budget is five seconds, overridable, and 0 disables the join entirely', () => {
+  const asked = [];
+  const joinIndexWork = (root, budgetMs) => {
+    asked.push([root, budgetMs]);
+    return undefined;
+  };
+  for (const [env, expected] of [
+    [{}, 5000],
+    [{ ODD_WORKTREE_CODEGRAPH_JOIN_MS: '250' }, 250],
+    [{ ODD_WORKTREE_CODEGRAPH_JOIN_MS: '0' }, 0],
+    [{ ODD_WORKTREE_CODEGRAPH_JOIN_MS: 'later' }, 5000],
+    [{ ODD_WORKTREE_CODEGRAPH_JOIN_MS: '-5' }, 5000],
+  ]) {
+    const { pi, ctx } = setup({ joinIndexWork, env });
+    const returned = pi.handlers.get('tool_call')[0](searchCall(), ctx);
+    const label = JSON.stringify(env);
+    assert.equal(returned, undefined, `${label}: the seam answered nothing to wait for`);
+    if (expected === 0) {
+      assert.equal(asked.length, 0, 'a disabled join is not even attempted');
+      continue;
+    }
+    assert.deepEqual(asked.pop(), ['/work/repo', expected], label);
+  }
+  assert.deepEqual(asked, []);
 });

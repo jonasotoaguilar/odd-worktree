@@ -34,6 +34,32 @@ test('the entry CodeGraph needs is exactly three fields', () => {
   assert.equal(mcpConfigPath('/x/agent'), path.join('/x/agent', 'mcp.json'));
 });
 
+// S4: direct callability of one MCP tool is the documented per-tool `toolExposure` map, not an entry-level field.
+// Pi docs, `docs/mcp.md` § "Control tool exposure": "To make the model see a tool without searching, give it
+// `direct` exposure with `toolExposure`." and "`toolExposure` overrides the server exposure for individual
+// tools." An entry-level `exposure: "direct"` would declare every CodeGraph tool instead of the one that needs it,
+// so this shape is pinned against a future rewrite to the upstream PR's entry-level spelling.
+test('direct callability is the per-tool toolExposure map, never an entry-level exposure', async () => {
+  assert.equal(Object.hasOwn(CODEGRAPH_SERVER, 'exposure'), false, 'the entry carries no server-wide exposure');
+  assert.deepEqual(CODEGRAPH_SERVER.toolExposure, { codegraph_explore: 'direct' });
+
+  const fresh = dir();
+  await ensureCodegraphServer({ agentDir: fresh });
+  assert.equal(Object.hasOwn(read(fresh).mcpServers.codegraph, 'exposure'), false, 'an added entry writes no exposure');
+
+  const kept = dir();
+  write(kept, { mcpServers: { codegraph: { command: 'codegraph', args: ['serve', '--mcp'], exposure: 'codemode' } } });
+  const result = await ensureCodegraphServer({ agentDir: kept });
+  assert.equal(result.status, 'fixed');
+  assert.deepEqual(result.changes, ['toolExposure.codegraph_explore']);
+  assert.deepEqual(read(kept).mcpServers.codegraph, {
+    command: 'codegraph',
+    args: ['serve', '--mcp'],
+    exposure: 'codemode',
+    toolExposure: { codegraph_explore: 'direct' },
+  });
+});
+
 test('a missing entry is added and every other server and key is kept', async () => {
   const agentDir = dir();
   write(agentDir, { settings: { a: 1 }, mcpServers: { other: { command: 'x', env: { TOKEN: 'keep' } } } });

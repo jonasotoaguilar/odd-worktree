@@ -1222,11 +1222,36 @@ children, and none of it can fail or wait for the host.
 | After a successful `edit` or `write` | A debounced sync of the checkout of the edited file (its git toplevel), unless a live daemon already watches that checkout. |
 
 **Coordination.** Every index write goes through one init lock and one per-project sync lease,
-so two sessions never write the same index together. A request that cannot run now is
-recorded and served later; a queued, coalesced or failed run is never reported as synced.
+so two sessions never write the same index together. A lease is released only by the session that
+still holds it, so a lock another session took over is never undone, while a lease abandoned
+without a record is still reclaimed once it is older than the write grace. A request that cannot
+run now is recorded and served later; a queued, coalesced or failed run is never reported as
+synced.
+
+**A run that timed out is a failure.** The timeout kills the command and its tree; a child that
+ignores the soft kill is killed hard two seconds into the same ten-second grace, and the run still
+reports the timeout whatever exit code that child finally ends with.
+
+**A seed is published, or rolled back.** A linked worktree's seed is copied aside and checked —
+non-empty, and a real CodeGraph index rather than any file that happened to be there — before it
+is published, and the publish is one move, so a crash cannot leave a half-written database where
+the index should be. The worktree's first sync then reconciles it to that tree; a seed whose sync
+fails is removed with the `.codegraph` the seed itself created, so nothing this session published
+survives a failed seed, and an index another session published is never touched.
 
 **Read-only roles.** Verify and the judges (a command tool and no file-writing tool) never
 start an index write.
+
+**A search joins the work already in flight.** Before a CodeGraph search runs — the native
+`codegraph` tool's `query` or `explore`, and any `mcp__codegraph__*` tool — the package waits for
+the index work this session already has in flight for that checkout: a session-start preparation,
+a post-init sync, or an edit sync that is running or owed. Nothing in flight means no wait and no
+timer, so a search in an idle checkout pays nothing. The wait is bounded by
+`ODD_WORKTREE_CODEGRAPH_JOIN_MS` (milliseconds, 5000 by default; `0` turns the wait off), it never
+starts an index write, and it can never block or fail the call: a search that spends its budget
+runs against the index as it is. One limit, stated plainly: the wait keys on the session's own
+checkout, so a `projectPath` naming another checkout is not joined — following it would add a git
+read to every search.
 
 **The MCP entry.** In a primary session, once per process, the package makes sure
 `mcpServers.codegraph` of `<agent dir>/mcp.json` (`~/.pi/agent` unless `PI_CODING_AGENT_DIR`

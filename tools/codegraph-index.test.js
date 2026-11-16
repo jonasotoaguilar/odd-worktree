@@ -13,6 +13,8 @@ const { spawn } = require('node:child_process');
 
 const {
   INIT_TIMEOUT_MS,
+  KILL_ESCALATION_MS,
+  KILL_WAIT_MS,
   POST_INIT_SYNC_WAIT_MS,
   SYNC_TIMEOUT_MS,
   autoIndex,
@@ -592,6 +594,12 @@ function linkedWorktree(base) {
   return { repo, worktree };
 }
 
+/** Every real SQLite database, and so every CodeGraph index, starts with these 16 bytes. */
+const INDEX_MAGIC = 'SQLite format 3\u0000';
+
+/** A plausible fake index: what a seed copy seam must write now that the copy is validated before it is published. */
+const fakeIndex = (payload = 'fake index payload') => INDEX_MAGIC + payload;
+
 test('S2: a directory without .git, a plain repository, a broken pointer and the main checkout are not worktrees', () => {
   const base = temp('cg-worktree-');
   assert.deepEqual(worktreeOf(base), { worktree: false });
@@ -648,14 +656,14 @@ test('S2: seeding copies the db only from a main index nobody is writing, into t
     sourceBusy: () => copied.length > 0,
     copy: (from, to) => {
       copied.push(from);
-      fs.writeFileSync(to, 'seed bytes');
+      fs.writeFileSync(to, fakeIndex('seed bytes'));
       return true;
     },
   });
   assert.equal(seeded, true, 'seeding ran');
   assert.equal(copied.length, 1, 'exactly one copy, of the main index db');
   assert.ok(copied[0].includes(path.join('.codegraph', 'codegraph.db')), JSON.stringify(copied));
-  assert.equal(fs.readFileSync(path.join(worktree, '.codegraph', 'codegraph.db'), 'utf8'), 'seed bytes');
+  assert.equal(fs.readFileSync(path.join(worktree, '.codegraph', 'codegraph.db'), 'utf8'), fakeIndex('seed bytes'));
 });
 
 test('S2: seeding refuses to copy while the main index is being written, and a failed copy leaves nothing', () => {
@@ -691,7 +699,7 @@ test('S2: a linked worktree of a session is seeded under its own index lock, and
     exists: fs.existsSync,
     sourceBusy: () => false,
     copy: (_from, to) => {
-      fs.writeFileSync(to, 'seeded db');
+      fs.writeFileSync(to, fakeIndex('seeded db'));
       return true;
     },
   });
@@ -811,7 +819,7 @@ test('S2: a copy failure in one worktree does not stop the others and leaves not
     copy: (_from, to) => {
       attempts += 1;
       if (attempts === 1) return false; // the first worktree fails
-      fs.writeFileSync(to, 'seeded db');
+      fs.writeFileSync(to, fakeIndex('seeded db'));
       return true;
     },
   });
@@ -848,7 +856,7 @@ test('S2: a session that finds an unindexed linked worktree seeds it and syncs i
     hasBinary: yes,
     lock: fakeLock(log, false),
     copySeed: (_from, to) => {
-      fs.writeFileSync(to, 'seeded');
+      fs.writeFileSync(to, fakeIndex('seeded'));
       return true;
     },
     run: fakeRun(calls),
@@ -856,7 +864,359 @@ test('S2: a session that finds an unindexed linked worktree seeds it and syncs i
   assert.deepEqual(result, { action: 'seed', ok: true });
   assert.deepEqual(calls.map((call) => call.args), [['sync', '-q']]);
   assert.deepEqual(log, ['lock:acquire', 'lock:isHeld', 'lock:isHeld', 'lock:release'], JSON.stringify(log));
-  assert.equal(fs.readFileSync(path.join(worktree, '.codegraph', 'codegraph.db'), 'utf8'), 'seeded');
+  assert.equal(fs.readFileSync(path.join(worktree, '.codegraph', 'codegraph.db'), 'utf8'), fakeIndex('seeded'));
+});
+
+test('S3: a seed whose post-seed sync fails leaves no published db and no directory this session created', async () => {
+  const base = temp('cg-seed-rollback-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const log = [];
+  const calls = [];
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists: fs.existsSync,
+    hasBinary: yes,
+    lock: fakeLock(log, false),
+    copySeed: (_from, to) => {
+      fs.writeFileSync(to, fakeIndex('seeded'));
+      return true;
+    },
+    run: fakeRun(calls, false),
+  });
+  assert.deepEqual(result, { action: 'seed', ok: false });
+  assert.deepEqual(calls.map((call) => call.args), [['sync', '-q']], 'the one reconciliation it attempted is still the one reported');
+  assert.equal(fs.existsSync(path.join(worktree, '.codegraph', 'codegraph.db')), false, 'the published db is gone');
+  assert.equal(fs.existsSync(path.join(worktree, '.codegraph')), false, 'the directory this session created is gone');
+});
+
+test('S3: a staged copy that is not a plausible index is never published and never synced', async () => {
+  const base = temp('cg-seed-garbage-');
+  for (const [name, stagedContent] of [['empty', ''], ['not-sqlite', 'not a codegraph index at all\n']]) {
+    const { repo, worktree } = linkedWorktree(path.join(base, name));
+    fs.mkdirSync(path.join(repo, '.codegraph'));
+    fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+    const calls = [];
+    const result = await autoIndex({
+      cwd: worktree,
+      env: {},
+      reason: 'startup',
+      exists: fs.existsSync,
+      hasBinary: yes,
+      lock: fakeLock([], false),
+      copySeed: (_from, to) => {
+        fs.writeFileSync(to, stagedContent);
+        return true;
+      },
+      run: fakeRun(calls),
+    });
+    assert.deepEqual(result, { action: 'seed', ok: false }, name);
+    assert.deepEqual(calls, [], `${name}: no sync runs over an index that was never published`);
+    assert.equal(fs.existsSync(path.join(worktree, '.codegraph', 'codegraph.db')), false, `${name}: nothing published`);
+    assert.equal(fs.existsSync(path.join(worktree, '.codegraph')), false, `${name}: nothing left behind`);
+  }
+});
+
+test('S3: the staged copy is judged by what the injected fs seam reads, and an unreadable one fails closed', () => {
+  const base = temp('cg-seed-read-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const targetDir = path.join(worktree, '.codegraph');
+  const copy = (from, to) => {
+    fs.copyFileSync(from, to);
+    return true;
+  };
+  // Each case starts from an absent directory: a seed only ever creates its own, so a fresh one is what a publish means.
+  const seed = (fsSeam) => {
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    return seedWorktreeIndex({ worktree, commonRoot: repo, sourceBusy: no, copy, fs: fsSeam });
+  };
+
+  // A read that answers nothing, or throws, is not an index: it fails closed exactly like a failed copy.
+  assert.equal(seed({ readFileSync: () => undefined }), false);
+  assert.equal(fs.existsSync(targetDir), false, 'an unreadable staged copy publishes nothing');
+  assert.equal(seed({
+    readFileSync: () => {
+      throw new Error('EACCES');
+    },
+  }), false);
+  assert.equal(fs.existsSync(targetDir), false, 'a throwing read publishes nothing');
+  assert.equal(seed({ readFileSync: () => 42 }), false, 'an unexpected answer is not guessed into an index');
+  assert.equal(fs.existsSync(targetDir), false);
+
+  // Raw bytes and a decoded string are both read, and a real header is a plausible index either way.
+  assert.equal(seed({ readFileSync: () => Buffer.from(fakeIndex('bytes')) }), true);
+  assert.equal(fs.readFileSync(path.join(targetDir, 'codegraph.db'), 'utf8'), fakeIndex('main'), 'the main db is what gets published');
+  assert.equal(seed({ readFileSync: (file) => fs.readFileSync(file, 'utf8') }), true);
+  assert.equal(fs.readFileSync(path.join(targetDir, 'codegraph.db'), 'utf8'), fakeIndex('main'));
+});
+
+test('S3: the seed is published with one rename, so no second write can leave a half-published db', () => {
+  const base = temp('cg-seed-rename-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const renames = [];
+  const seeded = seedWorktreeIndex({
+    worktree,
+    commonRoot: repo,
+    sourceBusy: no,
+    copy: (from, to) => {
+      fs.copyFileSync(from, to);
+      return true;
+    },
+    fs: {
+      renameSync: (from, to) => {
+        renames.push([from, to]);
+        fs.renameSync(from, to);
+      },
+      copyFileSync: () => {
+        throw new Error('the staged file is moved, never copied a second time');
+      },
+    },
+  });
+  assert.equal(seeded, true);
+  assert.equal(renames.length, 1, 'one rename publishes the staged copy');
+  assert.match(renames[0][0], /codegraph\.db\.seeding$/, 'the staged file is what moves');
+  assert.match(renames[0][1], /codegraph\.db$/, 'onto the index path');
+  assert.deepEqual(fs.readdirSync(path.join(worktree, '.codegraph')), ['codegraph.db'], 'no staging file is left behind');
+});
+
+test('S3: a seam with no rename keeps the older two-write publish of the staged copy', () => {
+  const base = temp('cg-seed-copy-fallback-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const copies = [];
+  const seeded = seedWorktreeIndex({
+    worktree,
+    commonRoot: repo,
+    sourceBusy: no,
+    copy: (from, to) => {
+      fs.copyFileSync(from, to);
+      return true;
+    },
+    fs: {
+      copyFileSync: (from, to) => {
+        copies.push([from, to]);
+        fs.copyFileSync(from, to);
+      },
+    },
+  });
+  assert.equal(seeded, true);
+  assert.equal(copies.length, 1, 'the publish copies the staged file once, as before');
+  assert.match(copies[0][0], /codegraph\.db\.seeding$/);
+  assert.match(copies[0][1], /codegraph\.db$/);
+  assert.equal(fs.existsSync(path.join(worktree, '.codegraph', 'codegraph.db.seeding')), false, 'the staging file is removed');
+});
+
+test('S3: a directory another session published is never removed, not even by a failed seed', async () => {
+  const base = temp('cg-seed-owned-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const otherDb = path.join(worktree, '.codegraph', 'codegraph.db');
+  let checks = 0;
+  // Another session publishes while this one waits for the lock, so the existence re-check under the lock sees it.
+  const exists = (p) => {
+    if (p === path.join(worktree, '.codegraph')) {
+      checks += 1;
+      if (checks > 1) {
+        fs.mkdirSync(path.dirname(otherDb), { recursive: true });
+        fs.writeFileSync(otherDb, fakeIndex('other session'));
+        return true;
+      }
+      return false;
+    }
+    return fs.existsSync(p);
+  };
+  const calls = [];
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists,
+    hasBinary: yes,
+    lock: fakeLock([], false),
+    copySeed: () => {
+      throw new Error('must not copy into a directory another session published');
+    },
+    run: fakeRun(calls, false),
+  });
+  assert.deepEqual(result, { action: 'seed', ok: true, joined: true });
+  assert.deepEqual(calls, [], 'this session ran nothing over an index it does not own');
+  assert.equal(fs.readFileSync(otherDb, 'utf8'), fakeIndex('other session'), "another session's index is untouched");
+});
+
+test('S3: a directory another actor created after the recheck is never published into', async () => {
+  const base = temp('cg-seed-race-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const targetDir = path.join(worktree, '.codegraph');
+  const accepted = path.join(targetDir, 'accepted');
+  let checks = 0;
+  // The second check is the one inside the seed: another actor creates the directory in between, so the directory this
+  // session finds is not one it created, and it holds no index yet.
+  const sourceBusy = () => {
+    checks += 1;
+    if (checks === 2) {
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(accepted, 'other session');
+    }
+    return false;
+  };
+  const calls = [];
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists: fs.existsSync,
+    hasBinary: yes,
+    lock: fakeLock([], false),
+    sourceBusy,
+    run: fakeRun(calls),
+  });
+  assert.deepEqual(result, { action: 'seed', ok: false }, 'a directory holding no index is an honest failure, not a join');
+  assert.deepEqual(calls, [], 'no sync runs over a directory this session did not publish');
+  assert.equal(fs.existsSync(path.join(targetDir, 'codegraph.db')), false, 'nothing of this session is written into it');
+  assert.equal(fs.existsSync(targetDir), true, 'a directory this session did not create is never removed');
+  assert.equal(fs.readFileSync(accepted, 'utf8'), 'other session', "another actor's file survives untouched");
+});
+
+test("S3: a foreign index created inside this session's creation window is never published over", async () => {
+  const base = temp('cg-seed-window-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const targetDir = path.join(worktree, '.codegraph');
+  const foreignDb = path.join(targetDir, 'codegraph.db');
+  const foreign = Buffer.from(fakeIndex('other accepted index'));
+  // The other actor lands in the very window this session's creation opens: the injected fs seam is where the module
+  // tries to create the directory, and the EEXIST it answers with is what says the directory is not this session's.
+  const seam = {
+    mkdirSync: (target, options) => {
+      if (path.basename(target) === '.codegraph' && !fs.existsSync(target)) {
+        fs.mkdirSync(target);
+        fs.writeFileSync(foreignDb, foreign);
+        const error = new Error(`EEXIST: file already exists, mkdir '${target}'`);
+        error.code = 'EEXIST';
+        throw error;
+      }
+      return fs.mkdirSync(target, options);
+    },
+  };
+  const calls = [];
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists: fs.existsSync,
+    hasBinary: yes,
+    lock: fakeLock([], false),
+    fs: seam,
+    run: fakeRun(calls),
+  });
+  assert.deepEqual(result, { action: 'seed', ok: true, joined: true }, 'the joined shape this module already uses for an index it does not own');
+  assert.deepEqual(calls, [], 'no sync runs over an index this session never published');
+  assert.deepEqual(fs.readFileSync(foreignDb), foreign, 'the index another actor accepted is byte-identical');
+});
+
+test('S3: a directory another actor replaced during the post-seed sync is left byte-identically', async () => {
+  const base = temp('cg-seed-replaced-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const targetDir = path.join(worktree, '.codegraph');
+  const replacement = path.join(targetDir, 'codegraph.db');
+  let theirs;
+  const run = async () => {
+    // The replacement lands while this session syncs the seed it published: the directory on disk is no longer ours.
+    fs.renameSync(targetDir, `${targetDir}.ours`);
+    fs.mkdirSync(targetDir);
+    fs.writeFileSync(replacement, fakeIndex('other accepted index'));
+    theirs = fs.readFileSync(replacement);
+    return false;
+  };
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists: fs.existsSync,
+    hasBinary: yes,
+    lock: fakeLock([], false),
+    run,
+  });
+  assert.deepEqual(result, { action: 'seed', ok: false }, 'the seed is still reported as failed');
+  assert.equal(fs.existsSync(replacement), true, 'the index another actor published is never removed');
+  assert.deepEqual(fs.readFileSync(replacement), theirs, 'and it is left byte-identical');
+});
+
+test('S3: a replacement database this session cannot read is unknown, so nothing is removed', async () => {
+  const base = temp('cg-seed-eacces-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const targetDir = path.join(worktree, '.codegraph');
+  const db = path.join(targetDir, 'codegraph.db');
+  const foreign = Buffer.from(fakeIndex('foreign accepted index'));
+  let syncing = false;
+  // During the post-seed sync another actor replaces only the database, and every later stat of it is denied: an
+  // unreadable identity is UNKNOWN, which is never "gone" and never "the same one", so it cannot authorize a removal.
+  const seam = {
+    statSync: (entry) => {
+      if (syncing && entry === db) throw Object.assign(new Error('stat denied'), { code: 'EACCES' });
+      return fs.statSync(entry);
+    },
+  };
+  const calls = [];
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists: fs.existsSync,
+    hasBinary: yes,
+    lock: fakeLock([], false),
+    fs: seam,
+    run: async (args, cwd) => {
+      calls.push({ args, cwd });
+      fs.renameSync(db, `${db}.ours`);
+      fs.writeFileSync(db, foreign);
+      syncing = true;
+      return false;
+    },
+  });
+  assert.deepEqual(result, { action: 'seed', ok: false }, 'the seed is still reported as failed');
+  assert.deepEqual(calls.map((call) => call.args), [['sync', '-q']], 'it is still the one reconciliation that ran');
+  assert.equal(fs.existsSync(db), true, 'an unreadable database is unknown, never absent: it stays');
+  assert.deepEqual(fs.readFileSync(db), foreign, 'and so does the directory that holds it');
+});
+
+test('S3: a published database that is positively gone still rolls back the directory this session created', async () => {
+  const base = temp('cg-seed-gone-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const targetDir = path.join(worktree, '.codegraph');
+  // ENOENT is a fact, not an unknown: the database this session published is gone, so nothing is left to protect.
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists: fs.existsSync,
+    hasBinary: yes,
+    lock: fakeLock([], false),
+    run: async () => {
+      fs.rmSync(path.join(targetDir, 'codegraph.db'), { force: true });
+      return false;
+    },
+  });
+  assert.deepEqual(result, { action: 'seed', ok: false });
+  assert.equal(fs.existsSync(targetDir), false, 'a positively absent database leaves nothing to keep');
 });
 
 // ---- The CLI seam (S1, S2) ----
@@ -896,6 +1256,258 @@ test('S2: a timed-out runCodegraph resolves only once the killed process is gone
     if (oldPidFile === undefined) delete process.env.CODEGRAPH_STUB_PID_FILE;
     else process.env.CODEGRAPH_STUB_PID_FILE = oldPidFile;
   }
+});
+
+/** A stand-in for a spawned child: it records every signal it is asked for and lets the test end it. */
+function fakeChild(pid) {
+  const handlers = { error: [], close: [] };
+  const signals = [];
+  const child = {
+    pid,
+    exitCode: null,
+    signalCode: null,
+    signals,
+    kill(signal = 'SIGTERM') {
+      signals.push(signal);
+      return true;
+    },
+    on(event, handler) {
+      if (!handlers[event]) handlers[event] = [];
+      handlers[event].push(handler);
+      return child;
+    },
+    end(code, signal) {
+      child.exitCode = code;
+      child.signalCode = signal;
+      for (const handler of handlers.close) handler(code, signal);
+      return child;
+    },
+  };
+  return child;
+}
+
+const sleep = (ms) => new Promise((resolve) => {
+  setTimeout(resolve, ms);
+});
+
+/** Whether a pid is gone, polled because a hard kill is asynchronous on every platform. */
+async function gone(pid, deadlineMs = 5_000) {
+  const limit = Date.now() + deadlineMs;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    if (Date.now() > limit) return false;
+    await sleep(25);
+  }
+}
+
+/**
+ * Waits for a marker a child process writes once it is ready. It polls with a deadline, so a slow start costs the
+ * deadline and never a guessed sleep, and the caller proceeds on the evidence instead of on elapsed time.
+ */
+async function ready(file, deadlineMs = 10_000) {
+  const limit = Date.now() + deadlineMs;
+  for (;;) {
+    if (fs.existsSync(file)) return true;
+    if (Date.now() > limit) return false;
+    await sleep(5);
+  }
+}
+
+test('S5: a child that ignores SIGTERM is escalated to SIGKILL, and the timed-out run still reports failure', {
+  // A POSIX signal trap is what this case is about; on Windows the escalation is the repeated taskkill the fake-child
+  // case pins, and a soft `kill` ends the process outright, so there would be nothing to trap.
+  skip: process.platform === 'win32' ? 'POSIX signal trapping' : false,
+}, async () => {
+  const dir = temp('cg-run-trap-');
+  const pidFile = path.join(dir, 'trap.pid');
+  const readyFile = path.join(dir, 'trap.ready');
+  const termLog = path.join(dir, 'trap.term');
+  const stub = path.join(dir, 'trap-cli.js');
+  // A real child that traps SIGTERM: only a hard kill ends it. The trap is installed before the marker is written, so
+  // the marker is the proof that a soft kill cannot end this process — and the trap records the signal it survived.
+  fs.writeFileSync(stub, [
+    "'use strict';",
+    "const fs = require('node:fs');",
+    `const pidFile = ${JSON.stringify(pidFile)};`,
+    `const readyFile = ${JSON.stringify(readyFile)};`,
+    `const termLog = ${JSON.stringify(termLog)};`,
+    'fs.writeFileSync(pidFile, String(process.pid));',
+    "process.on('SIGTERM', () => fs.appendFileSync(termLog, 'SIGTERM\\n'));",
+    "fs.writeFileSync(readyFile, 'trap installed');",
+    'setInterval(() => {}, 1000);',
+  ].join('\n'));
+  // The child is started and announces itself first, so the run below cannot signal it before its trap exists: no
+  // startup is guessed, and the timeout this case measures starts on a process that is already ready.
+  const child = spawn(process.execPath, [stub], { stdio: 'ignore' });
+  try {
+    assert.equal(await ready(readyFile), true, 'the stub installed its SIGTERM trap before anything signals it');
+    const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+    assert.equal(pid, child.pid, 'the stub that installed the trap is the process this run will kill');
+    const ok = await runCodegraph(['init', '-y'], dir, 30, () => {}, {
+      escalationMs: 200,
+      killWaitMs: 1_000,
+      spawn: () => child,
+    });
+    assert.equal(ok, false, 'the escalation still reports the timeout, never a success');
+    assert.equal(fs.readFileSync(termLog, 'utf8'), 'SIGTERM\n', 'the trap ran: the soft kill reached the child and did not end it');
+    assert.equal(await gone(pid, 2_000), true, `the child that trapped SIGTERM (pid ${pid}) is gone`);
+  } finally {
+    try {
+      child.kill('SIGKILL'); // cleanup of this case's own child
+    } catch {
+      // Already gone.
+    }
+  }
+});
+
+test('S5: a child that dies on SIGTERM is not killed a second time and its failure is reported as before', async () => {
+  const dir = temp('cg-run-term-');
+  let child;
+  const run = runCodegraph(['sync', '-q'], dir, 30, () => {}, {
+    platform: 'linux',
+    escalationMs: 60,
+    spawn: () => {
+      child = fakeChild(7001);
+      const asked = child.kill;
+      // The process really dies of the signal it was sent: the close event follows the kill.
+      child.kill = (signal = 'SIGTERM') => {
+        const ok = asked(signal);
+        setImmediate(() => child.end(null, signal));
+        return ok;
+      };
+      return child;
+    },
+  });
+  assert.equal(await run, false, 'a killed run is a failed run');
+  assert.deepEqual(child.signals, ['SIGTERM'], 'only the soft kill was sent');
+  await sleep(120); // well past the escalation delay this run armed
+  assert.deepEqual(child.signals, ['SIGTERM'], 'a child that already died is never escalated');
+});
+
+test('S5: a run that finishes normally neither escalates nor kills anything after it settled', async () => {
+  const dir = temp('cg-run-ok-');
+  let child;
+  const run = runCodegraph(['sync', '-q'], dir, 1_000, () => {}, {
+    platform: 'linux',
+    escalationMs: 20,
+    spawn: () => {
+      child = fakeChild(7002);
+      setTimeout(() => child.end(0, null), 5);
+      return child;
+    },
+  });
+  assert.equal(await run, true, 'a command that came back with 0 succeeded');
+  await sleep(60);
+  assert.deepEqual(child.signals, [], 'nothing is signalled after a successful run settled');
+});
+
+test('S5: the escalation delay is measured from the soft kill, so no hard kill lands before it', async () => {
+  const dir = temp('cg-run-escalate-');
+  const ESCALATION_MS = 200;
+  // The only discount is the millisecond a signal timestamp and the timer queue can disagree by. Nothing is taken off
+  // the delay itself: a shorter gap than this is a hard kill that did not wait.
+  const SIGNAL_CLOCK_TOLERANCE_MS = 5;
+  const received = [];
+  const run = runCodegraph(['sync', '-q'], dir, 40, () => {}, {
+    platform: 'linux',
+    killWaitMs: 1_000,
+    escalationMs: ESCALATION_MS,
+    spawn: () => {
+      const child = fakeChild(7003);
+      const asked = child.kill;
+      // The child's own record of when each signal reached it: the gap between the two is what "the delay" means here,
+      // and it is the one interval this case can measure without the run's own start standing in for it.
+      child.kill = (signal = 'SIGTERM') => {
+        received.push({ signal, at: Date.now() });
+        // Only the hard kill ends it, which is what a SIGTERM-trapping child looks like.
+        if (signal === 'SIGKILL') setImmediate(() => child.end(null, signal));
+        return asked(signal);
+      };
+      return child;
+    },
+  });
+  assert.equal(await run, false, 'the escalated run reports the timeout');
+  assert.deepEqual(received.map((entry) => entry.signal), ['SIGTERM', 'SIGKILL'], 'exactly one soft kill and one hard kill, in that order');
+  const gap = received[1].at - received[0].at;
+  assert.ok(gap >= ESCALATION_MS - SIGNAL_CLOCK_TOLERANCE_MS, `the hard kill waited the escalation delay after the soft one (${gap}ms)`);
+});
+
+test('S5: a requested escalation beyond the reporting grace is clamped, so the hard kill still lands', async () => {
+  const dir = temp('cg-run-clamp-');
+  const killWaitMs = 200;
+  const requestedMs = 10_000;
+  const killedAt = [];
+  const started = Date.now();
+  const run = runCodegraph(['sync', '-q'], dir, 40, () => {}, {
+    platform: 'linux',
+    killWaitMs,
+    escalationMs: requestedMs,
+    spawn: () => {
+      const child = fakeChild(7006);
+      const asked = child.kill;
+      child.kill = (signal = 'SIGTERM') => {
+        killedAt.push({ signal, at: Date.now() });
+        // Only the hard kill ends it, which is what a SIGTERM-trapping child looks like.
+        if (signal === 'SIGKILL') setImmediate(() => child.end(null, signal));
+        return asked(signal);
+      };
+      return child;
+    },
+  });
+  // The hard kill has to land inside the grace, so it is looked for before the run is allowed to report.
+  const deadline = Date.now() + 1_000;
+  while (!killedAt.some((entry) => entry.signal === 'SIGKILL') && Date.now() < deadline) await sleep(10);
+  const hard = killedAt.filter((entry) => entry.signal === 'SIGKILL');
+  assert.equal(hard.length, 1, `a requested ${requestedMs}ms escalation is clamped into the ${killWaitMs}ms grace: ${JSON.stringify(killedAt)}`);
+  assert.equal(await run, false, 'the escalation still reports the timeout, never a success');
+  assert.ok(hard[0].at - started <= killWaitMs, `the hard kill landed inside the reporting grace (${hard[0].at - started}ms)`);
+});
+
+test('S5: a run that already timed out never reports success, even when the child exits 0 afterwards', async () => {
+  const dir = temp('cg-run-late-ok-');
+  const run = runCodegraph(['sync', '-q'], dir, 30, () => {}, {
+    platform: 'linux',
+    escalationMs: 500,
+    spawn: () => {
+      const child = fakeChild(7004);
+      // A child that traps SIGTERM and then exits cleanly on its own: the timeout already happened.
+      setTimeout(() => child.end(0, null), 80);
+      return child;
+    },
+  });
+  assert.equal(await run, false, 'the timeout is the outcome, not the exit code that came after it');
+});
+
+test('S5: on Windows the hard kill is a second taskkill /T /F, run only while the pid lives', async () => {
+  const dir = temp('cg-run-win-');
+  const taskkills = [];
+  const cli = fakeChild(7005);
+  const run = runCodegraph(['sync', '-q'], dir, 20, () => {}, {
+    platform: 'win32',
+    escalationMs: 40,
+    spawn: (command, args) => {
+      if (command === 'taskkill') {
+        taskkills.push((args || []).join(' '));
+        return { on: () => {} };
+      }
+      // A shell proxy that only goes away once it is asked twice.
+      setTimeout(() => cli.end(null, 'SIGKILL'), 200);
+      return cli;
+    },
+  });
+  assert.equal(await run, false, 'the timeout is reported');
+  assert.deepEqual(taskkills, ['/pid 7005 /T /F', '/pid 7005 /T /F'], 'the escalation re-runs the hard kill while the pid lives');
+  assert.deepEqual(cli.signals, [], 'Windows escalates through taskkill, not a POSIX signal');
+});
+
+test('S5: the escalation fires inside the reporting grace, never instead of it', () => {
+  assert.ok(KILL_ESCALATION_MS > 0, 'the default delay is a positive number of milliseconds');
+  assert.ok(KILL_ESCALATION_MS <= 2_000, 'a couple of seconds, not minutes');
+  assert.ok(KILL_ESCALATION_MS < KILL_WAIT_MS, 'the hard kill lands inside the grace the run already reports on');
 });
 
 test('S2: the constant bounds of a run are the ones the commands use', () => {

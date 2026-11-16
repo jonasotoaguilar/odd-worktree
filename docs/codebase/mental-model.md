@@ -120,6 +120,8 @@ for each is in [`invariants.md`](invariants.md).
 | [26](invariants.md) | The rail's timed refresh exists only while the section is drawn. |
 | [27](invariants.md) | A forced refresh happens only after a mutating `bash`, behind its cap. |
 | [28](invariants.md) | The `gh`-absent and non-repository states are settled, so nothing retries them. |
+| [29](invariants.md) | CodeGraph never holds the host. |
+| [30](invariants.md) | An index write is complete or undone. |
 
 ## Common Change Paths
 
@@ -147,7 +149,7 @@ Work on a branch, never on `main`: an ODD gets its own checkout at
 
 ## Related Decisions / Contracts
 
-- [`invariants.md`](invariants.md) — the 28 rules above, in full, with their tests and limits.
+- [`invariants.md`](invariants.md) — the 30 rules above, in full, with their tests and limits.
 - [`code-map.md`](code-map.md) — every module and the one responsibility it owns.
 - [`../reference.md`](../reference.md) — panel keys, refusals, and how each surface behaves.
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) — the Node versions the suite runs on.

@@ -420,6 +420,69 @@ describe('repeated frames', () => {
   });
 });
 
+describe('choosing the shape', () => {
+  const fake = (version, acceptsLine) => {
+    const calls = [];
+    const disposed = [];
+    return {
+      calls,
+      disposed,
+      api: {
+        VERSION: version,
+        registerToolDesign: (design) => {
+          calls.push(design);
+          if (Array.isArray(design.tools) && !acceptsLine) throw new Error('refused: tool is required');
+          const dispose = () => disposed.push(design.id ?? design.tool);
+          return dispose;
+        },
+      },
+    };
+  };
+
+  test('a readable release decides alone: no probe is ever registered', () => {
+    for (const [version, grouped] of [['0.6.0', true], ['0.7.1', true], ['1.0.0', true], ['0.5.9', false], ['0.5.0', false]]) {
+      const { api, calls } = fake(version, true);
+      registerBashDesign(api)();
+      assert.equal(calls.length, 1, version);
+      assert.equal(Array.isArray(calls[0].tools), grouped, version);
+    }
+  });
+
+  test('a release string that cannot be read is asked instead, and the probe is disposed', () => {
+    for (const version of ['nightly', '', 'v0.6.0', 'six.zero', undefined, null, 6]) {
+      const accepting = fake(version, true);
+      const disposeProbe = registerBashDesign(accepting.api);
+      assert.equal(typeof disposeProbe, 'function', String(version));
+      disposeProbe();
+      assert.equal(accepting.calls.length, 2, `${String(version)}: probe then ours`);
+      assert.equal(accepting.calls[0].id, 'odd-worktree.capability-probe');
+      assert.equal(Array.isArray(accepting.calls[1].tools), true, String(version));
+      assert.equal(accepting.disposed[0], 'odd-worktree.capability-probe', String(version));
+    }
+  });
+
+  test('a bridge that refuses the line is probed once and keeps the per-tool shape', () => {
+    const refusing = fake('nightly', false);
+    const dispose = registerBashDesign(refusing.api);
+    assert.equal(typeof dispose, 'function');
+    dispose();
+    assert.equal(refusing.calls.at(-1).tool, 'bash', 'the probe threw, so the old shape is registered');
+    assert.equal(Array.isArray(refusing.calls.at(-1).tools), false);
+    assert.ok(!refusing.disposed.includes('odd-worktree.capability-probe'), 'a refused probe has nothing to dispose');
+  });
+
+  test('the probe is never selected, never labelled and never named', () => {
+    const accepting = fake('nightly', true);
+    registerBashDesign(accepting.api)();
+    const probe = accepting.calls[0];
+    assert.equal(probe.label, 'probe');
+    assert.equal(probe.name, undefined, 'it must not claim a plugin line');
+    assert.notEqual(probe.id, BASH_DESIGN_ID);
+    assert.deepEqual(probe.tools, ['odd-worktree-probe']);
+    assert.equal(probe.line, 'odd-worktree-probe');
+  });
+});
+
 describe('the registration', () => {
   test('is one bash design with the label the bridge line shows and a preview', () => {
     const design = bashActivityDesign();
@@ -692,7 +755,9 @@ const designFor = (version) => {
   const dispose = registerBashDesign(api);
   assert.equal(typeof dispose, 'function', String(version));
   dispose();
-  return seen[0];
+  // A release string that cannot be read is asked first, with a throwaway design; the design
+  // this package really registers is the one after it.
+  return seen.find((design) => design.id !== 'odd-worktree.capability-probe');
 };
 
 describe('the Card tools line', () => {
@@ -718,8 +783,8 @@ describe('the Card tools line', () => {
     }
   });
 
-  test('an older bridge or one with no readable release gets exactly today\'s single bash design', () => {
-    for (const version of ['0.5.0', '0.5.9', '0.4.2', '0.5', '', 'v0.6.0', 'nightly', undefined, 6, null, {}]) {
+  test('an older bridge with a readable release gets exactly today\'s single bash design', () => {
+    for (const version of ['0.5.0', '0.5.9', '0.4.2', '0.5']) {
       const design = designFor(version);
       assert.equal(design.tool, 'bash', String(version));
       assert.equal(Object.hasOwn(design, 'line'), false, `no line on ${String(version)}`);

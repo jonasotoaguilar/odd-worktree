@@ -609,9 +609,12 @@ drew. On a bridge that can put several tools on one line (`0.6.0` and later) tha
 `Card tools` row covering `bash` and the four read-only tools `grep`, `find`, `ls` and
 `read`; on an older bridge the same design is registered for `bash` alone, the row is
 `Card bash` and those four are drawn by the host. Which shape is sent is decided from the
-bridge's own `VERSION` before anything is registered — a non-string or unreadable release
-counts as an older bridge — because a grouped registration on an older one is refused and
-reported in `/bridge-status`. So the choice is the bridge's, survives a restart there, repaints cards already
+bridge's own `VERSION` before anything is registered, because a grouped registration on an
+older one is refused and reported in `/bridge-status`. A release string that cannot be read
+is not guessed: the bridge is asked once, with a throwaway design nobody selects and a line
+no plugin would use, which is registered and immediately disposed, so the capability is the
+bridge's own answer instead of a version number. A bridge without `registerToolDesign` gets
+no design at all. So the choice is the bridge's, survives a restart there, repaints cards already
 on screen as well as new ones, and does not depend on extension load order. With no
 bridge, or one older than `registerToolDesign`, nothing is registered.
 

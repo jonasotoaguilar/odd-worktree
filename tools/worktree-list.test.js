@@ -59,8 +59,8 @@ test('prints project, path, the unnumbered main checkout and the created worktre
 		'project: demo',
 		'path: /work/demo',
 		'base: main@1a2b3c4',
-		'1 alpha feat/alpha',
-		'2 zeta feat/zeta',
+		'1 alpha · feat/alpha',
+		'2 zeta · feat/zeta',
 	].join('\n'));
 	assertPlainLines(view.text);
 });
@@ -79,7 +79,7 @@ test('a linked worktree outside the canonical directory is hidden without all, a
 	const view = viewOf({
 		entries: [MAIN, entry(`${WORKTREES}/alpha`, 'feat/alpha'), entry('/elsewhere/other', 'feat/other')],
 	});
-	assert.equal(view.text.split('\n').includes('2 other feat/other'), false, 'the outside worktree is not listed');
+	assert.equal(view.text.split('\n').includes('2 other · feat/other'), false, 'the outside worktree is not listed');
 	assert.equal(view.text.split('\n').at(-1), '1 worktrees outside the list (--all to list them)');
 	assert.equal(view.details.hiddenOutside, 1);
 });
@@ -109,9 +109,9 @@ test('all adds the worktrees outside the canonical directory, after ours and by 
 		'project: demo',
 		'path: /work/demo',
 		'base: main@1a2b3c4',
-		'1 alpha feat/alpha',
-		'2 beta feat/beta',
-		'3 gamma -',
+		'1 alpha · feat/alpha',
+		'2 beta · feat/beta',
+		'3 gamma · -',
 	].join('|'));
 	assert.deepEqual(worktreeListFooters(view.details), [], 'nothing is hidden when everything is listed');
 	assert.equal('foreign' in view.details, false, 'no state field decides what a row is');
@@ -120,7 +120,7 @@ test('all adds the worktrees outside the canonical directory, after ours and by 
 test('a detached checkout prints a dash instead of inventing a branch', () => {
 	const view = viewOf({ entries: [MAIN, entry(`${WORKTREES}/alpha`, null)] });
 	assert.equal(view.details.worktrees[1].branch, '-');
-	assert.equal(view.text.split('\n').at(-1), '1 alpha -');
+	assert.equal(view.text.split('\n').at(-1), '1 alpha · -');
 });
 
 test('the main row prints first and unnumbered, as Git lists it', () => {

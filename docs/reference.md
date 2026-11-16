@@ -730,7 +730,7 @@ exactly as it did before the card existed.
 `worktree_list` prints the main checkout first and unnumbered, as the `base: <branch>@<sha>`
 line `worktree_create` also prints (the branch it stands on is always named), then one numbered
 row per checkout this package created under `<repo-name>-worktrees`, by name.
-A row is its directory's basename — which IS the ODD — and the branch Git
+A row is its directory's basename — which IS the ODD — then ` · ` and the branch Git
 reports. With `all: true`, the worktrees Git knows outside that directory follow,
 and a footer counts them while they are hidden. The text is fixed-field and
 undecorated, so it reads the same on every run:
@@ -739,8 +739,8 @@ undecorated, so it reads the same on every run:
 project: repo
 path: /code/repo
 base: main@1a2b3c4
-1 worktree-tools feat/worktree-tools
-2 billing feat/billing
+1 worktree-tools · feat/worktree-tools
+2 billing · feat/billing
 ```
 
 There is no `odd:` field, no date, no setup line, no hooks line and no stored

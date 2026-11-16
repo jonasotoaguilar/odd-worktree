@@ -356,12 +356,18 @@ the checkout's remote moves while the reader is open, mutations refuse with
 …); reopen /issues`, and the reads keep the displayed repository. An issue
 number on screen can never be sent to another repository.
 
-A NUMBERED open — `/issues <n>`, the form a rail click sends — pins the
-checkout's CACHED scope instead of forcing a fresh `git`/`gh` proof before the
-first frame, and a cached pin that cannot be read falls back to the fresh proof
-once. A typed `/issues` always proves freshly. Nothing that mutates is loosened:
-every action re-proves the checkout with a fresh read and refuses on drift, as
-above.
+A NUMBERED open — `/issues <n>`, the form a rail click sends — first takes the
+ROW's identity: the click carries the repository the rail proved when it READ that
+row, and the open pins that exact `<host>/<owner>/<repo>` with no probe at all — no
+`git`, no `gh` — so the first frame paints as soon as the TUI helper is loaded. The
+number belongs to the repository the row was read from, so that is the right target
+even if the checkout has moved since; the hint is used once, only for its own
+number and session, and cleared with the click. Without it (a typed `/issues 12`, a
+hint that is gone) the open pins the checkout's CACHED scope instead of forcing a
+fresh `git`/`gh` proof before the first frame, and a cached pin that cannot be read
+falls back to the fresh proof once. A typed `/issues` always proves freshly.
+Nothing that mutates is loosened: every action re-proves the checkout with a fresh
+read and refuses on drift, as above.
 
 ## The `ISSUES` rail section
 

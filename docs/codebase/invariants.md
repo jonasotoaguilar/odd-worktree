@@ -62,6 +62,18 @@ The question this page answers: which rules must every change preserve, and what
    `call` part, swapping the host's `$` for the family `lib/bash-activity.js`
    names, taking the added columns from the row's own fill; every other row, every
    result and every unproven heading is returned byte for byte (invariant 20).
+   **One rail open at a time, and the click's own identity.** A click on a rail row
+   opens one panel at a time: while it is in flight every further click has no
+   effect, and the effect returns when the panel mounts, on every exit of the
+   command that never mounted one (a refusal, an unproven identity, a throw), and
+   after the bounded safety interval of about ten seconds that covers a command the
+   host never ran. The numbered open pins the identity the CLICKED ROW was read from
+   with no probe at all; without that one-shot hint it pins the checkout's cached
+   scope, while a typed plain `/issues` keeps the fresh proof. Both pins are reads:
+   every action still re-proves the checkout fresh and refuses on drift, so no
+   mutation rides a pin. `tools/issues-open-guard.test.js` pins the guard, its
+   release points and both pins.
+
 4. **Deletion refuses on a live session.** The only surface that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
    before the pending-change question and again immediately before removal. This

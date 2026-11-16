@@ -116,15 +116,18 @@ function git(cwd, args) {
 // A real checkout with TWO remotes (a fork), the case whose identity comes from
 // the checkout's OWN git configuration: a CACHED scope read then reuses what the
 // rail already proved, while a FRESH one reads git again. That is the difference
-// the numbered open is tested against.
-function makeCheckout() {
+// the numbered open is tested against. `singleRemote` builds the other shape — one
+// remote, so gh's own `repo view` is the whole identity — which is the shape whose
+// cached-scope pin still paid that network call before the click carried its row's
+// identity.
+function makeCheckout({ singleRemote = false } = {}) {
   const dir = track(fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-guard-'))));
   git(dir, ['init']);
   git(dir, ['config', 'user.email', 'test@example.com']);
   git(dir, ['config', 'user.name', 'Test']);
   git(dir, ['commit', '--allow-empty', '-m', 'init']);
   git(dir, ['remote', 'add', 'origin', 'git@github.com:myfork/project.git']);
-  git(dir, ['remote', 'add', 'upstream', 'git@github.com:original/project.git']);
+  if (!singleRemote) git(dir, ['remote', 'add', 'upstream', 'git@github.com:original/project.git']);
   return dir;
 }
 
@@ -293,8 +296,8 @@ async function waitForRows(section, ctx) {
 // warms nothing in the fixture checkout under test, so a numbered open there meets
 // a COLD scope cache and has to prove the identity — the pattern the command tests
 // use for the same reason.
-async function harness({ assigned = nineIssues(), draw = true, gate = true } = {}) {
-  const checkout = makeCheckout();
+async function harness({ assigned = nineIssues(), draw = true, gate = true, singleRemote = false } = {}) {
+  const checkout = makeCheckout({ singleRemote });
   const { registered, repaints } = installBridge();
   const sent = [];
   const loaded = await loadExtension({
@@ -474,17 +477,19 @@ test('S1: a cwd outside a checkout releases the guard', async () => {
 
 test('S1: a failed identity proof still mounts and releases the guard', async () => {
   const h = await harness();
-  const number = numberOf(h.rows[0].label);
   h.rows[0].onClick();
   await waitFor(() => h.sent.length === 1, 'the click never dispatched');
 
   // The identity cannot be proven at all: the cached read and its one fresh
-  // fallback both fail, and the panel still opens (S5 reports the failure).
+  // fallback both fail, and the panel still opens (S5 reports the failure). The
+  // open names ANOTHER number than the click, because a click's own number now
+  // rides its row identity and pins it without a proof at all (S2 below) — the
+  // click still owns the guard that this failed open has to release.
   ghIssues.setGitRunner(() => ({ status: 1, stdout: '', stderr: 'bad config', error: null }));
   const holder = captureIssuesView(h.loaded.mod);
   const { ctx, customs } = commandCtx(h.checkout);
   ctx.ui.custom = async (factory) => { customs.push(1); factory(hostTui(), {}, {}, () => {}); return null; };
-  await h.loaded.commands.get('issues').handler(String(number), ctx);
+  await h.loaded.commands.get('issues').handler('12', ctx);
   assert.equal(customs.length, 1, 'the overlay mounted despite the failed proof');
   assert.equal((await holder.options.loadIssuePage({ bucketId: 'assigned', limit: 5 })).ok, false,
     'and its reads report the unproven identity');
@@ -713,4 +718,152 @@ test('S2: both proofs failing keeps today\'s failure, and the panel still opens'
   assert.equal(page.ok, false);
   assert.match(page.error, /git configuration|cannot resolve this checkout's own repository|own repository/,
     'the read reports the unproven identity, exactly as before');
+});
+
+// ---------------------------------------------------------------------------
+// S2, second half: the row's identity rides the click, so the numbered open
+// pins THAT repository with no probe at all.
+// ---------------------------------------------------------------------------
+
+// The identity work a call did: the identity's own `git` seam (the cached-scope
+// read and the fresh proof both go through it) plus gh's own repository
+// resolution, which is the whole proof of a SINGLE-remote checkout. Everything
+// else a mount runs is a read of issues, never the identity.
+function identityChildren(h, before) {
+  return {
+    git: h.identity.calls.slice(before.git),
+    gh: h.gh.calls.slice(before.gh)
+      .filter((call) => call.bin === 'gh' && call.argv[0] === 'repo' && call.argv[1] === 'view'),
+  };
+}
+
+function rowFor(h, number) {
+  const row = h.rows.find((candidate) => numberOf(candidate.label) === number);
+  assert.ok(row, `the rail painted a row for #${number}`);
+  return row;
+}
+
+// Click a rail row and then run the command the host would run for it, with the
+// view captured instead of drawn. `cwd` is the checkout the command runs in: the
+// rail's own by default, or a SECOND checkout whose identity scope cache is cold
+// — the only way to see a cached-scope pin cost anything at all.
+async function clickOpen(h, { row, number, cwd } = {}) {
+  const target = row === undefined ? h.rows[0] : row;
+  const asked = number === undefined ? numberOf(target.label) : number;
+  const sentBefore = h.sent.length;
+  target.onClick();
+  await waitFor(() => h.sent.length > sentBefore, 'the click never dispatched its command');
+  assert.deepEqual(h.sent[h.sent.length - 1],
+    { text: `/issues ${asked}`, opts: { expandPromptTemplates: true } },
+    'the click dispatched that row\'s number');
+  return await runOpen(h, { cwd: cwd === undefined ? h.checkout : cwd, args: String(asked) });
+}
+
+async function runOpen(h, { cwd, args }) {
+  const holder = captureIssuesView(h.loaded.mod);
+  const { ctx, customs, notices } = commandCtx(cwd);
+  ctx.ui.custom = async (factory) => { customs.push(1); factory(hostTui(), {}, {}, () => {}); return null; };
+  await h.loaded.commands.get('issues').handler(args, ctx);
+  assert.equal(customs.length, 1, 'the panel mounted');
+  return { holder, options: holder.options, notices, ctx };
+}
+
+test('S2: a click carrying an identity pins it with no identity probe and seeds from the rail cache', async () => {
+  // A SINGLE-remote checkout: there is no fork remote to read, so gh's own
+  // `repo view` IS the identity proof — the ~0.6 s call a cached-scope pin still
+  // paid before a click carried the identity of the row it came from.
+  const h = await harness({ singleRemote: true });
+  const row = rowFor(h, 104);
+  // The checkout's remote "moves" after the rail proved its repository. Nothing on
+  // this open path reads it again — and nothing needs to: the row's number belongs
+  // to the repository it was READ from, and every action still re-proves the
+  // checkout fresh (the drift test below refuses on exactly this).
+  h.identity.remoteUrl.value = 'git@github.com:myfork/renamed.git';
+  const before = { git: h.identity.calls.length, gh: h.gh.calls.length };
+
+  const { options } = await clickOpen(h, { row });
+
+  assert.equal(options.initialIssue, 104, 'the panel opened on the clicked number');
+  assert.equal(options.initialBucket, 'assigned', 'the cache says which tab holds the number');
+  assert.deepEqual(pageOf(options, 'assigned').issues.map((entry) => entry.number).sort((a, b) => a - b),
+    [100, 101, 102, 103, 104, 105, 106, 107, 108],
+    'the first frame is seeded from the rail cache for the identity the ROW was read from');
+  assert.equal(pageOf(options, 'assigned').total, 9, 'and reports the count that cache holds');
+  const children = identityChildren(h, before);
+  assert.deepEqual(children.git, [], 'the clicked identity needed no git child at all');
+  assert.deepEqual(children.gh, [], 'and no gh repository probe either');
+});
+
+test('S2: the row identity hint is one-shot — the next numbered open takes the cached-scope pin', async () => {
+  const h = await harness();
+  // A SECOND checkout of the same repository: its scope cache is cold, so an open
+  // that does NOT ride the hint has to read git to pin the identity.
+  const cold = makeCheckout();
+  const beforeFirst = { git: h.identity.calls.length, gh: h.gh.calls.length };
+  const first = await clickOpen(h, { row: rowFor(h, 104), cwd: cold });
+  assert.equal(first.options.initialIssue, 104);
+  assert.deepEqual(identityChildren(h, beforeFirst), { git: [], gh: [] },
+    'the clicked open pinned the row identity with no probe at all');
+
+  // The same number again, with no click behind it: the hint was consumed by the
+  // open above, so this one falls back to the checkout's cached scope.
+  const beforeSecond = { git: h.identity.calls.length, gh: h.gh.calls.length };
+  const second = await runOpen(h, { cwd: cold, args: '104' });
+  assert.equal(second.options.initialIssue, 104);
+  assert.ok(identityChildren(h, beforeSecond).git.length > 0,
+    'the second numbered open proved the identity again — the hint is one-shot');
+});
+
+test('S2: a hint for another number is ignored and that open takes the cached-scope pin', async () => {
+  const h = await harness();
+  const cold = makeCheckout();
+  const sentBefore = h.sent.length;
+  rowFor(h, 104).onClick();
+  await waitFor(() => h.sent.length > sentBefore, 'the click never dispatched its command');
+
+  const before = { git: h.identity.calls.length, gh: h.gh.calls.length };
+  const { options } = await runOpen(h, { cwd: cold, args: '105' });
+  assert.equal(options.initialIssue, 105, 'the open is the number that was asked for');
+  assert.ok(identityChildren(h, before).git.length > 0,
+    'a hint for another number never pins anything: the open proved its own identity');
+  assert.deepEqual(pageOf(options, 'assigned').issues.map((entry) => entry.number).sort((a, b) => a - b),
+    [100, 101, 102, 103, 104, 105, 106, 107, 108],
+    'and still seeds from the cache for the identity it proved');
+});
+
+test('S2: a hint from a previous generation is ignored and the open takes the cached-scope pin', async () => {
+  const h = await harness();
+  const cold = makeCheckout();
+  const sentBefore = h.sent.length;
+  rowFor(h, 104).onClick();
+  await waitFor(() => h.sent.length > sentBefore, 'the click never dispatched its command');
+  // The session boundary moves the cache generation on, so a click left over by
+  // the previous session names nothing this one may pin. (The same boundary also
+  // releases the guard and with it the hint; the generation stamp is the second
+  // guard, and what this pins is the outcome: no pin without a proof.)
+  await fireSessionStart(h.loaded.hooks, h.ctx);
+
+  const before = { git: h.identity.calls.length, gh: h.gh.calls.length };
+  const { options } = await runOpen(h, { cwd: cold, args: '104' });
+  assert.equal(options.initialIssue, 104);
+  assert.ok(identityChildren(h, before).git.length > 0,
+    'the previous generation\'s hint pinned nothing: the open proved its own identity');
+});
+
+test('S2: an action in a panel opened from a click still refuses when the checkout drifted', async () => {
+  const h = await harness();
+  const { options } = await clickOpen(h, { row: rowFor(h, 104) });
+  // The remote moves AFTER the click, which the row pinned without re-reading: this
+  // is the drift only `scopeDrift` can catch, and it is caught fresh on every action.
+  h.identity.remoteUrl.value = 'git@github.com:myfork/renamed.git';
+  const before = { git: h.identity.calls.length, gh: h.gh.calls.length };
+
+  const refused = await options.actions.setState(104, 'closed');
+  assert.equal(refused.ok, false, 'the write is refused on the drift');
+  assert.match(refused.error, /changed since this issue list loaded/,
+    'the refusal is the scope-drift line, naming the repository it found');
+  assert.ok(identityChildren(h, before).git.length > 0, 'the action re-proved the checkout fresh');
+  const mutations = h.gh.calls.slice(before.gh)
+    .filter((call) => call.argv[0] === 'issue' && ['edit', 'comment', 'close', 'reopen'].includes(call.argv[1]));
+  assert.deepEqual(mutations, [], 'no mutating gh command ran after the drift');
 });

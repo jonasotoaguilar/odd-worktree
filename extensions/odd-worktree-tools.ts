@@ -6744,6 +6744,12 @@ let issuesSidebarInstallAnnounced = false;
 const ISSUES_PANEL_OPEN_GUARD_MS = 10000;
 let issuesPanelOpenToken = null;
 let issuesPanelOpenTimer = null;
+// S2 (issues-sidebar-click T1, second half): the rail row carries the identity the
+// section proved when it READ that row, and the click leaves it here as a ONE-SHOT
+// hint for the numbered open it dispatches — so that open pins exactly that identity
+// with no probe at all. It lives beside the token and is cleared with it, so a hint
+// can never outlive the open (`releaseIssuesPanelOpen`).
+let issuesPanelOpenHint = null;
 
 function clearIssuesPanelOpenTimer() {
   if (issuesPanelOpenTimer === null) return;
@@ -6762,6 +6768,9 @@ function releaseIssuesPanelOpen(token) {
   if (token !== undefined && issuesPanelOpenToken !== token) return;
   clearIssuesPanelOpenTimer();
   issuesPanelOpenToken = null;
+  // The hint belonged to the open that token guarded: released with it, so no
+  // click's identity can ever outlive the open it was taken for.
+  issuesPanelOpenHint = null;
 }
 
 // Only a token from the CURRENT session generation blocks: `session_start`,
@@ -6769,6 +6778,20 @@ function releaseIssuesPanelOpen(token) {
 function issuesPanelOpenBlocked() {
   if (issuesPanelOpenToken === null) return false;
   return issuesPanelOpenToken.generation === issuesSidebarCacheGeneration;
+}
+
+// S2: the one-shot hint a rail click left for the numbered open it dispatched. It
+// applies to the SAME number only, and only in the generation it was recorded
+// under; taking it consumes it, so the next open of that number proves the identity
+// again. A hint for another number is left alone (its own open may still come, and
+// any release clears it).
+function takeIssuesPanelOpenHint(number) {
+  const hint = issuesPanelOpenHint;
+  if (hint === null) return null;
+  if (!Number.isInteger(number) || hint.number !== number) return null;
+  if (hint.generation !== issuesSidebarCacheGeneration) return null;
+  issuesPanelOpenHint = null;
+  return hint.identity;
 }
 
 function armIssuesPanelOpenGuard(token) {
@@ -7031,6 +7054,18 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen) {
     if (typeof notify === "function") notify(`issues: cannot load the gh client: ${(err && err.message) || err}`, "error");
     return;
   }
+  // S2 (issues-sidebar-click T1, second half): a click on a rail row carries the
+  // identity the section proved when it READ that row, and this consumes it as a
+  // one-shot hint: that exact identity is pinned with NO probe at all — no `git`,
+  // no `gh`, no cached-scope read — so the first frame paints as soon as the TUI
+  // helper is loaded. The issue number belongs to the repository the row was read
+  // from, so opening THAT repository is the right target even if the checkout has
+  // moved since; nothing that mutates rides it, because every action still
+  // re-proves the checkout fresh in `scopeDrift` and refuses on drift. A numbered
+  // open without a matching hint (a typed `/issues 12`, a stale generation, a hint
+  // for another number) takes the cached-scope pin below, and a plain `/issues`
+  // keeps the fresh proof.
+  const hintedIdentity = initialIssue === null ? null : takeIssuesPanelOpenHint(initialIssue);
   // The repository identity is PINNED when the list loads, as ONE
   // HOST-QUALIFIED string (`<host>/<owner>/<repo>`, the form gh accepts for
   // GH_REPO and `-R`). The proof itself is the shared helper, so the sidebar
@@ -7050,13 +7085,16 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen) {
   const pinRepo = async () => {
     if (pinnedRepo !== undefined) return pinnedRepo;
     if (pinnedPromise === null) {
-      pinnedPromise = (initialIssue === null
-        ? pinIdentity(true)
-        : pinIdentity(false).then((cached) => (cached && cached.ok === true ? cached : pinIdentity(true))))
-        .then((pin) => {
-          pinnedRepo = pin;
-          return pin;
-        });
+      const pin = hintedIdentity !== null
+        // The click already named the repository this panel opens: pin it as given.
+        ? Promise.resolve({ ok: true, identity: hintedIdentity })
+        : (initialIssue === null
+          ? pinIdentity(true)
+          : pinIdentity(false).then((cached) => (cached && cached.ok === true ? cached : pinIdentity(true))));
+      pinnedPromise = pin.then((pinned) => {
+        pinnedRepo = pinned;
+        return pinned;
+      });
     }
     return pinnedPromise;
   };
@@ -7618,6 +7656,9 @@ async function loadIssuesSidebar() {
 // The row's bucket (S7/T8) may ride along as a third argument, but this seam does
 // not dispatch it: the `/issues <n>` command picks the bucket from the cache when
 // it runs, so the panel does not depend on a row the human clicked seconds ago.
+// The row's identity rides along for the same reason the number does — it is what
+// the section proved for THAT row — and is left as a one-shot hint for the open
+// this dispatch starts (S2 above).
 // `pi.sendUserMessage` returns void by contract, so this reports that the command
 // was dispatched, never that a panel opened. Never throws.
 const ISSUES_SIDEBAR_NOT_REPOSITORY = "not a git repository";
@@ -7649,16 +7690,23 @@ function announceIssuesPanelRefusal(pi, message) {
   return false;
 }
 
-function dispatchIssuesPanel(pi, number, _identity, _bucket) {
+function dispatchIssuesPanel(pi, number, identity, _bucket) {
   // S1 (issues-sidebar-click T1): a click while a rail open is in flight has no
   // effect at all — not even a visible refusal — so it returns normally and
   // claims nothing.
   if (issuesPanelOpenBlocked()) return { ok: true };
   const token = { generation: issuesSidebarCacheGeneration };
   issuesPanelOpenToken = token;
-  armIssuesPanelOpenGuard(token);
   const asked = Number(number);
   const namesIssue = Number.isInteger(asked) && asked > 0;
+  // S2 (issues-sidebar-click T1, second half): a click that names an issue AND
+  // carries the identity its row was read from leaves both as the one-shot hint the
+  // open it dispatches consumes. The dispatch still sends the number alone and stays
+  // synchronous; the guard's release clears the hint with the token.
+  issuesPanelOpenHint = namesIssue && typeof identity === "string" && identity.length > 0
+    ? { number: asked, identity, generation: token.generation }
+    : null;
+  armIssuesPanelOpenGuard(token);
   const command = namesIssue ? `/issues ${asked}` : "/issues";
   if (!pi || typeof pi.sendUserMessage !== "function") {
     // The host cannot dispatch, so nothing will run to release the guard.

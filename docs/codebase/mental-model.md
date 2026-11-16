@@ -6,13 +6,15 @@ starts, which rule each change must preserve, and where to begin.
 ## What This Codebase Owns
 
 One Pi extension package, `pi-odd-worktree`: two agent tools (`worktree_create`,
-`worktree_list`), three panels (`/warp`, `/odd-list`, `/issues`), one optional
-sidebar section, one bash design on the bridge and two preferences — `Card skill`
-and `Card odd`. It owns creating and listing the checkouts an ODD works in,
-reading a checkout's `odd/tasks/*.md`, reading and — role permitting — editing that
+`worktree_list`), four panels (`/warp`, `/odd-list`, `/files`, `/issues`), one
+optional sidebar section, one bash design on the bridge and two preferences —
+`Card skill` and `Card odd`. It owns creating and listing the checkouts an ODD
+works in, reading a checkout's `odd/tasks/*.md`, browsing and previewing a
+checkout's files, reading and — role permitting — editing that
 checkout's GitHub issues, and the drawing of its own cards. `git` is the only
 external requirement; Gentle Shell is recommended, and gentle-shell-bridge adds
-only three control surfaces.
+only five control surfaces: the rail section, the bash design, the two file-card
+switches, and the file picker's keymap action and palette row.
 
 ## What It Does Not Own
 
@@ -39,7 +41,7 @@ only three control surfaces.
 ## Main Flow
 
 1. `extensions/odd-worktree-tools.ts` — the only entry point the host loads:
-   registers the three commands, the two tools, the message renderer, the file
+   registers the four commands, the two tools, the message renderer, the file
    card, the optional rail section, the bash design, the `Cards` row group and
    the hooks.
 2. `lib/worktree-*.js` — a create validates and plans in
@@ -79,7 +81,7 @@ for each is in [`invariants.md`](invariants.md).
 | --- | --- |
 | [1](invariants.md) | One extension entry point: `pi.extensions` is exactly `["./extensions/odd-worktree-tools.ts"]` and `extensions/` holds no other file. |
 | [2](invariants.md) | No customize command, plugin-tools toggle or Herdr panel surface; CodeGraph only as 18 and 19 allow. |
-| [3](invariants.md) | The shipped surface is exactly three commands, two tools, one sidebar section, one bash design and the one `Cards` row group. |
+| [3](invariants.md) | The shipped surface is exactly four commands, two tools, one sidebar section, one bash design and the one `Cards` row group. |
 | [4](invariants.md) | Deletion refuses on a live session and discloses every caveat it could not resolve. |
 | [5](invariants.md) | Deletion is git only: `git worktree remove <absolute path>`, branch kept. |
 | [6](invariants.md) | `/issues` keeps repository identity pinning, and refuses a mutation after the remote moves. |

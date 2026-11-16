@@ -1,12 +1,15 @@
 // @ts-nocheck
 // odd-worktree-tools.ts — the standalone odd-worktree Pi extension.
 //
-// One package, one surface: the two agent worktree tools and the three
-// read/inspect panels, plus the one preference this package owns.
+// One package, one surface: the two agent worktree tools and the four
+// read/inspect panels, plus the two preferences this package owns and the one
+// bash design it contributes.
 //
-// Registers three commands:
+// Registers four commands:
 //   /warp      move this session to another checkout of the project
 //   /odd-list  read this checkout's odd/ documents
+//   /files     browse one checkout's files with a live preview, insert the
+//              chosen paths into the editor, or open one in $EDITOR
 //   /issues    read this checkout's GitHub issues, with label/assignee,
 //              comment and close actions when the repository permits them
 //
@@ -6610,6 +6613,407 @@ function registerOddCommand(pi) {
 }
 
 // ---------------------------------------------------------------------------
+// `/files` (T7: S9, S14, S17): the file picker over one checkout of this clone.
+//
+// The command JOINS the modules that already own each half and decides nothing
+// they own: `lib/files-index.js` lists Git's files with their change state and
+// reads one bounded preview, `lib/files-orders.js` builds the three orders,
+// `lib/files-preview.js` paints the preview pane's cells, `lib/files-insert.js`
+// formats the text Enter pastes, `lib/files-scope-detail.js` reads the scope's
+// Git facts, and `lib/files-scope-view.js` / `lib/files-picker-view.js` paint the
+// two overlays. This front resolves the scopes from the package's own worktree
+// seam and ownership rule, mounts the two overlays, pastes the insertion and
+// hands the terminal to the editor.
+//
+// Read-only (S16): every child is the package's async runner behind one adapter,
+// so nothing is spawned synchronously and nothing blocks the host event loop. The
+// panel writes nothing; the only child it starts is the editor `ctrl+e` asks for.
+// ---------------------------------------------------------------------------
+
+// T7 honesty: there is no picker without an overlay, and this package offers no
+// second surface in its place, so the one line says exactly that.
+const FILES_NO_UI_LINE = 'files: the file picker needs an interactive session with overlay support';
+
+// S9: two overlay shapes. The scope step is the small single-choice card; the
+// picker takes the whole terminal's height budget (Pi truncates an overlay's rows
+// from the bottom, so a smaller percentage would drop the footer line) and the
+// width S15 needs for two panes.
+const FILES_SCOPE_OVERLAY = Object.freeze({
+  overlay: true,
+  overlayOptions: Object.freeze({ anchor: 'center', width: '70%', minWidth: 60, maxHeight: '85%' }),
+});
+const FILES_PICKER_OVERLAY = Object.freeze({
+  overlay: true,
+  overlayOptions: Object.freeze({ anchor: 'center', width: '85%', minWidth: 76, maxHeight: '100%' }),
+});
+
+let filesTuiLoader = () => import('@earendil-works/pi-tui');
+
+function setFilesTuiLoader(loader) {
+  filesTuiLoader = loader;
+}
+
+// S12: Pi's OWN highlighter and language mapper, resolved LAZILY at open time
+// from the package root and never imported at module load — this package ships no
+// node_modules, so a static import would break every load (the tests stub only
+// the two existing import lines). An absent package leaves the preview plain.
+let filesAgentLoader = () => import('@earendil-works/pi-coding-agent');
+
+function setFilesAgentLoader(loader) {
+  filesAgentLoader = loader;
+}
+
+function filesTerminalRows(hostTui) {
+  try {
+    const rows = hostTui && hostTui.terminal ? hostTui.terminal.rows : undefined;
+    if (Number.isFinite(rows) && rows > 0) return rows;
+  } catch {
+    // A hostile host object never breaks the panel.
+  }
+  return 24;
+}
+
+function filesRepaint(hostTui) {
+  try {
+    if (hostTui && typeof hostTui.requestRender === 'function') hostTui.requestRender();
+  } catch {
+    // A repaint failure never breaks the panel.
+  }
+}
+
+// The overlay settles ONCE, and a host that already closed it never turns that
+// into a throw on the way out.
+function filesSettle(done, value) {
+  try {
+    if (typeof done === 'function') done(value);
+  } catch {
+    // A settled overlay is not a failed command.
+  }
+}
+
+// The one runner shape the files modules take: `run(args, { cwd, timeoutMs })`
+// over ONE fixed argv array and the package's bounded async runner, so no caller
+// builds a shell string and no read blocks the host event loop (invariant 9).
+function filesRunner(git) {
+  return (args, options) => {
+    const opts = options !== null && typeof options === 'object' ? options : {};
+    const call = { cwd: typeof opts.cwd === 'string' ? opts.cwd : undefined };
+    const timeoutMs = Number(opts.timeoutMs);
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) call.timeoutMs = timeoutMs;
+    return git.runArgvAsync('git', args, call);
+  };
+}
+
+/**
+ * S9: the checkouts `/files` can browse — the principal checkout and every
+ * checkout this package created. Which checkouts are ours is the registry's one
+ * rule (the path under `<repo-name>-worktrees`), and only a LIVE checkout is
+ * offered: a directory Git still records but that no longer exists is no place to
+ * read files from. The reads are the awaited ones, so opening the picker never
+ * freezes the session.
+ */
+async function filesCheckouts(cwd) {
+  const git = libRequire('worktree-git.js');
+  const registry = libRequire('worktree-registry.js');
+  const runAsync = libRunner(git);
+  const repo = await git.repoIdentityAsync(cwd, { runAsync });
+  let entries = [];
+  try {
+    entries = await git.listWorktreesAsync(repo.root, { runAsync });
+  } catch {
+    entries = [];
+  }
+  const main = entries[0];
+  let mainRoot = main && typeof main.path === 'string' && main.path.length > 0 ? main.path : repo.root;
+  try {
+    mainRoot = fs.realpathSync(mainRoot);
+  } catch {
+    // Git's own spelling is all it answered.
+  }
+  const others = registry
+    .ownedCheckouts(entries.slice(main === undefined ? 0 : 1), mainRoot)
+    .filter((entry) => isLiveGitRecord(entry, repo.root));
+  return { repo, mainRoot, others };
+}
+
+// S9: the ODD directory IS a checkout's identity in this package (invariant 12),
+// so a worktree row reads `<odd> · <branch>`; a detached checkout names no branch
+// and keeps just its directory.
+function filesWorktreeLabel(root, branch) {
+  const name = path.basename(root);
+  return typeof branch === 'string' && branch.length > 0 ? `${name} · ${branch}` : name;
+}
+
+/**
+ * S9: the two numbers a scope row and its detail line show. The uncommitted set
+ * is the picker's own listing (`state !== "clean"`) and its newest mtime is "the
+ * age of the last modification"; the line above the footer is
+ * `lib/files-scope-detail.js` with `origin/main` for the principal row and the
+ * local `main` for every worktree. A read that failed leaves its fields absent, so
+ * the step paints less instead of claiming a zero nobody measured.
+ */
+async function filesScopeFacts(index, detailLib, run, scope) {
+  const facts = {};
+  try {
+    const listing = await index.listRepositoryEntries({ run, cwd: scope.root });
+    if (listing && listing.ok === true && Array.isArray(listing.entries)) {
+      let changed = 0;
+      let newest;
+      for (const entry of listing.entries) {
+        if (!entry || entry.state === 'clean') continue;
+        changed += 1;
+        const mtime = Number(entry.mtimeMs);
+        if (Number.isFinite(mtime) && (newest === undefined || mtime > newest)) newest = mtime;
+      }
+      facts.changedFiles = changed;
+      if (newest !== undefined) facts.lastModifiedMs = newest;
+    }
+    const loaded = await detailLib.loadScopeDetail({
+      run,
+      cwd: scope.root,
+      comparison: scope.kind === 'main' ? detailLib.REMOTE_MAIN : detailLib.LOCAL_MAIN,
+    });
+    // The view paints the count and the age out of `detail`, and orders the rows
+    // by the scope's own `lastModifiedMs`, so both carry the same numbers.
+    facts.detail = { ...(loaded !== null && typeof loaded === 'object' ? loaded : {}), ...facts };
+  } catch {
+    facts.detail = {};
+  }
+  return { ...scope, ...facts };
+}
+
+/** The scopes S9 offers, principal first; the view orders the rest by recency. */
+async function filesScopes(cwd) {
+  const checkouts = await filesCheckouts(cwd);
+  const mainScope = { root: checkouts.mainRoot, kind: 'main', label: 'main' };
+  // S9: with nothing else to offer the step never appears — and neither the
+  // uncommitted counts nor the Git detail are read at all, because the picker
+  // paints none of them.
+  if (checkouts.others.length === 0) return [mainScope];
+  const index = libRequire('files-index.js');
+  const detailLib = libRequire('files-scope-detail.js');
+  const run = filesRunner(libRequire('worktree-git.js'));
+  return Promise.all([
+    filesScopeFacts(index, detailLib, run, mainScope),
+    ...checkouts.others.map((entry) => filesScopeFacts(index, detailLib, run, {
+      root: entry.path,
+      kind: 'worktree',
+      label: filesWorktreeLabel(entry.path, entry.branch),
+    })),
+  ]);
+}
+
+/**
+ * S12: Pi's highlighter and language mapper, resolved once per open. The
+ * `highlight` seam hands back `undefined` for anything that is not real syntax
+ * colour: Pi paints a language whose grammar it has not loaded with the same
+ * uniform code tone it uses for no language at all, and the two passes are how
+ * that is told apart. Every throw degrades to plain text, never to a partial
+ * paint.
+ */
+async function filesAgentSeam() {
+  let agent;
+  try {
+    agent = await filesAgentLoader();
+  } catch {
+    return {};
+  }
+  if (agent === null || typeof agent !== 'object') return {};
+  const highlight = typeof agent.highlightCode === 'function'
+    ? (code, language) => {
+      try {
+        const painted = agent.highlightCode(code, language);
+        if (!Array.isArray(painted)) return undefined;
+        const plain = agent.highlightCode(code);
+        if (Array.isArray(plain) && plain.length === painted.length && plain.every((line, index) => line === painted[index])) {
+          return undefined;
+        }
+        return painted;
+      } catch {
+        return undefined;
+      }
+    }
+    : undefined;
+  const languageForPath = typeof agent.getLanguageFromPath === 'function'
+    ? (filePath) => {
+      try {
+        const language = agent.getLanguageFromPath(filePath);
+        return typeof language === 'string' && language.length > 0 ? language : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    : undefined;
+  return { highlight, languageForPath };
+}
+
+/**
+ * S7/S8: Enter's payload. The insertion form is `lib/files-insert.js`'s alone
+ * (`@` plus the path from the session cwd for a file of this checkout, the real
+ * absolute path for any other checkout), it goes into the editor through the
+ * host's own paste seam, and NOTHING is sent: the message stays unsent.
+ */
+function filesInsert(ctx, insertLib, scope, cwd, paths, notify) {
+  const text = insertLib.formatFileInsertion(paths, { root: scope.root, kind: scope.kind, cwd });
+  if (text.length === 0) return;
+  try {
+    if (ctx.ui && typeof ctx.ui.pasteToEditor === 'function') {
+      ctx.ui.pasteToEditor(text);
+      return;
+    }
+  } catch {
+    // Fall through to the honest line: the text never reached the editor.
+  }
+  if (notify) notify(`files: the editor did not accept the insertion: ${text}`, 'warning');
+}
+
+/**
+ * S14: the editor handoff. The picker repaints nothing on the way out (its own
+ * `finish` guarantees that), and this stops the terminal BEFORE the editor takes
+ * it — the same suspend/resume the odd viewer uses — so no frame is torn and the
+ * one full repaint happens after the editor EXITS, which is the jolt the
+ * reference complained about. The opener is the shared `lib/open-external.js`
+ * one, so a missing $VISUAL/$EDITOR is its own sentence, reported here.
+ */
+async function filesOpenEditor(hostTui, absolutePath, notify) {
+  let result;
+  try {
+    result = await openExternalSuspended(hostTui, absolutePath);
+  } catch (err) {
+    result = { ok: false, error: (err && err.message) || String(err) };
+  }
+  if (result && result.ok === true) return;
+  if (notify) notify(`files: ${(result && result.error) || 'cannot open the editor'}`, 'warning');
+}
+
+/** The picker overlay (S1-S6, S14, S15) over one resolved scope. */
+async function mountFilesPicker(ctx, input) {
+  const index = libRequire('files-index.js');
+  const insertLib = libRequire('files-insert.js');
+  const pickerView = libRequire('files-picker-view.js');
+  const run = filesRunner(libRequire('worktree-git.js'));
+  const agent = await filesAgentSeam();
+  const scope = input.scope;
+  await ctx.ui.custom(
+    (hostTui, theme, _keybindings, done) => pickerView.createFilesPickerView({
+      theme,
+      helpers: input.helpers,
+      rowsAvailable: () => filesTerminalRows(hostTui),
+      scope,
+      cwd: input.cwd,
+      // The listing and the preview are the T1 reader's own, read from the scope
+      // root rather than the session cwd: the picker browses another checkout.
+      loadEntries: () => index.listRepositoryEntries({ run, cwd: scope.root }),
+      loadPreview: (relative) => index.readFilePreview(scope.root, relative),
+      ...(agent.highlight === undefined ? {} : { highlight: agent.highlight }),
+      ...(agent.languageForPath === undefined ? {} : { languageForPath: agent.languageForPath }),
+      onInsert: (paths) => filesInsert(ctx, insertLib, scope, input.cwd, paths, input.notify),
+      onOpen: (relative) => {
+        // The file's real absolute path, never the repository-relative one: the
+        // editor is a plain child process and knows no checkout.
+        void filesOpenEditor(hostTui, path.join(scope.root, relative), input.notify);
+      },
+      onClose: () => filesSettle(done, null),
+      requestRender: () => filesRepaint(hostTui),
+    }),
+    FILES_PICKER_OVERLAY,
+  );
+}
+
+async function executeFiles(rawArgs, ctx) {
+  const notify = ctx && ctx.ui && typeof ctx.ui.notify === 'function'
+    ? (text, level) => {
+      try {
+        ctx.ui.notify(text, level);
+      } catch {
+        // A dead UI never fails the command.
+      }
+    }
+    : null;
+  const raw = String(rawArgs ?? '').trim();
+  if (raw !== '') {
+    if (notify) notify(`Unknown option "${raw}". Use /files with no argument.`, 'error');
+    return;
+  }
+  // S17: without an overlay there is no picker to paint, and the one line says
+  // so instead of opening a second surface or throwing into the host.
+  if (!ctx || !ctx.ui || typeof ctx.ui.custom !== 'function') {
+    if (notify) notify(FILES_NO_UI_LINE, 'info');
+    return;
+  }
+  const cwd = toolCwd(ctx);
+  let scopes;
+  try {
+    scopes = await filesScopes(cwd);
+  } catch (err) {
+    const message = (err && err.message) || String(err);
+    if (notify) {
+      notify(/not a git repository/i.test(message) ? notGitRepositoryLine(cwd) : `files: ${message}`, 'info');
+    }
+    return;
+  }
+  let helpers = {};
+  try {
+    helpers = (await filesTuiLoader()) || {};
+  } catch {
+    helpers = {};
+  }
+  let scope = scopes[0];
+  // S9: the scope step appears only when there is a choice to make.
+  if (scopes.length > 1) {
+    const scopeView = libRequire('files-scope-view.js');
+    const picked = await ctx.ui.custom(
+      (hostTui, theme, _keybindings, done) => scopeView.createFilesScopeView({
+        scopes,
+        theme,
+        helpers,
+        rowsAvailable: () => filesTerminalRows(hostTui),
+        // The step answers the ORIGINAL scope object, which is what the picker
+        // then lists: nothing is re-resolved from a label or a path.
+        onSelect: (chosen) => filesSettle(done, chosen),
+        onClose: () => filesSettle(done, null),
+        requestRender: () => filesRepaint(hostTui),
+      }),
+      FILES_SCOPE_OVERLAY,
+    );
+    if (!picked) return;
+    scope = picked;
+  }
+  await mountFilesPicker(ctx, { scope, cwd, helpers, notify });
+}
+
+// S18 (files-picker T8): the handler `/files` registered, kept so the key the
+// bridge resolves runs the SAME path — a key and its command can never drift
+// apart. `null` until the command is registered.
+let filesCommandHandler = null;
+
+// `/files` (files-picker T7): browse one checkout's files, insert the chosen
+// paths into the editor, open one in $EDITOR. A handler that threw would break the
+// host's command dispatch, so the one unexpected failure is reported as a line.
+function registerFilesCommand(pi) {
+  if (typeof pi?.registerCommand !== 'function') return;
+  const handler = async (args, ctx) => {
+    try {
+      await executeFiles(args, ctx);
+    } catch (err) {
+      const notify = ctx && ctx.ui && typeof ctx.ui.notify === 'function' ? ctx.ui.notify : undefined;
+      if (typeof notify !== 'function') return;
+      const message = String((err && err.message) || err).split('\n')[0];
+      try {
+        notify(`files: the picker could not open: ${message}`, 'error');
+      } catch {
+        // A dead UI never turns a failed open into a throw.
+      }
+    }
+  };
+  pi.registerCommand('files', {
+    description: "Browse one checkout's files with a live preview: enter inserts the paths, ctrl+e opens $EDITOR",
+    handler,
+  });
+  filesCommandHandler = handler;
+}
+
+// ---------------------------------------------------------------------------
 // `/issues` (T3 S1,S3): a full-screen issues reader over the CURRENT checkout's
 // repository issues, through this package's own migrated pieces
 // (lib/gh-issues.js for `gh`, lib/issues-view.js for the pure view).
@@ -7856,6 +8260,44 @@ function mountIssuesSidebar(pi, api) {
   issuesSidebarDisposer = typeof disposer === "function" ? disposer : null;
 }
 
+// S18/S19 (files-picker T8): the bridge announces its publication on ONE event,
+// and this package answers it with ONE subscription — a second `events.on` for
+// the same announcement would be a second surface listening to one fact. Every
+// surface the bridge contributes (the issues rail, the file picker's keymap
+// action and its palette row) registers its retry here, and the one announcement
+// runs them all.
+const bridgeReadyRetries = [];
+let bridgeReadySubscribed = false;
+
+function subscribeBridgeReady(pi, retry) {
+  try {
+    if (typeof retry !== "function") return false;
+    const events = pi && pi.events ? pi.events : null;
+    if (!events || typeof events.on !== "function") return false;
+    bridgeReadyRetries.push(retry);
+    if (bridgeReadySubscribed) return true;
+    bridgeReadySubscribed = true;
+    try {
+      events.on(ISSUES_SIDEBAR_READY_EVENT, () => {
+        for (const run of bridgeReadyRetries.slice()) {
+          try {
+            run();
+          } catch {
+            // One surface's retry never breaks another's.
+          }
+        }
+      });
+    } catch {
+      bridgeReadySubscribed = false;
+      bridgeReadyRetries.pop();
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // The bash activity design reaches the host ONLY through gentle-shell-bridge's
 // published object (`registerToolDesign`), never an import. The bridge owns the
 // renderer resolver, the `bash` customize line, its persistence and the repaint of
@@ -7871,7 +8313,7 @@ function registerBashDesignRows(api) {
   }
 }
 
-// S2 (issues-sidebar): the rail section reaches the rail ONLY through the bridge's
+// S2 (issues-sidebar): the section reaches the rail ONLY through the bridge's
 // published object. A host without it is subscribed to the ready announcement
 // ONCE and nothing else happens: no notify, no throw, no other surface touched.
 // The bash design takes the same two paths, so one subscription carries every
@@ -7886,25 +8328,204 @@ function registerIssuesSidebar(pi) {
       return;
     }
     if (issuesSidebarSubscribed) return;
-    const events = pi && pi.events ? pi.events : null;
-    if (!events || typeof events.on !== "function") return;
-    issuesSidebarSubscribed = true;
-    try {
-      events.on(ISSUES_SIDEBAR_READY_EVENT, () => {
-        // T11: a publication that arrives late makes the missing-plugin hint
-        // untrue, so it is recorded before anything else is attempted.
-        issuesSidebarInstallAnnounced = true;
-        try {
-          registerIssuesSidebar(pi);
-        } catch {
-          // The rail stays absent; every other surface keeps working.
-        }
-      });
-    } catch {
-      issuesSidebarSubscribed = false;
-    }
+    const subscribed = subscribeBridgeReady(pi, () => {
+      // T11: a publication that arrives late makes the missing-plugin hint
+      // untrue, so it is recorded before anything else is attempted.
+      issuesSidebarInstallAnnounced = true;
+      try {
+        registerIssuesSidebar(pi);
+      } catch {
+        // The rail stays absent; every other surface keeps working.
+      }
+    });
+    if (subscribed) issuesSidebarSubscribed = true;
   } catch {
     // The rail is optional: a broken bridge never breaks this extension.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// S18/S19 (files-picker T8): the file picker's place in Gentle Shell.
+//
+// The bridge read here is the SAME published object the rail reads — its symbol
+// slot, its schema and version gate, never an import and never a dependency.
+// What `/files` needs from it are the two OPTIONAL members `registerKeymap` and
+// `registerCommands`, so a bridge that carries neither is simply not a usable
+// bridge for this surface and nothing is contributed.
+//
+// The key itself is bound HERE, because the bridge carries no handler: it answers
+// which key the action uses (`resolveKeymap`: environment → saved binding →
+// default, one implementation instead of a second copy that would drift) and this
+// package binds that key through the host's own `registerShortcut`.
+// ---------------------------------------------------------------------------
+
+const FILES_BRIDGE_ID = "files";
+const FILES_BRIDGE_LABEL = "File picker";
+// The env name follows Gentle Shell's own convention (`GENTLE_PI_COMMANDS_KEY`,
+// `GENTLE_PI_AGENTS_VIEW_KEY`); the default is a convenience, never a
+// requirement: `/files` stays reachable from the palette with no key at all.
+const FILES_KEYMAP_ENV = "GENTLE_PI_FILES_KEY";
+const FILES_KEYMAP_DEFAULT = "alt+p";
+// S19: the palette row joins Gentle Shell's own section, matched by that
+// section's exact title. The host lists the row only while the `files` command
+// is registered, so it can never be a dead row.
+const FILES_PALETTE_SECTION = "Session";
+const FILES_SHORTCUT_DESCRIPTION = "Open the file picker: enter inserts the paths, ctrl+e opens $EDITOR";
+
+// The api object the current contribution was registered on (`null` until then),
+// the disposers the bridge handed back, and the ONE key this package bound.
+let filesBridgeApi = null;
+let filesBridgeSubscribed = false;
+let filesKeymapDisposer = null;
+let filesCommandsDisposer = null;
+let filesShortcutDisposer = null;
+let filesBoundKey = null;
+
+// Absent, malformed or missing the members this surface uses is `null` — never a
+// throw, and never a fallback that registers a surface the bridge did not take.
+function filesBridge() {
+  try {
+    const api = globalThis[ISSUES_SIDEBAR_BRIDGE_SLOT];
+    if (!api || api.schema !== "gentle-shell-bridge/api" || api.version !== 1) return null;
+    if (typeof api.registerKeymap !== "function") return null;
+    if (typeof api.registerCommands !== "function") return null;
+    return api;
+  } catch {
+    return null;
+  }
+}
+
+// A republished bridge replaces the contribution in place: whatever the previous
+// one handed back is released FIRST, so nothing this package contributed is left
+// behind and the stable id never leaves a second row behind.
+function releaseFilesBridgeContribution() {
+  for (const dispose of [filesKeymapDisposer, filesCommandsDisposer]) {
+    if (typeof dispose !== "function") continue;
+    try {
+      dispose();
+    } catch {
+      // A contribution the bridge will not release never blocks the next one.
+    }
+  }
+  filesKeymapDisposer = null;
+  filesCommandsDisposer = null;
+}
+
+// S18: the effective key comes from the shell. `{ unavailable }`, an empty answer
+// and a bridge that throws are the same silence: nothing is bound, nothing is
+// said. The host's shortcut is process-wide, so the ONE key this package bound is
+// released before another is bound, and the same key is never bound twice.
+function bindFilesKey(pi, api) {
+  try {
+    if (typeof pi?.registerShortcut !== "function") return;
+    let answer = null;
+    try {
+      answer = api.resolveKeymap(FILES_BRIDGE_ID);
+    } catch {
+      return;
+    }
+    const key = answer && typeof answer === "object" && typeof answer.key === "string" ? answer.key.trim() : "";
+    if (key === "" || key === filesBoundKey) return;
+    if (typeof filesShortcutDisposer === "function") {
+      try {
+        filesShortcutDisposer();
+      } catch {
+        // A binding the host will not release never blocks the next one.
+      }
+      filesShortcutDisposer = null;
+      filesBoundKey = null;
+    }
+    const handler = (...args) => {
+      const run = filesCommandHandler;
+      if (typeof run !== "function") return;
+      // The host hands a shortcut the session context; the command's own handler
+      // is the ONE implementation, invoked with no argument (exactly `/files`).
+      const ctx = args.length > 0 ? args[args.length - 1] : undefined;
+      try {
+        void run("", ctx);
+      } catch {
+        // A key never breaks the host.
+      }
+    };
+    let disposable = null;
+    try {
+      disposable = pi.registerShortcut(key, { description: FILES_SHORTCUT_DESCRIPTION, handler });
+    } catch {
+      return;
+    }
+    filesBoundKey = key;
+    filesShortcutDisposer = typeof disposable === "function" ? disposable : null;
+  } catch {
+    // The key is a convenience: a broken bridge or host never breaks this extension.
+  }
+}
+
+function mountFilesBridge(pi, api) {
+  releaseFilesBridgeContribution();
+  // `command:` ids belong to the palette and the bridge refuses them, so the
+  // action's id is this package's own name.
+  let keymapDisposer = null;
+  try {
+    const dispose = api.registerKeymap({
+      id: FILES_BRIDGE_ID,
+      label: FILES_BRIDGE_LABEL,
+      env: FILES_KEYMAP_ENV,
+      defaultKey: FILES_KEYMAP_DEFAULT,
+      command: FILES_BRIDGE_ID,
+    });
+    keymapDisposer = typeof dispose === "function" ? dispose : null;
+  } catch {
+    // A bridge that refuses the action still gets the palette row asked for below.
+  }
+  let commandsDisposer = null;
+  try {
+    const dispose = api.registerCommands({
+      id: FILES_BRIDGE_ID,
+      label: FILES_BRIDGE_LABEL,
+      command: FILES_BRIDGE_ID,
+      section: FILES_PALETTE_SECTION,
+    });
+    commandsDisposer = typeof dispose === "function" ? dispose : null;
+  } catch {
+    // The palette row is optional too: the key and `/files` keep working.
+  }
+  filesKeymapDisposer = keymapDisposer;
+  filesCommandsDisposer = commandsDisposer;
+  filesBridgeApi = api;
+  bindFilesKey(pi, api);
+}
+
+// S18/S19: the contribution is idempotent and comes from two moments — this
+// extension's own registration (a bridge already published at load time works)
+// and the ready announcement (a bridge that publishes later). Without a bridge
+// nothing is registered, nothing is bound, nothing is notified and no other
+// surface changes.
+function registerFilesBridge(pi) {
+  try {
+    const api = filesBridge();
+    if (api !== null) {
+      // The SAME published object is the same bridge, so a second moment
+      // contributes ONCE and the bridge never reports a duplicate. Only the key is
+      // retried, because the shell may not have published its resolver yet when
+      // this loads.
+      if (api === filesBridgeApi) {
+        if (filesBoundKey === null) bindFilesKey(pi, api);
+        return;
+      }
+      mountFilesBridge(pi, api);
+      return;
+    }
+    if (filesBridgeSubscribed) return;
+    const subscribed = subscribeBridgeReady(pi, () => {
+      try {
+        registerFilesBridge(pi);
+      } catch {
+        // Nothing is contributed; `/files` keeps working from the command.
+      }
+    });
+    if (subscribed) filesBridgeSubscribed = true;
+  } catch {
+    // The bridge is optional: a broken one never breaks this extension.
   }
 }
 
@@ -8041,6 +8662,12 @@ export default function (pi) {
   registerIssuesSidebar(pi);
   registerWarpCommand(pi);
   registerOddCommand(pi);
+  // T7 (files-picker): the file picker is the fourth command. It mounts its own
+  // overlays, reads Git through the package's async runner and adds no tool.
+  registerFilesCommand(pi);
+  // S18/S19 (files-picker T8): the keymap action and the palette row reach Gentle
+  // Shell ONLY through gentle-shell-bridge, and only when it is published.
+  registerFilesBridge(pi);
   registerIssuesCommand(pi);
   pi.registerTool(worktreeCreateTool);
   pi.registerTool(worktreeListTool);
@@ -8063,6 +8690,10 @@ export default function (pi) {
   // stale inside `lines()`, which schedules its own refresh. The hidden section
   // therefore makes no child process and no network call, and starts no timer.
   pi.on("session_start", async (event, ctx) => {
+    // S18/S19 (files-picker T8): the second moment the bridge contribution comes
+    // from. It is idempotent, and it is what binds the key once the shell on this
+    // session has published its keymap resolver.
+    registerFilesBridge(pi);
     rememberIssuesSidebarSession(ctx);
     // T16 (S6/S9): a session that starts in another checkout also cuts the CACHE
     // write path, not just the section's snapshot. The identity — not the checkout
@@ -8262,4 +8893,4 @@ export default function (pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule };

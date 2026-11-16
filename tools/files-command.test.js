@@ -1,0 +1,396 @@
+'use strict';
+// T7 (S9, S14, S17): the `/files` command driven through the registered handler
+// and the fake host. The interactive panels themselves have their own suites
+// (tools/files-picker-view.test.js, tools/files-scope-view.test.js); what this
+// file proves is the COMMAND: that it is registered with the other four, that a
+// host without an overlay gets one honest line instead of a throw, and that it
+// wires the landed modules — the scopes from Git and the ownership rule, the
+// picker with its `loadEntries`/`loadPreview`/`highlight`/`languageForPath` seams,
+// the insertion form through `pasteToEditor`, and the editor handoff that stops
+// the terminal before anything repaints (S14).
+const { test, describe, after } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const { spawnSync } = require('node:child_process');
+const { LIB_DIR, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
+
+const scratch = [];
+function track(dir) {
+  scratch.push(dir);
+  return dir;
+}
+
+const savedEnv = { ...process.env };
+after(() => {
+  for (const key of Object.keys(process.env)) {
+    if (!(key in savedEnv)) delete process.env[key];
+  }
+  for (const [key, value] of Object.entries(savedEnv)) process.env[key] = value;
+  for (const dir of scratch) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
+
+function git(cwd, args) {
+  const out = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  if (out.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${out.stderr}`);
+  return out.stdout.trim();
+}
+
+/** A real repository: `main`, one commit and one tracked file. */
+function makeRepo() {
+  const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-files-repo-')));
+  git(dir, ['init', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'test@example.test']);
+  git(dir, ['config', 'user.name', 'Test']);
+  fs.writeFileSync(path.join(dir, 'a.js'), 'const x = 1;\n');
+  fs.writeFileSync(path.join(dir, 'README.md'), '# fixture\n');
+  git(dir, ['add', 'a.js', 'README.md']);
+  git(dir, ['commit', '-m', 'init']);
+  return fs.realpathSync(dir);
+}
+
+/** One checkout this package owns, at the canonical directory, one file short of committed. */
+function addOwnedWorktree(repo, odd, branch) {
+  const parent = path.dirname(repo);
+  const target = path.join(parent, `${path.basename(repo)}-worktrees`, odd);
+  git(repo, ['worktree', 'add', '-b', branch, target, 'main']);
+  fs.writeFileSync(path.join(target, 'x.js'), 'const y = 2;\n');
+  return fs.realpathSync(target);
+}
+
+// ---- the fake host -------------------------------------------------------
+//
+// One extension instance per load, because `setFilesTuiLoader` and
+// `setFilesAgentLoader` are that instance's own seams (the same shape the other
+// panels' tests use). `custom` mounts the factory exactly like Pi does: the
+// component is built synchronously and the answer resolves the overlay promise.
+async function loadFilesExtension(pi = {}) {
+  process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
+  const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-files-ext-')));
+  const copy = path.join(dir, 'odd-worktree-tools.mjs');
+  fs.writeFileSync(copy, stubbedSource());
+  const mod = await import(pathToFileURL(copy).href);
+  const commands = new Map();
+  const fakeHost = {
+    registerCommand: (name, handler) => { commands.set(name, handler); },
+    registerTool: () => {},
+    registerMessageRenderer: () => {},
+    on: () => {},
+    ...pi,
+  };
+  mod.default(fakeHost);
+  return { mod, commands };
+}
+
+const theme = { fg: (_role, text) => text, bg: (_role, text) => text, bold: (text) => text };
+
+function stripAnsi(text) {
+  return String(text).replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+/**
+ * The mount host: records every `custom` call (its options and its component) and
+ * every terminal event the handoff causes, so a test can tell what the command
+ * asked for and what it repainted.
+ */
+function mountHost({ rows = 40 } = {}) {
+  const mounts = [];
+  const events = [];
+  const pasted = [];
+  const notifications = [];
+  const tui = {
+    terminal: { rows },
+    stopped: false,
+    stop() { tui.stopped = true; events.push('stop'); },
+    start() { tui.stopped = false; events.push('start'); },
+    requestRender(force) {
+      if (tui.stopped) return;
+      events.push(force === true ? 'render:force' : 'render');
+    },
+  };
+  const ui = {
+    notify: (text, level) => { notifications.push([level, text]); },
+    pasteToEditor: (text) => { pasted.push(text); },
+    custom: (factory, options) => new Promise((resolve) => {
+      const component = factory(tui, theme, {}, (value) => resolve(value));
+      mounts.push({ options, component });
+    }),
+  };
+  return { tui, mounts, events, pasted, notifications, ui };
+}
+
+function ctxFor(repo, ui) {
+  return { cwd: repo, hasUI: true, mode: 'tui', sessionManager: { getSessionId: () => 'thread-1' }, ui };
+}
+
+async function waitFor(predicate, label) {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+const rowsOf = (component, width = 120) => component.render(width).map((line) => stripAnsi(line));
+const textOf = (component, width = 120) => rowsOf(component, width).join('\n');
+
+// The ANSI-aware helpers the panel measures with; key matching falls back to the
+// view's own spelled sequences, which is what a host without `matchesKey` has.
+function visibleWidthOf(value) {
+  return [...stripAnsi(value)].length;
+}
+
+const helpers = {
+  visibleWidth: visibleWidthOf,
+  truncateToWidth: (value, width, ellipsis = '') => {
+    const text = stripAnsi(value);
+    if (width <= 0) return '';
+    const chars = [...text];
+    if (chars.length <= width) return value;
+    const mark = [...String(ellipsis)];
+    return `${chars.slice(0, Math.max(0, width - mark.length)).join('')}${mark.join('')}`;
+  },
+  // ANSI-aware: a line that already fits keeps its escapes, which is what the
+  // coloured preview depends on. A longer one is split on visible cells.
+  wrapTextWithAnsi: (value, width) => {
+    if (width <= 0) return [String(value)];
+    if (visibleWidthOf(value) <= width) return [String(value)];
+    const chars = [...stripAnsi(value)];
+    const rows = [];
+    while (chars.length > width) rows.push(chars.splice(0, width).join(''));
+    rows.push(chars.join(''));
+    return rows;
+  },
+  isKeyRelease: () => false,
+  // What Pi's own matcher does for the keys this test drives: a raw sequence
+  // becomes a name. Without it the panels only see the names themselves.
+  matchesKey: (data, name) => {
+    const RAW = {
+      '\u001b[A': 'up', '\u001b[B': 'down', '\r': 'enter', '\n': 'enter',
+      '\u001b': 'escape', '\t': 'tab', '\u0005': 'ctrl+e', '\u000f': 'ctrl+o',
+      '\u0015': 'ctrl+u', '\u000a': 'ctrl+j',
+    };
+    return data === name || RAW[data] === name;
+  },
+};
+
+const GREEN = '\u001b[32m';
+
+// Pi's own pair, faked: a `.js` file is coloured and every other name is not.
+const agentStub = {
+  highlightCode: (code, language) => {
+    const lines = String(code).split('\n');
+    return language === 'javascript' ? lines.map((line) => `${GREEN}${line}\u001b[39m`) : lines;
+  },
+  getLanguageFromPath: (filePath) => (filePath.endsWith('.js') ? 'javascript' : undefined),
+};
+
+describe('/files registration (S17)', () => {
+  test('the file picker is registered beside the other three panels', async () => {
+    const { commands } = await loadExtension({});
+    assert.deepEqual([...commands.keys()].sort(), ['files', 'issues', 'odd-list', 'warp']);
+    const files = commands.get('files');
+    assert.equal(typeof files.handler, 'function', 'the command carries its handler');
+    assert.ok(files.description.includes('files'), 'the description says what it browses');
+    assert.ok(files.description.includes('ctrl+e'), 'and how a file opens in the editor');
+  });
+
+  test('the command reads the seven landed files modules and nothing of its own', () => {
+    const source = stubbedSource();
+    assert.ok(source.includes('pi.registerCommand(\'files\''), 'the command is registered');
+    assert.ok(source.includes('function registerFilesCommand'), 'its registration is a named step');
+    for (const module of [
+      'files-index.js',
+      'files-insert.js',
+      'files-scope-detail.js',
+      'files-scope-view.js',
+      'files-picker-view.js',
+    ]) {
+      assert.ok(source.includes(`libRequire('${module}')`), `${module} is required by the wiring`);
+    }
+    // The row builder and the preview pane are composed BY the views, so the
+    // command must own no copy of their rules.
+    assert.equal(/function (buildRows|nextOrder|previewRows)\b/.test(source), false, 'the wiring reimplements no view rule');
+  });
+});
+
+describe('a host without an overlay (S17)', () => {
+  test('says so in one honest line and returns', async () => {
+    const { commands } = await loadExtension({});
+    const notifications = [];
+    const ctx = { cwd: os.tmpdir(), ui: { notify: (text, level) => notifications.push([level, text]) } };
+    await commands.get('files').handler('', ctx);
+    assert.deepEqual(notifications, [['info', 'files: the file picker needs an interactive session with overlay support']]);
+  });
+
+  test('a host with no UI at all, and one whose UI throws, never throws into the host', async () => {
+    const { commands } = await loadExtension({});
+    await commands.get('files').handler('', { cwd: os.tmpdir() });
+    const hostile = {
+      cwd: os.tmpdir(),
+      ui: {
+        notify: () => { throw new Error('dead UI'); },
+      },
+    };
+    await commands.get('files').handler('', hostile);
+  });
+
+  test('an argument is refused instead of opening the picker', async () => {
+    const { commands } = await loadExtension({});
+    const notifications = [];
+    const ctx = { cwd: os.tmpdir(), ui: { notify: (text, level) => notifications.push([level, text]) } };
+    await commands.get('files').handler('nope', ctx);
+    assert.deepEqual(notifications, [['error', 'Unknown option "nope". Use /files with no argument.']]);
+  });
+
+  test('outside a Git repository the package’s own sentence lands', async () => {
+    const { commands } = await loadExtension({});
+    const loose = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-files-loose-')));
+    const host = mountHost();
+    await commands.get('files').handler('', ctxFor(loose, host.ui));
+    assert.deepEqual(host.mounts, [], 'no overlay is mounted over nothing');
+    assert.deepEqual(host.notifications, [['info', `not a git repository: ${fs.realpathSync(loose)}; run 'git init' first`]]);
+  });
+});
+
+describe('one checkout: the picker opens directly (S9, S7/S8)', () => {
+  test('Enter pastes the `@` reference of the session checkout and sends nothing', async () => {
+    const repo = makeRepo();
+    const { commands } = await loadFilesExtension();
+    const host = mountHost();
+    // The overlay resolves `ctx.ui.custom` only when it settles, so the handler is
+    // started and driven, never awaited before the panel answers.
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui));
+
+    await waitFor(() => host.mounts.length >= 1, 'the picker mount');
+    assert.equal(host.mounts.length, 1, 'no scope step appears when there is nothing to choose');
+    assert.deepEqual(host.mounts[0].options, {
+      overlay: true,
+      overlayOptions: { anchor: 'center', width: '85%', minWidth: 76, maxHeight: '100%' },
+    }, 'the picker takes the terminal width S15 needs');
+
+    const picker = host.mounts[0].component;
+    await waitFor(() => textOf(picker).includes('a.js'), 'the listing');
+    // The order footer and the one-option-per-key legend are the view's; the
+    // command only has to hand it a listing to paint.
+    assert.ok(textOf(picker).includes('modified'), 'the default order paints');
+
+    // The default `modified` order puts changed files first and sorts the clean
+    // ones by path, so the highlight opens on README.md, not on a.js.
+    picker.handleInput('\r');
+    assert.deepEqual(host.pasted, ['@README.md'], 'the session checkout keeps the `@` form');
+    assert.deepEqual(host.notifications, [], 'inserting never notifies');
+    await running;
+  });
+});
+
+describe('several checkouts: the scope step (S9)', () => {
+  test('main first with the worktree’s count and detail, then the picker over the chosen checkout', async () => {
+    const repo = makeRepo();
+    const worktree = addOwnedWorktree(repo, 'pick-me', 'feat/pick');
+    const { mod, commands } = await loadFilesExtension();
+    mod.setFilesTuiLoader(async () => helpers);
+    const host = mountHost();
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui));
+
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    const scopeMount = host.mounts[0];
+    assert.deepEqual(scopeMount.options, {
+      overlay: true,
+      overlayOptions: { anchor: 'center', width: '70%', minWidth: 60, maxHeight: '85%' },
+    }, 'the step is its own smaller card');
+    const scopeRows = textOf(scopeMount.component);
+    assert.ok(scopeRows.includes('main'), 'the principal checkout leads');
+    assert.ok(scopeRows.includes('pick-me · feat/pick'), 'the worktree names its ODD and its branch');
+    assert.ok(scopeRows.includes('±1 file'), 'its uncommitted count is read from Git');
+    assert.ok(scopeRows.includes('init'), 'the detail line leads with the last commit subject');
+    assert.ok(scopeRows.indexOf('main') < scopeRows.indexOf('pick-me'), 'main keeps the first row');
+
+    // Down selects the worktree, Enter opens it.
+    scopeMount.component.handleInput('\u001b[B');
+    scopeMount.component.handleInput('\r');
+
+    await waitFor(() => host.mounts.length >= 2, 'the picker over the chosen scope');
+    const picker = host.mounts[1].component;
+    await waitFor(() => textOf(picker).includes('x.js'), 'the worktree listing');
+    assert.ok(textOf(picker).includes(worktree), 'the picker names the scope it lists');
+
+    picker.handleInput('\r');
+    assert.deepEqual(host.pasted, [path.join(worktree, 'x.js')], 'another checkout travels as its real absolute path');
+    assert.deepEqual(host.notifications, []);
+    await running;
+  });
+
+  test('esc closes the step without opening a picker', async () => {
+    const repo = makeRepo();
+    addOwnedWorktree(repo, 'pick-me', 'feat/pick');
+    const { mod, commands } = await loadFilesExtension();
+    mod.setFilesTuiLoader(async () => helpers);
+    const host = mountHost();
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui));
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    host.mounts[0].component.handleInput('\u001b');
+    await running;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(host.mounts.length, 1, 'nothing else is mounted');
+    assert.deepEqual(host.pasted, []);
+  });
+});
+
+describe('the preview and the editor (S12, S14)', () => {
+  test('the injected highlighter reaches the pane through the command’s own seams (S12)', async () => {
+    const repo = makeRepo();
+    const { mod, commands } = await loadFilesExtension();
+    mod.setFilesTuiLoader(async () => helpers);
+    mod.setFilesAgentLoader(async () => agentStub);
+    const host = mountHost();
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui));
+    await waitFor(() => host.mounts.length >= 1, 'the picker mount');
+    const picker = host.mounts[0].component;
+    const painted = () => picker.render(120).join('\n');
+    await waitFor(() => textOf(picker).includes('a.js'), 'the listing');
+    // The highlight follows the HIGHLIGHTED row: the order opens on README.md,
+    // which names no language, so the file with the language is selected first.
+    assert.equal(painted().includes(GREEN), false, 'a language-less file stays plain');
+    picker.handleInput('\u001b[B');
+    await waitFor(() => painted().includes(GREEN), 'the coloured preview');
+    assert.ok(stripAnsi(painted()).includes('const x = 1;'), 'the file text is the preview');
+    picker.handleInput('\u001b');
+    await running;
+  });
+
+  test('ctrl+e stops the terminal before anything repaints, and reports a missing editor (S14)', async () => {
+    const repo = makeRepo();
+    delete process.env.VISUAL;
+    delete process.env.EDITOR;
+    const { mod, commands } = await loadFilesExtension();
+    mod.setFilesTuiLoader(async () => helpers);
+    const host = mountHost();
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui));
+    await waitFor(() => host.mounts.length >= 1, 'the picker mount');
+    const picker = host.mounts[0].component;
+    await waitFor(() => textOf(picker).includes('a.js'), 'the listing');
+
+    host.events.length = 0;
+    picker.handleInput('\u0005');
+    // Nothing is painted on the way out: the handoff stops the terminal first.
+    assert.deepEqual(host.events, ['stop'], 'the terminal is stopped and nothing is repainted yet');
+    assert.equal(host.tui.stopped, true);
+
+    await waitFor(() => host.events.includes('start'), 'the terminal resumed after the editor step');
+    assert.equal(host.tui.stopped, false);
+    assert.ok(host.events.indexOf('start') < host.events.indexOf('render:force'), 'the one full repaint comes after the terminal is back');
+    assert.deepEqual(host.notifications, [[
+      'warning',
+      'files: no editor configured: set $VISUAL or $EDITOR to open documents outside Pi',
+    ]]);
+    assert.deepEqual(host.pasted, [], 'opening a file pastes nothing');
+    picker.handleInput('\u001b');
+    await running;
+  });
+});

@@ -4,7 +4,7 @@ A Pi extension that gives an agent session worktrees, ODD documents and GitHub i
 
 ## What It Does
 
-Two agent tools, three panels, one sidebar section, one bash design and two preferences, loaded from one extension entry point. Each ODD feature gets its own checkout beside the clone, and you move between checkouts and read your ODD documents and issues without leaving Pi.
+Two agent tools, four panels, one sidebar section, one bash design and two preferences, loaded from one extension entry point. Each ODD feature gets its own checkout beside the clone, and you move between checkouts and read your ODD documents, files and issues without leaving Pi.
 
 | Surface | Kind | What it does |
 | --- | --- | --- |
@@ -12,6 +12,7 @@ Two agent tools, three panels, one sidebar section, one bash design and two pref
 | `worktree_list` | tool | Read-only list of the checkouts this package created, each by its ODD and branch. |
 | `/warp` | panel | Moves this session to another checkout, creates one, and removes one. |
 | `/odd-list` | panel | Reads this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
+| `/files` | panel | Browses one checkout's files with a live, language-coloured preview: `enter` pastes the chosen paths into your prompt, `ctrl+e` opens the file in `$EDITOR`. |
 | `/issues` | panel | Reads this checkout's GitHub issues — the three scoped tabs on open, every open issue behind `g` — and, when your role allows it, edits them. |
 | `ISSUES` rail section | sidebar section | Lists the open issues of this checkout's repository assigned to you, seven at a time plus a count of the rest; a click opens that issue in `/issues` on `Assigned` and the overflow row opens `/issues`. Needs `gh` and gentle-shell-bridge with its rail. |
 | `activity` bash design | design on the bridge's `bash` line | Optional: `/gentle:customize` → `Cards` → `bash`, with `native` (the host's own card, the default) and `activity` (the card's heading names what the command does: `⌕ exploring`, `✓ checking`, …). Registered through gentle-shell-bridge's `registerToolDesign`; the bridge owns the choice, remembers it and repaints cards already on screen. |
@@ -31,7 +32,7 @@ The two preferences are the file cards' switches, `Card skill` and `Card odd`, b
 | Node.js >= 18 and `git` | Every repository operation is a `git` child process. |
 | `gh`, authenticated (`gh auth login`) | `/issues` and the `ISSUES` rail section. Without it the command stays registered and says what is missing, and the section shows its error row. |
 | Gentle Shell (recommended) | Supplies the session records the deletion guard reads to see other sessions. |
-| Gentle Shell with `gentle-shell-bridge` (and its rail, for the section) | The `Card skill` and `Card odd` rows and the `activity` value of the `bash` line in `/gentle:customize` → `Cards`, which need only the bridge, and the `ISSUES` rail section, which needs the rail too. Without the bridge none of them is registered and no other surface changes, apart from one warning in a primary session naming `pi install npm:gentle-shell-bridge`; the package has no dependency on it. |
+| Gentle Shell with `gentle-shell-bridge` (and its rail, for the section) | The `Card skill` and `Card odd` rows and the `activity` value of the `bash` line in `/gentle:customize` → `Cards`, and the file picker's `files` keymap action (`alt+p`, rebindable in `Keymaps`) with its palette row in `Session` — all of which need only the bridge — plus the `ISSUES` rail section, which needs the rail too. Without the bridge none of them is registered and no other surface changes, apart from one warning in a primary session naming `pi install npm:gentle-shell-bridge`; the package has no dependency on it. |
 
 ```bash
 pi install npm:pi-odd-worktree
@@ -39,7 +40,7 @@ pi install npm:pi-odd-worktree
 
 Inside a Gentle Shell session, use its launcher instead: `gentle-shell install npm:pi-odd-worktree`. From a local clone, `pi install .` installs the working copy.
 
-Expected result: `/warp`, `/odd-list` and `/issues` are available as commands, the agent is offered `worktree_create` and `worktree_list`, a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows an `ISSUES` section for this checkout, and its `/gentle:customize` → `Cards` page offers `activity` on its `bash` line together with the `Card skill` and `Card odd` rows.
+Expected result: `/warp`, `/odd-list`, `/files` and `/issues` are available as commands, the agent is offered `worktree_create` and `worktree_list`, a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows an `ISSUES` section for this checkout, and its `/gentle:customize` → `Cards` page offers `activity` on its `bash` line together with the `Card skill` and `Card odd` rows.
 
 ## Core Workflow
 
@@ -55,6 +56,7 @@ The full rules of each step, including every refusal, are in [Create, list, move
 - **A create is instant and writes no state.** The directory is the whole record; there is no list file and no lock file.
 - **Deleting refuses on a live session.** The guard reads Gentle Shell's presence records, discloses what it could not resolve, and never auto-warps. Removal is `git worktree remove` and the branch is kept. See [the deletion guard](docs/reference.md#the-deletion-guard-and-its-honest-limit).
 - **A warp is queued, never dropped.** While this session's tools, agent tasks or background jobs are still running, `/warp` keeps the request pending and moves when they finish. See [the queued warp](docs/reference.md#a-warp-waits-for-this-sessions-own-tools-agent-tasks-and-background-jobs).
+- **`/files` lists one checkout's files and pastes them.** When the clone has more than its principal checkout it asks for a scope first (`main`, then the checkouts this package created, most recently modified first); `ctrl+o` cycles `modified`, `path` and `ext`, and the preview is read-only, bounded and coloured from your active theme. `enter` inserts `@`-prefixed paths — a file of another checkout travels as its absolute path instead, because `@` would resolve against the wrong directory — and `ctrl+e` opens the highlighted file in `$VISUAL`/`$EDITOR`. With gentle-shell-bridge installed it also appears as the `files` keymap action (`alt+p`, editable in Customize → Keymaps) and in the palette's `Session` section. See [the file picker](docs/reference.md#files-the-picker-its-scopes-and-its-orders).
 - **`/issues` opens on three tabs, not four.** The bar is `My issues`, `Assigned` and `Involved`; `All` is the `g` shortcut's own view, read the first time you enter it and reused after that, with the footer saying `g all issues` outside it and `g related issues` inside. A typed filter spans the three tabs and travels with you into `All`, which then reads a capped search and says so instead of claiming an exact total. See [the tabs, the shortcut and the filter](docs/reference.md#issues-three-tabs-one-shortcut-one-filter).
 - **`/issues` can open on one issue.** `/issues 42` (or `/issues #42`) opens the panel on `Assigned` with that issue selected, and a number that tab cannot find says so instead of guessing a row.
 - **`/issues` pins the repository.** Every read, mutation and browser open is bound to the repository that was loaded, and capabilities fail closed. See [the repository pin](docs/reference.md#issues-pins-the-repository).

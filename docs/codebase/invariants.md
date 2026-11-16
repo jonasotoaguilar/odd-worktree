@@ -14,17 +14,17 @@ The question this page answers: which rules must every change preserve, and what
    bash DESIGN (the `activity` value) on gentle-shell-bridge's own `bash` line
    (invariant 3); the design is not a preference here, because the bridge owns
    that choice and its store. It registers no command, no page, no setting, no
-   settings file and no key of its own, and no other setting is read, written or
-   offered. CodeGraph
+   settings file and no key of its own beyond the file picker's ONE keymap action
+   (invariant 3), and no other setting is read, written or offered. CodeGraph
    adds no command and no model-facing tool: no `/codegraph-*` command, no tool
    named `codegraph`, no override of another extension's tool.
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
-3. **The shipped surface is exactly three commands, two tools, one sidebar
+3. **The shipped surface is exactly four commands, two tools, one sidebar
    section, one bash design and the one `Cards` row group.** `/warp`, `/odd-list`,
-   `/issues`; `worktree_create`, `worktree_list`; the one fourth kind of surface, a
-   sidebar section (`lib/issues-section.js`) that is neither a command nor a tool and
+   `/files`, `/issues`; `worktree_create`, `worktree_list`; the one fourth kind of
+   surface, a sidebar section (`lib/issues-section.js`) that is neither a command nor a tool and
    registers no name the host or the agent can call; the one bash design
    (`lib/bash-design.js`) and the one `Cards` row group (`lib/cards-customize.js`,
    which carries `Card skill` and `Card odd`), which are neither commands nor tools
@@ -45,13 +45,30 @@ The question this page answers: which rules must every change preserve, and what
    that HAS the bridge but draws no rail registers the section and never paints it,
    which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the bridge, not by this package (invariant 2 keeps every customize
-   surface out of it except the `Cards` row group). A host without the bridge
-   otherwise hears nothing about it;
+   surface out of it except the `Cards` row group), and the section declares NO
+   preview: every `Sections` row draws the host's one shared list of active sections
+   and the bridge adds this section's `rowLabel` to it itself, shown or left out
+   with the row's own hypothetical (`registerSection` has no `preview` field — do
+   not add one). A host without the bridge otherwise hears nothing about it;
    the one warning it can get is discoverability — once per process, from a primary
    session only (`GENTLE_PI_AGENTS_CHILD` is not `1`), naming
    `pi install npm:gentle-shell-bridge`, timed after the announcement window because
    an empty slot at `session_start` may still be a bridge that has not loaded, and
    immediate on a host with no event bus to announce on.
+
+   **`/files` is a panel and nothing else.** It mounts its OWN overlay through
+   `ctx.ui.custom` (the scope step's small card, then the picker), and a host with
+   no such seam gets one honest line — `files: the file picker needs an interactive
+   session with overlay support` — and no second surface in its place: no
+   transcript dump, no sub-command, nothing written. It is bridge-independent: it
+   opens as a command and needs no other package to draw. Its ONLY Gentle Shell
+   hooks are optional and go through the same published object as every other
+   bridge surface: the `files` keymap action (label `File picker`, env
+   `GENTLE_PI_FILES_KEY`, default `alt+p`) and the palette row in `Session`, both
+   via `registerKeymap` / `registerCommands`, with the key bound here from
+   `resolveKeymap`; without the bridge they are simply absent, not an error. The
+   command itself registers no store and writes nothing: it reads Git through the
+   ordinary fixed argv (invariant 9) and paints.
 
    **The bash card is a design on the bridge, not a preference here.**
    `lib/bash-design.js` registers ONE design (`tool: "bash"`, id

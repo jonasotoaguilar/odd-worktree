@@ -1,6 +1,6 @@
 'use strict';
-// S4 surface: the standalone package always registers /warp, /odd-list and
-// /issues plus the TWO agent worktree tools (S3/S4: `worktree_delete` and
+// S4 surface: the standalone package always registers /warp, /odd-list, /files
+// and /issues plus the TWO agent worktree tools (S3/S4: `worktree_delete` and
 // `worktree_warp` are not registered, so `/warp` is the only front that moves
 // the session and the panel's ctrl+d the only one that removes a checkout),
 // loads in plain Pi with git as its only external dependency, and ships none of
@@ -13,8 +13,8 @@
 // worktree↔issue association.
 //
 // The bash activity is not a preference here: it is a design on gentle-shell-bridge's
-// own `bash` line, so the shipped surface is exactly three commands, two tools and
-// one sidebar section.
+// own `bash` line, so the shipped surface is exactly four commands, two tools, one
+// sidebar section, one bash design and the one `Cards` row group.
 //
 // Everything here reads the observable surface: the registered command and
 // tool objects, the manifest, the files on disk. No internal state is read.
@@ -78,11 +78,11 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd-list, /issues and the two worktree tools', async () => {
+  test('registers /warp, /odd-list, /files, /issues and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['issues', 'odd-list', 'warp'], 'the command list is exactly the three panels');
+    assert.deepEqual(registered, ['files', 'issues', 'odd-list', 'warp'], 'the command list is exactly the four panels');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });

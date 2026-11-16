@@ -497,6 +497,18 @@ on screen are the last good ones.
   repository can be proven — a failed proof is the error row and makes no `gh`
   call; and a Gentle Shell whose `gentle-shell-bridge` published its API and draws
   a rail.
+- **The `gh` check never delays a session.** Whether `gh` is usable (`gh api user`,
+  `gh repo view`, plus the checkout's own git probes: about a second of network) is
+  decided in the background: `session_start` dispatches it and returns at once, so
+  opening Pi, resuming a session and switching sessions never wait for it. The one
+  startup notice a failing check gives, and the refusal `/issues` gives, are the same
+  sentences as before; only when they appear changed. `/issues` typed while the check
+  is still running waits for that same check instead of starting a second one. A
+  verdict is reused for five minutes when `gh` works and thirty seconds when it does
+  not (so a login you just fixed is noticed quickly), once per checkout and
+  `GH_HOST`, at most eight checkouts at a time, and everything is dropped at
+  `session_shutdown`. A verdict that lands after its session was replaced is
+  discarded.
 
 ## Card style follows your shell
 

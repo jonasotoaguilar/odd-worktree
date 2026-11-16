@@ -61,6 +61,7 @@ package's whole suite stays green.
 - **T13** — the residual the previous round flagged: an EEXIST at the seed's creation step must not
   publish over another actor's index — `e9c1b1c`.
 - **T14** — the third pass's residual: an unreadable identity must never read as equal or as absent — `ff5cf01`.
+- **T15** — the fourth pass: attack the three-valued identity at runtime — no findings; accepted in L20.
 
 ## Log
 
@@ -106,6 +107,17 @@ package's whole suite stays green.
   the existing joined shape, while a bare directory is an honest failed seed — the split is forced by the
   verifier's own created-after-recheck probe, which requires `ok: false` for a foreign directory holding
   no index.
+- **L20** — Fourth pass on `1840617`: **no findings**. The first attempt was blocked by verification
+  infrastructure, not by the code — the helper requires an empty scratch under the system temp, while the
+  session exports a `TMPDIR` outside it and `NODE_COMPILE_CACHE` populates the scratch before the emptiness
+  check; running the preparation as `env -u NODE_COMPILE_CACHE -u NODE_OPTIONS TMPDIR=/tmp …` is what makes it
+  work, and that is worth remembering for the next independent pass in this environment. Result: 67 distinct
+  runtime tests, 0 failures, covering EPERM/EIO/EBUSY/EACCES and uncoded throws, missing/partial/null/NaN
+  identities, unknown at capture versus at rollback, the positive-ownership and ENOENT rollback controls, 20
+  abandon-path combinations, and creation-step joining through both `autoIndex` and `seedLinkedWorktrees` —
+  with the protected database, staging bytes and source hashes unchanged. The minimized regression reads 0/1
+  at `b07ac4f` and 1/1 at `5bfe80d`, so the defect it pins was real and is now closed. Verified: S3 and S2
+  met for this recheck; S1, S4 and S5 remain as the earlier passes left them (met).
 - **L19** — T14 landed in `ff5cf01` and was accepted by the verifier's own minimized regression (0/1 against
   `b07ac4f`, 1/1 after) plus both probe suites. Identity is three-valued now — `present` with dev+inode,
   `ENTRY_ABSENT` only when stat said ENOENT, `ENTRY_UNKNOWN` for EACCES/EPERM, a throwing seam or an answer

@@ -67,7 +67,7 @@ The question this page answers: which rules must every change preserve, and what
    opens as a command and needs no other package to draw. Its ONLY Gentle Shell
    hooks are optional and go through the same published object as every other
    bridge surface: the `files` keymap action (label `File picker`, env
-   `GENTLE_PI_FILES_KEY`, default `alt+p`) and the palette row in `Session`, both
+   `GENTLE_PI_FILES_KEY`, default `alt+f`) and the palette row in `Session`, both
    via `registerKeymap` / `registerCommands`, with the key bound here from
    `resolveKeymap`; without the bridge they are simply absent, not an error. The
    command itself registers no store and writes nothing: it reads Git through the

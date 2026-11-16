@@ -1,11 +1,13 @@
 'use strict';
-// T3 (files-picker S9): `lib/files-scope-view.js` — the worktree scope step.
+// T3 (files-picker S9) and T10 (S20): `lib/files-scope-view.js` — the worktree
+// scope step.
 //
 // Contract under test, as observable output only: the card frame at the
 // requested width, the `main`-first rows with each scope's `±n files` count at
 // the right edge, the focused scope's detail line directly above the footer,
 // the one-option-per-key legend painted with the key role, the arrow/enter/esc
-// keys, the mouse hover/wheel/click routes, and every degradation (no scopes, a
+// keys, the `a` toggle between the registered list and every worktree of the
+// clone, the mouse hover/wheel/click routes, and every degradation (no scopes, a
 // narrow or short terminal, a hostile theme, a long label).
 
 const { test, describe } = require('node:test');
@@ -96,6 +98,16 @@ const WORKTREE = scope({
 
 const SCOPES = [WORKTREE, scope()];
 
+// S20: a checkout Git knows but this package did not create, so it is only on the
+// `a` list.
+const UNREGISTERED = scope({
+  root: '/w/loose',
+  label: 'loose · other',
+  kind: 'worktree',
+  lastModifiedMs: 500,
+  detail: detail({ lastCommitSubject: 'an unrelated checkout', changedFiles: 1, lastModifiedMs: NOW - 60 * 60_000, ahead: 0, behind: 0, comparison: 'main' }),
+});
+
 function mount(options = {}) {
   const selected = [];
   const closes = [];
@@ -103,6 +115,7 @@ function mount(options = {}) {
   const theme = options.theme === undefined ? plainTheme : options.theme;
   const view = createFilesScopeView({
     scopes: options.scopes === undefined ? SCOPES : options.scopes,
+    ...(options.allScopes === undefined ? {} : { allScopes: options.allScopes }),
     theme,
     rowsAvailable: options.rowsAvailable === undefined ? HEIGHT : options.rowsAvailable,
     helpers: options.helpers || helpers,
@@ -294,6 +307,85 @@ describe('the footer legend (S9)', () => {
       assert.ok(theme.calls.some((call) => call.role === 'muted' && call.text === rest), rest);
     }
     assert.ok(theme.calls.some((call) => call.role === 'bold' && strip(call.text) === '↑/↓'));
+  });
+});
+
+describe('the two lists and the `a` key (S20)', () => {
+  test('the step opens on the registered rows and the footer names the list `a` switches to', () => {
+    const { view } = mount({ scopes: [scope()], allScopes: [scope(), UNREGISTERED] });
+    const registered = rowsOf(view);
+    assert.ok(registered[2].includes('main'), registered[2]);
+    assert.ok(!registered.join('\n').includes('loose · other'), 'the default rows are the registered ones');
+    assert.ok(registered[HEIGHT - 2].includes('a all'), registered[HEIGHT - 2]);
+    assert.ok(!registered[HEIGHT - 2].includes('a registered'), 'and it names where the key goes, not where it is');
+
+    view.handleInput('a');
+    const all = rowsOf(view);
+    assert.ok(all.join('\n').includes('loose · other'), 'every worktree of the clone is offered');
+    assert.ok(all[2].includes('main'), 'the main checkout stays first');
+    assert.ok(all.findIndex((row) => row.includes('loose · other')) > all.findIndex((row) => row.includes('main')),
+      'and every worktree follows it');
+    assert.ok(all[HEIGHT - 2].includes('a registered'), all[HEIGHT - 2]);
+    assert.ok(!all[HEIGHT - 2].includes('a all'), 'the footer names the way back');
+
+    view.handleInput('a');
+    assert.ok(!rowsOf(view).join('\n').includes('loose · other'), 'the key switches back');
+  });
+
+  test('a scope both lists carry keeps the cursor; one they do not drops it on the first row', () => {
+    const toggled = mount({ scopes: [scope(), WORKTREE], allScopes: [scope(), WORKTREE, UNREGISTERED] });
+    toggled.view.handleInput('down');
+    assert.ok(rowsOf(toggled.view)[3].includes('▸ feat/x · files-picker'), 'the registered worktree is focused');
+    toggled.view.handleInput('a');
+    assert.ok(rowsOf(toggled.view)[3].includes('▸ feat/x · files-picker'), 'the same root keeps the cursor on the wider list');
+    toggled.view.handleInput('a');
+    assert.ok(rowsOf(toggled.view)[3].includes('▸ feat/x · files-picker'), 'and on the way back');
+
+    const dropped = mount({ scopes: [scope(), WORKTREE], allScopes: [scope(), WORKTREE, UNREGISTERED] });
+    dropped.view.handleInput('a');
+    dropped.view.handleInput('down');
+    dropped.view.handleInput('down');
+    assert.ok(rowsOf(dropped.view)[4].includes('loose · other'), 'the unregistered checkout is focused');
+    dropped.view.handleInput('a');
+    assert.ok(rowsOf(dropped.view)[2].includes('▸ main'), 'a root the other list does not carry leaves the first row');
+  });
+
+  test('the scope answered is the original object of the list on screen', () => {
+    const { view, selected } = mount({ scopes: [scope()], allScopes: [scope(), UNREGISTERED] });
+    view.handleInput('a');
+    view.handleInput('down');
+    view.handleInput('enter');
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0], UNREGISTERED, 'the `a` list answers its own scope object');
+  });
+
+  test('the focused scope’s detail line follows the list on screen', () => {
+    const { view } = mount({ scopes: [scope()], allScopes: [scope(), UNREGISTERED] });
+    view.handleInput('a');
+    view.handleInput('down');
+    assert.ok(rowsOf(view)[HEIGHT - 3].includes('an unrelated checkout'), rowsOf(view)[HEIGHT - 3]);
+  });
+
+  test('the toggle paints its key in the key role and its destination muted', () => {
+    const theme = recordingTheme();
+    const { view } = mount({ theme, scopes: [scope()], allScopes: [scope(), UNREGISTERED] });
+    view.render(WIDTH);
+    assert.ok(theme.calls.some((call) => call.role === 'accent' && call.text === 'a'));
+    assert.ok(theme.calls.some((call) => call.role === 'muted' && call.text === ' all'));
+    view.handleInput('a');
+    theme.calls.length = 0;
+    view.render(WIDTH);
+    assert.ok(theme.calls.some((call) => call.role === 'muted' && call.text === ' registered'));
+  });
+
+  test('with no second list the key is not offered and does nothing', () => {
+    const { view, selected, closes } = mount();
+    const footer = rowsOf(view)[HEIGHT - 2];
+    assert.ok(!footer.includes('a all') && !footer.includes('a registered'), footer);
+    view.handleInput('a');
+    assert.ok(rowsOf(view)[2].includes('▸ main'), 'the rows did not move');
+    assert.deepEqual(selected, []);
+    assert.deepEqual(closes, []);
   });
 });
 

@@ -68,6 +68,7 @@ replacing those seams.
   appears when it has nothing to offer. «main siempre va arriba primero, luego se ordenan del cambio
   mas reciente ... si alguno es 0 ... no sale ese campo ... en la data el ultimo commit siempre
   primero y luego lo demas».
+  *Superseded by S20 (round L9): the step always opens, `main` included. Kept as the record of the first cut.*
 - S10: **Listing orders.** `ctrl+o` cycles the order and the footer names it: `modified` (the
   default, most recently modified first, painted as a flat file list), `path` (an IDE-style folder
   tree: inside a folder its subfolders come first and then its own files, so at the top level every
@@ -134,6 +135,61 @@ replacing those seams.
   its layout table, README, `docs/reference.md` and `tools/package-surface.test.js` all state the new
   command and its modules. The whole suite stays green: `node --test tools/*.test.js`.
 
+Round L9 (all reopen the delivered surfaces: S1, S3, S4, S9, S13, S18, S19):
+
+- S20: **The scope step always opens.** Every `/files` invocation opens the checkout selector first, `main`
+  included, even when nothing is registered, instead of jumping straight into the picker on the session
+  checkout. The default rows are the session checkout plus the worktrees this session registered, and `a`
+  toggles the step between that list and every worktree of the clone, discovered the way `worktree_list`
+  discovers them. The footer names the list the key switches to (`a all`, then `a registered`), and a scope
+  both lists carry keeps the cursor. "haremos un ajuste porque en el worktree si no tenia ninguno registrado
+  lo saltaba y habria directo cwd actual, mejor hagamos que siempre abra primero el selector del
+  worktree/path (que incluye main), pero que por defecto muestre en la opciones el checkout actual y
+  worktrees registrado y con keybindig "a" muestra todos los worktrees."
+- S21: **The listing path follows the title.** The title row paints the path being listed immediately after
+  the panel's name, elided from its left when the card is narrow, and `esc` keeps the far-right corner
+  alone — instead of pairing the path with `esc` at the edge, which is what made that corner read as
+  "only esc". "otro punto es que a la ruta sala a la derecha de file, junto a titulo, extremo derecho solo
+  dice esc."
+- S22: **`listed/total (selected)` and the order at the list's edge.** Between the search row and the list,
+  the picker paints how many files the active query lists out of the whole listing (`2/202` filtered,
+  `202/202` unfiltered), the Tab selection count in parentheses, and the active order right-aligned at the
+  list pane's edge behind a `─` fill (`202/202 (4) ─────── tree`). This is a new row: the picker has none
+  today. "Tambien como en este ejemplo [Image#2] entre search y listado debe salir el total de archivos y si
+  filtra search sale 2/202 (n), o sea cuantos son filtrados respecto al total, y dentro del paretesis el
+  numero de seleccionados."
+- S23: **The folder order is named `tree`.** The order S10 called `path` is `tree` in the footer, the code
+  and the docs; the listing it paints is unchanged. "otro punto es que en orden por carpeta (que no salle
+  path, se llame tree ese orden, arregallo)"
+- S24: **Only file rows take the cursor.** In `tree` and `ext` the highlighted row is always a file: arrows,
+  page moves, `home`/`end`, the wheel, a click and a query never park the cursor on a group row, and a
+  group row is never marked, inserted or opened. `space` folds the group that holds the highlighted file
+  (its parent folder in `tree`, its extension group in `ext`) and a click on a group row folds it without
+  focusing it. The one exception, documented and pinned: with every group folded and no file row left, the
+  cursor may rest on a group row so `space` can reopen the tree. "en ese modo [Image#4] no deberia dejar
+  seleccionar la carpeta pues no es un file, en el listado esos campos no pueden estar select, se los debe
+  saltar, lo mismo para orden por extension, las extension no son seleccionables, no pueden estar focus al
+  moverse nunca."
+- S25: **The preview uses the body's whole height.** The search row narrows to the list pane's width, the
+  preview's box rides the new info row on top and closes on the list's last row, so the preview spans the
+  body beside the list instead of sitting below the search row; a full-width rule then closes the body
+  under both columns, aligning the separation below the list with the preview. The search row's right
+  column stays blank. "si es posible, solo si se puede, como en el ejemplo, el preview, cuadrado de preview
+  usa todo el alto, en el actual es debajo de search, la idea es ahicar search al ancho de la lista y
+  agrandar alto el preview. y una linea abajo de listado para separa que se alinie con preview"
+- S26: **The Tab mark reads in a theme role.** The bar a marked row paints uses a role of the active theme
+  rather than an unstyled cell, focused or not. "el selector con tab, la linea tambien debe ser de color del
+  tema, no blanca."
+- S27: **`ctrl+e` returns to a live session.** Opening the highlighted file in the editor closes the panel,
+  hands the terminal over, and gives it back with a repaint that leaves the prompt responsive as soon as
+  the editor exits; the panel's view is disposed once the handoff returns instead of living on. "Otro bug es
+  que con ctrl+e lo abre en editor, pero al cerra edit se bugea, pi queda congelado para siempre, es un
+  claro bug. ... changes panel tiene algo similar para abrir en editor, podrias revisarlo para ver que
+  diferencia hay que causa que pi se congele al retornar."
+- S28: **The default key is `alt+f`.** The `files` keymap default becomes `alt+f`, still overridable through
+  `GENTLE_PI_FILES_KEY` and assignable in the bridge's Keymaps page, because Pi claims `alt+p` for
+  `app.model.cycleBackward` on Windows and WSL. "alt+f mejor"
+
 ## Tasks
 
 | ID | Specs | Route | Commit |
@@ -146,6 +202,9 @@ replacing those seams.
 | T6 | S1-S6, S14, S15 | worker: `lib/files-picker-view.js` + `tools/files-picker-view.test.js` — the view composing T1, T4 and T5: chrome, search row, panes, keys, mouse, badges, ages, selection, insert/close/open. Landed at `8010bb5` (54/54 focused); the footer's `ctrl+j/k scroll` token was added at the parent's round (S4 names it, the first cut dropped it) |
 | T7 | S17, S14, S9 | worker: the `files` command in `extensions/odd-worktree-tools.ts` — scopes from Git, `ctx.ui.custom`, `pasteToEditor`, `openExternal`, the lazy highlighter — plus AGENTS.md, README, `docs/reference.md` and `tools/package-surface.test.js` . Landed at `3c200d5` (the command, 11/11 in `tools/files-command.test.js`) and `30ac701` (AGENTS.md, README, `docs/reference.md`, `tools/package-surface.test.js`) |
 | T8 | S18, S19 | worker: the bridge integration — `registerKeymap` (`files`, `GENTLE_PI_FILES_KEY`, `alt+p`), `registerCommands` with `section: "Session"`, `resolveKeymap` + `pi.registerShortcut`, registered from `session_start` and the ready event, with its tests (a fake bridge, an absent bridge, a bridge that publishes later) and the docs . Landed at `2167362` (11/11 in `tools/files-bridge.test.js`) with its docs in the commit after it |
+| T9 | S22, S23, S24, S25, S26 | worker: `lib/files-picker-view.js`, `lib/files-orders.js` and their tests — the info row with the order at the list's edge, `path` renamed `tree`, a cursor that only rests on file rows, the full-height preview geometry and the rule row, and the mark bar in a theme role . Landed at `91245c2` (188/188 focused across the six picker suites) |
+| T10 | S20, S27, S28 | worker: `lib/files-scope-view.js`, `extensions/odd-worktree-tools.ts` and their tests — the scope step that always opens with `a` for every worktree, the `ctrl+e` handoff that repaints and disposes, and `alt+f` as the default key . Landed at `cb6954a` (command 12/12, scope 42/42, bridge 11/11) |
+| T11 | S17, S20-S28 | parent: docs truth — README, `docs/reference.md`, `docs/codebase/invariants.md` and `docs/codebase/code-map.md`, plus S9 marked superseded . Landed at this commit |
 
 ### Module contracts (fixed here so T6 can be written against T1, T4 and T5)
 
@@ -223,3 +282,11 @@ Plain JS, no dependencies, every child injected. Shapes:
   order, and a query forces every group open.
 - L7 (parent, closing evidence): the unit set T1-T8 is landed on `feat/files-picker`, one commit per work unit: `9580c3e` (T2), `c9a48e8` (T1), `a2aaae2` (T4), `b770e54` (T3), `fd01e17` (T5), `8010bb5` + `cf657ff` (T6), `3c200d5` (T7 command), `30ac701` (T7 docs), `2167362` (T8). Full unit stage on the final tree, `node --test --test-timeout=120000 tools/*.test.js`: 1952 tests, 1952 pass, 0 fail (baseline 1732 before the feature). Defects found by the parent while closing T7, each pinned by its test: the command tests awaited the handler before driving the overlay it was waiting on (a deadlock, not a slow test), the fake host owed the panels Pi's `matchesKey` seam, and the fake `wrapTextWithAnsi` stripped the very colour the highlighter test looks for. Bridge 0.4.0 (the shared `Sections` preview) was checked against this package: `SidebarSection` and `plugin-surface` are byte-identical to 0.3.2, so nothing here changed except the sentence in AGENTS.md and `docs/reference.md` that the issues section declares no preview. Known limits, stated honestly: the host's `registerShortcut` returns `void`, so a key changed in Customize applies after `/reload`; and the worker that first wired T7 stalled, so its half-finished tests were repaired inline rather than re-delegated. `Risk: none` — no irreversible data, security surface, concurrency, delivery or consumed contract changed, and every new behaviour is pinned by the suites above. Nothing was pushed; push, PR creation and merge remain the human's decisions.
 - L8 (parent, slice boundary): `feat/files-picker` stands at 12 commits against `origin/main`, past the ~400-line review slice, because the feature is nine independent modules plus their suites. Delivery therefore follows `gentle-ai-chained-pr` when the human asks for it: a tracker PR plus one chained PR per work unit in dependency order (T2, T1, T4, T3, T5, T6, T7, then T8 last, because it is the only unit that touches Gentle Shell's surface). The unrelated `docs(issues)` commit `f4b0d5c` belongs to the issues-sidebar area and travels in its own PR. Nothing is pushed.
+- L9 (user, verbatim): the round is reported in the conversation that produced it: the picker differs from the
+  reference in the eight ways recorded as S20-S28, all of them in this repository. The parent's first attempt
+  applied them to a `gentle-shell` worktree instead, opened `jonasotoaguilar/gentle-shell#81` and closed it
+  unmerged on the human's instruction; nothing in this document, this branch or this package was lost in that
+  detour, and the specs above are the ported set.
+- L10 (parent, closing evidence): round L9 landed on `feat/files-picker` in three units, each with its tests and docs: `91245c2` (T9, S22-S26), `cb6954a` (T10, S20, S27, S28) and this docs commit (T11). Full stage on the final tree, `node --test --test-timeout=120000 tools/*.test.js`: **2179 tests, 2179 pass, 0 fail** (the baseline before this round was 1952; the round added 227). Focused sets: picker 70/70, orders 35/35, preview 18/18, command 12/12, scope view 42/42, bridge 11/11.
+  Corrections the workers made to the parent's spec, each one right: (1) `CHROME_ROWS = 5` cannot also hold the new rule row, so the constant keeps its meaning and a `BODY_RULE_ROWS = 1` is subtracted from the body — `bodyRows = height - CHROME_ROWS - BODY_RULE_ROWS`, `BODY_TOP` and `MIN_CARD_HEIGHT` unchanged; (2) the info row's preview column is not blank: the box's top border rides it, so S25 wins over the task's wording; (3) the parent asked for the editor handoff to follow the reference end to end, and the worker found that the order defect lived in the extension's `onOpen` (it spawned before the overlay settled), not in the view's `finish()` — so the fix stopped `onOpen` from spawning and starts the editor after the overlay resolves, which is the reference's shape exactly.
+  Honest limits: the `a` list costs two bounded Git reads per checkout before the step paints, so a clone with many worktrees opens the step a moment slower than the registered list alone; and the workers' own reports note that `tools/files-command.test.js` was not in T9's authorized commands, so the command path through the changed view was pinned only by T10's run of it (12/12), which does drive the same view. `Risk: none` — no irreversible data, security surface, concurrency, delivery or consumed contract changed, and every changed behaviour is pinned by the suites above.

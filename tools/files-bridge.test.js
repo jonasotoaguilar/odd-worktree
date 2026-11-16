@@ -5,7 +5,7 @@
 //
 // What this file proves, all of it through the loaded extension:
 // - the exact keymap action (`files`, `File picker`, `GENTLE_PI_FILES_KEY`,
-//   `alt+p`, command `files`) and the exact palette row (same id and label,
+//   `alt+f`, command `files`) and the exact palette row (same id and label,
 //   command `files`, section `Session`, the host's own title);
 // - the key comes from `resolveKeymap`'s answer and is bound with the host's
 //   `registerShortcut`, whose handler reaches the SAME `/files` path the command
@@ -55,7 +55,7 @@ afterEach(() => {
 // resolution, exactly the shape the contract publishes (`{ key }` or
 // `{ unavailable }`). `members` overrides any member to model a throwing or
 // partial bridge.
-function installBridge({ key = 'alt+p', members = {} } = {}) {
+function installBridge({ key = 'alt+f', members = {} } = {}) {
   const keymaps = [];
   const commands = [];
   const resolved = [];
@@ -146,7 +146,7 @@ test('S18/S19: a published bridge receives the keymap action and the Session pal
     id: 'files',
     label: 'File picker',
     env: 'GENTLE_PI_FILES_KEY',
-    defaultKey: 'alt+p',
+    defaultKey: 'alt+f',
     command: 'files',
   }], 'the keymap action is the spec\'s, field for field');
 
@@ -159,7 +159,7 @@ test('S18/S19: a published bridge receives the keymap action and the Session pal
 
   assert.deepEqual(bridge.resolved, ['files'], 'the action\'s key is asked for by its id');
   assert.equal(host.shortcuts.length, 1, 'one key is bound');
-  assert.equal(host.shortcuts[0].key, 'alt+p', 'the default resolves to a bound key');
+  assert.equal(host.shortcuts[0].key, 'alt+f', 'the default resolves to a bound key (S28)');
   assert.equal(typeof host.shortcuts[0].options.handler, 'function');
   assert.equal(typeof host.shortcuts[0].options.description, 'string');
   assert.equal(loaded.commands.has('files'), true, '/files is still registered under its own name');
@@ -172,7 +172,7 @@ test('S18: the effective key is the shell\'s answer, not the default, and its ha
 
   assert.equal(host.shortcuts.length, 1);
   assert.equal(host.shortcuts[0].key, 'ctrl+shift+f', 'the resolved key wins over the declared default');
-  assert.equal(bridge.keymaps[0].defaultKey, 'alt+p', 'the declared default is untouched');
+  assert.equal(bridge.keymaps[0].defaultKey, 'alt+f', 'the declared default is untouched');
   assert.deepEqual(bridge.resolved, ['files']);
 
   const sink = notifyHost();
@@ -292,7 +292,7 @@ test('S18/S19: a bridge that publishes later lands both registrations from the r
     id: 'files',
     label: 'File picker',
     env: 'GENTLE_PI_FILES_KEY',
-    defaultKey: 'alt+p',
+    defaultKey: 'alt+f',
     command: 'files',
   }], 'the late bridge lands the keymap action');
   assert.deepEqual(bridge.commands, [{
@@ -303,7 +303,7 @@ test('S18/S19: a bridge that publishes later lands both registrations from the r
   }], 'and the palette row');
   assert.deepEqual(bridge.resolved, ['files']);
   assert.equal(host.shortcuts.length, 1);
-  assert.equal(host.shortcuts[0].key, 'alt+p', 'the key is bound from the late answer');
+  assert.equal(host.shortcuts[0].key, 'alt+f', 'the key is bound from the late answer');
 
   const sink = notifyHost();
   await host.shortcuts[0].options.handler(sink.ctx);

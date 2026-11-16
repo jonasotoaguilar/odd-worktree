@@ -86,16 +86,16 @@ open the document in `$VISUAL`/`$EDITOR`, `s` toggles the order between `recent`
 and `name`, `r` reload, `esc` close. `←`/`→` and `[`/`]` scroll the list; the
 document pane pages with `ctrl+j`/`ctrl+k`.
 
-`/files` — one option per key. The scope step, when it appears, is `↑`/`↓`,
-`enter` and `esc`.
+`/files` — one option per key. The scope step is `↑`/`↓`, `enter`, `a` (the
+registered checkouts, or every worktree of the clone) and `esc`.
 
 | Key | Action |
 | --- | --- |
 | `↑`/`↓` | Move the selection |
 | `tab` | Select or unselect the highlighted file |
 | `ctrl+j`/`ctrl+k` | Scroll the preview one line |
-| `ctrl+o` | Cycle the order: `modified`, `path`, `ext` |
-| `space` | Fold or unfold the focused group |
+| `ctrl+o` | Cycle the order: `modified`, `tree`, `ext` |
+| `space` | Fold or unfold the group holding the highlighted file |
 | `ctrl+u` | Clear the query |
 | `ctrl+e` | Open the highlighted file in `$VISUAL`/`$EDITOR` |
 | `enter` | Insert the selected files plus the highlighted one, and close |
@@ -570,15 +570,20 @@ own badge — `M` for a tracked file with an uncommitted change, `U` for an
 untracked one — and its age in `s`/`h`/`d` at the right; the ages are computed
 when the panel opens and never refreshed live.
 
-**A scope step, only when there is a choice.** When this clone has more than its
-principal checkout, `/files` first asks which one to browse: `main` first, then
-every other checkout this package created, most recently modified first, each row
-reading `<odd> · <branch>` and its `±n files` (`±1 file`). Above that card's
+**A scope step, always.** `/files` first asks which checkout to browse — `main`
+included, so an unregistered session chooses its own checkout instead of being
+dropped straight into the current directory: `main` first, then every other
+checkout this session registered, most recently modified first, each row reading
+`<odd> · <branch>` and its `±n files` (`±1 file`). `a` widens that list to every
+worktree of the clone (the ones `worktree_list` reports) and back, and the footer
+names the list the key switches to (`a all`, then `a registered`); a checkout both
+lists carry keeps the cursor. Above that card's
 footer sits the focused scope's detail line: the last commit subject, then
 `±n files`, the age of the last modification, and `↑n main` / `↓n main` — the
 `main` row compares with `origin/main`, every other checkout with the local
-`main` — and a field that is zero or absent is not painted at all. With no other
-checkout the step never appears and the picker opens on the principal checkout.
+`main` — and a field that is zero or absent is not painted at all. The `a` list costs
+two bounded Git reads per checkout before the step paints, which is why a clone
+with many worktrees opens it a moment slower than the registered list alone.
 
 **One option per key.** The footer names one binding per action even when several
 work, and both keys stay live. The compatibility bindings it never names all
@@ -586,17 +591,24 @@ work: `home`/`end` (first and last file), `ctrl+home`/`ctrl+end` (the preview's
 first and last line), `ctrl+shift+j`/`ctrl+shift+k` and `ctrl+c`.
 
 **The three orders.** `ctrl+o` cycles `modified` (the default: one flat list,
-most recently modified first), `path` (an IDE-style folder tree — inside a folder
+most recently modified first), `tree` (an IDE-style folder tree — inside a folder
 its subfolders come first and then its own files, so at the top level every
 folder group paints before the files at the repository root) and `ext` (one group
 per extension named with its dot, alphabetical by path inside, the extensionless
-group last). The active order is painted at the right of the footer. `path` and
-`ext` are foldable: groups start expanded, the fold state is kept per order while
-the panel is open, `space` toggles the focused group and `enter` on a group does
-the same while `enter` on a file still inserts. A non-empty query forces every
-group open, and the fold keys do nothing until it is cleared. In `modified` and
-`ext` a file row paints its parent directory at the right; in `path` it does not,
-because the tree already places the file under that folder.
+group last). The active order is painted at the right of the info row under the
+search row, which also carries the counts: how many files the query lists out of
+the whole listing and the Tab selection in parentheses (`202/202 (4)`). `tree` and
+`ext` are foldable: groups start expanded and the fold state is kept per order
+while the panel is open. Only file rows ever take the cursor — the arrows,
+`home`/`end`, the wheel, a click and a query all skip group rows, so a group is
+never marked, inserted or opened. `space` folds the group holding the highlighted
+file (its parent folder in `tree`, its extension group in `ext`) and a click on a
+group row folds it without focusing it; with every group folded and no file row
+left, the cursor may rest on a group row so `space` can reopen the tree. A
+non-empty query forces every group open, and the fold keys do nothing until it is
+cleared. In `modified` and `ext` a file row paints its parent directory at the
+right; in `tree` it does not, because the tree already places the file under that
+folder.
 
 **What `enter` inserts.** Every file selected with `tab` plus the highlighted
 one, each once, in list order, space-separated — and nothing is sent: the panel
@@ -605,6 +617,14 @@ below the session's cwd is inserted as `@` plus its path from that cwd
 (`@AGENTS.md`, `@lib/view-layout.js`); any other file — one of another checkout,
 or one outside the cwd — is inserted as its real absolute path, because `@`
 resolves against the current directory and would name the wrong file.
+
+**The layout.** The search row takes the list pane's width, the info row sits
+directly under it, and the preview's box top border rides that info row while its
+bottom border closes on the list's last row, so the preview uses the body's whole
+height beside the list instead of sitting below the search. A full-width rule
+then closes the body under both columns, aligning the separation below the list
+with the preview. The title row carries the path being listed right after the
+panel's name, with `esc` alone in the far corner.
 
 **The preview is bounded.** It is one `open`/`read` of at most 64 KiB, at most
 200 lines and at most 400 columns per line, so no file can stall a paint: a file
@@ -629,7 +649,7 @@ nothing, stages nothing and opens no network, and every child is a fixed argv
 with a bounded timeout — `git` through this package's async runner, plus the one
 `$VISUAL`/`$EDITOR` `ctrl+e` starts (a missing variable is reported in its own
 sentence). With `gentle-shell-bridge` published, `/files` contributes one keymap
-action (`files`, "File picker", default `alt+p`, overridable in
+action (`files`, "File picker", default `alt+f`, overridable in
 `/gentle:customize` → `Keymaps` and through `GENTLE_PI_FILES_KEY`; a changed key
 applies after `/reload`) and one row in the command palette's `Session` section.
 The bridge carries no handler, so this package asks `resolveKeymap("files")` for the

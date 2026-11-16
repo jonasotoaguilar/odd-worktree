@@ -10,10 +10,12 @@
 // the whole suite runs without a repository, a theme or a highlighter.
 //
 // T9 adds the round L9 rules to the same surface: the info row with the counts
-// and the order at the list's edge (S22), the folder order named `tree` (S23), a
-// cursor that only rests on file rows (S24), the full-height preview geometry
-// with the rule under the body (S25) and the Tab mark bar in a theme role (S26).
-// Whatever a rule change retargeted says so where it is asserted.
+// and the order at the list's edge (S22), the folder order named `tree` (S23), the
+// full-height preview geometry with the rule under the body (S25) and the Tab mark
+// bar in a theme role (S26). Its "a cursor only rests on file rows" rule (S24) is
+// superseded by S38's every-row cursor, and the tree round's "shift+space folds the
+// other groups" (S34) by S39's one toggle over every group. Whatever a rule change
+// retargeted says so where it is asserted.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
@@ -124,7 +126,7 @@ const FILES = [
 ];
 
 // A listing with two top-level folders, one nested folder and a root file, so the
-// S30/S34 rules have something to open and something to leave closed.
+// S30/S39 fold rules have something to open and something to leave closed.
 const NESTED = [
   { path: 'src/web/test.ts', state: 'clean' },
   { path: 'src/index.ts', state: 'clean' },
@@ -317,20 +319,42 @@ describe('the card chrome (S1, S15)', () => {
     }
   });
 
-  test('the listing path sits at the top-right next to esc, and elides from the left when narrow', async () => {
+  test('the listing path rides the title at the left, and esc keeps the far corner alone (S37)', async () => {
     const { view } = await open();
-    const roomy = rowsOf(view)[0];
-    assert.ok(roomy.includes(SCOPE.root), roomy);
-    assert.ok(roomy.endsWith(`${SCOPE.root} esc ╮`), roomy);
+    // The whole row, as painted: the panel's name, ` · `, the path, the filling
+    // rule, and `esc` alone at the right corner. The 63-column fill is
+    // 120 - 47 (title + path) - 5 (chrome) - 5 (the ` esc ` cell).
+    assert.equal(
+      rowsOf(view)[0],
+      `╭─ ✿ Files · ${SCOPE.root} ${'─'.repeat(63)} esc ╮`,
+      'the path rides the panel title, never the right corner',
+    );
+    // The path is nowhere near the corner: what follows it is only the rule and the
+    // `esc` cell.
+    const afterPath = rowsOf(view)[0].slice(3 + `✿ Files · ${SCOPE.root}`.length);
+    assert.match(afterPath, /^ ─+ esc ╮$/, `only the rule and esc follow the path: ${JSON.stringify(afterPath)}`);
+  });
 
+  test('a narrow card elides the path from its left, so the tail that identifies the checkout survives (S37)', async () => {
+    const { view } = await open();
+    // 50 columns: the title keeps 30 for the path (50 - 7 for `✿ Files` - 3 for
+    // ` · ` - 5 for the chrome - 5 for ` esc `), which keeps the last 29 characters.
+    assert.equal(
+      view.render(50).map(strip)[0],
+      '╭─ ✿ Files · …v/repo-worktrees/files-picker  esc ╮',
+    );
+    // 40 columns leaves 20 for the path: the tail still names the checkout.
+    assert.equal(
+      view.render(40).map(strip)[0],
+      '╭─ ✿ Files · …ktrees/files-picker  esc ╮',
+    );
     for (const width of [50, 40]) {
       const row = view.render(width).map(strip)[0];
       assert.equal(helpers.visibleWidth(row), width);
-      assert.ok(row.startsWith('╭─ ✿ Files'), row);
-      assert.ok(row.includes('\u2026'), `the path is elided at ${width}: ${row}`);
-      assert.ok(!row.includes('/home/dev'), 'only the identifying tail survives');
-      assert.ok(row.includes(SCOPE.root.slice(-10)), `the tail survives at ${width}: ${row}`);
-      assert.ok(row.endsWith('esc ╮'), row);
+      assert.ok(row.startsWith('╭─ ✿ Files · …'), `the path still follows the title at ${width}: ${row}`);
+      assert.ok(!row.includes('/home'), 'the head of the path gives way, never its tail');
+      assert.ok(row.includes(SCOPE.root.slice(-10)), `the identifying tail survives at ${width}: ${row}`);
+      assert.ok(row.endsWith('esc ╮'), 'esc keeps the far right corner');
     }
   });
 
@@ -437,11 +461,12 @@ describe('the footer (S4)', () => {
     }
     assert.ok(flat.endsWith('files'), flat);
 
-    // S32, S34: the trees earn the two fold keys, in the same one-key style.
-    for (const order of ['tree', 'ext']) {
+    // S32, S40: the trees earn the two fold keys, in the same one-key style, and the
+    // shift+space one names the action it would perform.
+    for (const [order, action] of [['tree', 'shift+space expand all'], ['ext', 'shift+space collapse all']]) {
       view.handleInput('ctrl+o');
       const tree = footerOf(rowsOf(view, 200));
-      for (const token of ['space fold', 'shift+space all', 'ctrl+u clear', 'ctrl+e edit', 'enter insert', 'esc close']) {
+      for (const token of ['space fold', action, 'ctrl+u clear', 'ctrl+e edit', 'enter insert', 'esc close']) {
         assert.ok(tree.includes(token), `the ${order} footer names ${token}: ${tree}`);
       }
       assert.ok(tree.endsWith(order), tree);
@@ -471,7 +496,7 @@ describe('the footer (S4)', () => {
     assert.equal(compact.length, CARD_HEIGHT, 'the footer never adds a row');
     for (const row of compact) assert.equal(helpers.visibleWidth(row), 80);
 
-    // In a tree the two fold keys join the compact legend (S32, S34): at the default
+    // In a tree the two fold keys join the compact legend (S32, S40): at the default
     // width both are named, and at 80 the longer legend still fits one row.
     view.handleInput('ctrl+o');
     const roomy = footerOf(rowsOf(view));
@@ -730,7 +755,7 @@ describe('keys (S4)', () => {
     assert.deepEqual(calls.insert, []);
   });
 
-  test('home/end reach the first and last FILE row and never a group row', async () => {
+  test('home/end reach the first and last ROW, group rows included (S38)', async () => {
     const { view } = await open();
     // S30: a file inside the tree stays highlighted across the order change, which
     // is what leaves its folders open under the fully-folded default.
@@ -738,9 +763,9 @@ describe('keys (S4)', () => {
     view.handleInput('ctrl+o');
     assert.match(selectedRow(rowsOf(view)), /util\.ts/);
     view.handleInput('home');
-    assert.match(selectedRow(rowsOf(view)), /util\.ts/, 'the first file row, not the src group');
+    assert.equal(selectedName(rowsOf(view)), 'src', 'S38: the first row of the tree is its first folder');
     view.handleInput('end');
-    assert.match(selectedRow(rowsOf(view)), /brand-new\.ts/, 'the last file row');
+    assert.equal(selectedName(rowsOf(view)), 'brand-new.ts', 'the last row');
   });
 
   test('ctrl+home and ctrl+end reach the preview edges', async () => {
@@ -814,23 +839,20 @@ describe('keys (S4)', () => {
     assert.equal(calls.close, 1);
   });
 
-  test('a click folds a group without focusing it, and space folds the group holding the file', async () => {
+  test('a click parks the cursor on a group row and folds it, and space folds the group holding the file', async () => {
     const { view, calls } = await open();
     view.handleInput('ctrl+o'); // tree, opened with every group collapsed (S29)
     let rows = rowsOf(view);
     assert.ok(!bodyText(rows).includes('util.ts'), 'every group starts collapsed');
     assert.match(selectedRow(rows), /brand-new\.ts/);
-    // S24: a click on a group row opens it and never parks the cursor there.
+    // S38 replaces S24's "a click folds it without focusing it": the click parks
+    // the cursor on the group row AND folds it, so `space`/`enter` have the row.
     assert.deepEqual(view.handleMouse(mouse({ y: BODY_TOP })), { handled: true, render: true });
     rows = rowsOf(view);
     assert.ok(bodyText(rows).includes('cursor.ts'), 'the click opened the folder');
     assert.ok(!bodyText(rows).includes('util.ts'), 'its own subfolder stays exactly as it was');
     assert.ok(bodyText(rows).includes('src'), 'the group row stays');
-    // S29 changed what this click does to the rows ABOVE the cursor: opening a
-    // group adds rows under it, so the kept index lands on another FILE row — a
-    // group row still never takes the cursor, which is what S24 rules.
-    assert.notEqual(selectedName(rows), 'src', 'a group row never takes the cursor');
-    assert.match(selectedRow(rows), /\.ts/, 'the cursor stays on a file row');
+    assert.equal(selectedName(rows), 'src', 'the click parks the cursor on the group row');
     assert.deepEqual(calls.insert, [], 'a group row never inserts');
     assert.equal(calls.close, 0);
     // A second click closes it again.
@@ -847,17 +869,21 @@ describe('keys (S4)', () => {
     rows = rowsOf(view);
     assert.ok(!bodyText(rows).includes('util.ts'), 'space folded the folder holding it');
     assert.ok(bodyText(rows).includes('lib'), 'the folder row stays');
-    assert.equal(selectedName(rows), 'cursor.ts', 'the cursor moves to a file row, never the group');
+    assert.equal(selectedName(rows), 'lib', 'S38: the cursor parks on the group row that held the file');
 
     // S30 replaces S10's per-order memory: choosing the tree again re-seeds its
     // folds to the focused file's path, so the folder just folded is open again.
+    view.handleInput('space'); // reopen the folder from its own row
+    view.handleInput('down'); // and step back onto the file it holds
+    assert.equal(selectedName(rowsOf(view)), 'util.ts');
     view.handleInput('ctrl+o'); // ext
     assert.ok(bodyText(rowsOf(view)).includes('.md'), 'the ext order paints its own groups');
     view.handleInput('ctrl+o'); // files
     view.handleInput('ctrl+o'); // tree again
     rows = rowsOf(view);
     assert.ok(bodyText(rows).includes('cursor.ts'), 'the focused file path is open again (S30)');
-    assert.ok(!bodyText(rows).includes('util.ts'), 'and the folder it left folded stays folded');
+    assert.ok(bodyText(rows).includes('util.ts'), 'and so is the nested folder that holds it');
+    assert.deepEqual(groupCells(rows), [' ▾ src', ' ▾   lib'], 'no fold the reader left behind is remembered');
   });
 
   test('a non-empty query forces every group open and makes the fold keys inert', async () => {
@@ -1134,63 +1160,104 @@ describe('the info row (S22)', () => {
   });
 });
 
-describe('the cursor only rests on file rows (S24)', () => {
-  test('the arrows, home/end skip every group row in both foldable orders', async () => {
+describe('every row of tree and ext takes the cursor (S38)', () => {
+  test('the arrows and home/end park the cursor on a group row exactly as on a file row', async () => {
     const { view, calls } = await open();
-    // S30: focus a file inside the tree, so the order change is what opens the two
-    // folders the walk below visits.
-    for (let step = 0; step < 3; step += 1) view.handleInput('down'); // src/lib/util.ts
-    view.handleInput('ctrl+o'); // tree: [src] [lib] util.ts cursor.ts README.md brand-new.ts
+    view.handleInput('ctrl+o'); // tree, every group collapsed: [src] README.md brand-new.ts
     view.handleInput('home');
+    assert.equal(selectedName(rowsOf(view)), 'src', 'home reaches the first row, the folder group');
     const walked = [];
-    for (let step = 0; step < 5; step += 1) {
+    for (let step = 0; step < 4; step += 1) {
       walked.push(selectedName(rowsOf(view)));
       view.handleInput('down');
     }
-    assert.deepEqual(walked, ['util.ts', 'cursor.ts', 'README.md', 'brand-new.ts', 'brand-new.ts'],
-      'walking down visits every file row and never a folder group');
+    assert.deepEqual(walked, ['src', 'README.md', 'brand-new.ts', 'brand-new.ts'],
+      'walking down visits the group row and every file row, and clamps on the last one');
     view.handleInput('home');
-    for (let step = 0; step < 3; step += 1) {
-      view.handleInput('up');
-      assert.equal(selectedName(rowsOf(view)), 'util.ts', 'the cursor clamps on the first file, never the folder above it');
-    }
+    view.handleInput('up');
+    assert.equal(selectedName(rowsOf(view)), 'src', 'the cursor clamps on the first row, the group');
     view.handleInput('end');
-    assert.equal(selectedName(rowsOf(view)), 'brand-new.ts', 'end is the last file row');
+    assert.equal(selectedName(rowsOf(view)), 'brand-new.ts', 'end is the last row');
 
-    view.handleInput('ctrl+o'); // ext: [.md] README.md [.ts] brand-new.ts cursor.ts util.ts
-    // S34: util.ts keeps its own extension group open, and one `shift+space` opens
-    // the other one, so every file row is walkable again.
-    view.handleInput('shift+space');
+    // `ext`: its extension groups are rows the cursor takes too.
+    view.handleInput('ctrl+o'); // ext: [.md] [.ts] brand-new.ts cursor.ts util.ts
     view.handleInput('home');
-    const extWalk = [];
-    for (let step = 0; step < 5; step += 1) {
-      extWalk.push(selectedName(rowsOf(view)));
-      view.handleInput('down');
-    }
-    assert.deepEqual(extWalk, ['README.md', 'brand-new.ts', 'cursor.ts', 'util.ts', 'util.ts'],
-      'ext skips its extension groups the same way');
+    assert.equal(selectedName(rowsOf(view)), '.md', 'the ext order starts on its first extension row');
+    view.handleInput('down');
+    assert.equal(selectedName(rowsOf(view)), '.ts', 'the cursor walks the extension rows too');
+    view.handleInput('down');
+    assert.equal(selectedName(rowsOf(view)), 'brand-new.ts', 'and continues into the files');
     assert.deepEqual(calls.insert, []);
     assert.equal(calls.close, 0);
   });
 
-  test('the wheel and a query never park the cursor on a group row', async () => {
-    const entries = [
-      { path: 'src/a.ts', state: 'clean' },
-      { path: 'src/b.ts', state: 'clean' },
-      { path: 'z.ts', state: 'clean' },
-    ];
+  test('the wheel and the page moves park the cursor on a group row too', async () => {
+    const entries = ['a', 'b', 'c', 'd', 'e']
+      .map((name) => ({ path: `src/${name}.ts`, state: 'clean' }))
+      .concat([{ path: 'z.ts', state: 'clean' }]);
     const { view } = await open({ entries });
-    view.handleInput('ctrl+o'); // tree: [src] a.ts b.ts z.ts
+    view.handleInput('ctrl+o'); // tree: S30 opened `src`, the folder holding the focused file
     view.handleInput('home');
-    assert.equal(selectedName(rowsOf(view)), 'a.ts');
-    view.handleMouse(mouse({ type: 'wheel', button: 'none', wheelDelta: -1, y: BODY_TOP + 1 }));
-    assert.equal(selectedName(rowsOf(view)), 'a.ts', 'the wheel up stays on the first file, not the folder above it');
-    view.handleMouse(mouse({ type: 'wheel', button: 'none', wheelDelta: 1, y: BODY_TOP + 1 }));
-    assert.equal(selectedName(rowsOf(view)), 'b.ts');
-    for (const character of 'z') view.handleInput(character);
-    assert.equal(selectedName(rowsOf(view)), 'z.ts', 'a query parks the cursor on its first match, never a group');
-    view.handleInput('ctrl+u');
-    assert.notEqual(selectedName(rowsOf(view)), 'src');
+    assert.equal(selectedName(rowsOf(view)), 'src', 'the wheel below starts from the folder row');
+    assert.equal(bodyCells(rowsOf(view))[0], '▸▾ src', 'the focused folder row paints its cursor and chevron');
+    // S10 stands: space on a group row folds it, and S38 says the cursor stays there.
+    view.handleInput('space');
+    assert.equal(selectedName(rowsOf(view)), 'src', 'the folded folder keeps the cursor');
+    assert.equal(bodyCells(rowsOf(view))[0], '▸▸ src', 'and paints its collapsed chevron');
+    view.handleInput('space');
+    assert.equal(bodyCells(rowsOf(view))[0], '▸▾ src', 'space reopened it from that same row');
+
+    assert.deepEqual(
+      view.handleMouse(mouse({ type: 'wheel', button: 'none', wheelDelta: 1, y: BODY_TOP })),
+      { handled: true, render: true },
+    );
+    assert.equal(selectedName(rowsOf(view)), 'a.ts', 'the wheel moves off the group row');
+    view.handleMouse(mouse({ type: 'wheel', button: 'none', wheelDelta: -1, y: BODY_TOP }));
+    assert.equal(selectedName(rowsOf(view)), 'src', 'and back onto it');
+
+    // The page moves are compatibility bindings S4 never names (like home/end).
+    view.handleInput('pagedown');
+    assert.equal(selectedName(rowsOf(view)), 'z.ts', 'a page down clamps on the last row');
+    view.handleInput('\x1b[5~');
+    assert.equal(selectedName(rowsOf(view)), 'src', 'a page up from a raw sequence returns to the first row');
+  });
+
+  test('tab and enter on a group row mark and insert nothing, and the panel stays open', async () => {
+    const entries = [{ path: 'src/a.ts', state: 'clean' }, { path: 'src/b.ts', state: 'clean' }];
+    const { view, calls } = await open({ entries });
+    view.handleInput('ctrl+o'); // tree: [src] a.ts b.ts
+    view.handleInput('home');
+    assert.equal(selectedName(rowsOf(view)), 'src');
+    const before = rowsOf(view);
+    const renders = calls.render;
+    view.handleInput('tab');
+    assert.deepEqual(rowsOf(view), before, 'tab changes nothing on a group row');
+    assert.equal(calls.render, renders, 'so it repaints nothing');
+    assert.ok(!bodyText(rowsOf(view)).includes(SELECTION_MARK), 'and it never marks the group');
+    view.handleInput('enter');
+    assert.deepEqual(calls.insert, [], 'enter on a group row inserts nothing');
+    assert.equal(calls.close, 0, 'and leaves the panel open');
+    // S10 still holds: enter on a group row toggles that group.
+    assert.ok(!bodyText(rowsOf(view)).includes('a.ts'), 'enter folded the focused folder');
+  });
+
+  test('the preview settles on a group row and the panel stays live', async () => {
+    const { view, calls } = await open();
+    view.handleInput('ctrl+o'); // tree, every group collapsed
+    view.handleInput('home'); // the src group
+    assert.equal(selectedName(rowsOf(view)), 'src');
+    const rows = rowsOf(view);
+    assert.ok(previewTop(rows).startsWith('╭'), `the preview keeps its box: ${previewTop(rows)}`);
+    assert.ok(bodyText(rows).includes('No file selected.'), 'the pane says it shows no file');
+    assert.ok(!/\d+\/\d+/.test(previewTop(rows)), 'and claims no line position');
+    // The panel keeps answering: the group folds, nothing opens, escape still closes.
+    view.handleInput('space');
+    assert.ok(bodyText(rowsOf(view)).includes('cursor.ts'), 'space opened the focused group');
+    view.handleInput('ctrl+e');
+    assert.deepEqual(calls.open, [], 'a group row is never opened in the editor');
+    assert.equal(calls.close, 0);
+    view.handleInput('escape');
+    assert.equal(calls.close, 1, 'the panel still closes');
   });
 
   test('a click folds a group while no query is active, and does nothing during one', async () => {
@@ -1225,7 +1292,25 @@ describe('the cursor only rests on file rows (S24)', () => {
     assert.equal(calls.close, 0);
   });
 
-  test('the one exception: with every group folded the cursor rests on a group row so space reopens it', async () => {
+  test('a query parks the cursor on the first matching row, group or file', async () => {
+    const entries = [
+      { path: 'src/a.ts', state: 'clean' },
+      { path: 'src/b.ts', state: 'clean' },
+      { path: 'z.ts', state: 'clean' },
+    ];
+    const { view } = await open({ entries });
+    view.handleInput('ctrl+o'); // tree: S30 opened `src`
+    for (const character of 'src') view.handleInput(character);
+    assert.equal(selectedName(rowsOf(view)), 'src', 'a query parks the cursor on the first row it lists');
+    // S10 stands: the query holds every group open, so the fold key changes nothing.
+    const during = rowsOf(view);
+    view.handleInput('space');
+    assert.deepEqual(rowsOf(view), during, 'the query holds the folder open');
+    view.handleInput('ctrl+u');
+    assert.equal(selectedName(rowsOf(view)), 'src', 'and clearing it keeps the first row, the group');
+  });
+
+  test('space folds the group holding the focused file and parks the cursor on its row', async () => {
     const entries = [{ path: 'src/a.ts', state: 'clean' }, { path: 'src/b.ts', state: 'clean' }];
     const { view, calls } = await open({ entries });
     view.handleInput('ctrl+o'); // tree: [src] a.ts b.ts
@@ -1233,8 +1318,8 @@ describe('the cursor only rests on file rows (S24)', () => {
     view.handleInput('space'); // folds `src`, the folder holding a.ts
     let rows = rowsOf(view);
     assert.ok(!bodyText(rows).includes('a.ts'), 'the only group is folded, so no file row is left');
-    assert.equal(selectedName(rows), 'src', 'the documented exception: the cursor rests on the group row');
-    // It still is not a file: nothing marks, opens or folds-then-inserts it.
+    assert.equal(selectedName(rows), 'src', 'S38: the cursor rests on the group row that held the file');
+    // A group row is still not a file: nothing marks, opens or inserts it.
     view.handleInput('tab');
     assert.ok(!bodyText(rowsOf(view)).includes(SELECTION_MARK), 'a group row is never marked');
     view.handleInput('ctrl+e');
@@ -1242,13 +1327,14 @@ describe('the cursor only rests on file rows (S24)', () => {
     assert.equal(calls.close, 0);
     view.handleInput('space');
     rows = rowsOf(view);
-    assert.equal(selectedName(rows), 'a.ts', 'space reopened the tree and the cursor went back to a file');
-    // S10 still holds: Enter on the group row reopens it as well, and never inserts.
-    view.handleInput('space');
-    assert.equal(selectedName(rowsOf(view)), 'src');
+    assert.equal(selectedName(rows), 'src', 'space reopened the tree and the cursor stays on the folder row');
+    assert.ok(bodyText(rows).includes('a.ts'), 'the files paint again');
+    view.handleInput('down');
+    assert.equal(selectedName(rowsOf(view)), 'a.ts', 'and one step down reaches the first file');
+    // S10 still holds: enter on a group row folds it as well, and never inserts.
+    view.handleInput('up');
     view.handleInput('enter');
-    rows = rowsOf(view);
-    assert.equal(selectedName(rows), 'a.ts', 'enter reopened the tree from the group row');
+    assert.ok(!bodyText(rowsOf(view)).includes('a.ts'), 'enter folded the folder from the group row');
     assert.deepEqual(calls.insert, [], 'a group row never inserts');
   });
 });
@@ -1286,8 +1372,8 @@ describe('the tree orders fold by default with a chevron (S29)', () => {
   });
 
   test('the cursor mark stays readable next to the chevron on a group row', async () => {
-    // The S24 exception: one folded group and no file row left, so the cursor
-    // rests on the group row, where the marker column holds both glyphs.
+    // S38: the cursor rests on the group row it folded, where the marker column holds
+    // both glyphs.
     const entries = [{ path: 'src/a.ts', state: 'clean' }];
     const { view } = await open({ entries });
     view.handleInput('ctrl+o'); // tree: [src] a.ts
@@ -1351,9 +1437,9 @@ describe('only the focused file path opens on an order change (S30)', () => {
     view.handleInput('down'); // src/web/test.ts
     view.handleInput('ctrl+o'); // tree: src and src/web open, the other `web` collapsed
     view.handleInput('down'); // src/index.ts
-    view.handleInput('down'); // README.md
+    view.handleInput('down'); // S38: the next row is the collapsed `web` group
     const rows = rowsOf(view);
-    assert.equal(selectedName(rows), 'README.md');
+    assert.equal(selectedName(rows), 'web');
     assert.ok(bodyText(rows).includes('index.ts'), 'the folder the reader had open stays open');
     assert.ok(!bodyText(rows).includes('app.ts'), 'a group the highlight moved past never opens by itself');
   });
@@ -1363,8 +1449,13 @@ describe('only the focused file path opens on an order change (S30)', () => {
     view.handleInput('down');
     view.handleInput('down'); // src/web/test.ts
     view.handleInput('ctrl+o'); // tree
-    view.handleInput('shift+space'); // S34: the other groups open
-    assert.ok(bodyText(rowsOf(view)).includes('app.ts'), 'every other group is open');
+    view.handleInput('shift+space'); // S39: collapses every group
+    view.handleInput('shift+space'); // and the second press expands them all
+    assert.ok(bodyText(rowsOf(view)).includes('app.ts'), 'every group is open');
+    view.handleInput('home');
+    view.handleInput('down');
+    view.handleInput('down'); // back onto src/web/test.ts
+    assert.equal(selectedName(rowsOf(view)), 'test.ts');
     view.handleInput('ctrl+o'); // ext
     view.handleInput('ctrl+o'); // files
     view.handleInput('ctrl+o'); // tree again
@@ -1422,47 +1513,91 @@ describe('space folds only where the order paints groups (S32)', () => {
 
   test('the footer names the fold keys only while the order paints groups', async () => {
     const { view } = await open();
-    for (const order of ['files', 'tree', 'ext', 'files']) {
+    for (const [order, action] of [
+      ['files', undefined],
+      ['tree', 'shift+space expand all'],
+      ['ext', 'shift+space collapse all'],
+      ['files', undefined],
+    ]) {
       const footer = footerOf(rowsOf(view, 200));
-      if (order === 'files') {
+      if (action === undefined) {
         assert.ok(!footer.includes('space') && !footer.includes('fold'), `the ${order} footer names no fold key: ${footer}`);
       } else {
         assert.ok(footer.includes('space fold'), `the ${order} footer names space fold: ${footer}`);
-        assert.ok(footer.includes('shift+space all'), `the ${order} footer names shift+space: ${footer}`);
+        assert.ok(footer.includes(action), `the ${order} footer names ${action}: ${footer}`);
       }
       view.handleInput('ctrl+o');
     }
   });
 });
 
-describe('shift+space toggles every other group (S34)', () => {
-  test('it opens every group except the focused file ones, then collapses them', async () => {
-    const { view } = await open({ entries: NESTED });
+describe('shift+space is one toggle over every group (S39)', () => {
+  test('it collapses EVERY group, the ones holding the focused file included, and parks the cursor on the group that held it', async () => {
+    const { view, calls } = await open({ entries: NESTED });
     view.handleInput('down');
     view.handleInput('down'); // src/web/test.ts
     view.handleInput('ctrl+o'); // tree: src and src/web open, the other `web` collapsed
+    assert.equal(selectedName(rowsOf(view)), 'test.ts');
+    view.handleInput('shift+space');
     let rows = rowsOf(view);
-    assert.ok(!bodyText(rows).includes('app.ts'), 'the other group starts collapsed');
+    assert.ok(!bodyText(rows).includes('test.ts'), 'the folders holding the focused file collapse too');
+    assert.ok(!bodyText(rows).includes('app.ts'), 'and so does every other group');
+    assert.deepEqual(groupCells(rows), ['▸▸ src', ' ▸ web'], 'every group row paints collapsed, and the cursor rests on src');
+    // S39: the group that held the file keeps the cursor. In a nested tree the
+    // deepest holder (`src/web`) is hidden by its own collapse, so the cursor rests
+    // on the nearest group row above it that still paints — `src`.
+    assert.equal(selectedName(rows), 'src', 'the cursor rests on the group row that held the file');
+    assert.deepEqual(calls.insert, []);
+    assert.equal(calls.close, 0);
+    // The same key now expands every group, and the cursor stays on its row.
     view.handleInput('shift+space');
     rows = rowsOf(view);
-    assert.ok(bodyText(rows).includes('app.ts'), 'every other group opened');
-    assert.match(selectedRow(rows), /test\.ts/, 'and the cursor never moved off its file');
-    view.handleInput('shift+space');
-    rows = rowsOf(view);
-    assert.ok(!bodyText(rows).includes('app.ts'), 'now every other group is open, so they all collapse');
-    assert.ok(bodyText(rows).includes('test.ts'), 'the focused file keeps its row, so the cursor stays aware');
+    assert.ok(bodyText(rows).includes('app.ts'), 'every group is open again');
+    assert.ok(bodyText(rows).includes('test.ts'));
+    assert.equal(selectedName(rows), 'src', 'the group row under the cursor stays the one the file came from');
   });
 
-  test('in ext it toggles the other extension groups only', async () => {
+  test('a cursor already on a group row keeps that row across both directions', async () => {
+    const entries = [{ path: 'src/a.ts', state: 'clean' }, { path: 'src/b.ts', state: 'clean' }];
+    const { view } = await open({ entries });
+    view.handleInput('ctrl+o'); // tree: src open, a.ts b.ts
+    view.handleInput('home'); // the src group row
+    view.handleInput('shift+space');
+    let rows = rowsOf(view);
+    assert.equal(selectedName(rows), 'src', 'the focused group row keeps the cursor');
+    assert.ok(!bodyText(rows).includes('a.ts'), 'and every group is collapsed');
+    view.handleInput('shift+space');
+    rows = rowsOf(view);
+    assert.ok(bodyText(rows).includes('a.ts'), 'the second press expands every group');
+    assert.equal(selectedName(rows), 'src', 'with the cursor still on its row');
+  });
+
+  test('a repository-root file has no group to park on, so the cursor keeps its own row', async () => {
+    const entries = [{ path: 'src/a.ts', state: 'clean' }, { path: 'README.md', state: 'clean' }];
+    const { view } = await open({ entries });
+    view.handleInput('ctrl+o'); // tree with the root file focused: every group collapsed
+    assert.equal(selectedName(rowsOf(view)), 'README.md');
+    view.handleInput('shift+space'); // every group is collapsed, so this expands them
+    const rows = rowsOf(view);
+    assert.ok(bodyText(rows).includes('a.ts'), 'every group opened');
+    assert.equal(selectedName(rows), 'README.md', 'the row the reader was on stays under the cursor');
+  });
+
+  test('in ext it collapses the focused extension group too and parks on it', async () => {
     const { view } = await open({ entries: NESTED });
     view.handleInput('down');
     view.handleInput('down'); // src/web/test.ts
     view.handleInput('ctrl+o'); // tree
     view.handleInput('ctrl+o'); // ext: only .ts open
-    assert.ok(!bodyText(rowsOf(view)).includes('app.md'), 'the md group starts collapsed');
+    assert.equal(selectedName(rowsOf(view)), 'test.ts');
     view.handleInput('shift+space');
-    assert.ok(bodyText(rowsOf(view)).includes('README.md'), 'the other extension group opened');
-    assert.ok(bodyText(rowsOf(view)).includes('test.ts'), 'the focused file still paints');
+    let rows = rowsOf(view);
+    assert.ok(!bodyText(rows).includes('test.ts'), 'the focused extension group collapses too');
+    assert.equal(selectedName(rows), '.ts', 'the cursor rests on the extension group that held the file');
+    view.handleInput('shift+space');
+    rows = rowsOf(view);
+    assert.ok(bodyText(rows).includes('README.md'), 'every extension group opens again');
+    assert.equal(selectedName(rows), '.ts', 'with the cursor still on that group row');
   });
 
   test('in the flat files order it does nothing', async () => {
@@ -1490,9 +1625,56 @@ describe('shift+space toggles every other group (S34)', () => {
     view.handleInput('\x0f'); // raw ctrl+o
     assert.ok(!bodyText(rowsOf(view)).includes('app.ts'));
     view.handleInput('\x1b[32;2u');
-    assert.ok(bodyText(rowsOf(view)).includes('app.ts'), 'the kitty sequence reaches the fold-all key');
+    assert.ok(!bodyText(rowsOf(view)).includes('app.ts'), 'the kitty sequence reaches the fold-all key');
     view.handleInput('\x1b[27;2;32~');
-    assert.ok(!bodyText(rowsOf(view)).includes('app.ts'), 'so does the modifyOtherKeys one');
+    assert.ok(bodyText(rowsOf(view)).includes('app.ts'), 'so does the modifyOtherKeys one');
+  });
+});
+
+describe('the fold-all legend states the action it performs (S40)', () => {
+  test('it names expand all while every group is collapsed, and collapse all otherwise', async () => {
+    const { view } = await open({ entries: NESTED });
+    // The flat order names neither fold key (S32 stands).
+    let footer = footerOf(rowsOf(view, 200));
+    assert.ok(!footer.includes('space') && !footer.includes('fold'), `the flat footer names no fold key: ${footer}`);
+
+    view.handleInput('ctrl+o'); // tree, with a root file focused: every group is collapsed
+    footer = footerOf(rowsOf(view, 200));
+    assert.ok(footer.includes('space fold'), footer);
+    assert.ok(footer.includes('shift+space expand all'), footer);
+    assert.ok(!footer.includes('collapse all'), footer);
+
+    view.handleInput('shift+space');
+    footer = footerOf(rowsOf(view, 200));
+    assert.ok(footer.includes('shift+space collapse all'), footer);
+    assert.ok(!footer.includes('expand all'), footer);
+
+    // A hand-folded group makes the tree mixed, so the legend says it would collapse.
+    view.handleInput('home');
+    view.handleInput('space'); // folds `src` from its own row
+    footer = footerOf(rowsOf(view, 200));
+    assert.ok(footer.includes('shift+space collapse all'), `a mixed tree would collapse: ${footer}`);
+
+    // ext paints the same two states.
+    view.handleInput('ctrl+o'); // ext, every group collapsed (the cursor came from a group row)
+    footer = footerOf(rowsOf(view, 200));
+    assert.ok(footer.includes('shift+space expand all'), `ext starts collapsed: ${footer}`);
+    view.handleInput('shift+space');
+    footer = footerOf(rowsOf(view, 200));
+    assert.ok(footer.includes('shift+space collapse all'), `ext now shows the other action: ${footer}`);
+
+    // And the flat order drops both tokens again.
+    view.handleInput('ctrl+o');
+    footer = footerOf(rowsOf(view, 200));
+    assert.ok(!footer.includes('space') && !footer.includes('fold'), `the flat footer names no fold key: ${footer}`);
+  });
+
+  test('a query holds every group open, so the legend offers to collapse them', async () => {
+    const { view } = await open({ entries: NESTED });
+    view.handleInput('ctrl+o'); // tree, every group collapsed
+    for (const character of 'app') view.handleInput(character);
+    const footer = footerOf(rowsOf(view, 200));
+    assert.ok(footer.includes('shift+space collapse all'), footer);
   });
 });
 

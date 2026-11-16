@@ -113,3 +113,27 @@ test('hazardous and malformed input never throws', () => {
 		assert.equal(isSqlClientSegment(value), false, String(value));
 	}
 });
+
+// A removed checkout is the one git operation whose data is not in the repository at
+// all, so it is proven from the verb alone; the verbs that create, move or record a
+// checkout delete nothing and keep whatever identity the call has.
+test('removing a checkout is proven while creating or recording one is not', () => {
+	for (const segment of [
+		'git worktree remove ../old',
+		'git worktree remove --force ../dirty',
+		'git worktree prune',
+		'git -C repo worktree remove ../old',
+	]) {
+		assert.equal(isDestructiveSegment(segment), true, segment);
+	}
+	for (const segment of [
+		'git worktree add ../new -b feat/x',
+		'git worktree move ../a ../b',
+		'git worktree lock ../old',
+		'git worktree unlock ../old',
+		'git worktree repair ../old',
+		'git worktree list',
+	]) {
+		assert.equal(isDestructiveSegment(segment), false, segment);
+	}
+});

@@ -1019,3 +1019,401 @@ test('adversarial assignment runs classify in bounded time', () => {
 		assert.ok(elapsed < 250, `${command} took ${elapsed}ms`);
 	}
 });
+
+// The user's own transcripts: a read-only call must not fall to the generic card just because
+// the program is a modern replacement for one the table already names.
+test('read-only inspection programs beyond the classic ones are exploring', () => {
+	const exploring = [
+		'fd -e js lib', 'fdfind --type f src', 'fd . lib | head',
+		'bat README.md', 'batcat -n lib/a.js', 'eza -la', 'exa --tree', 'lsd -l',
+		'ag needle src', 'ack needle', 'zgrep x a.gz', 'fgrep -n x a',
+		'less README.md', 'man ls', 'id', 'hostname', 'uptime', 'free -h', 'printenv PATH', 'nproc',
+		'comm -12 a b', 'paste a b', 'rev a', 'tac a', 'seq 1 5',
+		'git stash show -p', 'git diff-tree --stat HEAD', 'git show-ref', 'git symbolic-ref HEAD', 'git cherry -v',
+		'gh cache list', 'gh secret list', 'gh variable list',
+		'docker ps -a', 'docker images', 'docker logs web', 'docker inspect web', 'kubectl get pods', 'kubectl describe pod x', 'kubectl logs x',
+		'npm ls', 'npm view react version', 'npm outdated', 'npm explain x', 'pnpm ls', 'pnpm why x', 'yarn why x', 'pip list', 'pip show x', 'pip freeze',
+	];
+	for (const command of exploring) {
+		assert.equal(inferBashActivity(command), 'exploring', command);
+	}
+});
+
+test('a CI run listing stays a check, as it was', () => {
+	for (const command of ['gh run list', 'gh run view 123']) assert.equal(inferBashActivity(command), 'checking', command);
+});
+
+test('fd names exploring only while it executes nothing', () => {
+	for (const command of ['fd -x rm {}', 'fd --exec rm {}', 'fd -X rm', 'fd --exec-batch rm', 'fd . -x sh -c "echo x"']) {
+		assert.notEqual(inferBashActivity(command), 'exploring', command);
+	}
+});
+
+test('a composition of reads with neutral separators is exploring, and one unnamed segment still keeps it generic', () => {
+	assert.equal(inferBashActivity('fd -e js lib; echo ---; bat lib/a.js && pwd'), 'exploring');
+	assert.equal(inferBashActivity('cd /tmp && fd x && echo done'), 'exploring');
+	assert.equal(inferBashActivity('fd -e js lib; frobnicate --now'), undefined);
+});
+
+// ---- T7: the census rules ----
+//
+// A census of the user's own 6000 most recent distinct calls left 32.3% of them on the
+// generic `$ bash`, and most of that residue was not ambiguity: it was a command this
+// classifier could read if it stripped the same prefix the shell does. Every rule below
+// was judged against one standard — a heading must never claim work the call did not
+// do — so the payloads nobody can read still stay generic on purpose.
+
+// A git or gh global option names how the tool runs, never what it does, and it stands
+// between the program and the subcommand that names the card. `-C <dir>`, `-c <k=v>`,
+// `--git-dir`, `--work-tree`, `--no-pager`, `-P`, `--no-optional-locks` and
+// `--paginate` are stripped in one place, so no family has to know about them.
+test('git and gh global options never hide the subcommand', () => {
+	for (const command of [
+		'git -C /repo status',
+		'git -C /repo --no-pager log -1',
+		'git -c core.pager=cat log -1',
+		'git --no-pager log -1',
+		'git -P status',
+		'git --no-optional-locks status',
+		'git --git-dir=/repo/.git status',
+		'git --git-dir /repo/.git status',
+		'git --work-tree=/repo status',
+		'gh --paginate pr list',
+		'gh -R owner/name pr view 12',
+	]) {
+		assert.equal(inferBashActivity(command), 'exploring', command);
+	}
+	assert.equal(inferBashActivity('git -C /repo add .'), 'versioning');
+	assert.equal(inferBashActivity('git --no-pager fetch origin'), 'versioning');
+	assert.equal(inferBashActivity('git -C /repo push'), 'publishing');
+	assert.equal(inferBashActivity('git -C /repo --no-pager log -1 | head -3'), 'exploring');
+	// An option this list does not know is not guessed at: the card stays generic.
+	assert.equal(inferBashActivity('git --unknown-option status'), undefined);
+});
+
+// A program named by a path is the program the path resolves to, so a virtualenv's
+// pytest and a project's own vitest are the checks they are — while a path to a program
+// this classifier does not name still matches nothing.
+test('a program named by a path classifies as its basename', () => {
+	for (const [command, activity] of [
+		['/usr/bin/git status', 'exploring'],
+		['/opt/homebrew/bin/git -C /repo log -1', 'exploring'],
+		['./node_modules/.bin/vitest run a.test.js', 'checking'],
+		['.venv/bin/pytest -q', 'checking'],
+		['~/.local/bin/ruff check .', 'checking'],
+		['./scripts/deploy.sh', undefined],
+		['/opt/tools/unknown-tool --flag', undefined],
+	]) {
+		assert.equal(inferBashActivity(command), activity, command);
+	}
+});
+
+// A wrapper changes how the command runs, not what it does, so the command behind it
+// names the card. `sudo` is deliberately absent: it runs the command as another user,
+// and no heading may file a privileged action as the read it resembles. `timeout` keeps
+// the reading this suite already pinned — only a check is unwrapped.
+test('a wrapper names the command it runs, and sudo never names anything', () => {
+	for (const [command, activity] of [
+		['env FOO=1 git status', 'exploring'],
+		['env -i FOO=1 git status', 'exploring'],
+		['env --unset=FOO git status', 'exploring'],
+		['nice -n 10 git status', 'exploring'],
+		['nice -10 git status', 'exploring'],
+		['nohup git status', 'exploring'],
+		['stdbuf -oL git status', 'exploring'],
+		['stdbuf -i0 -o0 git status', 'exploring'],
+		['command git status', 'exploring'],
+		['exec git status', 'exploring'],
+		['ionice -c2 -n7 git status', 'exploring'],
+		['time -p pnpm test', 'checking'],
+		['nohup npm test', 'checking'],
+		['env CI=1 pnpm test', 'checking'],
+		['nice -n 5 git -C /repo fetch', 'versioning'],
+		['command -v git', 'exploring'],
+		['sudo git status', undefined],
+		['sudo -u root pnpm test', undefined],
+		['env -S "git status"', undefined],
+		['env', undefined],
+		['timeout 5 git status', undefined],
+	]) {
+		assert.equal(inferBashActivity(command), activity, command);
+	}
+});
+
+// Moving between branches, fetching, merging, staging a patch and rewriting local
+// history all move work inside this machine and publish nothing: they are the one
+// versioning identity. A deletion the destructive table already names keeps its warning.
+test('the git verbs that move work name the versioning activity', () => {
+	for (const command of [
+		'git fetch origin',
+		'git fetch --all --prune',
+		'git pull',
+		'git pull --rebase',
+		'git merge main',
+		'git merge --no-ff feat/x',
+		'git checkout main',
+		'git checkout -b feat/x',
+		'git switch main',
+		'git switch -c feat/y',
+		'git restore --staged .',
+		'git reset',
+		'git reset HEAD~1',
+		'git revert abc1234',
+		'git apply fix.patch',
+		'git am 0001-a.patch',
+		'git mv old.ts new.ts',
+		'git rm --cached a.txt',
+		'git branch feat/x',
+		'git branch -m old new',
+		'git branch -d old',
+		'git tag v1.0.0',
+		'git tag -a v1 -m x',
+		'git tag -d v1.0.0',
+		'git remote add origin /tmp/repo.git',
+		'git remote set-url origin /tmp/other.git',
+		'git remote rename a b',
+		'git stash',
+		'git stash push -m wip',
+		'git stash pop',
+		'git stash apply',
+		'git stash save wip',
+		'gh pr checkout 12',
+	]) {
+		assert.equal(inferBashActivity(command), 'versioning', command);
+	}
+	// A deletion the destructive table already names keeps its warning, and a listing
+	// stays the inspection it is.
+	for (const command of ['git branch -D feat/x', 'git stash drop', 'git rm a.txt', 'git reset --hard']) {
+		assert.equal(inferBashActivity(command), 'destructive', command);
+	}
+	for (const command of ['git branch', 'git branch -a', 'git tag', 'git tag -l "v*"', 'git stash list', 'git worktree list', 'git remote -v']) {
+		assert.equal(inferBashActivity(command), 'exploring', command);
+	}
+});
+
+// A subshell's opening `(` stands before the program without a space, and a CI rerun is
+// work this machine sent to the remote: neither may hide the command it names.
+test('a subshell prefix and a CI rerun name the command they carry', () => {
+	assert.equal(inferBashActivity('(git status)'), 'exploring');
+	assert.equal(inferBashActivity('(cd /repo && git fetch)'), 'versioning');
+	assert.equal(inferBashActivity('(gh pr create --title x --body y)'), 'publishing');
+	assert.equal(inferBashActivity('gh run rerun 123'), 'publishing');
+	assert.equal(inferBashActivity('gh run cancel 123 --force'), 'publishing');
+});
+
+// A worktree the call creates is a checkout this machine did not have, so it is the
+// build-up identity; the lock files beside it are local git metadata like the index.
+test('a worktree the call creates prepares the machine', () => {
+	for (const command of [
+		'git worktree add ../x main',
+		'git worktree add -b feat/x ../x main',
+	]) {
+		assert.equal(inferBashActivity(command), 'preparing', command);
+	}
+	for (const command of ['git worktree lock ../x', 'git worktree unlock ../x']) {
+		assert.equal(inferBashActivity(command), 'versioning', command);
+	}
+	assert.equal(inferBashActivity('git worktree list'), 'exploring');
+});
+
+// Programs the transcripts read with name inspection: the journal, the kernel log, the
+// unit state, a package's own query verbs, and a tool's read-only words. The noun before
+// the read word is transparent, so `herdr plugin list` is the list it is while
+// `herdr plugin install` still names nothing.
+test('the read-only programs of the census name the exploring activity', () => {
+	for (const command of [
+		'journalctl -u pi -n 50',
+		'journalctl --since today',
+		'dmesg -T',
+		'systemctl status pi',
+		'systemctl is-active herdr',
+		'systemctl --user list-units',
+		'systemctl show -p MainPID pi',
+		'systemctl cat pi.service',
+		'pacman -Qo /usr/bin/git',
+		'pacman -Qi git',
+		'pacman -Qe',
+		'pacman -Ss ripgrep',
+		'pacman -Si git',
+		'brew list',
+		'brew info jq',
+		'brew search jq',
+		'brew outdated',
+		'apt list --installed',
+		'apt show jq',
+		'apt search jq',
+		'apt policy jq',
+		'mise ls',
+		'mise current',
+		'mise which node',
+		'mise where node',
+		'mise doctor',
+		'mise ls-remote node',
+		'nvim --version',
+		'tmux list-sessions',
+		'tmux show-options -g',
+		'tmux display-message -p x',
+		'herdr --version',
+		'herdr plugin list',
+		'herdr config show',
+		'pi --version',
+		'pi mcp list',
+		'gentle-ai version',
+		'gentle-shell --version',
+		'odd-worktree list',
+		// These tools print their usage page like every other known program.
+		'pi --help',
+		'herdr plugin --help',
+	]) {
+		assert.equal(inferBashActivity(command), 'exploring', command);
+	}
+	// Only a read word is a read: the same tools' other verbs name nothing.
+	for (const command of ['herdr plugin install x', 'pi install x', 'herdr server', 'systemctl restart pi', 'pacman -Syu', 'pacman -Sc', 'apt install jq']) {
+		assert.notEqual(inferBashActivity(command), 'exploring', command);
+	}
+});
+
+// A script names a check only while its name is one. `verify` and a namespaced
+// `test:unit` are the same family, while a name that carries a fix, a write, a format, a
+// watch, a dev server or a start is not a check at all — and a bare `npm ci` still
+// installs, because `ci` is a script only when the package manager runs it as one.
+test('a package script names a check only while its name is a check', () => {
+	for (const command of [
+		'npm run verify',
+		'pnpm verify',
+		'npm run ci',
+		'pnpm run ci',
+		'pnpm run test:unit',
+		'npm run lint:ci',
+		'npm run check:runtime-modules',
+		'npm run build',
+	]) {
+		assert.equal(inferBashActivity(command), 'checking', command);
+	}
+	for (const command of [
+		'npm run test:watch',
+		'npm run lint:fix',
+		'npm run build:watch',
+		'npm run format',
+		'npm run dev',
+		'npm run start',
+		'npm run serve',
+		'npm run fix:lint',
+		'npm run write:docs',
+	]) {
+		assert.equal(inferBashActivity(command), undefined, command);
+	}
+	assert.equal(inferBashActivity('npm ci'), 'preparing');
+});
+
+// Creating a temporary path, changing a mode or an owner and renaming a file are the
+// build-up identity, exactly as `cp` and `mkdir` already are: none of them deletes
+// anything a reader could not rename back.
+test('temporary paths, modes, owners and renames prepare the machine', () => {
+	for (const command of ['mktemp -d', 'mktemp', 'chmod +x scripts/run.sh', 'chmod -R 755 build', 'chown me tmp/file', 'mv old.txt new.txt', 'mise install node@20', 'mise use -g node@20']) {
+		assert.equal(inferBashActivity(command), 'preparing', command);
+	}
+});
+
+// `exit`, `umask`, `unset`, `local`, `read`, `wait`, `return` and `:` change the shell
+// the call runs in and nothing else, so the named work beside them still decides the
+// card — and each on its own names nothing.
+test('shell bookkeeping builtins are neutral', () => {
+	for (const [command, activity] of [
+		['git status && exit 0', 'exploring'],
+		['git commit -m x && umask 022', 'versioning'],
+		['git status; unset FOO', 'exploring'],
+		['pnpm test && :', 'checking'],
+		['pnpm test && wait', 'checking'],
+		['exit 1', undefined],
+		['umask 022', undefined],
+		['local x=1', undefined],
+		['read -r answer', undefined],
+		['wait', undefined],
+		['return 0', undefined],
+		[':', undefined],
+		// A bare assignment keeps its value whole: the path inside it is a value, never the
+		// program the segment runs, so the neutral reading survives a path with spaces.
+		['LOG="/var/log/my app.log"', undefined],
+		['LOG="/var/log/my app.log" && wc -l app.log', 'exploring'],
+		// A comment line is prose the shell never runs, so it keeps no card generic.
+		['# a note', undefined],
+		['git status;\n# a note\ngit diff', 'exploring'],
+		['git add -A\n# stage it all\ngit commit -m x', 'versioning'],
+	]) {
+		assert.equal(inferBashActivity(command), activity, command);
+	}
+});
+
+// Ending a process removes no file and rewrites no history, and no family here names
+// it: `kill` and `pkill` stay generic rather than wearing the deletion warning.
+test('ending a process names no family, so kill and pkill stay generic', () => {
+	for (const command of ['kill 1234', 'kill -9 1234', 'pkill -f node', 'killall node']) {
+		assert.equal(inferBashActivity(command), undefined, command);
+	}
+});
+
+// A heredoc body is the text the command reads, never a command of its own: folding it
+// into the segment that opens it is what keeps a multi-line commit message from leaking
+// its words into the list of commands the classifier reads.
+test('a heredoc body belongs to the command that reads it', () => {
+	assert.deepEqual(shellCommandSegments("cat <<'EOF'\nhello world\nEOF"), ["cat <<'EOF'\nhello world\nEOF"]);
+	assert.deepEqual(shellCommandSegments('a <<-X\n\tbody\n\tX\nb'), ['a <<-X\n\tbody\n\tX', 'b']);
+	// The words of a commit message are that message, so the call is the commit it is.
+	assert.equal(inferBashActivity("git commit -F - <<'EOF'\nMerge branch 'main' of example\nEOF"), 'versioning');
+	assert.equal(inferBashActivity("gh pr create --title x --body \"$(cat <<'EOF'\nsome body\nEOF\n)\""), 'publishing');
+	assert.equal(inferBashActivity("git commit -m \"$(cat <<'EOF'\nMerge branch 'main'\n\nbody\nEOF\n)\""), 'versioning');
+	// A heredoc that writes a file is still a write, and a payload this classifier cannot
+	// read is still unnamed.
+	assert.equal(inferBashActivity("cat > notes.txt <<'EOF'\nhello\nEOF"), undefined);
+	assert.equal(inferBashActivity("python3 - <<'PY'\nprint(1)\nPY"), undefined);
+});
+
+// The payloads nobody can read stay generic on purpose: an inline script, an interpreter
+// handed a file to run, an in-place editor, a command that writes its output into a
+// file, a privileged invocation, a shell fed by a pipe, and `eval`.
+test('the payloads this classifier cannot read stay generic on purpose', () => {
+	for (const command of [
+		"python3 -c 'print(1)'",
+		"node -e 'console.log(1)'",
+		"bash -c 'echo hi'",
+		'node scripts/build.mjs',
+		'python3 tools/run.py --fast',
+		'bash scripts/deploy.sh',
+		"sed -i 's/a/b/' file.txt",
+		"perl -pi -e 's/a/b/' file.txt",
+		'cat > notes.txt',
+		'echo hi | sh',
+		'eval "$(cat setup.sh)"',
+		'xargs rm -rf',
+		'unknown-tool --flag',
+	]) {
+		assert.equal(inferBashActivity(command), undefined, command);
+	}
+});
+
+// Every rule above runs on each repainted bash row, so a long adversarial command must
+// still classify in bounded time.
+test('a long adversarial command classifies in bounded time', () => {
+	for (const command of [
+		'git -C /x '.repeat(40) + 'status',
+		'env A=1 '.repeat(250) + 'git status',
+		"cat <<'EOF'\n".repeat(160) + 'x',
+		'herdr '.repeat(50) + 'list',
+		'git -C ' + 'a'.repeat(500) + ' status',
+	]) {
+		const start = performance.now();
+		inferBashActivity(command);
+		const elapsed = performance.now() - start;
+		assert.ok(elapsed < 250, `${command.slice(0, 20)}… took ${elapsed}ms`);
+	}
+});
+
+// The family the card wears for a checkout the call removes, beside the ones it only
+// creates: the censused removal rows were the last silent gap in the table.
+test('a removed checkout wears the destructive family, a created one prepares', () => {
+	assert.equal(inferBashActivity('git worktree remove ../old'), 'destructive');
+	assert.equal(inferBashActivity('git worktree prune'), 'destructive');
+	assert.equal(inferBashActivity('git worktree add ../new -b feat/x'), 'preparing');
+	assert.equal(inferBashActivity('git worktree list'), 'exploring');
+});

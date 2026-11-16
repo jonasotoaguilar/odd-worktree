@@ -81,7 +81,7 @@ how the package is tested and released. The repository invariants live in
 | `r` | Reload the listing |
 | `esc`, `ctrl+c` | Close the panel |
 
-`/odd-list` — `↑`/`↓` select, `t` search (`T` and `/` also open the box), `o`
+`/odd` — `↑`/`↓` select, `t` search (`T` and `/` also open the box), `o`
 open the document in `$VISUAL`/`$EDITOR`, `s` toggles the order between `recent`
 and `name`, `r` reload, `esc` close. `←`/`→` and `[`/`]` scroll the list; the
 document pane pages with `ctrl+j`/`ctrl+k`.
@@ -543,6 +543,18 @@ on screen are the last good ones.
   repository can be proven — a failed proof is the error row and makes no `gh`
   call; and a Gentle Shell whose `gentle-shell-bridge` published its API and draws
   a rail.
+- **The `gh` check never delays a session.** Whether `gh` is usable (`gh api user`,
+  `gh repo view`, plus the checkout's own git probes: about a second of network) is
+  decided in the background: `session_start` dispatches it and returns at once, so
+  opening Pi, resuming a session and switching sessions never wait for it. The one
+  startup notice a failing check gives, and the refusal `/issues` gives, are the same
+  sentences as before; only when they appear changed. `/issues` typed while the check
+  is still running waits for that same check instead of starting a second one. A
+  verdict is reused for five minutes when `gh` works and thirty seconds when it does
+  not (so a login you just fixed is noticed quickly), once per checkout and
+  `GH_HOST`, at most eight checkouts at a time, and everything is dropped at
+  `session_shutdown`. A verdict that lands after its session was replaced is
+  discarded.
 
 ## `/files`: the picker, its scopes and its orders
 
@@ -715,32 +727,91 @@ the elapsed time are identical in both; only the chrome differs.
   cannot paint the background role, draws the `neon` outline instead of a
   half-drawn float card.
 
-## The bash card, and its preference
+## The cards the `activity` design paints
 
-The bash card is a **design**, not a renderer and not a preference of this package.
+The cards are a **design**, not a renderer and not a preference of this package.
 `lib/bash-design.js` registers one design (`odd-worktree.bash-activity`, label
 `activity`) through gentle-shell-bridge's `registerToolDesign`. The bridge owns Pi's one
 tool-renderer resolver, builds the host's own card (whatever `Card style` and
-`Card content` are chosen), reads its `bash` line in `/gentle:customize` → `Cards`
-(`native` | `activity`) on every render pass, and hands the design the rows the host
-drew. So the choice is the bridge's, survives a restart there, repaints cards already
+`Card content` are chosen), reads its line in `/gentle:customize` → `Cards`
+(`default` | `activity`; the bridge stores `default` as `native`) on every render pass, and hands the design the rows the host
+drew. On a bridge that can put several tools on one line (`0.6.0` and later) that is ONE
+`Card tools` row covering `bash` and the four read-only tools `grep`, `find`, `ls` and
+`read`; on an older bridge the same design is registered for `bash` alone, the row is
+`Card bash` and those four are drawn by the host. Which shape is sent is decided from the
+bridge's own `VERSION` before anything is registered, because a grouped registration on an
+older one is refused and reported in `/bridge-status`. A release string that cannot be read
+is not guessed: the bridge is asked once, with a throwaway design nobody selects and a line
+no plugin would use, which is registered and immediately disposed, so the capability is the
+bridge's own answer instead of a version number. A bridge without `registerToolDesign` gets
+no design at all. So the choice is the bridge's, survives a restart there, repaints cards already
 on screen as well as new ones, and does not depend on extension load order. With no
 bridge, or one older than `registerToolDesign`, nothing is registered.
 
-What the design changes is one thing on the card's heading row: the host's `$` mark
-becomes the family the classifier (`lib/bash-activity.js`) names for the command —
-`⌕ exploring`, `✓ checking`, `⚠ destructive`, and so on — and the columns the longer
-mark adds are taken from the row's own fill, so the row keeps its width. Every other
-row comes back byte for byte, results are never touched, and the heading keeps the
-host's own paint.
+What the design changes is one thing on the card's heading row: bash's `$` mark becomes
+the family the classifier (`lib/bash-activity.js`) names for the command —
+`⌕ exploring`, `✓ checking`, `⚠ destructive`, and so on — and a read-only tool's own
+`<glyph> <tool>` (`⌕ grep`, `⌖ find`, `☷ ls`, `≡ read`) becomes `⌕ exploring`, because
+those four only read. Nothing else is renamed: the arguments after the mark stay where the
+host put them. The columns the longer mark adds are taken from the row's own fill, so the
+row keeps its width. Every other row comes back byte for byte, results are never touched,
+and the heading keeps the host's own paint.
 
-The rule is the classifier's: never guess. The design context carries no arguments, so
-the heading is the only evidence, and a call is named only when the heading provably
-shows the WHOLE command: no `…` abbreviation, no `… +N lines` fold, no continuation
-row, and nothing after the command but the host's fill and hint. A command the
-classifier cannot name, a heading that hides part of the command and a row with no
-fill to pay for the word all keep the host's `$` exactly as drawn. The default is
-`native`; the design draws nothing until the user picks `activity`.
+The rule is the classifier's: never guess. A bridge that hands the design the call's
+render context (`ctx.render`: the arguments, `isPartial`, `isError`, `durationMs`) lets it
+classify the REAL command, so a heading the host truncated, folded or wrapped is still
+named; for a read-only tool that render context is only the proof that the heading is not
+the whole evidence, since the word never depends on what it reads. That context is the
+bridge's, and it is handed on BOTH registration shapes — the grouped `Card tools` line and
+the historical per-tool one — with the call's own `args` by reference, exactly as Pi passes
+them (`ToolRenderContext.args`); `ctx.render.args.command` is therefore the bash contract.
+A reproduction that nests that object one level deeper (`{ args: { args: { command } } }`)
+looks exactly like a bridge that stopped handing it: the command is unreadable, so a cut
+heading falls back to `$ bash` and the frame and duration are left unpainted. Without it the drawn
+heading is the only evidence and a call is named only when the heading provably shows the
+WHOLE text: no `…` abbreviation, no `… +N lines` fold, no continuation row, and nothing
+after it but the host's fill and hint. Either way, a bash command the classifier cannot
+name keeps the generic heading, now drawn `$ bash` (in the host's `bashMode` role) instead
+of a bare `$`, so a card never claims an activity it cannot prove; a read-only heading
+that cannot be proved stays exactly as the host drew it, because those four have no
+generic word of their own. A tool the line does not cover (`edit`, `write`, every MCP
+tool) is returned untouched.
+
+Colour is a theme role, never a palette (`ctx.theme`): the label wears its family's role
+(`exploring` `mdLink`, `checking` `mdHeading`, `formatting`/`preparing` `syntaxFunction`,
+`publishing` `success`, `versioning` `warning`, `destructive` `error`, generic `bashMode`),
+and the whole frame (`lib/bash-frame.js`) is repainted in ONE role so no row shows two
+colours side by side. The call's state speaks first: a running call wears `warning` on the
+frame, a failed one `error`, an idle one the family's role; the label keeps its family
+colour in every state. A finished call's duration (`120ms`, `1.2s`, in `dim`) is written
+into the closing rule right-aligned against the corner (neon `╰──── 120ms ╯`; float: the
+bar row's end), only when it fits, never while running and never without a duration. A
+theme that cannot paint, or no render context, leaves those rows exactly as the host
+drew them. The default card is the host's own only for a user who already chose it. The bridge has no default design (an
+absent value reads `native`), so on its first load with a bridge that has `createStore`,
+this package selects `activity` for `bash` **once**: only when the bridge's
+`bridge-tool-designs` store holds no `bash` choice, and it then writes its own marker
+(`odd-worktree` store, `bashActivitySeeded`). It writes that choice BEFORE it registers the
+design and never writes the bridge's reserved line key: a `0.6.0` bridge carries a joining
+tool's per-tool choice over to its line's value at registration time, so a choice stored
+afterwards would be missed, and the line would open on `default`. A choice already stored
+(`default` included) is never overwritten, a later switch to `native` is never undone, and
+a failed write leaves no marker so the next load tries again.
+
+The room the longer label needs comes from the host's fill first and, when a long heading has
+none left, from the tail of the text after the mark, which then ends in `…` (or keeps the
+host's own `…`); the heading is a preview and the expanded call shows the whole command.
+Less than eight columns of that text would be left, and the row is left as the host drew
+it. A drawing is a pure function of the host's rows, which tool's card it is, what each
+theme role paints and the call's arguments and state, so repeated frames of a retained card
+are answered from a bounded memo (512 entries) instead of being classified and repainted
+again: Pi repaints every retained card on every frame. The `/gentle:customize` preview is
+one row, like the other `Cards` rows.
+
+The roles come from the theme, so the colours are the theme's. In `TokyoNight`, for example,
+`mdLink` and `syntaxFunction` are the same blue and `success` and `bashMode` are two close cyans,
+so `exploring`, `formatting` and `preparing` read alike there; a theme that separates those roles
+separates the cards.
 
 The CodeGraph card is separate: with the `codegraph` CLI installed it still claims
 `codegraph …` bash rows through its own resolver (invariant 19).
@@ -898,8 +969,8 @@ the system temp directory (`odd-worktree-setup-*`), one directory per create.
 One document holds a preference rather than worktrees: `<home>/card-files.json`,
 the two file-card switches the `Cards` rows write; its format, reader and writer
 are in [the file cards and their switches](#the-file-cards-and-their-switches).
-The bash design's choice is not stored here at all: it belongs to the bridge
-([the bash card](#the-bash-card-and-its-preference)). Nothing else in user
+The design's choice is not stored here at all: it belongs to the bridge
+([the cards](#the-cards-the-activity-design-paints)). Nothing else in user
 configuration is written by this package, except — with the `codegraph` CLI
 installed — the one `codegraph` entry of `<agent dir>/mcp.json` (see [CodeGraph:
 index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry)); Gentle
@@ -1115,23 +1186,22 @@ init's one outcome row (`→ initialized` / `→ already initialized`), which is
 the call did rather than its body and is drawn at BOTH levels; a minimized init
 keeps that row alone and its index facts wait for the expansion. A `codegraph …`
 `bash` call is that card's only while the CLI is installed; without it the host draws
-it, and [the bash design](#the-bash-card-and-its-preference) may head it with the
+it, and [the design](#the-cards-the-activity-design-paints) may head it with the
 classifier's `codegraph` identity.
 
 ## Deliberately absent
 
 This package is the worktree / ODD / files / issues surface only: two agent
-tools, four panels, one optional rail section, one bash design on the bridge and
+tools, four panels, one optional rail section, one tool design on the bridge and
 the two file-card switches, no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. Its
-customize-side contributions are the `activity` value of the bridge's `bash` line,
-the `Card skill` / `Card odd` rows and the file picker's `files` keymap action
-with its palette row, none of which adds a command or tool of its own.
-There is nothing to configure here beyond those two switches, and `/warp`,
-`/odd-list`, `/files` and `/issues` are always
+customize-side contributions are the `activity` value of the bridge's `Card tools` line
+(or its `Card bash` line, on a bridge older than 0.6.0), the `Card skill` / `Card odd`
+rows and the file picker's `files` keymap action with its palette row, none of which
+adds a command, tool or row of its own. There is nothing to configure here beyond those
+two switches, and `/warp`, `/odd`, `/files` and `/issues` are always
 on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
-never as a shell string.
 never as a shell string.
 
 ## Tests

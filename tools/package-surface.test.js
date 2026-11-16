@@ -1,5 +1,5 @@
 'use strict';
-// S4 surface: the standalone package always registers /warp, /odd-list, /files
+// S4 surface: the standalone package always registers /warp, /odd, /files
 // and /issues plus the TWO agent worktree tools (S3/S4: `worktree_delete` and
 // `worktree_warp` are not registered, so `/warp` is the only front that moves
 // the session and the panel's ctrl+d the only one that removes a checkout),
@@ -13,8 +13,9 @@
 // worktree↔issue association.
 //
 // The bash activity is not a preference here: it is a design on gentle-shell-bridge's
-// own `bash` line, so the shipped surface is exactly four commands, two tools, one
-// sidebar section, one bash design and the one `Cards` row group.
+// own `Card tools` line, so the shipped surface is exactly four commands, two tools, one
+// sidebar section, one tools design and the one `Cards` row group the two file-card
+// switches carry.
 //
 // Everything here reads the observable surface: the registered command and
 // tool objects, the manifest, the files on disk. No internal state is read.
@@ -71,18 +72,18 @@ describe('manifest', () => {
     // classifier and the one design registered on the bridge. The file cards add
     // their own five modules — a classifier, the card and its resolver, the switch
     // document and the customize rows — and still no command.
-    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-design.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'card-files-mode.js', 'cards-customize.js']) {
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-design.js', 'bash-frame.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'card-files-mode.js', 'cards-customize.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
   });
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd-list, /files, /issues and the two worktree tools', async () => {
+  test('registers /warp, /odd, /files, /issues and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['files', 'issues', 'odd-list', 'warp'], 'the command list is exactly the four panels');
+    assert.deepEqual(registered, ['files', 'issues', 'odd', 'warp'], 'the command list is exactly the four panels');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
@@ -274,7 +275,9 @@ describe('removed surface', () => {
 
   test('the loaded extension holds no reference to the removed packages', async () => {
     const { commands } = await loadExtension({});
-    for (const gone of ['customize', 'odd', 'herdr-gentle:warp']) {
+    // `odd` is NOT in this list any more: it is the odd viewer's own name now. What must
+    // never come back is the customize panel and the Herdr worktree panel.
+    for (const gone of ['customize', 'herdr-gentle:warp']) {
       assert.equal(commands.has(gone), false, `no /${gone} command`);
     }
     assert.equal(commands.has('issues'), true, '/issues is the migrated command');

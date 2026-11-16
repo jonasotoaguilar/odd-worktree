@@ -551,11 +551,17 @@ highlighter and a highlighter that throws all degrade to plain text — never
 blank, never an error, never a partial line — and highlighting runs once per
 preview load, never per repaint.
 
-**Read-only, and with no shortcut yet.** The panel reads and paints: it writes
+**Read-only, and reachable from Gentle Shell.** The panel reads and paints: it writes
 nothing, stages nothing and opens no network, and every child is a fixed argv
 with a bounded timeout — `git` through this package's async runner, plus the one
 `$VISUAL`/`$EDITOR` `ctrl+e` starts (a missing variable is reported in its own
-sentence). It opens from the command palette: `/files` has no key of its own yet.
+sentence). With `gentle-shell-bridge` published, `/files` contributes one keymap
+action (`files`, "File picker", default `alt+p`, overridable in
+`/gentle:customize` → `Keymaps` and through `GENTLE_PI_FILES_KEY`; a changed key
+applies after `/reload`) and one row in the command palette's `Session` section.
+The bridge carries no handler, so this package asks `resolveKeymap("files")` for the
+effective key and binds it itself; without the bridge nothing is registered, bound
+or announced, and `/files` still opens from the palette and as a command.
 It mounts its own overlay, so a host without `ctx.ui.custom` gets one line saying
 the picker needs an interactive session with overlay support, and no second
 surface in its place.

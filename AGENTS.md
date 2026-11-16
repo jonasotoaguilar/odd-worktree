@@ -123,8 +123,11 @@ floor `engines` declares; CI additionally runs 20, 22 and 24.
    no such seam gets one honest line — `files: the file picker needs an
    interactive session with overlay support` — and no second surface in its
    place: no transcript dump, no sub-command, nothing written. It is
-   bridge-independent: it opens from the command palette and needs no other
-   package to draw.
+   bridge-independent: it opens as a command and needs no other package to
+   draw. Only the optional Gentle Shell hooks — the `files` keymap action
+   (`alt+p`, `GENTLE_PI_FILES_KEY`) and the palette row in `Session` — go through
+   gentle-shell-bridge's `registerKeymap`/`registerCommands`, the key bound here from
+   `resolveKeymap`; without the bridge they are simply absent.
 
    **The section reaches the host only through gentle-shell-bridge.** It is
    published through that package's sidebar-section API alone: the object read from

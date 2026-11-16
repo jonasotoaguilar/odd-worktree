@@ -2936,9 +2936,21 @@ function cachedDefaultBranch(git, root) {
   return value;
 }
 
+// S4: the branch that checkout is on RIGHT NOW, read fresh at each judgement and
+// NEVER memoized the way `cachedDefaultBranch` is. The branch a checkout points at is
+// the one fact a process must not remember: it changes outside this process — a switch
+// in another session, a `worktree_create`, a rebase — so a remembered answer would
+// judge the next call against a branch that checkout left long ago. A detached HEAD
+// and a read that fails both answer undefined, and the guard refuses no switch then.
+function readCurrentBranch(git, root) {
+  return readGitTextSync(git, root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+}
+
 // The registered `tool_call` handler: the guard's one host surface. A non-`bash` call
-// returns before any module is read, and the git answers ride in as the guard's seams,
-// memoized per checkout, so the hot path costs one `Map` hit per call.
+// returns before any module is read, and the git answers ride in as the guard's seams:
+// the identity and the default branch memoized per checkout, the current branch read
+// on demand, so the hot path costs one `Map` hit per call plus one git read for a
+// switch.
 function guardWorktreeBashCall(event, ctx) {
   try {
     // `ODD_WORKTREE_GUARD=0` turns the guards off for this process, the way
@@ -2956,6 +2968,7 @@ function guardWorktreeBashCall(event, ctx) {
       cwd: oddEventCwd(event, ctx),
       repoIdentity: (cwd) => cachedRepoIdentity(git, cwd),
       defaultBranch: (root) => cachedDefaultBranch(git, root),
+      currentBranch: (root) => readCurrentBranch(git, root),
       pathExists: (cwd, value) => fs.existsSync(path.resolve(cwd, value)),
     });
     if (decision && decision.block === true && typeof decision.reason === "string") {

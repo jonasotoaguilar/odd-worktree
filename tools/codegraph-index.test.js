@@ -594,6 +594,12 @@ function linkedWorktree(base) {
   return { repo, worktree };
 }
 
+/** Every real SQLite database, and so every CodeGraph index, starts with these 16 bytes. */
+const INDEX_MAGIC = 'SQLite format 3\u0000';
+
+/** A plausible fake index: what a seed copy seam must write now that the copy is validated before it is published. */
+const fakeIndex = (payload = 'fake index payload') => INDEX_MAGIC + payload;
+
 test('S2: a directory without .git, a plain repository, a broken pointer and the main checkout are not worktrees', () => {
   const base = temp('cg-worktree-');
   assert.deepEqual(worktreeOf(base), { worktree: false });
@@ -650,14 +656,14 @@ test('S2: seeding copies the db only from a main index nobody is writing, into t
     sourceBusy: () => copied.length > 0,
     copy: (from, to) => {
       copied.push(from);
-      fs.writeFileSync(to, 'seed bytes');
+      fs.writeFileSync(to, fakeIndex('seed bytes'));
       return true;
     },
   });
   assert.equal(seeded, true, 'seeding ran');
   assert.equal(copied.length, 1, 'exactly one copy, of the main index db');
   assert.ok(copied[0].includes(path.join('.codegraph', 'codegraph.db')), JSON.stringify(copied));
-  assert.equal(fs.readFileSync(path.join(worktree, '.codegraph', 'codegraph.db'), 'utf8'), 'seed bytes');
+  assert.equal(fs.readFileSync(path.join(worktree, '.codegraph', 'codegraph.db'), 'utf8'), fakeIndex('seed bytes'));
 });
 
 test('S2: seeding refuses to copy while the main index is being written, and a failed copy leaves nothing', () => {
@@ -693,7 +699,7 @@ test('S2: a linked worktree of a session is seeded under its own index lock, and
     exists: fs.existsSync,
     sourceBusy: () => false,
     copy: (_from, to) => {
-      fs.writeFileSync(to, 'seeded db');
+      fs.writeFileSync(to, fakeIndex('seeded db'));
       return true;
     },
   });
@@ -813,7 +819,7 @@ test('S2: a copy failure in one worktree does not stop the others and leaves not
     copy: (_from, to) => {
       attempts += 1;
       if (attempts === 1) return false; // the first worktree fails
-      fs.writeFileSync(to, 'seeded db');
+      fs.writeFileSync(to, fakeIndex('seeded db'));
       return true;
     },
   });
@@ -850,7 +856,7 @@ test('S2: a session that finds an unindexed linked worktree seeds it and syncs i
     hasBinary: yes,
     lock: fakeLock(log, false),
     copySeed: (_from, to) => {
-      fs.writeFileSync(to, 'seeded');
+      fs.writeFileSync(to, fakeIndex('seeded'));
       return true;
     },
     run: fakeRun(calls),
@@ -858,7 +864,188 @@ test('S2: a session that finds an unindexed linked worktree seeds it and syncs i
   assert.deepEqual(result, { action: 'seed', ok: true });
   assert.deepEqual(calls.map((call) => call.args), [['sync', '-q']]);
   assert.deepEqual(log, ['lock:acquire', 'lock:isHeld', 'lock:isHeld', 'lock:release'], JSON.stringify(log));
-  assert.equal(fs.readFileSync(path.join(worktree, '.codegraph', 'codegraph.db'), 'utf8'), 'seeded');
+  assert.equal(fs.readFileSync(path.join(worktree, '.codegraph', 'codegraph.db'), 'utf8'), fakeIndex('seeded'));
+});
+
+test('S3: a seed whose post-seed sync fails leaves no published db and no directory this session created', async () => {
+  const base = temp('cg-seed-rollback-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const log = [];
+  const calls = [];
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists: fs.existsSync,
+    hasBinary: yes,
+    lock: fakeLock(log, false),
+    copySeed: (_from, to) => {
+      fs.writeFileSync(to, fakeIndex('seeded'));
+      return true;
+    },
+    run: fakeRun(calls, false),
+  });
+  assert.deepEqual(result, { action: 'seed', ok: false });
+  assert.deepEqual(calls.map((call) => call.args), [['sync', '-q']], 'the one reconciliation it attempted is still the one reported');
+  assert.equal(fs.existsSync(path.join(worktree, '.codegraph', 'codegraph.db')), false, 'the published db is gone');
+  assert.equal(fs.existsSync(path.join(worktree, '.codegraph')), false, 'the directory this session created is gone');
+});
+
+test('S3: a staged copy that is not a plausible index is never published and never synced', async () => {
+  const base = temp('cg-seed-garbage-');
+  for (const [name, stagedContent] of [['empty', ''], ['not-sqlite', 'not a codegraph index at all\n']]) {
+    const { repo, worktree } = linkedWorktree(path.join(base, name));
+    fs.mkdirSync(path.join(repo, '.codegraph'));
+    fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+    const calls = [];
+    const result = await autoIndex({
+      cwd: worktree,
+      env: {},
+      reason: 'startup',
+      exists: fs.existsSync,
+      hasBinary: yes,
+      lock: fakeLock([], false),
+      copySeed: (_from, to) => {
+        fs.writeFileSync(to, stagedContent);
+        return true;
+      },
+      run: fakeRun(calls),
+    });
+    assert.deepEqual(result, { action: 'seed', ok: false }, name);
+    assert.deepEqual(calls, [], `${name}: no sync runs over an index that was never published`);
+    assert.equal(fs.existsSync(path.join(worktree, '.codegraph', 'codegraph.db')), false, `${name}: nothing published`);
+    assert.equal(fs.existsSync(path.join(worktree, '.codegraph')), false, `${name}: nothing left behind`);
+  }
+});
+
+test('S3: the staged copy is judged by what the injected fs seam reads, and an unreadable one fails closed', () => {
+  const base = temp('cg-seed-read-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const targetDir = path.join(worktree, '.codegraph');
+  const copy = (from, to) => {
+    fs.copyFileSync(from, to);
+    return true;
+  };
+  const seed = (fsSeam) => seedWorktreeIndex({ worktree, commonRoot: repo, sourceBusy: no, copy, fs: fsSeam });
+
+  // A read that answers nothing, or throws, is not an index: it fails closed exactly like a failed copy.
+  assert.equal(seed({ readFileSync: () => undefined }), false);
+  assert.equal(fs.existsSync(targetDir), false, 'an unreadable staged copy publishes nothing');
+  assert.equal(seed({
+    readFileSync: () => {
+      throw new Error('EACCES');
+    },
+  }), false);
+  assert.equal(fs.existsSync(targetDir), false, 'a throwing read publishes nothing');
+  assert.equal(seed({ readFileSync: () => 42 }), false, 'an unexpected answer is not guessed into an index');
+  assert.equal(fs.existsSync(targetDir), false);
+
+  // Raw bytes and a decoded string are both read, and a real header is a plausible index either way.
+  assert.equal(seed({ readFileSync: () => Buffer.from(fakeIndex('bytes')) }), true);
+  assert.equal(fs.readFileSync(path.join(targetDir, 'codegraph.db'), 'utf8'), fakeIndex('main'), 'the main db is what gets published');
+  assert.equal(seed({ readFileSync: (file) => fs.readFileSync(file, 'utf8') }), true);
+  assert.equal(fs.readFileSync(path.join(targetDir, 'codegraph.db'), 'utf8'), fakeIndex('main'));
+});
+
+test('S3: the seed is published with one rename, so no second write can leave a half-published db', () => {
+  const base = temp('cg-seed-rename-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const renames = [];
+  const seeded = seedWorktreeIndex({
+    worktree,
+    commonRoot: repo,
+    sourceBusy: no,
+    copy: (from, to) => {
+      fs.copyFileSync(from, to);
+      return true;
+    },
+    fs: {
+      renameSync: (from, to) => {
+        renames.push([from, to]);
+        fs.renameSync(from, to);
+      },
+      copyFileSync: () => {
+        throw new Error('the staged file is moved, never copied a second time');
+      },
+    },
+  });
+  assert.equal(seeded, true);
+  assert.equal(renames.length, 1, 'one rename publishes the staged copy');
+  assert.match(renames[0][0], /codegraph\.db\.seeding$/, 'the staged file is what moves');
+  assert.match(renames[0][1], /codegraph\.db$/, 'onto the index path');
+  assert.deepEqual(fs.readdirSync(path.join(worktree, '.codegraph')), ['codegraph.db'], 'no staging file is left behind');
+});
+
+test('S3: a seam with no rename keeps the older two-write publish of the staged copy', () => {
+  const base = temp('cg-seed-copy-fallback-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const copies = [];
+  const seeded = seedWorktreeIndex({
+    worktree,
+    commonRoot: repo,
+    sourceBusy: no,
+    copy: (from, to) => {
+      fs.copyFileSync(from, to);
+      return true;
+    },
+    fs: {
+      copyFileSync: (from, to) => {
+        copies.push([from, to]);
+        fs.copyFileSync(from, to);
+      },
+    },
+  });
+  assert.equal(seeded, true);
+  assert.equal(copies.length, 1, 'the publish copies the staged file once, as before');
+  assert.match(copies[0][0], /codegraph\.db\.seeding$/);
+  assert.match(copies[0][1], /codegraph\.db$/);
+  assert.equal(fs.existsSync(path.join(worktree, '.codegraph', 'codegraph.db.seeding')), false, 'the staging file is removed');
+});
+
+test('S3: a directory another session published is never removed, not even by a failed seed', async () => {
+  const base = temp('cg-seed-owned-');
+  const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
+  fs.mkdirSync(path.join(repo, '.codegraph'));
+  fs.writeFileSync(path.join(repo, '.codegraph', 'codegraph.db'), fakeIndex('main'));
+  const otherDb = path.join(worktree, '.codegraph', 'codegraph.db');
+  let checks = 0;
+  // Another session publishes while this one waits for the lock, so the existence re-check under the lock sees it.
+  const exists = (p) => {
+    if (p === path.join(worktree, '.codegraph')) {
+      checks += 1;
+      if (checks > 1) {
+        fs.mkdirSync(path.dirname(otherDb), { recursive: true });
+        fs.writeFileSync(otherDb, fakeIndex('other session'));
+        return true;
+      }
+      return false;
+    }
+    return fs.existsSync(p);
+  };
+  const calls = [];
+  const result = await autoIndex({
+    cwd: worktree,
+    env: {},
+    reason: 'startup',
+    exists,
+    hasBinary: yes,
+    lock: fakeLock([], false),
+    copySeed: () => {
+      throw new Error('must not copy into a directory another session published');
+    },
+    run: fakeRun(calls, false),
+  });
+  assert.deepEqual(result, { action: 'seed', ok: true, joined: true });
+  assert.deepEqual(calls, [], 'this session ran nothing over an index it does not own');
+  assert.equal(fs.readFileSync(otherDb, 'utf8'), fakeIndex('other session'), "another session's index is untouched");
 });
 
 // ---- The CLI seam (S1, S2) ----

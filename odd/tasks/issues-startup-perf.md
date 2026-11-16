@@ -30,18 +30,37 @@ S11. Verbatim: "igual recuerda que la mayoria sirve solo si la sidebar de issues
 
 S12. Verbatim: "Igual cambia en Sidebar que dice \"ISSUES\" por \"GITHUB\" mejor, y en numero derecha le pone \"7 issues\" por ejemplos le agregas ahi la palabra issues". The rail heading reads `GITHUB`, and the right-hand count reads `7 issues` (and `7 issues · stale` while stale), keeping the count the number the last read produced.
 
+S13. Verbatim: "el que el panel issues y sidebar requieren claramente gh cli, si no la tiene el so nunca activa sus funciones". Without `gh` on PATH the issues surfaces activate nothing: no child, no read, no timer, and one honest line that names the missing CLI.
+
+S14. Verbatim: "un detlale fix meor en warp que que ver todos seria con \"a\" no con \"v\"". The extended list's key is `a`, and every hint that names it reads `a`.
+
+S15. Verbatim: "El selector normal muestra todos los ODD worktree de la lista, es una lista escroleable asi que deberia salir maximo 5 y si son mas abajo sale algo como flecha hacia abajo n more, y al baja sale arriba flecha para arriba y n more". The normal selector is scrollable: at most five rows visible, a down arrow with the hidden count below when more follow, and an up arrow with the hidden count above once it is scrolled.
+
+S16. Verbatim: "ademas de agregar en arriba a la derecha de Warp \"Warp  · n worktrees\", la cantida de worktrees de la lista. Y en all solo aparecia tecla y mostraria la lista de odd worktees mas los fuera de la lista, ahi igual el total a lado de warp cambiaria peus se suman estos ahora". The heading reads `Warp · n worktrees` with the number of checkouts the list holds, and in the extended (`all`) list that total includes the checkouts outside `<repo-name>-worktrees/`.
+
+S17. Verbatim: "el readme falta en instalacion variante para gentle shell que es como con pi pero con \"gentle-shell install ...\". Y falta el pre requisito que debe tener isntalado pi install npm:gentle-shell-bridge con gentle-shell intall ... el mismo." The README documents the Gentle Shell install variant beside the Pi one, and names `gentle-shell-bridge` as the prerequisite with its own install line.
+
+S18. Verbatim: "Igual este plugin deberia comprobar si lo tiene, creo que lo hace, si no lo tiene desactiva todo el plugin, no carga nada." When `gentle-shell-bridge` is not published, the plugin registers NOTHING: no command, no tool, no card, no rail, no hook. It only says how to install it.
+
+S19. Verbatim: "igual warp tiene como un espacio entre repo main y lista, lo sacaria para que se vea parejo, saca ese espacio/salto de linea". The blank row between the principal checkout's detail line and the checkout list is gone, so the heading, the detail line and the first list row are evenly stacked.
+
 ## Tasks
 
 T1 — S1, S2 · route: worker · commit 1: `perf(issues): take the gh gate off the session path`
 T2 — S3 · route: worker · commit 1
 T3 — S4 · route: worker · commit 1: `perf(issues): keep and persist the issues cache`
-T4 — S5, S8 · route: worker · commit 2: `perf(issues): read only the buckets the rail paints`
+T4 — S5, S8 · route: worker · commit 2: `perf(issues): stop paying for the bucket the rail never paints`
 T5 — S6, S7 · route: worker · commit 2: `feat(issues): mark a rail PR row with the pull-request icon`
 T6 — S8 · route: worker · commit 3: `perf(issues): stop probing git on every tool event`
 T7 — S1-S12 · route: worker · commit 4: docs + invariants + suite
 T8 — S10, S11 · route: worker · commit 3: `perf(issues): refresh the rail on time and after a mutating bash`
 T9 — S10 · route: worker · commit 3: the `bash` command classifier that forces a refresh
 T10 — S12 · route: worker · commit 2: `feat(issues): head the rail GITHUB and count it in issues`
+T11 — S13 · route: worker · commit 4: `feat(issues): activate nothing without the gh CLI`
+T12 — S14, S15, S16, S19 · route: worker · commit 5: `feat(warp): scroll the selector and count its checkouts`
+T13 — S17 · route: worker · commit 4: `docs: install the package under Gentle Shell and name the bridge`
+T14 — S18 · route: worker · commit 4: `feat: load nothing without gentle-shell-bridge`
+T15 — S8 · route: worker · commit 2: `revert: keep the rail's involved page whole`
 
 ## Log
 
@@ -66,3 +85,15 @@ L8 (user, verbatim): "cada tool vuelve a revisar si se actualizo la issues? eso 
 L7 (parent, decision): `clearIssuesSidebarCache` on `session_shutdown` stops clearing entries. The generation still advances, so an answer from the ended session still lands nowhere, and the snapshot is still dropped so a frame after shutdown never shows the old rows.
 
 L9 (parent, decision): the refresh floor while drawn is 20 s (S10's own range), and a forced refresh after a mutating `bash` is capped to one per 5 s so a script that runs several `gh` writes cannot storm the API. A read is never started while the section is not drawn (S11).
+
+L10 (parent, decision, T4 narrowed): the rail does NOT drop `involved` from the one combined query. The cache's `apply` holds all three buckets to one contract, and a partial answer would have forced a change to `lib/related-issues-cache.js` and its invariants for a payload saving on one round trip. Instead the rail asks `involved` for the DELTA size only (20), so the hundred rows it never paints leave the payload; the panel's own prefetch still reads all three in full, which is what S5 asks for.
+
+L11 (parent, evidence): commit 1 `8cab67b` closes T1-T3 (S1-S4): 1288 insertions, 657 of them tests, 8 files. It is over the ~400-line reviewable slice because the tests and the comments that carry the new contract came with it; the slice boundary is this commit.
+
+L12 (user, verbatim): "otro detalle el que el panel issues y sidebar requieren claramente gh cli, si no la tiene el so nunca activa sus funciones\n\n[imagen: gh no instalado, mensaje de GitHub CLI] y un detlale fix meor en warp que que ver todos seria con \"a\" no con \"v\". Ademas en warp solo salen los de worktree list, si existen fuera de worktree list aparecen solo en all porque lo que lal se habilita cuando la lista es extensa o cuando tiene worktree fuera de la lista. Pues wapr normal tenia un tope de los que mostrba, cantidad.\n\ny otro detalle es el readme falta en instalacion variante para gentle shell que es como con pi pero con \"gentle-shell install ...\". Y falta el pre requisito que debe tener isntalado pi install npm:gentle-shell-bridge con gentle-shell intall ... el mismo. Igual este plugin deberia comprobar si lo tiene, creo que lo hace, si no lo tiene desactiva todo el plugin, no carga nada."
+
+L13 (user, answers to the two decision questions, verbatim): "Desactivar todo el plugin" for the missing-bridge policy; for the warp list: "El selector normal muestra todos los ODD worktree de la lista, es una lista escroleable asi que deberia salir maximo 5 y si son mas abajo sale algo como flecha hacia abajo n more, y al baja sale arriba flecha para arriba y n more, ademas de agregar en arriba a la derecha de Warp \"Warp  · n worktrees\", la cantida de worktrees de la lista. Y en all solo aparecia tecla y mostraria la lista de odd worktees mas los fuera de la lista, ahi igual el total a lado de warp cambiaria peus se suman estos ahora"
+
+L14 (parent, evidence, T15): T4 as delivered damages an invariant I did not weigh: `apply` holds a bucket to `issueCount`, so a FULL rail read that replaces `involved` with 20 rows marks the entry `inconsistent` whenever the real count is 21..100, and `plan` then answers a FULL read forever — the steady state becomes 100+100+20 rows per rail read instead of today's 20+20+20. The payload saving was never worth it (one round trip either way), so T4 is REVERTED: the rail asks the full page again and `involvedFirst` is not kept as dead code.
+
+L15 (user, verbatim): "igual warp tiene como un espacio entre repo main y lista, lo sacaria para que se vea parejo, saca ese espacio/salto de linea"

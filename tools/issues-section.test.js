@@ -6,7 +6,8 @@
 //   authored and the ones they are assigned (S7/T8), merged and deduplicated by
 //   number, ordered `updatedAt` descending, each row keeping the bucket it came
 //   from so its click can ask for it — while the header reports the merged count
-//   alone (`8`, never `8 assigned`, and `8 · stale` while stalled);
+//   alone (`8 issues`, never `8 assigned`, and `8 issues · stale` while stalled);
+//   the heading reads `GITHUB` and the count names its unit (S12/T10);
 // - a row reads `#<number> <title>`, and the body paints at most SEVEN of them
 //   (S4); a read that produced more appends ONE eighth, dim, clickable
 //   `and N more issues` row (`N+` when the read hit its fetch bound) and a click
@@ -15,12 +16,13 @@
 //   pull-request cross-reference facts (`author:@me`, `assignee:@me` and
 //   `involves:@me -author:@me` in one request), feeds a process cache and leaves
 //   every failure to the section's own read state; a row whose issue has a pull
-//   request wears that pull request's NUMBER (`#69`, S8/T9) in the bridge's
+//   request wears that pull request's NUMBER behind the glyph the human asked
+//   for — `\ue726 #69` (S7/T5) — in the bridge's
 //   right-hand `meta` column — painted `muted` by the bridge itself, which is
 //   the gray the user asked for — and one without a pull request carries no
 //   `meta`;
 // - a failed refresh over an on-screen list keeps every row and reports
-//   `<n> · stale` (T10), while a failed first read is still one error row —
+//   `<n> issues · stale` (T10), while a failed first read is still one error row —
 //   except a session cwd that is not a repository (S12/T11), whose one line is
 //   exactly `not a git repository` in the `dim` tone, never `error`;
 // - a host with no bridge gets ONE warning per process naming
@@ -222,7 +224,7 @@ test('S4: no issue row carries a meta — the header reports the count instead',
   for (const row of rows) {
     assert.equal('meta' in row, false, `no row carries a meta (saw ${JSON.stringify(row)})`);
   }
-  assert.equal(handle.section.meta({}), '2', 'the heading names the one relation and its count');
+  assert.equal(handle.section.meta({}), '2 issues', 'the heading names the one relation and its count');
 });
 
 test('S4: more than seven issues paint seven rows plus one dim, clickable overflow row', async () => {
@@ -246,7 +248,7 @@ test('S4: more than seven issues paint seven rows plus one dim, clickable overfl
   assert.equal(rows[7].tone, 'dim');
   assert.equal('meta' in rows[7], false, 'the overflow row carries no meta either');
   assert.equal(typeof rows[7].onClick, 'function');
-  assert.equal(handle.section.meta({}), '9',
+  assert.equal(handle.section.meta({}), '9 issues',
     'the header counts every issue read, before any display cap');
 
   rows[7].onClick();
@@ -285,7 +287,7 @@ test('S4: a read that reached its fetch bound writes the overflow count with a +
   assert.equal(rows[7].label, 'and 13+ more issues',
     'the bound was reached, so the real total is larger than the rows counted here');
   assert.equal(rows[7].tone, 'dim');
-  assert.equal(handle.section.meta({}), '20', 'the header reports the count it read');
+  assert.equal(handle.section.meta({}), '20 issues', 'the header reports the count it read');
 });
 
 // T9 amended (S8): the mark is the pull request's NUMBER, not a glyph, and the
@@ -311,7 +313,7 @@ test('S8 (T9): an issue whose pull request is #69 carries `#69`, one without a n
 
   const rows = handle.section.lines({});
   assert.deepEqual(rows.map((row) => row.label), ['#4 Waits for a merge', '#3 Nobody opened a PR']);
-  assert.equal(rows[0].meta, '#69', 'the row whose issue has a pull request carries its number');
+  assert.equal(rows[0].meta, '\ue726 #69', 'the row whose issue has a pull request carries its number');
   assert.equal('meta' in rows[1], false, 'the row without one carries no meta at all');
   assert.deepEqual(rows.map((row) => row.tone), ['text', 'text'],
     'the marker never turns the row gray: the bridge paints only the meta column muted');
@@ -325,7 +327,7 @@ test('S8 (T9): an issue whose pull request is #69 carries `#69`, one without a n
     'an issue the decoration did not answer for reports the fact as false, never undefined');
   assert.equal(snap.issues[1].pullRequestNumber, null,
     'and no reference reports null instead of a number nobody opened');
-  assert.equal(handle.section.meta({}), '2', 'the marker never changes the count');
+  assert.equal(handle.section.meta({}), '2 issues', 'the marker never changes the count');
 });
 
 test('S8 (T9): only a positive integer number marks a row — anything else marks nothing', async () => {
@@ -347,10 +349,45 @@ test('S8 (T9): only a positive integer number marks a row — anything else mark
   await handle.refresh();
   const rows = handle.section.lines({});
   assert.equal('meta' in rows[0], false, 'anything but a positive integer is no mark');
-  assert.equal(rows[1].meta, '#70');
+  assert.equal(rows[1].meta, '\ue726 #70');
   assert.equal('meta' in rows[2], false, 'a zero is not a pull request number');
   assert.equal(handle.snapshot().issues[0].hasPullRequest, false);
   assert.equal(handle.snapshot().issues[0].pullRequestNumber, null);
+});
+
+// S7 (T5, issues-startup-performance): the mark the human asked for is the
+// nerd-font pull-request glyph, ONE space, then `#` and the number —
+// `\ue726 #69`. It still comes from the timeline the ONE combined read already
+// carries (no per-issue call), it still names the LAST associated pull request,
+// and a row whose issue has none still carries no mark at all (S6).
+test('S7 (T5): a marked row reads `\\ue726 #69` — the glyph, one space, `#` and the number', async () => {
+  const handle = createIssuesSection({
+    load: async () => ({
+      ok: true,
+      identity: IDENTITY,
+      issues: [
+        { ...issue(4, 'Newest pull request', '2024-03-01T00:00:00Z'), hasPullRequest: true, pullRequestNumber: 71 },
+        { ...issue(3, 'One pull request', '2024-02-01T00:00:00Z'), hasPullRequest: true, pullRequestNumber: 69 },
+        { ...issue(2, 'No pull request', '2024-01-01T00:00:00Z'), hasPullRequest: false, pullRequestNumber: null },
+      ],
+      truncated: false,
+    }),
+    open: () => {},
+    openAll: () => {},
+    schedule: () => {},
+  });
+  await handle.refresh();
+
+  const rows = handle.section.lines({});
+  assert.equal(rows[0].meta, '\ue726 #71',
+    'the glyph, one space, `#` and the number — the LAST associated pull request');
+  assert.equal(rows[1].meta, '\ue726 #69', 'a single pull request wears the same mark');
+  assert.equal('meta' in rows[2], false, 'a row whose issue has no pull request keeps no mark');
+  assert.equal(rows[0].meta.codePointAt(0), 0xe726,
+    'the glyph is U+E726, nf-dev-git_pull_request');
+  assert.equal(rows[0].meta.length, '\ue726 #71'.length, 'exactly one glyph, one space and the number');
+  assert.equal(rows[0].meta.slice(1), ' #71', 'the glyph is followed by ONE space, a `#` and the number');
+  assert.equal(handle.section.meta({}), '3 issues', 'the mark never changes the count');
 });
 
 // T11 (S12): a checkout that is not a repository is its own state: ONE short
@@ -616,7 +653,7 @@ test('S3: only lines() schedules the TTL refresh, a meta-only frame schedules no
   assert.equal(sched.pending(), 1, 'the drawn body schedules exactly one refresh');
   await sched.flush();
   assert.equal(loads, 1);
-  assert.equal(handle.section.meta({}), '0');
+  assert.equal(handle.section.meta({}), '0 issues');
 
   // A ready snapshot past its TTL: still only the drawn body schedules.
   clock += 200;
@@ -652,7 +689,7 @@ test('S1/S6: an explicit refresh never coalesces, and an older answer never over
   await second;
   assert.equal(handle.snapshot().identity, 'github.com/myfork/repo-b');
   assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#20 B issue']);
-  assert.equal(handle.section.meta({}), '1');
+  assert.equal(handle.section.meta({}), '1 issues');
 
   // A settles later: its rows are dropped, never applied over B's.
   deferred[0]({
@@ -665,7 +702,7 @@ test('S1/S6: an explicit refresh never coalesces, and an older answer never over
   assert.equal(handle.snapshot().identity, 'github.com/myfork/repo-b');
   assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#20 B issue'],
     'the older answer never overwrites the newer one');
-  assert.equal(handle.section.meta({}), '1',
+  assert.equal(handle.section.meta({}), '1 issues',
     'the metadata is the newer repository\'s too');
 });
 
@@ -880,8 +917,8 @@ test('S5 (T10): a failed refresh keeps every ready row and reports it stale', as
   await handle.refresh();
   const ready = handle.section.lines({});
   const successfulAt = handle.snapshot().at;
-  assert.equal(handle.section.meta({}), '2');
-  assert.equal(ready[0].meta, '#69', 'the marker is part of what is on screen');
+  assert.equal(handle.section.meta({}), '2 issues');
+  assert.equal(ready[0].meta, '\ue726 #69', 'the marker is part of what is on screen');
 
   clock += 200;
   answer = { ok: false, error: 'gh timed out after 30000ms' };
@@ -894,7 +931,7 @@ test('S5 (T10): a failed refresh keeps every ready row and reports it stale', as
     'the age stays the last SUCCESSFUL read, which is what keeps the TTL retrying');
   assert.deepEqual(handle.section.lines({}), ready,
     'the rows stay exactly as they were: same rows, same order, same markers');
-  assert.equal(handle.section.meta({}), '2 · stale', 'the header discloses the stall');
+  assert.equal(handle.section.meta({}), '2 issues · stale', 'the header discloses the stall');
 
   // A second failure changes nothing about the rows, and a success replaces the
   // stale list as it always did.
@@ -915,7 +952,33 @@ test('S5 (T10): a failed refresh keeps every ready row and reports it stale', as
   assert.equal(handle.snapshot().error, null);
   assert.equal(handle.snapshot().at, clock, 'a success moves the age again');
   assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#3 Back again']);
-  assert.equal(handle.section.meta({}), '1', 'the stale suffix is gone with the stall');
+  assert.equal(handle.section.meta({}), '1 issues', 'the stale suffix is gone with the stall');
+});
+
+// S12 (T10, issues-startup-performance): the rail's heading names the source —
+// `GITHUB`, not `ISSUES` — and the right-hand count names its unit: `7 issues`,
+// and `7 issues · stale` while the list is stalled. The number is still the one
+// the last read produced, and no snapshot still means no count at all.
+test('S12 (T10): the heading reads GITHUB and the count reads `7 issues`', async () => {
+  let answer = { ok: true, identity: IDENTITY, issues: issueList(7), truncated: false };
+  const handle = createIssuesSection({
+    load: async () => answer,
+    open: () => {},
+    openAll: () => {},
+    schedule: () => {},
+  });
+
+  assert.equal(handle.section.title, 'GITHUB', 'the heading names the source, not the subject');
+  assert.equal(handle.section.meta({}), undefined, 'no snapshot still means no count at all');
+
+  await handle.refresh();
+  assert.equal(handle.section.meta({}), '7 issues', 'the count says what it counts');
+
+  answer = { ok: false, error: 'gh timed out after 30000ms' };
+  await handle.refresh();
+  assert.equal(handle.snapshot().status, 'stale');
+  assert.equal(handle.section.meta({}), '7 issues · stale', 'the stale suffix keeps its own wording');
+  assert.equal(handle.section.lines({}).length, 7, 'and the seven rows stay on screen');
 });
 
 test('S5 (T10): a failed first read is still ONE error row, and a success clears a stale list', async () => {
@@ -956,7 +1019,7 @@ test('S5 (T10): a failed first read is still ONE error row, and a success clears
   assert.equal(handle.snapshot().status, 'ready');
   assert.deepEqual(handle.section.lines({}), [{ label: 'no open issues', tone: 'dim' }],
     'a success after the stale list draws the empty state again');
-  assert.equal(handle.section.meta({}), '0');
+  assert.equal(handle.section.meta({}), '0 issues');
 });
 
 test('S5: loading, empty and error are rows, never a throw', async () => {
@@ -1195,7 +1258,7 @@ test('S2: a published bridge receives exactly one section with the decided ident
   assert.equal(registered.length, 1, 'exactly one section is registered');
   const section = registered[0];
   assert.equal(section.id, 'odd-worktree.issues');
-  assert.equal(section.title, 'ISSUES');
+  assert.equal(section.title, 'GITHUB');
   assert.equal(section.rowLabel, 'issues');
   assert.equal(section.defaultVisible, true);
   assert.equal(typeof section.lines, 'function');
@@ -1261,7 +1324,7 @@ test("S6/S7 (T8): session_start reads the checkout's mine AND assigned issues, m
   assert.deepEqual(rows.map((row) => row.label),
     ['#13 Both thirteen', '#12 Assigned newer', '#11 Assigned older', '#14 Only mine fourteen'],
     'one merged list, deduplicated by number, newest first');
-  assert.equal(section.meta(ctx), '4', 'the header is the merged count alone, never `4 assigned`');
+  assert.equal(section.meta(ctx), '4 issues', 'the header is the merged count alone, never `4 assigned`');
   assert.ok(rows.every((row) => !('meta' in row)), 'no row reports a relation');
   const snap = section.lines(ctx);
   assert.equal(snap.length, 4);
@@ -1306,7 +1369,7 @@ test('S7 (T8): a truncated mine bucket alone still writes the overflow count wit
   assert.equal(rows.length, 8, 'seven merged rows plus the one overflow row');
   assert.equal(rows[7].label, 'and 3+ more issues',
     'either contributing bucket being truncated makes the count inexact');
-  assert.equal(section.meta(ctx), '10', 'the header counts the merged rows it has');
+  assert.equal(section.meta(ctx), '10 issues', 'the header counts the merged rows it has');
 });
 
 test('S4: nine assigned issues paint seven rows plus an overflow row that dispatches /issues once', async () => {
@@ -1338,7 +1401,7 @@ test('S4: nine assigned issues paint seven rows plus an overflow row that dispat
   assert.equal(rows[7].label, 'and 2 more issues');
   assert.equal(rows[7].tone, 'dim');
   assert.equal('meta' in rows[7], false, 'the overflow row carries no meta');
-  assert.equal(section.meta(ctx), '9', 'the header counts every issue read');
+  assert.equal(section.meta(ctx), '9 issues', 'the header counts every issue read');
   assert.equal(graphqlCalls(gh.calls).length, 1, 'one read, never one per bucket');
 
   rows[7].onClick();
@@ -1572,12 +1635,12 @@ test('S8 (T9): the ONE combined read supplies both the rows and the pull-request
   assert.deepEqual(rows.map((row) => row.label), ['#13 Two PRs', '#12 No PR', '#11 Has a PR']);
   // S3 (issues-sidebar-click): the mark is the NEWEST pull request's number, so
   // the fixture's later event (#71) wins over the earlier one (#70).
-  assert.equal(rows[0].meta, '#71', 'an issue with several pull requests marks the NEWEST number');
+  assert.equal(rows[0].meta, '\ue726 #71', 'an issue with several pull requests marks the NEWEST number');
   assert.equal('meta' in rows[1], false, 'an issue no pull request references carries no marker');
-  assert.equal(rows[2].meta, '#69');
+  assert.equal(rows[2].meta, '\ue726 #69');
   assert.deepEqual(rows.map((row) => row.tone), ['text', 'text', 'text'],
     'only the meta column is gray: the row keeps the plain text tone');
-  assert.equal(section.meta(ctx), '3', 'the marker never changes the count');
+  assert.equal(section.meta(ctx), '3 issues', 'the marker never changes the count');
 
   // T14: the marker read T9 introduced is gone — the same read that returns the
   // rows returns their cross-reference facts, so there is no second call.
@@ -1627,9 +1690,9 @@ test('S4 (T9): a row without a cross-referenced pull request carries no marker a
   assert.deepEqual(rows.map((row) => row.label), ['#12 No PR', '#11 Has a PR'],
     'the rows are the combined read\'s own');
   assert.equal('meta' in rows[0], false, 'the decoration is simply absent');
-  assert.equal(rows[1].meta, '#69', 'the row with a pull request carries its number');
+  assert.equal(rows[1].meta, '\ue726 #69', 'the row with a pull request carries its number');
   const meta = section.meta(ctx);
-  assert.equal(meta, '2', 'the section stays ready, never stale');
+  assert.equal(meta, '2 issues', 'the section stays ready, never stale');
   assert.ok(!String(meta).includes('stale'), 'a decoration never reports a stall');
 });
 
@@ -1835,7 +1898,7 @@ test('S9 (T10): a host that cannot dispatch leaves a visible transcript entry, n
       /cannot dispatch the \/issues command/, 'the entry names the refusal');
     assert.deepEqual(section.lines(ctx).map((row) => row.label), ['#11 Assigned one'],
       'the recorded refusal never turns the ready list into an error row');
-    assert.equal(section.meta(ctx), '1', 'and the header still counts the list it has');
+    assert.equal(section.meta(ctx), '1 issues', 'and the header still counts the list it has');
   } finally {
     worktreeGit.runArgvAsync = original;
   }
@@ -2122,7 +2185,7 @@ test('S9 (T10): a retained row dispatches its number, and the panel proves its o
     assert.deepEqual(opened, [], 'and opens no browser');
     assert.ok(section.lines(ctxB).some((row) => row.label === '#11 B eleven'),
       'the ready list is never disturbed by the click');
-    assert.equal(section.meta(ctxB), '1', 'and the header still counts it');
+    assert.equal(section.meta(ctxB), '1 issues', 'and the header still counts it');
   } finally {
     worktreeGit.runArgvAsync = original;
   }
@@ -2569,7 +2632,7 @@ test('S9 (T14): an issue that left the assigned set makes the next refresh a ful
       () => section.lines(ctx).map((row) => row.label).join('|') === '#12 Twelve',
       'the full read never replaced the bucket',
     );
-    assert.equal(section.meta(ctx), '1');
+    assert.equal(section.meta(ctx), '1 issues');
   } finally {
     Date.now = realNow;
   }
@@ -2619,7 +2682,7 @@ test('S9 (T14): a failed read keeps the cache and the section stale, so the next
     await fireSessionStart(loaded.hooks, ctx);
     const section = registered[0];
     await waitForRows(section, ctx);
-    assert.equal(section.meta(ctx), '2');
+    assert.equal(section.meta(ctx), '2 issues');
 
     offset = 61000;
     section.lines(ctx);
@@ -2981,7 +3044,7 @@ test('S6/S9 (T16): a checkout switch cuts the previous read out of the cache', a
   );
   assert.ok(!section.lines(ctxB).some((row) => row.label === '#11 Left behind'),
     "the previous checkout's rows never survive the move");
-  assert.match(section.meta(ctxB), /^1$/, 'the header counts only the moved session rows');
+  assert.match(section.meta(ctxB), /^1 issues$/, 'the header counts only the moved session rows');
 });
 
 // T10 (S9): the pre-dispatch proof E18 described is gone, so there is no window

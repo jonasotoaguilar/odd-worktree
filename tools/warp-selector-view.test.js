@@ -2,22 +2,24 @@
 // T2/T3 + T4 (warp S2,S3,S4,S5,S6,S9,S12,S16; worktree-ui-feedback S4,S12,S15)
 // tests: lib/warp-selector-view.js — the warp surface as ONE component with
 // two views: the S4 bottom panel
-// (title, the current worktree's name, its data line, a separator, up to five
-// worktree rows, an optional `view all worktrees` row, the focused worktree's
-// data line, the one-row key legend) and the extended list (always-active
+// (`Warp · n worktrees` title (S16), the current worktree's detail line, the
+// focused worktree's detail line, a SCROLLABLE window of up to seven
+// worktree rows with `↑ n more` / `↓ n more` lines outside the selection space
+// (S15/L19), and the one-row key legend) and the extended list (always-active
 // filter row, pagination, `esc` back one level).
 //
 // Contract under test, as observable output only: every line is exactly the
 // requested width; the panel is exactly as tall as its content and never
 // taller than the rows the host offers (S3: a bottom panel that computes its
 // own height, not a box with slack); the S4 order above is pinned; the current
-// worktree owns the header and is never one of the five rows (S4b), and it is
-// never a DESTINATION either: `view all worktrees` lists every other checkout
+// worktree owns the header and is never one of the rows (S4b), and it is
+// never a DESTINATION either: the extended list holds every other checkout
 // and never the one the session already stands in; the
 // principal leads when it is not current, then the rows follow the most
-// recent activity; `view all worktrees` appears only when at least one
-// worktree is left out (S4c, reconciled in L2) and never when everything
-// fits; the legend is exactly ONE row (S2); S5 rows are the checkout NAMES
+// recent activity; S20: there is NO `view all worktrees` row — the extended
+// list is the `a` key, and the `a` token appears only when a checkout stands
+// outside `<repo-name>-worktrees/`; the legend is exactly ONE row (S2); S5
+// rows are the checkout NAMES
 // alone (the branch lives in a data line, never repeated on the row); a data
 // line carries branch, the change size as LINE COUNTS (S16: bare `+A −D`,
 // because the sign already says what the number is — the label survives only
@@ -32,15 +34,23 @@
 // checkout, in both views, and both legends advertise it (the extension owns
 // the confirmation and every refusal); the facts are read for the current and the
 // focused checkout, at most once each, and render() performs no I/O; `c`
-// opens the create flow instead of owning a list row (S6) while `v`,
-// `enter`, `r` and `esc` keep their meanings; `esc` steps back one level from
+// opens the create flow instead of owning a list row (S6) while `a` (S14:
+// the extended list's key, never `v`), `enter`, `r` and `esc` keep their
+// meanings; `esc` steps back one level from
 // the list; while the search is active `delete` clears the whole query and
 // `backspace` edits one character (S4/S12); no key outside the documented map
 // changes state.
 //
-// The panel frame is pinned: 7 fixed rows (top rule, current name, current
-// data, separator, focused data, legend, bottom rule) plus up to five
-// worktree rows and the optional `view all worktrees` row. The list frame is
+// The panel frame is pinned (S19, revised in L17): 7 fixed rows — top rule,
+// the CURRENT checkout's detail line, the FOCUSED checkout's detail line, one
+// blank row, ... the list ..., one more blank row, the legend, the bottom
+// rule — plus up to seven worktree rows and the `↑ n more` / `↓ n more`
+// lines, which are text outside the selection space: the cursor never lands
+// on them and one is drawn only while it has a count to carry. The name line
+// is gone: the top block is the two DETAIL lines alone, and the blank row that
+// separates it from the list stays while a second blank row now separates the
+// list from the keybindings. S20: no `view all worktrees` row exists.
+// The list frame is
 // pinned: 5 fixed rows (top rule, filter, page row, footer, bottom rule) plus
 // a page.
 
@@ -50,7 +60,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { createWarpSelectorView, formatFactsLine } = require('../lib/warp-selector-view.js');
+const { createWarpSelectorView, formatFactsLine, LIST_BLOCK_LINES } = require('../lib/warp-selector-view.js');
 
 function strip(value) {
   return String(value).replace(/\x1b\[[0-9;]*m/g, '');
@@ -105,12 +115,12 @@ const HEIGHT = 20;
 const NOW = Date.parse('2026-03-01T00:00:00.000Z');
 const ago = (ms) => new Date(NOW - ms).toISOString();
 
-const CURRENT = { name: 'feat-odd-viewer', path: '/w/feat-odd-viewer', branch: 'feat/odd-viewer' };
+const CURRENT = { name: 'feat-odd-viewer', path: '/w/herdr-worktrees/feat-odd-viewer', branch: 'feat/odd-viewer' };
 const CHECKOUTS = [
   CURRENT,
   { name: 'main', path: '/w/herdr', branch: 'main', isPrincipal: true },
-  { name: 'feat-alpha', path: '/w/feat-alpha', branch: 'feat/alpha' },
-  { name: 'fix-beta', path: '/w/fix-beta', branch: 'fix/beta' },
+  { name: 'feat-alpha', path: '/w/herdr-worktrees/feat-alpha', branch: 'feat/alpha' },
+  { name: 'fix-beta', path: '/w/herdr-worktrees/fix-beta', branch: 'fix/beta' },
 ];
 
 const DEFAULT_FACTS = { branch: 'feat/alpha', changes: { added: 2, deleted: 1 }, ahead: 1, behind: 0, createdAt: '2026-02-01' };
@@ -176,25 +186,33 @@ function screen(view, width = WIDTH) {
   return { lines, rows };
 }
 
-// S4: the panel is pinned, so every region is reachable by position — a
-// layout regression then fails ONE named assertion instead of thirty magic
-// indices. The list area is whatever sits between the separator and the
-// three trailing rows (focused data, legend, bottom rule).
+// S4/S15/S19: the panel is pinned, so every region is reachable by position —
+// a layout regression then fails ONE named assertion instead of thirty magic
+// indices. The top block is the two detail lines (S19), then the blank row,
+// then the list area, then the second blank row and the three trailing rows
+// (legend, bottom rule). Inside the list area, `↑ n more` / `↓ n more`
+// announce the rows the window hides and are never rows of the list.
+const MORE_ROW = /^\s*([↑↓]) (\d+) more$/;
+
 function panel(view, width = WIDTH) {
   const { lines, rows } = screen(view, width);
   const list = rows.slice(4, rows.length - 3);
+  const isMore = (text) => MORE_ROW.test(text);
   return {
     lines,
     rows,
     height: lines.length,
     title: lines[0],
-    currentName: rows[1],
-    currentData: rows[2],
-    separator: rows[3],
+    header: [rows[1], rows[2]],
+    currentData: rows[1],
+    focusData: rows[2],
+    gapAbove: rows[3],
+    gapBelow: rows[rows.length - 3],
     list,
-    worktrees: list.filter((text) => !/view all worktrees/.test(text)),
+    upMore: list.find((text) => (MORE_ROW.exec(text) || [])[1] === '↑') || null,
+    downMore: list.find((text) => (MORE_ROW.exec(text) || [])[1] === '↓') || null,
+    worktrees: list.filter((text) => !isMore(text) && !/view all worktrees/.test(text)),
     viewAll: list.find((text) => /view all worktrees/.test(text)) || null,
-    focusData: rows[rows.length - 3],
     legend: rows[rows.length - 2],
     bottom: lines[lines.length - 1],
   };
@@ -206,23 +224,23 @@ function assertWidth(lines, width = WIDTH) {
   }
 }
 
-describe('bottom panel layout (S3, S4)', () => {
-  test('renders the S4 order from top to bottom at a content-fitting height', async () => {
+describe('bottom panel layout (S3, S4, S19)', () => {
+  test('renders the S4/S19 order from top to bottom at a content-fitting height', async () => {
     const { view } = await opened();
     const view80 = panel(view);
-    assert.equal(view80.height, 10, 'top + name + data + separator + 3 rows + focused data + legend + bottom');
+    assert.equal(view80.height, 10, 'top + two detail lines + blank + 3 rows + blank + legend + bottom');
 
     const { lines, rows } = screen(view, WIDE);
     assertWidth(lines, WIDE);
-    assert.match(lines[0], /^╭─ Warp ─+ esc ─╮$/, 'line 1 is the title line');
-    assert.equal(rows[1], 'feat-odd-viewer', 'line 2 is the current session worktree');
-    assert.equal(rows[2], DEFAULT_LINE, 'line 3 is that worktree\'s data');
-    assert.equal(rows[3], '', 'a separator row follows the header');
+    assert.match(lines[0], /^╭─ Warp · 3 worktrees ─+ esc ─╮$/, 'line 1 is the title line, counting every checkout the list holds');
+    assert.equal(rows[1], DEFAULT_LINE, 'line 2 is the current checkout\'s detail, and no name line sits above it');
+    assert.equal(rows[2], DEFAULT_LINE, 'line 3 is the focused checkout\'s detail, moved up (S19)');
+    assert.equal(rows[3], '', 'the blank row between the detail lines and the list STAYS (S19, revised)');
     assert.equal(rows[4], '▸ main · use the local project', 'the list starts on line 5, focused first');
     assert.equal(rows[5], '  feat-alpha');
     assert.equal(rows[6], '  fix-beta');
-    assert.equal(rows[7], DEFAULT_LINE, 'the focused worktree\'s data line follows the list');
-    assert.equal(rows[8], '↑↓ move · enter choose · c create · ctrl+d delete · r reload · esc close', 'one legend row, with no `v all` while nothing is hidden, the delete key, and no retired edit key');
+    assert.equal(rows[7], '', 'a second blank row separates the list from the keybindings (S19)');
+    assert.equal(rows[8], '↑↓ move · enter choose · c create · ctrl+d delete · r reload · esc close', 'one legend row, with no `a all` while nothing is hidden, the delete key, and no retired edit key');
     assert.match(lines[9], /^╰─+╯$/, 'the frame is closed');
     assert.equal(lines.length, 10, 'the frame fills its computed height exactly');
   });
@@ -237,55 +255,69 @@ describe('bottom panel layout (S3, S4)', () => {
         assertWidth(frame.lines, width);
         assert.match(frame.title, /^╭─ Warp /, `rows ${rows}/${width}: the title line survives`);
         assert.match(frame.bottom, /^╰─+╯$/, `rows ${rows}/${width}: the frame stays closed`);
-        assert.equal(frame.separator, '', `rows ${rows}/${width}: the separator never moves`);
+        assert.equal(frame.gapAbove, '', `rows ${rows}/${width}: the blank row above the list never moves`);
+        assert.equal(frame.gapBelow, '', `rows ${rows}/${width}: the blank row below the list never moves`);
       }
     }
   });
 
-  test('shows at most five worktree rows, with the offer row only when one is left out', async () => {
+  test('the list block spends its seven lines on rows and hidden counts (S15, L20)', async () => {
+    const base = [
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      ...Array.from({ length: 9 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/herdr-worktrees/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
+    ];
+    const open = (checkouts) => opened({ checkouts, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, rows: HEIGHT });
+    assert.equal(LIST_BLOCK_LINES, 7, 'S15 (L20): the block is seven lines');
+
+    const seven = panel((await open(base.slice(0, 8))).view);
+    assert.equal(seven.worktrees.length, 7, 'nothing is hidden, so the block holds seven checkout rows');
+    assert.equal(seven.upMore, null);
+    assert.equal(seven.downMore, null);
+    assert.equal(seven.height, 7 + 7, 'and the block is seven lines tall');
+    assert.equal(seven.viewAll, null, 'S20: there is no `view all worktrees` row to select');
+
+    const eight = panel((await open(base)).view);
+    assert.equal(eight.worktrees.length, 6, 'one hidden-count line leaves six checkout rows');
+    assert.equal(eight.downMore, '↓ 3 more', 'S15: the hidden rows are announced below the window');
+    assert.equal(eight.upMore, null, 'nothing is hidden above the first row');
+    assert.equal(eight.height, 7 + 6 + 1, 'the block is still seven lines tall');
+    assert.equal(eight.height, eight.lines.length, 'the frame fills that height exactly');
+    const body = eight.rows.join('\n');
+    assert.ok(!body.includes('wt-8'), 'the eighth worktree is beyond the visible window');
+    assert.ok(!body.includes('wt-9'));
+    assert.equal(eight.focusData, DEFAULT_LINE, 'the focused row keeps its detail line, now above the list');
+
+    const scrolled = await open(base);
+    for (let i = 0; i < 6; i += 1) scrolled.view.handleInput('down');
+    const both = panel(scrolled.view);
+    assert.equal(both.worktrees.length, 5, 'both hidden-count lines leave five checkout rows');
+    assert.equal(both.upMore, '↑ 2 more');
+    assert.equal(both.downMore, '↓ 2 more');
+    assert.equal(both.height, 7 + 5 + 2, 'the block never grows past seven lines');
+    assert.equal(both.worktrees[4], '▸ wt-7', 'the selection is inside the window');
+  });
+
+  test('the panel never draws a `view all worktrees` row', async () => {
     const many = [
-      { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-      ...Array.from({ length: 8 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      ...Array.from({ length: 11 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/herdr-worktrees/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
     ];
-    const { view } = await opened({ checkouts: many, current: { name: 'cur', path: '/w/cur' }, rows: HEIGHT });
-    const frame = panel(view);
-    assert.equal(frame.worktrees.length, 5, 'S4b: at most five worktree rows');
-    assert.equal(frame.viewAll, '  view all worktrees', 'S4c: the offer row closes the list');
-    assert.equal(frame.height, 7 + 5 + 1, 'the offer row is part of the computed height');
-    assert.equal(frame.height, frame.lines.length, 'the frame fills that height exactly');
-    const body = frame.rows.join('\n');
-    assert.ok(!body.includes('wt-6'), 'the sixth worktree is beyond the bound');
-    assert.ok(!body.includes('wt-8'));
-    assert.ok(frame.focusData.length > 0, 'the focused row keeps its data line');
+    for (const rows of [8, 12, 20, 40]) {
+      const frame = panel((await opened({ checkouts: many, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, rows })).view);
+      assert.ok(!frame.rows.join('\n').includes('view all worktrees'), `rows ${rows}: the extended list is a key, never a row`);
+      assert.equal(frame.viewAll, null);
+    }
   });
 
-  test('the offer row is absent when every worktree fits, and at its five-row boundary', async () => {
-    const five = [
-      { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-      ...Array.from({ length: 5 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
-    ];
-    const fits = panel((await opened({ checkouts: five, current: { name: 'cur', path: '/w/cur' } })).view);
-    assert.equal(fits.worktrees.length, 5);
-    assert.equal(fits.viewAll, null, 'S4c: everything fits, so neither the row nor its key appears');
-    assert.ok(!fits.rows.join('\n').includes('view all'), 'the offer is nowhere on screen');
-    assert.equal(fits.height, 7 + 5);
-
-    const six = [...five, { name: 'wt-6', path: '/w/wt-6', branch: 'feat/wt-6' }];
-    const hidden = panel((await opened({ checkouts: six, current: { name: 'cur', path: '/w/cur' } })).view);
-    assert.equal(hidden.worktrees.length, 5, 'the sixth row is what makes the offer appear');
-    assert.equal(hidden.viewAll, '  view all worktrees');
-    assert.equal(hidden.height, 7 + 5 + 1);
-
-    const few = panel((await opened({ checkouts: CHECKOUTS, current: { name: CURRENT.name, path: CURRENT.path } })).view);
-    assert.equal(few.viewAll, null, 'three other worktrees need no offer row');
-  });
-
-  test('the current worktree owns the header and is never one of the rows', async () => {
-    const { view } = await opened();
+  test('S19: the top block is the two detail lines only — no name line, and the current is never a row', async () => {
+    const facts = (item) => ({ branch: item === CURRENT.path ? 'main' : 'feat/alpha', changes: { added: 233, deleted: 0 }, ahead: 0, behind: 0, createdAt: '2026-02-20' });
+    const { view } = await opened({ facts });
     const frame = panel(view, WIDE);
-    assert.equal(frame.currentName, 'feat-odd-viewer');
-    assert.ok(!frame.worktrees.some((row) => row.includes('feat-odd-viewer')), 'S4b: the current is not listed again');
-    assert.equal(frame.lines.filter((line) => line.includes('feat-odd-viewer')).length, 1, 'it appears exactly once');
+    assert.equal(frame.currentData, 'branch main · +233 · created 9d ago · modified —', 'line 2 is the principal checkout\'s own detail');
+    assert.equal(frame.focusData, 'branch feat/alpha · +233 · created 9d ago · modified —', 'line 3 is the focused checkout\'s detail');
+    assert.ok(!frame.header.includes('feat-odd-viewer'), `no name line survives above the detail lines: ${JSON.stringify(frame.header)}`);
+    assert.equal(frame.lines.filter((line) => line === 'feat-odd-viewer').length, 0, 'the checkout name is not a line of its own any more');
+    assert.ok(!frame.worktrees.some((row) => row.includes('feat-odd-viewer')), 'S4b: the current is not a row either');
   });
 
   test('an empty list names its state and keeps creation on the hotkey', async () => {
@@ -307,6 +339,235 @@ describe('bottom panel layout (S3, S4)', () => {
     assert.equal(lines.length, 1);
     assert.match(lines[0], /Warp .* enlarge the terminal/);
     assertWidth(lines);
+  });
+});
+
+describe('S14: the extended list key is `a`', () => {
+  test('`a` opens the extended list and `v` is no longer a binding', async () => {
+    const byKey = await opened();
+    byKey.view.handleInput('a');
+    assert.equal(byKey.view.state.view, 'list', 'a opens the extended list');
+    assert.deepEqual(byKey.results, [], 'and never resolves the component');
+
+    const old = await opened();
+    old.view.handleInput('v');
+    assert.equal(old.view.state.view, 'popup', 'v moved nothing: the key is a, not v');
+    assert.deepEqual(old.results, []);
+  });
+
+  test('the hint bar names `a` and is drawn only when a checkout stands outside the listing', async () => {
+    const outside = [
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      { name: 'wt-1', path: '/w/herdr-worktrees/wt-1', branch: 'feat/wt-1' },
+      { name: 'elsewhere', path: '/somewhere/else', branch: 'feat/elsewhere' },
+    ];
+    const withOutside = panel((await opened({ checkouts: outside, current: { name: 'cur', path: '/w/herdr-worktrees/cur' } })).view, WIDE);
+    assert.equal(withOutside.legend, '↑↓ move · enter choose · c create · ctrl+d delete · a all · r reload · esc close', 'the hint names `a all` and every other token is untouched');
+    assert.equal(withOutside.viewAll, null, 'S20: there is no `view all worktrees` row');
+    assert.ok(!withOutside.rows.join('\n').includes('view all worktrees'), 'and the row never comes back');
+
+    const listed = [
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      { name: 'wt-1', path: '/w/herdr-worktrees/wt-1', branch: 'feat/wt-1' },
+    ];
+    const insideOnly = panel((await opened({ checkouts: listed, current: { name: 'cur', path: '/w/herdr-worktrees/cur' } })).view, WIDE);
+    assert.equal(insideOnly.legend, '↑↓ move · enter choose · c create · ctrl+d delete · r reload · esc close', 'S20: with nothing outside the listing there is no `a all` token');
+    assert.ok(!insideOnly.legend.includes('a all'));
+    assert.ok(!insideOnly.lines.join('\n').includes('v all'), 'the retired key appears nowhere in the frame');
+  });
+});
+
+describe('S15: the panel scrolls a window of seven checkouts', () => {
+  const many = [
+    { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+    ...Array.from({ length: 11 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/herdr-worktrees/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
+  ];
+
+  async function after(keys, options = {}) {
+    const made = await opened({
+      checkouts: many,
+      current: { name: 'cur', path: '/w/herdr-worktrees/cur' },
+      facts: () => null,
+      ...options,
+    });
+    for (const key of keys) made.view.handleInput(key);
+    return { made, frame: panel(made.view, WIDE) };
+  }
+
+  test('shows six rows and a down arrow carrying the hidden count at the top', async () => {
+    const { made, frame } = await after([]);
+    assert.deepEqual(
+      frame.worktrees,
+      ['▸ wt-1', '  wt-2', '  wt-3', '  wt-4', '  wt-5', '  wt-6'],
+      'S15 (L20): one hidden-count line leaves six rows',
+    );
+    assert.equal(made.view.state.cursor, 0);
+    assert.equal(frame.upMore, null, 'nothing is hidden above the first row');
+    assert.equal(frame.downMore, '↓ 5 more', 'the rows below the window are announced with their count');
+    assert.ok(frame.list.indexOf(frame.downMore) > frame.list.indexOf('  wt-6'), 'the down arrow sits BELOW the visible rows');
+    assert.ok(!frame.worktrees.includes(frame.downMore), 'the indicator is text, never a row the cursor can land on');
+    assert.equal(frame.height, 7 + 6 + 1, 'the block is still seven lines');
+  });
+
+  test('scrolls one row at a time, spends two lines once both counts are needed, and never selects an indicator', async () => {
+    const fifth = await after(Array.from({ length: 5 }, () => 'down'));
+    assert.equal(fifth.frame.upMore, null, 'five moves stay inside the first window');
+    assert.equal(fifth.frame.worktrees[5], '▸ wt-6', 'the selection is the last visible row');
+    assert.equal(fifth.frame.downMore, '↓ 5 more');
+
+    const seventh = await after(Array.from({ length: 6 }, () => 'down'));
+    assert.equal(seventh.made.view.state.cursor, 6, 'the cursor moved onto a real checkout, not onto the indicator');
+    assert.deepEqual(
+      seventh.frame.worktrees,
+      ['  wt-3', '  wt-4', '  wt-5', '  wt-6', '▸ wt-7'],
+      'once both counts are needed the window keeps five rows and scrolls',
+    );
+    assert.equal(seventh.frame.upMore, '↑ 2 more', 'the hidden rows above are counted');
+    assert.equal(seventh.frame.downMore, '↓ 4 more');
+    assert.equal(seventh.frame.height, 7 + 5 + 2, 'five rows plus the two lines: seven');
+    assert.ok(seventh.frame.list.indexOf(seventh.frame.upMore) < seventh.frame.list.indexOf('  wt-3'), 'the up arrow sits ABOVE the visible rows');
+
+    const eighth = await after(Array.from({ length: 7 }, () => 'down'));
+    assert.equal(eighth.frame.upMore, '↑ 3 more');
+    assert.equal(eighth.frame.downMore, '↓ 3 more');
+    assert.equal(eighth.frame.worktrees[4], '▸ wt-8', 'the window follows the selection one row at a time');
+
+    const last = await after(Array.from({ length: 11 }, () => 'down'));
+    assert.equal(last.frame.worktrees.at(-1), '▸ wt-11', 'the last checkout is reachable from the panel');
+    assert.equal(last.frame.worktrees.length, 6, 'at the bottom only the up line is left, so six rows show');
+    assert.equal(last.frame.upMore, '↑ 5 more', 'every hidden row above is counted');
+    assert.equal(last.frame.downMore, null, 'nothing is left below the last row, so no line is drawn');
+
+    const back = await after(Array.from({ length: 11 }, () => 'down').concat(Array.from({ length: 11 }, () => 'up')));
+    assert.equal(back.made.view.state.cursor, 0, 'scrolling back up returns to the first row');
+    assert.equal(back.frame.upMore, null, 'and the up line disappears');
+    assert.equal(back.frame.downMore, '↓ 5 more');
+  });
+
+  test('a short panel never overflows and still keeps the selection visible', async () => {
+    for (const rows of [8, 9, 10]) {
+      const made = await opened({ checkouts: many, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, facts: () => null, rows });
+      assert.ok(made.view.render(WIDE).length <= rows, `rows ${rows}: the frame never grows past the host's rows`);
+      for (let i = 0; i < 7; i += 1) made.view.handleInput('down');
+      const frame = panel(made.view, WIDE);
+      assert.ok(frame.height <= rows, `rows ${rows}: the scrolled frame fits too`);
+      assert.ok(frame.rows.some((text) => /^▸ wt-8$/.test(text)), `rows ${rows}: the selected row stays on screen`);
+      assertWidth(frame.lines, WIDE);
+    }
+  });
+});
+
+describe('S16: the heading counts the checkouts the list holds', () => {
+  const many = [
+    { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+    ...Array.from({ length: 8 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/herdr-worktrees/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
+  ];
+
+  test('the panel heading counts every checkout its listing holds, not the seven-row window', async () => {
+    const { view } = await opened({ checkouts: many, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, facts: () => null });
+    const frame = panel(view, WIDE);
+    assert.equal(frame.worktrees.length, 6, 'six are visible: one line goes to the hidden-count');
+    assert.match(frame.title, /^╭─ Warp · 8 worktrees ─+ esc ─╮$/, 'the heading counts the eight checkouts the list holds');
+  });
+
+  test('the extended list adds the checkouts outside the worktrees root to the same count', async () => {
+    const roots = [
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      { name: 'main', path: '/w/herdr', branch: 'main', isPrincipal: true },
+      { name: 'inside-a', path: '/w/herdr-worktrees/inside-a', branch: 'feat/a' },
+      { name: 'inside-b', path: '/w/herdr-worktrees/inside-b', branch: 'feat/b' },
+      { name: 'elsewhere', path: '/somewhere/else', branch: 'feat/elsewhere' },
+      { name: 'scratch', path: '/other/scratch', branch: 'chore/scratch' },
+    ];
+    const { view } = await opened({ checkouts: roots, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, facts: () => null });
+    const frame = panel(view, WIDE);
+    assert.match(frame.title, /^╭─ Warp · 3 worktrees ─+ esc ─╮$/, 'the listing holds the principal and the two plugin checkouts');
+    const panelRows = frame.rows.join('\n');
+    assert.ok(!panelRows.includes('elsewhere') && !panelRows.includes('scratch'), 'the outside checkouts are not in the panel listing');
+
+    view.handleInput('a');
+    assert.match(screen(view, WIDE).lines[0], /^╭─ Warp · all 5 worktrees ─+ esc ─╮$/, 'S20: the extended list adds them, so the number grows');
+    const listed = screen(view, WIDE).rows.join('\n');
+    for (const name of ['inside-a', 'inside-b', 'elsewhere', 'scratch']) {
+      assert.ok(listed.includes(name), `${name} is one of the counted rows`);
+    }
+  });
+
+  test('the heading counts what the list holds, never the page', async () => {
+    const { view } = await opened({ checkouts: many, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, facts: () => null });
+    view.handleInput('a');
+    for (const char of 'wt-1') view.handleInput(char);
+    const { lines, rows } = screen(view, WIDE);
+    assert.match(lines[0], /^╭─ Warp · all 8 worktrees ─+ esc ─╮$/, 'the heading counts the eight rows the list holds, never the page');
+    assert.equal(rows[17], 'page 1/1 · 1 worktree', 'the page row keeps counting the matches');
+  });
+
+  test('a single checkout reads in the singular', async () => {
+    const one = [
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      { name: 'wt-1', path: '/w/herdr-worktrees/wt-1', branch: 'feat/wt-1' },
+    ];
+    const { view } = await opened({ checkouts: one, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, facts: () => null });
+    assert.match(panel(view, WIDE).title, /^╭─ Warp · 1 worktree ─+ esc ─╮$/, 'one checkout reads in the singular');
+    view.handleInput('a');
+    assert.match(screen(view, WIDE).lines[0], /^╭─ Warp · all 1 worktree ─+ esc ─╮$/);
+  });
+
+  test('the heading never exceeds the panel width', async () => {
+    const { view } = await opened({ checkouts: many, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, facts: () => null });
+    for (const width of [24, 30, 40, 80]) {
+      assertWidth(panel(view, width).lines, width);
+      view.handleInput('a');
+      assertWidth(screen(view, width).lines, width);
+      view.handleInput('escape');
+    }
+  });
+});
+
+describe('S19: the two detail lines, with a blank row on each side', () => {
+  const checkouts = [
+    { name: 'principal', path: '/w/herdr', branch: 'main', isPrincipal: true },
+    ...Array.from({ length: 8 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/herdr-worktrees/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
+  ];
+  const facts = (checkoutPath) => ({
+    branch: checkoutPath === '/w/herdr' ? 'main' : `feat/${checkoutPath.split('/').pop()}`,
+    changes: { added: 233, deleted: 0 },
+    ahead: 0,
+    behind: checkoutPath === '/w/herdr' ? 0 : 1,
+    createdAt: ago(9 * 86400_000),
+    lastActivity: ago(20 * 60_000),
+  });
+  const openAt = async () => opened({ checkouts, current: { name: 'principal', path: '/w/herdr' }, facts, rows: HEIGHT });
+
+  test('the principal name line is gone, both detail lines stay, and the gaps sit on both sides', async () => {
+    const { view } = await openAt();
+    const frame = panel(view, WIDE);
+    assert.deepEqual(frame.header, [
+      'branch main · +233 · created 9d ago · modified 20m ago',
+      'branch feat/wt-1 · +233 · ↓1 · created 9d ago · modified 20m ago',
+    ], 'exactly the two detail lines sit above the blank row');
+    assert.ok(!frame.rows.includes('principal'), 'the principal\'s NAME line is gone');
+    assert.equal(frame.rows[3], '', 'the blank row between the details and the list stays (S19, revised)');
+    assert.equal(frame.gapBelow, '', 'a second blank row closes the list');
+    assert.equal(frame.rows[frame.rows.length - 3], '', 'the blank row sits between the list and the keybindings');
+    assert.equal(frame.rows[frame.rows.length - 2], frame.legend, 'the keybindings come right after it');
+    assertWidth(frame.lines, WIDE);
+  });
+
+  test('the second detail line follows the selection, which only ever lands on a real checkout', async () => {
+    const { view } = await openAt();
+    for (let i = 0; i < 6; i += 1) view.handleInput('down');
+    await tick();
+    const moved = panel(view, WIDE);
+    assert.equal(moved.focusData, 'branch feat/wt-7 · +233 · ↓1 · created 9d ago · modified 20m ago', 'the line follows the selection');
+    assert.equal(moved.currentData, 'branch main · +233 · created 9d ago · modified 20m ago', 'while the top line stays the principal one');
+
+    for (let i = 0; i < 2; i += 1) view.handleInput('down');
+    await tick();
+    assert.equal(view.state.cursor, 7, 'the last checkout holds the focus');
+    const offered = panel(view, WIDE);
+    assert.equal(offered.focusData, 'branch feat/wt-8 · +233 · ↓1 · created 9d ago · modified 20m ago', 'and it is described in full');
+    assert.equal(offered.viewAll, null, 'S20: there is no offer row to focus');
   });
 });
 
@@ -425,15 +686,15 @@ describe('focused checkout facts (S4d, S9)', () => {
   });
 
   test('moving the selection refreshes the data line and reads each checkout only once', async () => {
-    const facts = (path) => ({ ...BASE, branch: path === '/w/feat-alpha' ? 'feat/alpha' : 'main' });
+    const facts = (path) => ({ ...BASE, branch: path === '/w/herdr-worktrees/feat-alpha' ? 'feat/alpha' : 'main' });
     const { view, factCalls, paints } = await opened({ facts });
-    assert.deepEqual(factCalls, ['/w/feat-odd-viewer', '/w/herdr'], 'the current and the focused checkout are read');
+    assert.deepEqual(factCalls, ['/w/herdr-worktrees/feat-odd-viewer', '/w/herdr'], 'the current and the focused checkout are read');
     assert.ok(paints.length > 0, 'the component repaints after a move');
     view.handleInput('down');
     screen(view, WIDE);
     await tick();
     const moved = panel(view, WIDE);
-    assert.deepEqual(factCalls, ['/w/feat-odd-viewer', '/w/herdr', '/w/feat-alpha'], 'the new focus is read on demand');
+    assert.deepEqual(factCalls, ['/w/herdr-worktrees/feat-odd-viewer', '/w/herdr', '/w/herdr-worktrees/feat-alpha'], 'the new focus is read on demand');
     assert.ok(moved.focusData.startsWith('branch feat/alpha'), `the data follows the focus: ${moved.focusData}`);
     view.handleInput('up');
     screen(view, WIDE);
@@ -462,15 +723,15 @@ describe('focused checkout facts (S4d, S9)', () => {
 
 describe('ordering and both ages (S12)', () => {
   const ORDERED = [
-    { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-    { name: 'stale', path: '/w/stale', branch: 'feat/stale', lastActivity: ago(10 * 86400_000) },
-    { name: 'open', path: '/w/open', branch: 'feat/open', lastActivity: null, lastActivityReason: 'not a git repository' },
-    { name: 'commit-fresh', path: '/w/commit-fresh', branch: 'feat/cf', lastActivity: ago(60_000) },
-    { name: 'dirty-fresh', path: '/w/dirty-fresh', branch: 'feat/df', lastActivity: ago(3600_000) },
+    { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+    { name: 'stale', path: '/w/herdr-worktrees/stale', branch: 'feat/stale', lastActivity: ago(10 * 86400_000) },
+    { name: 'open', path: '/w/herdr-worktrees/open', branch: 'feat/open', lastActivity: null, lastActivityReason: 'not a git repository' },
+    { name: 'commit-fresh', path: '/w/herdr-worktrees/commit-fresh', branch: 'feat/cf', lastActivity: ago(60_000) },
+    { name: 'dirty-fresh', path: '/w/herdr-worktrees/dirty-fresh', branch: 'feat/df', lastActivity: ago(3600_000) },
   ];
 
   test('orders the rows by last activity descending, keeps the unreadable one last and never prints its reason', async () => {
-    const { view } = await opened({ checkouts: ORDERED, current: { name: 'cur', path: '/w/cur' }, facts: () => null });
+    const { view } = await opened({ checkouts: ORDERED, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, facts: () => null });
     const rows = panel(view, WIDE).worktrees;
     assert.match(rows[0], /^▸ commit-fresh/, 'the most recent commit leads and takes the focus');
     assert.match(rows[1], /^ {2}dirty-fresh/, 'a recent dirty file follows the commit');
@@ -484,13 +745,13 @@ describe('ordering and both ages (S12)', () => {
     assert.ok(focused.focusData.endsWith('modified —'), `a brief value replaces a fake date: ${focused.focusData}`);
     assert.ok(!focused.focusData.includes('not a git repository'), `the reason stays out of the row: ${focused.focusData}`);
     assert.ok(!/modified 20\d\d/.test(focused.focusData));
-    const stored = view.state.checkouts.find((entry) => entry.path === '/w/open');
+    const stored = view.state.checkouts.find((entry) => entry.path === '/w/herdr-worktrees/open');
     assert.equal(stored.lastActivityReason, 'not a git repository', 'the provenance is kept in data');
   });
 
   test('the extended list keeps the same order', async () => {
-    const { view } = await opened({ checkouts: ORDERED, current: { name: 'cur', path: '/w/cur' }, facts: () => null });
-    view.handleInput('v');
+    const { view } = await opened({ checkouts: ORDERED, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, facts: () => null });
+    view.handleInput('a');
     const { rows } = screen(view, WIDE);
     assert.match(rows[2], /commit-fresh/);
     assert.match(rows[3], /dirty-fresh/);
@@ -532,14 +793,14 @@ describe('S15: compact facts rows never print the raw reason', () => {
 
   test('a row-level reason is kept as data and never rendered', async () => {
     const checkouts = [
-      { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-      { name: 'stale', path: '/w/stale', branch: 'feat/stale', lastActivity: null, lastActivityReason: LONG },
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      { name: 'stale', path: '/w/herdr-worktrees/stale', branch: 'feat/stale', lastActivity: null, lastActivityReason: LONG },
     ];
-    const { view } = await opened({ checkouts, current: { name: 'cur', path: '/w/cur' }, facts: () => null });
+    const { view } = await opened({ checkouts, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, facts: () => null });
     const frame = panel(view, WIDE);
     assert.match(frame.worktrees[0], /^▸ stale/, 'the unreadable row still sorts last and takes the focus');
     assert.ok(frame.focusData.endsWith('modified —'), `the row's own reason is not printed: ${frame.focusData}`);
-    const stored = view.state.checkouts.find((entry) => entry.path === '/w/stale');
+    const stored = view.state.checkouts.find((entry) => entry.path === '/w/herdr-worktrees/stale');
     assert.equal(stored.lastActivityReason, LONG, 'the provenance survives in the component data');
   });
 
@@ -562,7 +823,7 @@ describe('the create key and the retired edit key (S1, S4, S6)', () => {
 
   test('c stays ordinary text in the extended list, where the filter owns printables', async () => {
     const { view, results } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     view.handleInput('c');
     assert.equal(view.state.filter, 'c', 'the filter took the character');
     assert.deepEqual(results, []);
@@ -583,17 +844,18 @@ describe('the create key and the retired edit key (S1, S4, S6)', () => {
     assert.deepEqual(empty.results, [], 'e on an empty list is inert');
 
     const many = [
-      { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-      ...Array.from({ length: 8 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      ...Array.from({ length: 8 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/herdr-worktrees/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
     ];
-    const offered = await opened({ checkouts: many, current: { name: 'cur', path: '/w/cur' } });
-    for (let i = 0; i < 5; i += 1) offered.view.handleInput('down');
-    assert.match(panel(offered.view).viewAll || '', /^▸ view all worktrees$/, 'the offer row is focused');
+    const offered = await opened({ checkouts: many, current: { name: 'cur', path: '/w/herdr-worktrees/cur' } });
+    for (let i = 0; i < 8; i += 1) offered.view.handleInput('down');
+    assert.equal(offered.view.state.cursor, 7, 'S20: the selection stops on the last checkout, there is no offer row');
     offered.view.handleInput('e');
-    assert.deepEqual(offered.results, [], 'e on the offer row is inert too');
+    assert.deepEqual(offered.results, [], 'e on the last checkout is inert too');
+    assert.ok(!offered.view.render(WIDE).join('\n').includes('view all worktrees'));
 
     const listed = await opened();
-    listed.view.handleInput('v');
+    listed.view.handleInput('a');
     listed.view.handleInput('T');
     listed.view.handleInput('e');
     assert.equal(listed.view.state.filter, 'e', 'e is typed text while the filter is open');
@@ -602,14 +864,14 @@ describe('the create key and the retired edit key (S1, S4, S6)', () => {
 });
 
 describe('extended list (S1, S6)', () => {
-  test('v opens a paginated list of every other checkout with an always-active filter row', async () => {
+  test('a opens a paginated list of every other checkout with an always-active filter row', async () => {
     const { view } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     assert.equal(view.state.view, 'list');
     const { lines, rows } = screen(view);
     assert.equal(lines.length, HEIGHT);
     assertWidth(lines);
-    assert.match(lines[0], /^╭─ Warp · all worktrees ─+ esc ─╮$/);
+    assert.match(lines[0], /^╭─ Warp · all 3 worktrees ─+ esc ─╮$/);
     assert.equal(rows[1], 'filter: type to search', 'the filter row is always present and never selectable');
     assert.equal(rows[2], '▸ main · use the local project', 'S6: the principal leads the list');
     assert.equal(rows[3], '  feat-alpha');
@@ -623,7 +885,7 @@ describe('extended list (S1, S6)', () => {
 
   test('typing filters the list live and the filter row is not a selectable item', async () => {
     const { view } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     view.handleInput('a');
     assert.equal(view.state.filterOpen, true);
     assert.equal(view.state.filter, 'a');
@@ -642,7 +904,7 @@ describe('extended list (S1, S6)', () => {
 
   test('the filter excludes rows that match nothing and enter cannot warp from it', async () => {
     const { view, results } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     for (const ch of 'zzz') view.handleInput(ch);
     const { lines, rows } = screen(view);
     assertWidth(lines);
@@ -654,9 +916,9 @@ describe('extended list (S1, S6)', () => {
   });
 
   test('pgUp/pgDn page through every other checkout', async () => {
-    const many = Array.from({ length: 12 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/wt-${index + 1}`, branch: `feat/wt-${index + 1}` }));
-    const { view } = await opened({ checkouts: many, current: { name: 'wt-1', path: '/w/wt-1' }, rows: 11 });
-    view.handleInput('v');
+    const many = Array.from({ length: 12 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/herdr-worktrees/wt-${index + 1}`, branch: `feat/wt-${index + 1}` }));
+    const { view } = await opened({ checkouts: many, current: { name: 'wt-1', path: '/w/herdr-worktrees/wt-1' }, rows: 11 });
+    view.handleInput('a');
     let { rows } = screen(view);
     // 11 rows - 5 fixed rows = a 6-row page, and wt-1 (the session's own
     // checkout) is not one of the eleven destinations.
@@ -680,7 +942,7 @@ describe('extended list (S1, S6)', () => {
 
   test('esc closes the filter first and then steps back to the panel', async () => {
     const { view, results } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     view.handleInput('a');
     assert.equal(view.state.filterOpen, true);
     view.handleInput('escape');
@@ -696,7 +958,7 @@ describe('extended list (S1, S6)', () => {
 
   test('ctrl+c steps back from the list too', async () => {
     const { view, results } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     view.handleInput('ctrl+c');
     assert.equal(view.state.view, 'popup');
     assert.deepEqual(results, []);
@@ -704,22 +966,22 @@ describe('extended list (S1, S6)', () => {
 
   test('enter on a checkout warps to its path', async () => {
     const { view, results } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     view.handleInput('down');
     view.handleInput('enter');
-    assert.deepEqual(results, [{ warp: '/w/feat-alpha' }], 'the second row is feat-alpha: the current checkout is not listed');
+    assert.deepEqual(results, [{ warp: '/w/herdr-worktrees/feat-alpha' }], 'the second row is feat-alpha: the current checkout is not listed');
   });
 });
 
 describe('the S6 space rule', () => {
   test('space toggles while the filter is closed, types once it is open, and toggles again after it closes', async () => {
     const { view, toggles } = await opened({ onToggle: () => {} });
-    view.handleInput('v');
+    view.handleInput('a');
     view.handleInput('down');
     assert.equal(view.state.listCursor, 1);
 
     view.handleInput(' ');
-    assert.deepEqual(toggles, ['/w/feat-alpha'], 'space toggles the focused row while the filter is closed');
+    assert.deepEqual(toggles, ['/w/herdr-worktrees/feat-alpha'], 'space toggles the focused row while the filter is closed');
     assert.equal(view.state.filterOpen, false, 'and never opens the filter');
     assert.equal(view.state.filter, '');
 
@@ -728,7 +990,7 @@ describe('the S6 space rule', () => {
     assert.equal(view.state.filter, 'z');
     view.handleInput(' ');
     assert.equal(view.state.filter, 'z ', 'once open, space goes to the text');
-    assert.deepEqual(toggles, ['/w/feat-alpha'], 'and no longer toggles');
+    assert.deepEqual(toggles, ['/w/herdr-worktrees/feat-alpha'], 'and no longer toggles');
 
     view.handleInput('escape');
     assert.equal(view.state.filterOpen, false);
@@ -739,12 +1001,12 @@ describe('the S6 space rule', () => {
     view.handleInput('escape');
     view.handleInput('down');
     view.handleInput(' ');
-    assert.deepEqual(toggles, ['/w/feat-alpha', '/w/feat-alpha'], 'closing an empty filter restores the toggle');
+    assert.deepEqual(toggles, ['/w/herdr-worktrees/feat-alpha', '/w/herdr-worktrees/feat-alpha'], 'closing an empty filter restores the toggle');
   });
 
   test('without a toggle, space is a printable and opens the filter', async () => {
     const { view } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     view.handleInput(' ');
     assert.equal(view.state.filterOpen, true);
     assert.equal(view.state.filter, ' ');
@@ -759,7 +1021,7 @@ describe('S9: no redundant help overlay', () => {
     assert.ok(panel(view).worktrees.some((text) => /feat-alpha/.test(text)), 'the panel rows stay');
     assert.deepEqual(view.state, before, '? changes no state in the panel');
 
-    view.handleInput('v');
+    view.handleInput('a');
     view.handleInput('?');
     const { rows } = screen(view);
     assert.equal(view.state.filter, '?', '? is ordinary printable text in the list, never a help toggle');
@@ -772,16 +1034,18 @@ describe('S9: no redundant help overlay', () => {
     assert.equal(panel(view, WIDE).legend, '↑↓ move · enter choose · c create · ctrl+d delete · r reload · esc close');
     assert.ok(!panel(view, WIDE).legend.includes('?'), 'no generic help hint in the panel legend');
 
-    // S4c: the offer row and its key appear together, only when a worktree
-    // is left out.
+    // S20: the `a` token appears only when a checkout stands outside
+    // `<repo-name>-worktrees/`, and there is never a row to go with it.
     const many = [
-      { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-      ...Array.from({ length: 8 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      { name: 'wt-1', path: '/w/herdr-worktrees/wt-1', branch: 'feat/wt-1' },
+      { name: 'elsewhere', path: '/somewhere/else', branch: 'feat/elsewhere' },
     ];
-    const offered = await opened({ checkouts: many, current: { name: 'cur', path: '/w/cur' } });
-    assert.match(panel(offered.view, WIDE).legend, /v all/, 'the offer key rides with the offer row');
+    const offered = await opened({ checkouts: many, current: { name: 'cur', path: '/w/herdr-worktrees/cur' } });
+    assert.match(panel(offered.view, WIDE).legend, /a all/, 'the hint names the extended list key');
+    assert.ok(!panel(offered.view, WIDE).rows.join('\n').includes('view all worktrees'), 'and no row advertises it');
 
-    view.handleInput('v');
+    view.handleInput('a');
     const { rows } = screen(view);
     assert.equal(rows[18], '↑↓ move · pgUp/pgDn page · enter warp · ctrl+d delete · r reload · esc back');
     assert.ok(!rows[18].includes('?'), 'no generic help hint in the list legend');
@@ -791,12 +1055,12 @@ describe('S9: no redundant help overlay', () => {
 describe('S6: the principal leads when it is not the current checkout', () => {
   test('a principal with the oldest activity still renders before newer checkouts', async () => {
     const checkouts = [
-      { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-      { name: 'recent', path: '/w/recent', branch: 'feat/recent', lastActivity: ago(60_000) },
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      { name: 'recent', path: '/w/herdr-worktrees/recent', branch: 'feat/recent', lastActivity: ago(60_000) },
       { name: 'main', path: '/w/herdr', branch: 'main', isPrincipal: true, lastActivity: ago(90 * 86400_000) },
-      { name: 'older', path: '/w/older', branch: 'feat/older', lastActivity: ago(120 * 86400_000) },
+      { name: 'older', path: '/w/herdr-worktrees/older', branch: 'feat/older', lastActivity: ago(120 * 86400_000) },
     ];
-    const { view } = await opened({ checkouts, current: { name: 'cur', path: '/w/cur' }, facts: () => null });
+    const { view } = await opened({ checkouts, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, facts: () => null });
     const rows = panel(view, WIDE).worktrees;
     assert.equal(rows[0], '▸ main · use the local project', 'the principal is first despite the oldest activity');
     assert.equal(rows[1], '  recent');
@@ -818,18 +1082,18 @@ describe('S1: render performs no I/O and enrichment keeps the selection', () => 
 
   test('apply() re-sorts by the newly arrived activity and keeps the focused checkout', async () => {
     const initial = [
-      { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-      { name: 'alpha', path: '/w/alpha', branch: 'feat/alpha' },
-      { name: 'beta', path: '/w/beta', branch: 'feat/beta' },
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      { name: 'alpha', path: '/w/herdr-worktrees/alpha', branch: 'feat/alpha' },
+      { name: 'beta', path: '/w/herdr-worktrees/beta', branch: 'feat/beta' },
     ];
-    const { view } = await opened({ checkouts: initial, current: { name: 'cur', path: '/w/cur' }, facts: () => null });
+    const { view } = await opened({ checkouts: initial, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, facts: () => null });
     view.handleInput('down');
     view.handleInput('down'); // focus beta (the second list row, clamped)
     assert.equal(view.state.cursor, 1);
     view.apply([
-      { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-      { name: 'alpha', path: '/w/alpha', branch: 'feat/alpha', lastActivity: '2026-02-01T00:00:00.000Z' },
-      { name: 'beta', path: '/w/beta', branch: 'feat/beta', lastActivity: '2026-02-02T00:00:00.000Z' },
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      { name: 'alpha', path: '/w/herdr-worktrees/alpha', branch: 'feat/alpha', lastActivity: '2026-02-01T00:00:00.000Z' },
+      { name: 'beta', path: '/w/herdr-worktrees/beta', branch: 'feat/beta', lastActivity: '2026-02-02T00:00:00.000Z' },
     ]);
     const rows = panel(view, WIDE).worktrees;
     assert.equal(rows[0], '▸ beta', 'beta now leads by activity and holds the focus');
@@ -847,8 +1111,8 @@ describe('S1: render performs no I/O and enrichment keeps the selection', () => 
     const before = JSON.parse(JSON.stringify(view.state.checkouts));
 
     const replacement = [
-      { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-      { name: 'late', path: '/w/late', branch: 'feat/late', lastActivity: '2026-02-02T00:00:00.000Z' },
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      { name: 'late', path: '/w/herdr-worktrees/late', branch: 'feat/late', lastActivity: '2026-02-02T00:00:00.000Z' },
     ];
     assert.doesNotThrow(() => view.apply(replacement));
     releaseFacts(DEFAULT_FACTS);
@@ -866,7 +1130,7 @@ describe('S12: Delete clears the search, Backspace edits it', () => {
 
   test('Delete empties the whole query while the search is active', async () => {
     const { view, results } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     for (const char of 'alpha') view.handleInput(char);
     assert.equal(view.state.filter, 'alpha');
     view.handleInput('\x1b[3~'); // the raw Delete sequence
@@ -880,7 +1144,7 @@ describe('S12: Delete clears the search, Backspace edits it', () => {
 
   test('the installed matcher spelling of Delete clears it too', async () => {
     const { view } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     for (const char of 'beta') view.handleInput(char);
     view.handleInput('delete');
     assert.equal(view.state.filter, '');
@@ -888,7 +1152,7 @@ describe('S12: Delete clears the search, Backspace edits it', () => {
 
   test('Backspace still deletes exactly one character', async () => {
     const { view } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     for (const char of 'alpha') view.handleInput(char);
     view.handleInput('backspace');
     assert.equal(view.state.filter, 'alph');
@@ -909,7 +1173,7 @@ describe('S12: Delete clears the search, Backspace edits it', () => {
   test('the footer advertises Delete clear on one row only while the search is active', async () => {
     for (const width of [40, 80, 120]) {
       const { view } = await opened();
-      view.handleInput('v');
+      view.handleInput('a');
       view.handleInput('T');
       const open = view.render(width).map(strip);
       const openLegend = open[open.length - 2];
@@ -938,7 +1202,7 @@ describe('keys that are not in the map', () => {
 
   test('no key outside the documented map changes the list state', async () => {
     const { view, results } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     screen(view);
     const before = { listCursor: view.state.listCursor, filter: view.state.filter, filterOpen: view.state.filterOpen, view: view.state.view, help: view.state.help };
     for (const key of ['tab', 'home', 'end', 'left', 'right', 'ctrl+s']) view.handleInput(key);
@@ -971,33 +1235,32 @@ describe('selection and reload', () => {
     assert.deepEqual(closed.results, [null], 'the component resolves once');
   });
 
-  test('enter on the offer row opens the extended list instead of resolving', async () => {
+  test('enter on the last checkout warps and never opens the extended list', async () => {
     const many = [
-      { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-      ...Array.from({ length: 8 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      ...Array.from({ length: 8 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/herdr-worktrees/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
     ];
-    const { view, results } = await opened({ checkouts: many, current: { name: 'cur', path: '/w/cur' }, rows: 14 });
-    for (let i = 0; i < 5; i += 1) view.handleInput('down');
-    assert.match(panel(view).viewAll || '', /^▸ view all worktrees$/, 'the offer row is focused');
+    const { view, results } = await opened({ checkouts: many, current: { name: 'cur', path: '/w/herdr-worktrees/cur' }, rows: 14 });
+    for (let i = 0; i < 7; i += 1) view.handleInput('down');
+    assert.match(panel(view).worktrees.at(-1), /^▸ wt-8$/, 'S20: the selection stops on the last checkout');
     view.handleInput('enter');
-    assert.equal(view.state.view, 'list');
-    assert.deepEqual(results, []);
+    assert.deepEqual(results, [{ warp: '/w/herdr-worktrees/wt-8' }], 'enter warps; the list is a key, never a row');
   });
 
   test('r reloads through the injected callback and re-reads both data lines', async () => {
     const reloaded = [
-      { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-      { name: 'new-shape', path: '/w/new-shape', branch: 'feat/new-shape' },
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      { name: 'new-shape', path: '/w/herdr-worktrees/new-shape', branch: 'feat/new-shape' },
     ];
     const { view, reloadCalls, factCalls } = await opened({
       checkouts: [
-        { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-        { name: 'old-shape', path: '/w/old-shape', branch: 'feat/old-shape' },
+        { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+        { name: 'old-shape', path: '/w/herdr-worktrees/old-shape', branch: 'feat/old-shape' },
       ],
-      current: { name: 'cur', path: '/w/cur' },
+      current: { name: 'cur', path: '/w/herdr-worktrees/cur' },
       reloadTo: reloaded,
     });
-    assert.deepEqual(factCalls, ['/w/cur', '/w/old-shape'], 'the mount reads the current and the focused row once');
+    assert.deepEqual(factCalls, ['/w/herdr-worktrees/cur', '/w/herdr-worktrees/old-shape'], 'the mount reads the current and the focused row once');
     view.handleInput('r');
     assert.equal(reloadCalls.length, 1, 'the reload reader is the only source');
     await tick();
@@ -1005,7 +1268,7 @@ describe('selection and reload', () => {
     assert.match(rows[0], /new-shape/);
     assert.deepEqual(
       factCalls,
-      ['/w/cur', '/w/old-shape', '/w/cur', '/w/new-shape'],
+      ['/w/herdr-worktrees/cur', '/w/herdr-worktrees/old-shape', '/w/herdr-worktrees/cur', '/w/herdr-worktrees/new-shape'],
       'the cached facts are dropped on reload and both data lines are re-read',
     );
   });
@@ -1038,7 +1301,7 @@ describe('S2: one-row key legends', () => {
   test('the extended-list legend owns exactly one row at every width', async () => {
     for (const width of WIDTHS) {
       const { view } = await opened();
-      view.handleInput('v');
+      view.handleInput('a');
       const { lines } = screen(view, width);
       assert.equal(lines.length, HEIGHT, `width ${width}: the list still fills its rows`);
       const legend = legendRows(lines, /esc back|↑↓/);
@@ -1065,20 +1328,20 @@ describe('S4: ctrl+d asks to delete the focused checkout', () => {
       view.handleInput('down');
       assert.match(panel(view).worktrees[1], /^▸ feat-alpha$/, 'a checkout row is focused');
       view.handleInput(spelling);
-      assert.deepEqual(results, [{ delete: '/w/feat-alpha' }], `${JSON.stringify(spelling)} names the focused path`);
+      assert.deepEqual(results, [{ delete: '/w/herdr-worktrees/feat-alpha' }], `${JSON.stringify(spelling)} names the focused path`);
     }
   });
 
-  test('ctrl+d on the offer row and on an empty panel resolves nothing', async () => {
+  test('ctrl+d on the last checkout names it, and on an empty panel resolves nothing', async () => {
     const many = [
-      { name: 'cur', path: '/w/cur', branch: 'feat/cur' },
-      ...Array.from({ length: 8 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
+      { name: 'cur', path: '/w/herdr-worktrees/cur', branch: 'feat/cur' },
+      ...Array.from({ length: 8 }, (_, index) => ({ name: `wt-${index + 1}`, path: `/w/herdr-worktrees/wt-${index + 1}`, branch: `feat/wt-${index + 1}` })),
     ];
-    const offered = await opened({ checkouts: many, current: { name: 'cur', path: '/w/cur' } });
-    for (let i = 0; i < 5; i += 1) offered.view.handleInput('down');
-    assert.match(panel(offered.view).viewAll || '', /^▸ view all worktrees$/, 'the offer row is focused');
+    const offered = await opened({ checkouts: many, current: { name: 'cur', path: '/w/herdr-worktrees/cur' } });
+    for (let i = 0; i < 8; i += 1) offered.view.handleInput('down');
+    assert.match(panel(offered.view).worktrees.at(-1), /^▸ wt-8$/, 'the last checkout is focused');
     offered.view.handleInput('ctrl+d');
-    assert.deepEqual(offered.results, [], 'the offer row is not a checkout to delete');
+    assert.deepEqual(offered.results, [{ delete: '/w/herdr-worktrees/wt-8' }], 'the delete request names a real checkout, never a row that is not one');
 
     const empty = await opened({ checkouts: [CURRENT], current: { name: CURRENT.name, path: CURRENT.path } });
     empty.view.handleInput('ctrl+d');
@@ -1087,15 +1350,15 @@ describe('S4: ctrl+d asks to delete the focused checkout', () => {
 
   test('ctrl+d in the extended list names the focused row and stays inert while the filter is open', async () => {
     const { view, results } = await opened();
-    view.handleInput('v');
+    view.handleInput('a');
     // The list is every OTHER checkout, principal first: main, then feat-alpha
     // — so the focused row after one move is feat-alpha.
     view.handleInput('down');
     view.handleInput('\x04');
-    assert.deepEqual(results, [{ delete: '/w/feat-alpha' }], 'the list speaks the same marker');
+    assert.deepEqual(results, [{ delete: '/w/herdr-worktrees/feat-alpha' }], 'the list speaks the same marker');
 
     const searching = await opened();
-    searching.view.handleInput('v');
+    searching.view.handleInput('a');
     searching.view.handleInput('T');
     const before = { listCursor: searching.view.state.listCursor, filter: searching.view.state.filter, view: searching.view.state.view };
     searching.view.handleInput('ctrl+d');
@@ -1107,7 +1370,7 @@ describe('S4: ctrl+d asks to delete the focused checkout', () => {
     for (const width of [80, 120]) {
       const { view } = await opened();
       assert.match(panel(view, width).legend, /ctrl\+d delete/, `width ${width}: the panel names it`);
-      view.handleInput('v');
+      view.handleInput('a');
       const { lines } = screen(view, width);
       assert.match(lines[lines.length - 2], /ctrl\+d delete/, `width ${width}: and so does the extended list`);
     }
@@ -1154,7 +1417,7 @@ describe('S1: no issue or ODD association is rendered', () => {
     const frame = panel(view, WIDE);
     assert.equal(frame.focusData, DEFAULT_LINE, 'the focused line is association-free');
     assert.equal(frame.currentData, DEFAULT_LINE, 'so is the current worktree line');
-    view.handleInput('v');
+    view.handleInput('a');
     const listed = screen(view, WIDE).lines.join('\n');
     assert.ok(!listed.includes('issues'), 'the extended list names no issue association');
     assert.ok(!/w1-a|w2-b|#12/.test(listed), 'and no ODD document or issue id either');
@@ -1188,7 +1451,7 @@ describe('S11: the shared palette', () => {
   test('the extended list and the active-search legend use the same key/description palette', async () => {
     const theme = recordingTheme();
     const { view } = await opened({ theme });
-    view.handleInput('v');
+    view.handleInput('a');
     const browse = view.render(WIDE).at(-2);
     assert.match(browse, /\x1b\[1m\x1b\[96mpgUp\/pgDn\x1b\[0m\x1b\[22m\x1b\[90m page/, 'a compound key is ONE key run');
     assert.match(browse, /\x1b\[1m\x1b\[96menter\x1b\[0m\x1b\[22m\x1b\[90m warp/, 'and its description is muted');
@@ -1213,23 +1476,21 @@ describe('S11: the shared palette', () => {
     const theme = recordingTheme();
     const { view } = await opened({ theme });
     const lines = view.render(WIDE);
-    assert.match(lines[0], /\x1b\[1m\x1b\[33mWarp\x1b\[0m\x1b\[22m/,
-      'the frame title is the Agents view title role, bold');
+    assert.match(lines[0], /\x1b\[1m\x1b\[33mWarp · 3 worktrees\x1b\[0m\x1b\[22m/,
+      'the frame title is the Agents view title role, bold, count included');
     assert.ok(!theme.calls.some((call) => call.role === 'accent' && call.text === 'Warp'),
       'the title never takes the button accent');
     assert.match(lines[0], /\x1b\[1m\x1b\[96mesc\x1b\[0m\x1b\[22m/, 'the close hint in the header is painted as a key');
     assert.match(lines[0], /\x1b\[34m╭─\x1b\[0m/, 'the frame rule keeps the border role');
-    assert.match(lines[1], /\x1b\[39mfeat-odd-viewer/, 'the current worktree name is ordinary text');
-    assert.ok(!/\x1b\[1m\x1b\[96mfeat-odd-viewer/.test(lines[1]), 'a value is never emphasized like a key');
-    assert.ok(!/\x1b\[96mfeat-odd-viewer/.test(lines[1]), 'a value is never the button accent');
-    assert.match(lines[2], /\x1b\[90mbranch feat\/alpha/, 'the facts line is muted');
-    assert.match(lines.at(-3), /\x1b\[90mbranch feat\/alpha/, 'so is the focused worktree line');
+    assert.match(lines[1], /\x1b\[90mbranch feat\/alpha/, 'the current checkout\'s facts line is muted');
+    assert.match(lines[2], /\x1b\[90mbranch feat\/alpha/, 'so is the focused checkout\'s line');
+    assert.ok(!lines.slice(1, 3).some((line) => /feat-odd-viewer/.test(line)), 'S19: no name line is painted at all');
   });
 
   test('the list page row paints its label dim, the page value as ordinary text and the total muted', async () => {
     const theme = recordingTheme();
     const { view } = await opened({ theme, rows: 20 });
-    view.handleInput('v');
+    view.handleInput('a');
     const pageRow = view.render(WIDE).at(-3);
     assert.match(pageRow, /\x1b\[2mpage \x1b\[0m/, 'the `page` label is dim');
     assert.match(pageRow, /\x1b\[39m1\/1\x1b\[0m/, 'the page number is ordinary text');
@@ -1239,7 +1500,7 @@ describe('S11: the shared palette', () => {
   test('the search row paints its static label dim and the live query as ordinary text', async () => {
     const theme = recordingTheme();
     const { view } = await opened({ theme });
-    view.handleInput('v');
+    view.handleInput('a');
     const idle = view.render(WIDE)[1];
     assert.match(idle, /\x1b\[2mfilter: \x1b\[0m\x1b\[90mtype to search/, 'the idle hint is dim/muted, never accent');
     view.handleInput('a');
@@ -1258,11 +1519,11 @@ describe('S11: the shared palette', () => {
     };
     const { view } = await opened({ theme: hostile });
     const { lines, rows } = screen(view, WIDE);
-    assert.match(lines[0], /^╭─ Warp ─+ esc ─╮$/, 'the title line still renders without colour');
+    assert.match(lines[0], /^╭─ Warp · 3 worktrees ─+ esc ─╮$/, 'the title line still renders without colour');
     assert.match(rows[rows.length - 2], /↑↓ move · enter choose · c create · ctrl\+d delete · r reload · esc close/,
       'the legend still spells every key and its words');
     assert.equal(rows[4], '▸ main · use the local project', 'the focus marker survives monochrome');
-    view.handleInput('v');
+    view.handleInput('a');
     assert.match(screen(view, WIDE).rows.at(-2), /pgUp\/pgDn page/, 'the list legend survives too');
   });
 });
@@ -1290,13 +1551,17 @@ describe('the current checkout is never a destination', () => {
     });
     return {
       dir,
+      // S20: the checkouts this package creates live under
+      // `<repo-name>-worktrees`, so a real workspace keeps them there and the
+      // panel's listing is what these tests exercise.
       checkout(name) {
-        const full = path.join(dir, name);
-        fs.mkdirSync(full);
+        const full = path.join(dir, 'herdr-worktrees', name);
+        fs.mkdirSync(full, { recursive: true });
         return full;
       },
       alias(name, target) {
-        const full = path.join(dir, name);
+        const full = path.join(dir, 'herdr-worktrees', name);
+        fs.mkdirSync(path.dirname(full), { recursive: true });
         fs.symlinkSync(target, full);
         return full;
       },
@@ -1317,7 +1582,7 @@ describe('the current checkout is never a destination', () => {
       current: { name: 'feat-alpha', path: feat },
       canonicalPath: realpath,
     });
-    view.handleInput('v');
+    view.handleInput('a');
     const { lines, rows } = screen(view);
     assertWidth(lines);
     assert.equal(rows[2], '▸ principal · use the local project', 'the principal still leads the destinations');
@@ -1341,7 +1606,7 @@ describe('the current checkout is never a destination', () => {
       current: { name: 'feat-alpha', path: feat },
       canonicalPath: realpath,
     });
-    listedByAlias.view.handleInput('v');
+    listedByAlias.view.handleInput('a');
     assert.ok(!screen(listedByAlias.view).rows.join('\n').includes('alias-alpha'),
       'the alias of the current checkout is not a destination');
     assert.equal(screen(listedByAlias.view).rows[17], 'page 1/1 · 1 worktree');
@@ -1354,7 +1619,7 @@ describe('the current checkout is never a destination', () => {
       current: { name: 'alias-alpha', path: alias },
       canonicalPath: realpath,
     });
-    listedByReal.view.handleInput('v');
+    listedByReal.view.handleInput('a');
     assert.ok(!screen(listedByReal.view).rows.join('\n').includes('feat-alpha'),
       'the real path is the same checkout as the alias the session stands on');
     assert.equal(screen(listedByReal.view).rows[17], 'page 1/1 · 1 worktree');
@@ -1372,7 +1637,7 @@ describe('the current checkout is never a destination', () => {
       current: { name: 'feat-x', path: feat },
       canonicalPath: realpath,
     });
-    view.handleInput('v');
+    view.handleInput('a');
     const { rows } = screen(view);
     assert.equal(rows[2], '▸ feat-x2', 'a shared name prefix is not the same checkout');
     assert.equal(rows[3], '', 'and the current checkout itself is still absent');
@@ -1394,7 +1659,7 @@ describe('the current checkout is never a destination', () => {
     });
     const frame = panel(view, WIDE);
     assert.deepEqual(frame.worktrees, ['▸ principal · use the local project'], 'the panel lists only the other checkout');
-    assert.equal(frame.viewAll, null, 'nothing is left out, so there is no offer row');
+    assert.equal(frame.viewAll, null, 'S20: no `view all worktrees` row exists at all');
     assert.equal(frame.height, 8, 'the panel shrinks to its content');
   });
 
@@ -1406,7 +1671,7 @@ describe('the current checkout is never a destination', () => {
       current: { name: 'feat-alpha', path: feat },
       canonicalPath: realpath,
     });
-    view.handleInput('v');
+    view.handleInput('a');
     const { lines, rows } = screen(view);
     assertWidth(lines);
     assert.equal(rows[2], '(no other worktrees)', 'the list explains itself instead of naming the current checkout');
@@ -1428,7 +1693,7 @@ describe('the current checkout is never a destination', () => {
       current: { name: 'unknown', path: path.join(ws.dir, 'nowhere') },
       canonicalPath: realpath,
     });
-    view.handleInput('v');
+    view.handleInput('a');
     const { rows } = screen(view);
     assert.equal(rows[2], '▸ principal · use the local project');
     assert.equal(rows[3], '  feat-alpha');
@@ -1452,7 +1717,7 @@ describe('the current checkout is never a destination', () => {
         { name: 'alias-alpha', path: alias, branch: 'feat/alpha' },
       ],
     });
-    view.handleInput('v');
+    view.handleInput('a');
     assert.ok(!screen(view).rows.join('\n').includes('alias-alpha'), 'the mount already excludes it');
     view.handleInput('r');
     await tick();

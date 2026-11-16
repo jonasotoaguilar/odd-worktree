@@ -36,19 +36,30 @@ package's whole suite stays green.
 
 ## Tasks
 
-- **T1** — S1 — inline — commit the contract tests.
-- **T2** — S4 — writer (`lib/codegraph-mcp-config.js`, `tools/codegraph-mcp-config.test.js`) — commit.
-- **T3** — S5 lock identity — writer (`lib/codegraph-lock.js`, `tools/codegraph-lock.test.js`) — commit.
-- **T4** — S3 seed publish-or-rollback — writer (`lib/codegraph-index.js`, `tools/codegraph-index.test.js`) — commit.
-- **T5** — S5 kill escalation + the in-flight join helper — writer (`lib/codegraph-index.js`, its suite), after T4.
-- **T6** — S2 the bounded join on the pre-execution hook — writer (`lib/codegraph-session.js`, its suite).
-- **T7** — independent verification of the S5 item-4 work.
-- **T8** — docs: the new behaviors in `README.md` and `docs/reference.md`.
+- **T1** — S1 — inline — `3e955ad`.
+- **T2** — S4 — writer (`lib/codegraph-mcp-config.js`, `tools/codegraph-mcp-config.test.js`) — `4bb1fb5`.
+- **T3** — S5 lock identity — writer (`lib/codegraph-lock.js`, `tools/codegraph-lock.test.js`) — `9f1e1f7`.
+- **T4** — S3 seed publish-or-rollback — writer (`lib/codegraph-index.js`, `tools/codegraph-index.test.js`) — `c48a5e3`.
+- **T5** — S5 kill escalation — writer (`lib/codegraph-index.js`, its suite), after T4 — `9f1e1f7`.
+- **T6** — S2 the bounded join on the pre-execution hook — writer (`lib/codegraph-session.js`,
+  `lib/codegraph-edit-sync.js`, their suites) — `e74b3fa`.
+- **T7** — independent verification of the item-4 work (S5) — the pre-commit attempt was blocked by the
+  verifier's commit-bound rules (L13); the post-commit pass ran in an ordinary single-root clone (L14) and
+  its five findings were fixed in `e9c1b1c` (L15, L17).
+- **T8** — docs: `README.md`, `docs/reference.md`, and the two new invariants with their counts — `c7a1f2c`.
 - **T9** — S5, found while closing T3: `releaseLease` treats an unreadable or missing `owner.json` as
   "mine" (`lib/codegraph-lock.js:398-406`), so a stale holder whose read lands inside another session's
   `mkdir run/` → `owner.json` window can delete that fresh lease. The init lock is already fail-closed
   (`if (owner && owner.token === mine.token)`); the lease must be too, while an abandoned lease older
-  than `UNWRITTEN_GRACE_MS` stays reclaimable.
+  than `UNWRITTEN_GRACE_MS` stays reclaimable. — `9f1e1f7`.
+- **T10** — differential over the shared `runCodegraph` (compaction's default `run`) — evidence in L12.
+- **T11** — the verifier's findings: the uncapped join on a throwing delay, the escalation override that
+  could never fire, and the four weak tests — `e74b3fa` (S2 cap), `9f1e1f7` (clamp), test hardening in
+  `e9c1b1c`'s parent round.
+- **T12** — the verifier's two post-commit findings: S3 rollback ownership and the S2 compaction join —
+  `e9c1b1c`.
+- **T13** — the residual the previous round flagged: an EEXIST at the seed's creation step must not
+  publish over another actor's index — `e9c1b1c`.
 
 ## Log
 
@@ -78,6 +89,41 @@ package's whole suite stays green.
   (`docs/extensions.md:363-367`, :977) and, per :3253, an error in it blocks the tool — so the join must be
   unable to throw and unable to run long, and `tool_call` joins `tool_result` as a handler that may answer
   with a promise.
+- **L15** — The two failures L14 named are fixed, and the fixes were accepted against the verifier's own probe
+  suite (rebuilt from its report at `/tmp/cg-verify/tools/verifier-codegraph.test.js`, functionally
+  equivalent, 20 cases): before 17/20, after 20/20. S3's rollback now proves ownership instead of inferring
+  it: the seed proves it created `.codegraph` with a non-recursive mkdir, captures the directory's and the
+  published database's device+inode, and removes nothing whose identity differs (an unreadable stat fails
+  closed). A differential against `c7a1f2c` over the shared `seedWorktreeIndex` caught one drift the first
+  draft introduced — a worktree root that does not exist yet — so the recursive mkdir of `.codegraph`'s
+  parent stayed and the re-run was byte-identical. S2's compaction sync is now tracked, so a search joins it
+  under the same budget.
+- **L16** — Residual closed at the parent's direction: an EEXIST at the seed's creation step means another
+  actor created the directory in the window, and publishing into it would overwrite an index that session
+  accepted — worse than removing it, which S3 already forbids. The path now writes, syncs and removes
+  nothing, and reuses only shapes the module already has: a directory that already holds an index reports
+  the existing joined shape, while a bare directory is an honest failed seed — the split is forced by the
+  verifier's own created-after-recheck probe, which requires `ok: false` for a foreign directory holding
+  no index.
+- **L17** — Post-verification fixes landed in `e9c1b1c`, accepted against the verifier's probe suite rather
+  than a self-authored one: 17/20 before, 20/20 after, with every previously green case still green.
+  RED was real on the branch (three failing focused tests, and the probe cases named in L14). The
+  differential over the shared `seedWorktreeIndex` — the helper `seedLinkedWorktrees` also uses — shows
+  exactly one intended delta (a seed into an existing foreign index no longer overwrites it) and
+  byte-identical filesystem residue in every other case, including a worktree root that does not exist
+  yet, which the first draft of the identity change had broken. Focused files 138/138, suite 2214/0.
+- **L14** — Independent verification ran for real once the topology allowed it: the verifier's preparer rejects
+  a linked worktree ("ordinary single-root Git directory required"), so the branch was cloned to
+  `/tmp/cg-verify` (HEAD `c7a1f2c`, base `5bfe80d`, identical tree hash `3b3b49e`). Result: five focused files
+  203/0, and the verifier's own probes 17 pass / 3 fail. The three failures are real and reproduced:
+  - **S3 (two failures)** — the rollback removes `.codegraph` blindly: if another actor creates the directory
+    after the under-lock recheck, or replaces this session's directory during the sync, the rollback deletes
+    something this session did not publish, which is exactly what S3 forbids. Ownership needs to be proven
+    (the identity this session created), not assumed from "my publish succeeded".
+  - **S2 (one failure)** — a compaction sync is not tracked, so a search answers immediately while it is in
+    flight, although S2 says a refresh already in flight is awaited.
+  The probes that had been the previous pass's findings now pass at runtime: the throwing-delay cap, the
+  escalation clamp at/above and equal to the grace and its default, and the fresh/abandoned record-less lease.
 - **L13** — Independent verification attempt (item 4) ran source review only: the verifier's preparation rules
   bind it to commits, and the candidate was a dirty worktree, so it reported **0 tests executed** rather than
   pretending. Its source verdicts and static findings:

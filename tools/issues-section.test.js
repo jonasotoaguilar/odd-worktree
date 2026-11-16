@@ -2403,6 +2403,14 @@ test('S9 (T14): the first refresh reads 100 per bucket, the next reads 20 and me
     await fireSessionStart(loaded.hooks, ctx);
     assert.equal(registered.length, 1);
     const section = registered[0];
+    // S5 (T8): the gate is DISPATCHED at `session_start` and its identity probes land after the
+    // handlers return, so waiting for them is what makes the baseline below count the refreshes
+    // and nothing else. Without this the count raced the probe.
+    await waitFor(
+      () => calls.some((call) => call.argv[0] === 'api' && call.argv[1] === 'user')
+        && calls.some((call) => call.argv[0] === 'repo' && call.argv[1] === 'view'),
+      'the dispatched session gate never probed gh',
+    );
     const baseline = calls.length; // the session gate's own identity probes
 
     const firstRows = await waitForRows(section, ctx);

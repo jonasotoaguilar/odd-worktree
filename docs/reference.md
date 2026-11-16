@@ -703,8 +703,9 @@ the elapsed time are identical in both; only the chrome differs.
 - **A row is clipped while it is still plain, and painted after.** Text is
   wrapped, clipped to the card's inner width (with the `…` mark) and padded first;
   the role wraps that result and nothing this package painted is measured again.
-  The one painted string the cards do measure is the host's own dim key hint, and
-  only with the host's ANSI-aware width. So the row is the same whatever measures
+  The painted strings the cards do measure are the host's own dim key hint and, on
+  a file card, the document rows Pi's Markdown renderer painted (see
+  [the file cards](#the-file-cards)) — both only with the host's ANSI-aware width. So the row is the same whatever measures
   it: the `/warp` card's own fallback, which counts escape characters as columns,
   clips the same text as the host's ANSI-aware helpers instead of cutting into a
   sequence and losing characters — and follows the host's own truncation rule, so
@@ -736,8 +737,8 @@ tool-renderer resolver, builds the host's own card (whatever `Card style` and
 `Card content` are chosen), reads its line in `/gentle:customize` → `Cards`
 (`default` | `activity`; the bridge stores `default` as `native`) on every render pass, and hands the design the rows the host
 drew. On a bridge that can put several tools on one line (`0.6.0` and later) that is ONE
-`Card tools` row covering `bash` and the four read-only tools `grep`, `find`, `ls` and
-`read`; on an older bridge the same design is registered for `bash` alone, the row is
+`Card tools` row covering `bash`, `write` and the four read-only tools `grep`, `find`, `ls`
+and `read`; on an older bridge the same design is registered for `bash` alone, the row is
 `Card bash` and those four are drawn by the host. Which shape is sent is decided from the
 bridge's own `VERSION` before anything is registered, because a grouped registration on an
 older one is refused and reported in `/bridge-status`. A release string that cannot be read
@@ -755,7 +756,11 @@ the family the classifier (`lib/bash-activity.js`) names for the command —
 those four only read. Nothing else is renamed: the arguments after the mark stay where the
 host put them. The columns the longer mark adds are taken from the row's own fill, so the
 row keeps its width. Every other row comes back byte for byte, results are never touched,
-and the heading keeps the host's own paint.
+and the heading keeps the host's own paint. A `read` of a skill or an ODD artifact is one
+of those other rows: it is the file card's call, that card draws its own heading, and this
+design leaves both parts exactly as the host drew them, whichever resolver runs first.
+The identity rule is the file card's own (`lib/skill-odd-card.js`), so the two surfaces
+cannot disagree about which paths those are.
 
 The rule is the classifier's: never guess. A bridge that hands the design the call's
 render context (`ctx.render`: the arguments, `isPartial`, `isError`, `durationMs`) lets it
@@ -816,7 +821,7 @@ separates the cards.
 The CodeGraph card is separate: with the `codegraph` CLI installed it still claims
 `codegraph …` bash rows through its own resolver (invariant 19).
 
-## The file cards and their switches
+## The file cards
 
 A `read`, `edit` or `write` call whose `path` names one of two things is drawn as
 that file rather than as a bare tool row: a **customized skill** — a file called
@@ -830,14 +835,18 @@ a `SKILL.md` below a `skills` folder is a skill even when an `odd/tasks` folder
 sits above it, while one whose closest marker is `odd/tasks` is an ODD artifact
 like every other file there.
 
-| The path names | Mark | Label | The role the label wears |
+| The path names | Mark | Label | The role the mark and label wear |
 | --- | --- | --- | --- |
 | a `SKILL.md` a `skills` folder holds | `▤` | `skill` | the theme's `toolTitle` |
 | any file below an `odd/tasks` folder | `📑` | `odd` | the theme's `mdHeading` |
 
 **The heading** is that mark and label, then the tool, the path and — for a read
 only — the line range the call asked for (`:10-39` for `offset: 10, limit: 30`,
-`:7` for an `offset` alone). Only a read states a range because only a read asks
+`:7` for an `offset` alone). Every element wears the role the reference design
+gives it (gentle-shell PR #3061): the glyph AND the label in `card.titleRole`
+(`toolTitle` for a skill, `mdHeading` for an ODD artifact) with the label
+additionally bold, the `·` separator in `muted`, the path in `accent`, the line
+range in `warning`, and the tool name unpainted. Only a read states a range because only a read asks
 for one: a write knows how many lines it writes, never where they land, and an
 edit's real range is the diff its result carries. A range stated in a shape the
 card cannot read names nothing rather than half of itself.
@@ -852,56 +861,46 @@ and carries the elapsed time bottom-right, in the form the other cards use
 (`61ms`, `1.2s`). The host's expand key hint is offered on a settled call, and the
 host's `expanded` flag (`ctrl+o`) decides what is drawn.
 
-**What the body is.** Collapsed it is the first three rows of what the result
-reported — a document previews from its top, unlike a command's output, whose
-summary is written last — and expanded it is the whole text. A call that failed
-says why at either level and wears the `error` role. Markdown is the shape a
-document is written in, not a property of where it lives: an expanded `read` of
-any `.md` file, and an expanded `write` to one, render as a document through the
-package's own renderer (`lib/odd-markdown.js`) — headings, bullets, fences — with
-the card's body role as the token colour, and a write draws the content its call
-carries, which the result does not echo. A collapsed card keeps its rows, because
-its preview is the first rows of the file; a failed one keeps its error; every
-non-Markdown file keeps its rows. **An edit is never a document**: its rows are
-the diff the host carries (`details.diff`) — its own text when it carries none —
-and expanding it shows the whole diff.
+**What the body is.** Collapsed it is the first three rows of the document, as
+drawn — a document previews from its top, unlike a command's output, whose summary
+is written last — and expanded it is the whole document. A call that failed says
+why at either level and wears the `error` role. Markdown is the shape a document is
+written in, not a property of where it lives: a `read` of any `.md` file, and a
+`write` to one, are drawn by Pi's OWN renderer (`Markdown` from
+`@earendil-works/pi-tui`, `lib/file-card-markdown.js`) with a theme table that
+gives every Markdown element a theme role — `heading`→`mdHeading`,
+`listBullet`→`mdListBullet`, `code`→`mdCode`, `codeBlock`→`mdCodeBlock`,
+`codeBlockBorder`→`mdCodeBlockBorder`, `quote`→`mdQuote`, `quoteBorder`→`mdQuoteBorder`,
+`link`→`mdLink`, `linkUrl`→`mdLinkUrl`, `hr`→`mdHr`, and bold/italic/underline/
+strikethrough from the theme's own handlers. Those rows arrive already painted: the
+card PLACES them, measuring them with the host's ANSI-aware width and never
+painting a body role over them, while the frame, the background and the padding
+stay the card's. A write draws the content its call carries, which the result does
+not echo. A host with no TUI package, a renderer that throws and a document that
+draws no row all fall back to the wrapped plain source, unstyled. A failed call
+keeps its error rows, every non-Markdown file keeps its rows, and **an edit is
+never a document**: its rows are the diff the host carries (`details.diff`) — its
+own text when it carries none — and expanding it shows the whole diff.
 
-**The two switches.** Each card has one, labelled `Card skill` and `Card odd`,
-both in `/gentle:customize` → `Cards` and both on by default.
+**The switch is the bridge's.** The card owns no preference of its own. It is
+painted while the bridge's `Card tools` line answers that this package's activity
+design (`odd-worktree.bash-activity`) draws the tool being painted, and only then.
 
-```json
-{ "schema": "gentle-pi.card-files/v1", "skill": true, "odd": true }
-```
-
-- **The document** is `<home>/card-files.json`, and it is strict: that schema
-  string, the two booleans and nothing else. `<home>` is the one `card-style.json`
-  resolves: `GENTLE_PI_CONFIG_HOME` → `GENTLE_SHELL_CONFIG_HOME` →
-  `~/.pi/gentle-ai`.
-- **The switch is read live**, in the order and with the reasons the card style
-  uses: the process-wide slot a toggle sets, then the document read fresh, then
-  both on. A missing, unreadable, malformed, wrong-schema or non-boolean document
-  reads as on, and an unknown name is never on.
-- **The write is atomic and owner-only**, document first and slot second, so a
-  failed write leaves both on the old state and there is nothing to roll back. It
-  merges the one switch into the state it can see, so saving `odd` keeps `skill`
-  as it was, and a document it cannot parse is never overwritten.
-- **The rows.** The switches reach `/gentle:customize` → `Cards` through
-  gentle-shell-bridge's `registerRows` alone (`lib/cards-customize.js`, provider
-  `odd-worktree.cards.file-switches`): each setting is two consecutive rows, `on`
-  then `off`, sharing one setting name under the bridge's own cursor, with a
-  `current()` read at build time and an `action()` that persists before the host
-  repaints. A refusal is a throw from that action — the writer refused, so nothing
-  was saved — and the customize menu catches it and shows its message (`Card odd
-  was not switched on: the card-files document is malformed (malformed_file); the
-  switch is unchanged.`) as one error notice, with the stored value and the drawn
-  switch exactly as they were. The bridge gate is the issues section's: the
-  published API's schema and major version, then the one hook used, and the one
-  `gentle-shell-bridge:ready` announcement for a bridge that publishes later. With
-  no bridge nothing registers and no other surface changes; there is no customize
-  command, no tool and no settings file here.
-- **A flip repaints what is on screen.** Both switches are read inside the card's
-  build, which the host calls on every frame, so flipping one repaints the rows
-  already drawn.
+- **The question** is `api.resolveToolDesignSelection(tool)` on the bridge's
+  published object (gentle-shell-bridge@0.7.0), reached exactly like the design's
+  registration — the `gentle-shell-bridge/api/v1` slot, behind its schema and major
+  version gate — never an import.
+- **The answer** decides: `{ kind: "design", design }` with
+  `design.id === "odd-worktree.bash-activity"` paints the card; `native`, `missing`,
+  `not-covered` and every other design give the row back to the host, box and hint
+  included.
+- **It is asked per painted tool, on every frame, and never cached**: the answer is
+  read inside the card's build, which the host calls on every frame, so a mid-session
+  switch repaints a card already on screen.
+- **It is optional.** A bridge older than 0.7.0 (or none at all) has no reader, and
+  then the card paints exactly as it did before the switch was joined: an
+  unavailable gate never hides a row. An answer this build cannot read keeps the
+  card too, and nothing here throws.
 - **Style and content level are the shell's.** The cards are on the same substrate
   as the others, so `float`'s painted band (the default) and `neon`'s rounded
   frame draw the same content. The content level applies too: at `default` a
@@ -966,13 +965,13 @@ Session names derived from an ODD write, and the warp's fork/resume bookkeeping,
 travel in the Pi session files the host already owns. The setup logs live under
 the system temp directory (`odd-worktree-setup-*`), one directory per create.
 
-One document holds a preference rather than worktrees: `<home>/card-files.json`,
-the two file-card switches the `Cards` rows write; its format, reader and writer
-are in [the file cards and their switches](#the-file-cards-and-their-switches).
-The design's choice is not stored here at all: it belongs to the bridge
-([the cards](#the-cards-the-activity-design-paints)). Nothing else in user
-configuration is written by this package, except — with the `codegraph` CLI
-installed — the one `codegraph` entry of `<agent dir>/mcp.json` (see [CodeGraph:
+This package writes no preference document of its own: the file cards obey the
+bridge's `Card tools` choice, which belongs to the bridge and lives in its own
+store ([the cards](#the-cards-the-activity-design-paints)), and
+[the file cards](#the-file-cards) own no switch, no document and no customize
+row. Nothing else in user configuration is written by this package, except — with
+the `codegraph` CLI installed — the one `codegraph` entry of
+`<agent dir>/mcp.json` (see [CodeGraph:
 index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry)); Gentle
 Shell's own `card-style.json` is read here, never written.
 
@@ -1197,16 +1196,15 @@ classifier's `codegraph` identity.
 ## Deliberately absent
 
 This package is the worktree / ODD / files / issues surface only: two agent
-tools, four panels, one optional rail section, one tool design on the bridge and
-the two file-card switches, no customize panel, no plugin-tools
+tools, four panels, one optional rail section and one tool design on the bridge,
+no preference of its own, no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. Its
-customize-side contributions are the `activity` value of the bridge's `Card tools` line
-(or its `Card bash` line, on a bridge older than 0.6.0), the `Card skill` / `Card odd`
-rows and the file picker's `files` keymap action with its palette row, none of which
-adds a command, tool or row of its own. There is nothing to configure here beyond those
-two switches, and `/warp`, `/odd`, `/files` and `/issues` are always
-on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
+customize-side contribution is the `activity` value of the bridge's `Card tools` line
+(or its `Card bash` line, on a bridge older than 0.6.0) — which the skill/ODD file
+cards obey as well — and the file picker's `files` keymap action with its palette
+row, neither of which adds a command, tool or row of its own. There is nothing to
+configure here, and `/warp`, `/odd`, `/files` and `/issues` are always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 
 ## Tests

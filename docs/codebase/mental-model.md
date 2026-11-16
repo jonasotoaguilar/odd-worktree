@@ -7,15 +7,15 @@ starts, which rule each change must preserve, and where to begin.
 
 One Pi extension package, `pi-odd-worktree`: two agent tools (`worktree_create`,
 `worktree_list`), four panels (`/warp`, `/odd`, `/files`, `/issues`), one
-optional sidebar section, one tools design on the bridge (`Card tools`: bash,
-grep, find, ls, read) and two preferences — `Card skill` and `Card odd`. It owns
-creating and listing the checkouts an ODD works in, reading a checkout's
-`odd/tasks/*.md`, browsing and previewing a checkout's files, reading and — role
-permitting — editing that checkout's GitHub issues, and the drawing of its own
-cards. `git` is the only external requirement; Gentle Shell is recommended, and
-gentle-shell-bridge adds only five control surfaces: the rail section, the
-design, the two file-card switches, and the file picker's keymap action and
-palette row.
+optional sidebar section and one tools design on the bridge (`Card tools`: bash,
+grep, find, ls, read) — and no preference of its own: the skill/ODD file cards
+obey that same `Card tools` value. It owns creating and listing the checkouts an
+ODD works in, reading a checkout's `odd/tasks/*.md`, browsing and previewing a
+checkout's files, reading and — role permitting — editing that checkout's GitHub
+issues, and the drawing of its own cards. `git` is the only external requirement;
+Gentle Shell is recommended, and gentle-shell-bridge adds only four control
+surfaces: the rail section, the design (which the file cards read), and the file
+picker's keymap action and palette row.
 
 ## What It Does Not Own
 
@@ -35,16 +35,15 @@ palette row.
   draw, the reminders only advise, the guards read command text (invariants 20, 21,
   22, 23).
 - Every other customize surface, plugin-tools toggle and companion-app
-  integration: the two file-card switches are the only preferences, and the bash
-  activity is a design on the bridge (invariants 2, 3, 23).
+  integration: the bash activity is a design on the bridge, the file cards read
+  that same line, and this package owns no preference at all (invariants 2, 3, 23).
 - Any child process through a shell string: fixed argv, always (invariant 9).
 
 ## Main Flow
 
 1. `extensions/odd-worktree-tools.ts` — the only entry point the host loads:
    registers the four commands, the two tools, the message renderer, the file
-   card, the optional rail section, the tools design, the `Cards` row group and
-   the hooks.
+   card, the optional rail section, the tools design and the hooks.
 2. `lib/worktree-*.js` — a create validates and plans in
    `lib/worktree-create.js`, prepares through `lib/worktree-hooks.js`, then
    `lib/worktree-setup-runner.js` starts the install as a tracked background
@@ -52,8 +51,8 @@ palette row.
    `lib/warp-*.js`; `/odd` reads through `lib/odd-docs.js`.
 3. `lib/worktree-git.js` — the one git seam, where a child argv leaves for git,
    with `lib/worktree-remove.js` the one removal. `lib/gh-issues.js` is the `gh`
-   seam for `/issues`; `lib/card-files-mode.js` writes the one document behind the
-   two file-card switches (invariant 23); `lib/codegraph-mcp-config.js` is the only
+   seam for `/issues`; the file cards own no switch and ask the bridge's published
+   reader on every paint (invariant 23); `lib/codegraph-mcp-config.js` is the only
    writer of the user's own configuration (invariant 19).
 
 ## Major Areas
@@ -82,7 +81,7 @@ for each is in [`invariants.md`](invariants.md).
 | --- | --- |
 | [1](invariants.md) | One extension entry point: `pi.extensions` is exactly `["./extensions/odd-worktree-tools.ts"]` and `extensions/` holds no other file. |
 | [2](invariants.md) | No customize command, plugin-tools toggle or Herdr panel surface; CodeGraph only as 18 and 19 allow. |
-| [3](invariants.md) | The shipped surface is exactly four commands, two tools, one sidebar section, one tools design and the one `Cards` row group. |
+| [3](invariants.md) | The shipped surface is exactly four commands, two tools, one sidebar section and one tools design. |
 | [4](invariants.md) | Deletion refuses on a live session and discloses every caveat it could not resolve. |
 | [5](invariants.md) | Deletion is git only: `git worktree remove <absolute path>`, branch kept. |
 | [6](invariants.md) | `/issues` keeps repository identity pinning, and refuses a mutation after the remote moves. |
@@ -96,10 +95,10 @@ for each is in [`invariants.md`](invariants.md).
 | [14](invariants.md) | The prompt block is append-only. |
 | [15](invariants.md) | A warp waits for this session's tools, agent tasks and background jobs, and it is queued, never thrown away. |
 | [16](invariants.md) | The card substrate's role tables are the reference's, not a local invention. |
-| [17](invariants.md) | This repo paints last; the host's key hint is the one painted input it measures. |
+| [17](invariants.md) | This repo paints last; the only painted inputs it measures are the host's key hint and Pi's own Markdown rows. |
 | [18](invariants.md) | The `## CodeGraph` section is advice, selected by the session's own facts. |
 | [19](invariants.md) | CodeGraph runs only with its CLI, in the background, and writes one config entry. |
-| [20](invariants.md) | The tools design only draws, and it draws what the classifier names (the four read-only tools are always `exploring`). |
+| [20](invariants.md) | The tools design only draws, and it draws what the classifier names (the four read-only tools are always `exploring`; `write` is declared only so the file card can ask about it, and it draws nothing for it). |
 | [21](invariants.md) | The two CodeGraph reminders advise; they never block and never add a surface. |
 | [22](invariants.md) | The `bash` guards read text, fail open and add no surface. |
 | [23](invariants.md) | The file card only draws, and it claims exactly three tools. |
@@ -120,7 +119,7 @@ Work on a branch, never on `main`: an ODD gets its own checkout at
 | A queued warp or the busy evidence | `lib/worktree-warp-busy.js`, `lib/worktree-warp-sessions.js` |
 | How a card draws | `lib/shell-card.js` for the substrate, `lib/worktree-cards.js` |
 | The bash heading design | `lib/bash-design.js`, `lib/bash-frame.js`, `lib/bash-activity.js` |
-| A file card or one of its two switches | `lib/file-card.js`, `lib/skill-odd-card.js`, `lib/card-files-mode.js`, `lib/cards-customize.js` |
+| A file card or the bridge gate it obeys | `lib/file-card.js`, `lib/skill-odd-card.js`, `lib/file-card-markdown.js`, `lib/file-card-resolver.js` |
 | Prompt text the model reads | `lib/odd-prompt/odd-worktrees.md`, `lib/codegraph-prompt/*.md` via `lib/odd-worktrees-prompt.js` and `lib/codegraph-rules.js` |
 | `/issues`, its tabs or its capabilities | `lib/gh-issues.js`, `lib/issues-view.js` |
 | The rail section or its cache | `lib/issues-section.js`, `lib/related-issues-cache.js` |

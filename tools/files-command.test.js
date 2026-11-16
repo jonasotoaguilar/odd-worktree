@@ -143,8 +143,29 @@ function mountHost({ rows = 40 } = {}) {
   return { tui, mounts, events, renders, pasted, notifications, ui };
 }
 
-function ctxFor(repo, ui) {
-  return { cwd: repo, hasUI: true, mode: 'tui', sessionManager: { getSessionId: () => 'thread-1' }, ui };
+/**
+ * The session ctx. `registeredRoots` are the worktrees this session registered
+ * through the host's `session_worktree_register` tool: the host appends one
+ * custom entry per registration, which is the only durable record of them
+ * (S35), so the double carries the same shape instead of a seam of its own.
+ */
+function ctxFor(repo, ui, options = {}) {
+  const sessionId = options.sessionId === undefined ? 'thread-1' : options.sessionId;
+  const registeredRoots = Array.isArray(options.registeredRoots) ? options.registeredRoots : [];
+  return {
+    cwd: repo,
+    hasUI: true,
+    mode: 'tui',
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getEntries: () => registeredRoots.map((root) => ({
+        type: 'custom',
+        customType: 'gentle-pi.session-worktree/v1',
+        data: { sessionId, root, evidence: 'session:tool' },
+      })),
+    },
+    ui,
+  };
 }
 
 async function waitFor(predicate, label) {
@@ -158,6 +179,15 @@ async function waitFor(predicate, label) {
 
 const rowsOf = (component, width = 120) => component.render(width).map((line) => stripAnsi(line));
 const textOf = (component, width = 120) => rowsOf(component, width).join('\n');
+// A scope row reads `│ ▸ <label> [±n files] │`; counting them is how a
+// duplicated `main` row would be caught. The detail line and the footer share the
+// frame but never reduce to a label plus a count cell.
+const scopeLabels = (component) => rowsOf(component)
+  .filter((row) => row.startsWith('│ ') && row.endsWith(' │'))
+  .map((row) => row.slice(2, -2).replace(/\s+/g, ' ').trimStart().replace(/^▸ /, '').trim());
+const scopeRowCount = (component, label) => scopeLabels(component)
+  .filter((row) => row === label
+    || (row.startsWith(`${label} ±`) && /^±\d+ files?$/.test(row.slice(label.length + 1)))).length;
 
 // The ANSI-aware helpers the panel measures with; key matching falls back to the
 // view's own spelled sequences, which is what a host without `matchesKey` has.
@@ -311,9 +341,11 @@ describe('one checkout: the scope step still opens (S20, S7/S8)', () => {
     await waitFor(() => textOf(picker).includes('a.js'), 'the listing');
     // The order footer and the one-option-per-key legend are the view's; the
     // command only has to hand it a listing to paint.
-    assert.ok(textOf(picker).includes('modified'), 'the default order paints');
+    // S33 (round L11) renamed the flat order `modified` to `files`; the footer
+    // token is the view's, and this line only proves the wiring gave it a listing.
+    assert.ok(textOf(picker).includes('files'), 'the default order paints');
 
-    // The default `modified` order puts changed files first and sorts the clean
+    // The default `files` order puts changed files first and sorts the clean
     // ones by path, so the highlight opens on README.md, not on a.js.
     picker.handleInput('\r');
     assert.deepEqual(host.pasted, ['@README.md'], 'the session checkout keeps the `@` form');
@@ -358,6 +390,96 @@ describe('the `a` list of every worktree (S20)', () => {
   });
 });
 
+describe('the default scope list is the session’s (S35)', () => {
+  test('main, the session checkout and the registered worktrees; an unregistered ODD worktree needs `a`', async () => {
+    const repo = makeRepo();
+    const registered = addOwnedWorktree(repo, 'registered-one', 'feat/reg');
+    addOwnedWorktree(repo, 'owned-only', 'feat/only');
+    const { mod, commands } = await loadFilesExtension();
+    mod.setFilesTuiLoader(async () => helpers);
+    const host = mountHost();
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui, { registeredRoots: [registered] }));
+
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    const step = host.mounts[0].component;
+    assert.ok(textOf(step).includes('main'), 'the principal checkout leads');
+    assert.ok(textOf(step).includes('registered-one · feat/reg'), 'the session’s registration is a default row');
+    assert.ok(textOf(step).includes('±1 file'), 'and it keeps its uncommitted count');
+    assert.ok(!textOf(step).includes('owned-only · feat/only'),
+      'an ODD worktree this session never registered is not a default row');
+    assert.ok(textOf(step).includes('a all'), 'the footer names the list `a` switches to');
+    assert.equal(scopeRowCount(step, 'main'), 1, '`main` is one row');
+
+    step.handleInput('a');
+    assert.ok(textOf(step).includes('owned-only · feat/only'), '`a` is what shows every worktree Git reports');
+    assert.ok(textOf(step).includes('registered-one · feat/reg'), 'and it still carries the registered one');
+    assert.ok(textOf(step).includes('a registered'), 'the footer names the way back');
+    assert.equal(scopeRowCount(step, 'main'), 1, '`main` is never duplicated on the wider list');
+
+    step.handleInput('a');
+    assert.ok(!textOf(step).includes('owned-only · feat/only'), 'the key switches back to the session’s list');
+    assert.ok(textOf(step).includes('registered-one · feat/reg'));
+
+    // The step answers the scope object the picker then browses.
+    step.handleInput('\u001b[B');
+    step.handleInput('\r');
+    await waitFor(() => host.mounts.length >= 2, 'the picker over the registered worktree');
+    const picker = host.mounts[1].component;
+    await waitFor(() => textOf(picker).includes('x.js'), 'the registered worktree’s listing');
+    assert.ok(textOf(picker).includes(registered), 'the picker lists the checkout the step answered');
+    picker.handleInput('\u001b');
+    await running;
+  });
+
+  test('a session that registered nothing sees `main` alone, and `a` still works', async () => {
+    const repo = makeRepo();
+    addOwnedWorktree(repo, 'owned-only', 'feat/only');
+    const { mod, commands } = await loadFilesExtension();
+    mod.setFilesTuiLoader(async () => helpers);
+    const host = mountHost();
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui));
+
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    const step = host.mounts[0].component;
+    assert.equal(scopeRowCount(step, 'main'), 1, 'the session checkout IS `main`, so it is one row');
+    assert.ok(!textOf(step).includes('owned-only · feat/only'), 'no registration, no default row for it');
+    assert.ok(textOf(step).includes('a all'));
+
+    step.handleInput('a');
+    assert.ok(textOf(step).includes('owned-only · feat/only'), 'the wider list still works with nothing registered');
+    assert.ok(textOf(step).includes('a registered'));
+    step.handleInput('a');
+    assert.ok(!textOf(step).includes('owned-only · feat/only'), 'and the way back is the one row');
+    assert.equal(scopeRowCount(step, 'main'), 1);
+
+    step.handleInput('\u001b');
+    await running;
+  });
+
+  test('a session sitting in another worktree carries it, once, without registering anything', async () => {
+    const repo = makeRepo();
+    const mine = addOwnedWorktree(repo, 'mine', 'feat/mine');
+    addOwnedWorktree(repo, 'other', 'feat/other');
+    const { mod, commands } = await loadFilesExtension();
+    mod.setFilesTuiLoader(async () => helpers);
+    const host = mountHost();
+    const running = commands.get('files').handler('', ctxFor(mine, host.ui));
+
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    const step = host.mounts[0].component;
+    assert.ok(textOf(step).includes('main'), '`main` leads from any checkout');
+    assert.equal(scopeRowCount(step, 'mine · feat/mine'), 1, 'the session’s own checkout is one row');
+    assert.ok(!textOf(step).includes('other · feat/other'), 'a worktree the session neither sits in nor registered is not');
+
+    step.handleInput('a');
+    assert.ok(textOf(step).includes('other · feat/other'), '`a` reports every worktree of the clone');
+    assert.equal(scopeRowCount(step, 'mine · feat/mine'), 1, 'and the session checkout is still one row');
+    assert.equal(scopeRowCount(step, 'main'), 1);
+    step.handleInput('\u001b');
+    await running;
+  });
+});
+
 describe('several checkouts: the scope step (S9)', () => {
   test('main first with the worktree’s count and detail, then the picker over the chosen checkout', async () => {
     const repo = makeRepo();
@@ -365,7 +487,10 @@ describe('several checkouts: the scope step (S9)', () => {
     const { mod, commands } = await loadFilesExtension();
     mod.setFilesTuiLoader(async () => helpers);
     const host = mountHost();
-    const running = commands.get('files').handler('', ctxFor(repo, host.ui));
+    // S35: the default list carries the worktrees THIS SESSION registered, so the
+    // checkout is registered here exactly as `worktree_create` registers it; the
+    // `a` list (every worktree Git reports) has its own case below.
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui, { registeredRoots: [worktree] }));
 
     await waitFor(() => host.mounts.length >= 1, 'the scope mount');
     const scopeMount = host.mounts[0];

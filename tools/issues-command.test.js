@@ -29,14 +29,14 @@
 // instance the extension loads via GENTLE_WORKTREE_LIB_DIR), so no live `gh`
 // runs and no real GitHub mutation is possible.
 
-const { test, describe, after, afterEach } = require('node:test');
+const { test, describe, after, afterEach, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
+const { LIB_DIR, stubbedSource, installDefaultBridge, withGhPath } = require('./fixtures/load-extension.js');
 
 // The client and git seam the extension itself loaded. One extension load compiles
 // its own lib modules, so a fake must reach THAT instance — the extension's
@@ -82,6 +82,7 @@ after(() => {
 
 afterEach(() => {
   ghIssues.setGhRunner(null);
+  ghIssues.setGhWhich(null);
   // S5 (T8): the gate's clock seam and its cache are process state too; every
   // test loads its own extension instance, and a leftover fake clock must not
   // reach the next one.
@@ -92,6 +93,13 @@ afterEach(() => {
   delete globalThis[Symbol.for('gentle-shell-bridge/api/v1')];
 });
 
+// S4 (T3): the read cache has a disk half now, so every test gets its own cache
+// directory — no test inherits a warm identity from another, and nothing here can
+// touch the real `$XDG_CACHE_HOME`/home.
+beforeEach(() => {
+  process.env.XDG_CACHE_HOME = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-cache-')));
+});
+
 const FIXTURES = path.join(__dirname, 'fixtures');
 function fixture(name) {
   return fs.readFileSync(path.join(FIXTURES, name), 'utf8');
@@ -99,35 +107,60 @@ function fixture(name) {
 
 // A fresh copy per load: module-level gate state belongs to one runtime load,
 // exactly like the host's rebuilt command registry.
-async function loadExtension() {
-  const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-ext-')));
-  const copy = path.join(dir, 'odd-worktree-tools.mjs');
-  fs.writeFileSync(copy, stubbedSource());
-  const commands = new Map();
-  const hooks = [];
-  const api = {
-    registerTool: () => {},
-    registerCommand: (name, definition) => { commands.set(name, definition); },
-    registerMessageRenderer: () => {},
-    on: (event, handler) => { hooks.push([event, handler]); return () => {}; },
-  };
-  process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
-  const mod = await import(pathToFileURL(copy).href);
-  const factory = mod.default;
-  factory(api);
-  ghIssues = mod.libModule('gh-issues.js');
-  worktreeGit = mod.libModule('worktree-git.js');
-  return { commands, hooks, api, mod, factory };
+//
+// S13 (T11): the issues surfaces are registered only when the local presence probe
+// finds `gh`, and that probe reads PATH (the extension compiles its own
+// `lib/gh-issues.js`, so a seam set here would not reach it). The load therefore
+// runs with a PATH that answers the way the case asked — present unless it passes
+// `{ gh: false }` — so the machine the suite runs on decides nothing.
+async function loadExtension(options = {}) {
+  // S18 (T14): the extension registers nothing without gentle-shell-bridge, so
+  // this file's own host publishes the shared fixture's bridge before the load.
+  installDefaultBridge();
+  return withGhPath(options && options.gh === false ? 'absent' : 'present', async () => {
+    const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-ext-')));
+    const copy = path.join(dir, 'odd-worktree-tools.mjs');
+    fs.writeFileSync(copy, stubbedSource());
+    const commands = new Map();
+    const hooks = [];
+    const api = {
+      registerTool: () => {},
+      registerCommand: (name, definition) => { commands.set(name, definition); },
+      registerMessageRenderer: () => {},
+      on: (event, handler) => { hooks.push([event, handler]); return () => {}; },
+    };
+    process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
+    const mod = await import(pathToFileURL(copy).href);
+    const factory = mod.default;
+    factory(api);
+    ghIssues = mod.libModule('gh-issues.js');
+    worktreeGit = mod.libModule('worktree-git.js');
+    modsFor.set(hooks, mod);
+    return { commands, hooks, api, mod, factory };
+  });
 }
 
 function sessionStartHandlers(hooks) {
   return hooks.filter(([event]) => event === 'session_start').map(([, handler]) => handler);
 }
 
+// The module one load produced, keyed by the hooks it registered: the startup work
+// `session_start` DISPATCHES (never awaits, T1) is reachable only through it.
+const modsFor = new Map();
+
 async function fireSessionStart(hooks, ctx) {
   for (const handler of sessionStartHandlers(hooks)) {
     const out = handler({}, ctx);
     if (out && typeof out.then === 'function') await out;
+  }
+  // S1/S2 (T1): the `gh` gate is no longer on the AWAITED path — it is dispatched
+  // as tracked startup work — so a test that asserts on the gate's own answer
+  // waits for that work here, the way the host's shutdown barrier does, instead of
+  // racing it. The one test that proves the awaited path is free of it fires the
+  // handlers itself and never reaches this helper.
+  const mod = modsFor.get(hooks);
+  if (mod && typeof mod.awaitPendingStartupTasks === 'function') {
+    await mod.awaitPendingStartupTasks();
   }
 }
 
@@ -464,6 +497,12 @@ describe('/issues gate (S3)', () => {
 
   test('a missing gh notifies the fix once at startup and again on invocation, opening nothing', async () => {
     const { commands, hooks, mod } = await loadExtension();
+    // T11 (S13): the CLI's PRESENCE is pinned here, because this test is about the
+    // other failure — a `gh` that is installed and whose own child cannot be
+    // spawned (an ENOENT from the runner). The local presence check would
+    // otherwise answer first on a machine that has no `gh` at all, which is a
+    // different state with its own line.
+    ghIssues.setGhWhich(() => '/usr/local/bin/gh');
     ghIssues.setGhRunner(async (bin) => ({
       status: null, stdout: '', stderr: '', error: `spawn ${bin} ENOENT: gh CLI is not available`,
     }));
@@ -504,6 +543,118 @@ describe('/issues gate (S3)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// S13 (T11, corrected): without the `gh` CLI the two issues surfaces are NOT
+// REGISTERED — `/issues` never loads and the `GITHUB` rail section is never added
+// to the rail — so there is no line, notice or refusal for them: nothing appears,
+// because nothing was registered. The decision is a LOCAL presence answer (a PATH
+// walk, no child process, no `gh` invocation to find out whether `gh` exists), and
+// every other surface this package contributes keeps working. A `gh` that is
+// present but unauthenticated is NOT this state and keeps the login fix it always
+// had.
+// ---------------------------------------------------------------------------
+describe('a missing gh CLI registers no issues surface (S13, T11)', () => {
+  test('without the CLI neither the command nor the rail section exists', async () => {
+    const { commands } = await loadExtension({ gh: false });
+
+    assert.equal(commands.has('issues'), false, '/issues never loads without the CLI');
+    // Everything else is still there: a missing `gh` is not a plugin-wide switch.
+    assert.ok(commands.has('warp'), '/warp still registers');
+    assert.ok(commands.has('odd'), '/odd still registers');
+    assert.ok(commands.has('files'), '/files still registers');
+  });
+
+  test('the decision costs no child process, at load or at session start', async () => {
+    const { hooks, mod } = await loadExtension({ gh: false });
+    const { runner, calls } = makeIssuesRunner();
+    ghIssues.setGhRunner(runner);
+
+    const root = makeRepo({ tag: 'cli-missing-gate' });
+    const notes = [];
+    await fireSessionStart(hooks, gateCtx(root, notes));
+
+    assert.deepEqual(calls, [], 'a missing CLI is answered locally: no gh child is ever spawned');
+    assert.deepEqual(notes, [], 'and nothing is said: there is no surface to say it on');
+    assert.equal(typeof mod, 'object');
+  });
+
+  test('with the CLI present the command is registered (PRESERVE)', async () => {
+    const { commands } = await loadExtension();
+    assert.ok(commands.has('issues'), '/issues loads when the CLI is on PATH');
+    assert.equal(typeof commands.get('issues').handler, 'function');
+  });
+
+  test('an unauthenticated gh that IS present keeps the login fix (PRESERVE)', async () => {
+    const { commands, mod } = await loadExtension();
+    ghIssues.setGhWhich(() => '/usr/local/bin/gh');
+    ghIssues.setGhRunner(async () => ({
+      status: 1, stdout: '', stderr: 'Failed to log in: authentication required', error: null,
+    }));
+    mod.setIssuesTuiLoader(async () => stubTui);
+
+    const { ctx, customs, notes } = makeCtx({
+      cwd: makeRepo({ tag: 'cli-present-unauth' }),
+      customImpl: async () => null,
+    });
+    await commands.get('issues').handler('', ctx);
+
+    assert.equal(customs.length, 0, 'no overlay while unauthenticated');
+    assert.equal(notes.length, 1);
+    assert.match(notes[0][0], /gh auth login/, 'the presence check never intercepts an authentication failure');
+    assert.equal(notes[0][1], 'error');
+    assert.equal(/not installed/.test(notes[0][0]), false, 'a present gh is never reported as missing');
+  });
+});
+
+// S1/S2 (T1, T2 of the startup theory): `session_start` must resolve without
+// waiting on any child process or network call. The `gh` gate used to be AWAITED
+// there — `gh api user` (≈485 ms) then `gh repo view` (≈550 ms), serially, on
+// every session start AND every session switch — and `/issues` probes `gh` on
+// demand anyway, so nothing is lost by dispatching it as startup work instead.
+// Outside a repository there is nothing to check at all, so the gate resolves the
+// checkout first and spawns nothing (T2/S3).
+describe('session startup takes no gh call (S1, S2)', () => {
+  test('the awaited session_start resolves while the injected gh runner is still pending', async () => {
+    const { hooks } = await loadExtension();
+    const calls = [];
+    let release = null;
+    ghIssues.setGhRunner((bin, argv) => {
+      calls.push({ bin, argv: argv.slice() });
+      return new Promise((resolve) => {
+        release = () => resolve({ status: 0, stdout: '{"login":"me"}', stderr: '', error: null });
+      });
+    });
+    const root = makeRepo({ tag: 'startup-nonblocking' });
+    // The handlers are fired HERE, not through `fireSessionStart`: that helper
+    // waits for the dispatched startup work, and this is precisely the work the
+    // awaited path must not wait for.
+    const fired = sessionStartHandlers(hooks).map((handler) => Promise.resolve(handler({}, gateCtx(root, []))));
+    const settled = await Promise.race([
+      Promise.all(fired).then(() => 'resolved'),
+      new Promise((resolve) => { setTimeout(() => resolve('blocked'), 500); }),
+    ]);
+    assert.equal(settled, 'resolved',
+      'the awaited session_start path never waits on a child process or a network call');
+
+    // Dispatched, not dropped: the probe is still startup work, so the session's
+    // own gate answer still arrives in the background.
+    assert.equal(await waitFor(() => calls.length > 0), true,
+      'the gh gate still probes, off the awaited path');
+    if (typeof release === 'function') release();
+  });
+
+  test('a session outside a repository makes no gh call at startup, and stays silent', async () => {
+    const { hooks } = await loadExtension();
+    const { runner, calls } = makeIssuesRunner();
+    ghIssues.setGhRunner(runner);
+    const outside = fs.realpathSync(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-startup-plain-'))));
+    const notes = [];
+    await fireSessionStart(hooks, gateCtx(outside, notes));
+    assert.deepEqual(calls, [], 'outside a repository there is nothing to check, so no gh child runs');
+    assert.deepEqual(notes, [], 'and nothing is said: a non-repository cwd is not an error');
+  });
+});
+
 // S5 (T8): the gate is network work (`gh api user` then `gh repo view`, plus the
 // checkout's own git probes) and the host awaits every `session_start` handler it
 // is handed, so awaiting it there put the first prompt behind the whole probe on
@@ -532,8 +683,13 @@ describe('S5 (T8): the issues gate never delays session_start', () => {
     return { runner, gateCalls };
   }
 
+  // The gate resolves the CHECKOUT before it asks gh anything (S3/T2), so a
+  // session's cwd has to be a real checkout for a probe to run at all: a bare
+  // temporary directory is the non-repository state, which by design spawns
+  // nothing. What these cases measure — dispatch, the TTL, the shared probe, the
+  // generation — is unchanged; only the preconditions of the directory moved.
   function scratchCheckout(tag) {
-    return track(fs.mkdtempSync(path.join(os.tmpdir(), `odd-gate-${tag}-`)));
+    return makeRepo({ tag: `gate-${tag}` });
   }
 
   function sessionShutdownHandlers(hooks) {
@@ -878,9 +1034,10 @@ describe('/issues overlay and arguments', () => {
     assert.deepEqual(notes[0], ['Unknown option "extra". Use /issues.', 'error']);
   });
 
-  test('outside a Git checkout notifies the shared line at info and opens nothing', async () => {
+  test('outside a Git checkout notifies the shared line at info and spawns no gh', async () => {
     const { commands, mod, hooks } = await loadExtension();
-    ghIssues.setGhRunner(makeIssuesRunner().runner);
+    const { runner, calls } = makeIssuesRunner();
+    ghIssues.setGhRunner(runner);
     const scratch = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-gate-')));
     await fireSessionStart(hooks, gateCtx(scratch, []));
     mod.setIssuesTuiLoader(async () => stubTui);
@@ -890,6 +1047,8 @@ describe('/issues overlay and arguments', () => {
     assert.equal(customs.length, 0, 'no overlay outside a checkout');
     assert.equal(selects.length, 0, 'no fallback selector outside a checkout');
     assert.deepEqual(notes, [[`not a git repository: ${outside}; run 'git init' first`, 'info']]);
+    assert.deepEqual(calls, [],
+      'the refusal is the checkout’s own answer: it never asks gh, which could only report its own error');
   });
 });
 
@@ -1467,7 +1626,15 @@ describe('/issues repository identity (S5)', () => {
       assert.equal(opened.ok, false, 'the opener refuses instead of opening another repository');
       assert.match(opened.error, /is a local path, not a GitHub repository/);
       assert.deepEqual(gitCalls, [], 'the browser opener never ran');
-      assert.ok(gh.calls.every((call) => call.cwd !== root), 'no gh command ran in this checkout');
+      // S1/S3 (T1, T2): the session gate is dispatched startup work now and no
+      // longer warms a session-wide `ok` from a scratch cwd, so THIS command's own
+      // on-demand health probe (`gh api user`, `gh repo view`) runs here. That probe
+      // asks gh whether it is usable; it reads nothing of this repository. No READ
+      // and no opener reaches gh from a checkout it cannot name.
+      const reads = gh.calls.filter((call) => call.argv[0] === 'issue'
+        || call.argv[0] === 'label'
+        || (call.argv[0] === 'api' && call.argv[1] === 'graphql'));
+      assert.deepEqual(reads, [], 'no repository read left this checkout');
     } finally {
       worktreeGit.runArgvAsync = original;
       run.restore();
@@ -2229,5 +2396,268 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
     const first = clean(component.render(240).join('\n'));
     assert.match(first, /Assigned \(1\+\)/, 'an entry the rail calls inconsistent is seeded inexact');
     assert.ok(!/Assigned \(1\)(?!\+)/.test(first), 'and never with the exact total it cannot prove');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S21 (T17), the human's own words: «me la asigne a mi o me quite la
+// asignacion … no se refresca altiro los tabs … actualmente eso demora o no
+// refrezca de hecho hasta que lo cierro y abro panel». This drives the REAL
+// panel over the injected `gh` client, and the REAL rail section over the
+// published bridge, so every assertion below is a read or a write that reached
+// `gh`:
+// - a save that changed the VIEWER's own assignment drops the rail's cached
+//   entry for this repository, so the rail's next read is the FULL one (a delta
+//   merges by issue number and can never express a removal) and it starts now,
+//   not on the 20 s floor;
+// - the panel reads the `assigned` bucket again and its count and rows follow;
+// - a write that did not land invalidates nothing: no rail read, no page read,
+//   the pre-write rows and count stay, and the draft stays open with the error.
+// ---------------------------------------------------------------------------
+describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)', () => {
+  const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+  const VIEWER = 'jonasotoaguilar';
+
+  // The one repository state both surfaces read. `assignees` is what makes an
+  // issue `assigned` to the viewer; `mine` is authorship, which an assignment
+  // never changes.
+  function repoState() {
+    return {
+      issues: new Map([
+        [12, { number: 12, title: 'Mine twelve', mine: true, assignees: [], updatedAt: '2026-02-02T00:00:00Z' }],
+        [21, { number: 21, title: 'Assigned twenty-one', mine: false, assignees: [VIEWER], updatedAt: '2026-02-03T00:00:00Z' }],
+      ]),
+    };
+  }
+
+  const authored = (state) => [...state.issues.values()].filter((row) => row.mine);
+  const assignedToViewer = (state) => [...state.issues.values()].filter((row) => row.assignees.includes(VIEWER));
+
+  function searchRow(row) {
+    return {
+      number: row.number,
+      title: row.title,
+      state: 'OPEN',
+      url: `https://example.test/issues/${row.number}`,
+      createdAt: row.updatedAt,
+      updatedAt: row.updatedAt,
+      author: { login: row.mine ? VIEWER : 'octocat' },
+    };
+  }
+
+  function relatedNode(row) {
+    return {
+      ...searchRow(row),
+      labels: { nodes: [] },
+      assignees: { nodes: row.assignees.map((login) => ({ login })) },
+      comments: { totalCount: 0 },
+      reactionGroups: [],
+      timelineItems: { nodes: [] },
+    };
+  }
+
+  function relatedAnswer(state) {
+    const bucket = (rows) => ({ issueCount: rows.length, nodes: rows.map(relatedNode) });
+    return { data: { mine: bucket(authored(state)), assigned: bucket(assignedToViewer(state)), involved: bucket([]) } };
+  }
+
+  function assignmentRunner(state, failure) {
+    const calls = [];
+    const ok = (stdout) => ({ status: 0, stdout, stderr: '', error: null });
+    const runner = async (bin, argv, opts) => {
+      calls.push({ bin, argv: argv.slice(), cwd: opts ? opts.cwd : undefined });
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        const query = graphqlField(argv, 'query', '-f') || '';
+        const search = graphqlField(argv, 'search');
+        if (query.includes('mine: search(')) return ok(JSON.stringify(relatedAnswer(state)));
+        if (search !== null) {
+          if (search.includes('assignee:@me')) return ok(graphqlSearchPage(argv, assignedToViewer(state).map(searchRow)));
+          if (search.includes('involves:@me')) return ok(graphqlSearchPage(argv, []));
+          return ok(graphqlSearchPage(argv, authored(state).map(searchRow)));
+        }
+        if (query.includes('assignableUsers')) {
+          return ok(JSON.stringify({ data: { repository: { assignableUsers: {
+            nodes: [{ login: VIEWER, name: 'Jonathan Soto' }, { login: 'octocat', name: 'Octo Cat' }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          } } } }));
+        }
+        // The assignee mutation's own permission read: it names the viewer too,
+        // which is what makes the save's answer able to say "this one was mine".
+        if (query.includes('viewer {')) {
+          return ok(JSON.stringify({ data: { repository: { viewerPermission: 'WRITE' }, viewer: { login: VIEWER } } }));
+        }
+        if (query.includes('projectItems')) {
+          return ok(JSON.stringify({ data: { repository: { issue: { projectItems: { nodes: [], pageInfo: { hasNextPage: false } } } } } }));
+        }
+        if (query.includes('viewerPermission')) {
+          const number = Number(graphqlField(argv, 'number', '-F'));
+          const row = state.issues.get(number);
+          return ok(JSON.stringify({ data: { repository: {
+            viewerPermission: 'WRITE',
+            issue: {
+              assignees: { nodes: (row ? row.assignees : []).map((login) => ({ login })), pageInfo: { hasNextPage: false } },
+              closedByPullRequestsReferences: { totalCount: 0 },
+            },
+          } } }));
+        }
+        return ok(JSON.stringify({ data: {} }));
+      }
+      if (argv[0] === 'api') return ok(fixture('gh-api-user.json'));
+      if (argv[0] === 'repo') return ok(fixture('gh-repo-view.json'));
+      if (argv[0] === 'issue' && argv[1] === 'view' && argv.includes('--json')) {
+        const number = Number(argv[2]);
+        const row = state.issues.get(number);
+        return ok(JSON.stringify({
+          number,
+          title: row.title,
+          state: 'OPEN',
+          body: `body of issue ${number}`,
+          author: { login: row.mine ? VIEWER : 'octocat' },
+          labels: [],
+          createdAt: row.updatedAt,
+          updatedAt: row.updatedAt,
+          url: `https://example.test/issues/${number}`,
+          comments: [],
+        }));
+      }
+      if (argv[0] === 'issue' && argv[1] === 'edit') {
+        if (failure && failure.on === true) return { status: 1, stdout: '', stderr: 'Forbidden', error: null };
+        const row = state.issues.get(Number(argv[2]));
+        for (let index = 3; index < argv.length; index += 1) {
+          const flag = argv[index];
+          const login = argv[index + 1];
+          if (flag === '--add-assignee' && row) row.assignees = [...new Set([...row.assignees, login])];
+          if (flag === '--remove-assignee' && row) row.assignees = row.assignees.filter((name) => name !== login);
+        }
+        return ok('');
+      }
+      if (argv[0] === 'label' && argv[1] === 'list') return ok(fixture('gh-label-list.json'));
+      return ok('');
+    };
+    return { runner, calls };
+  }
+
+  // The rail fills its cache exactly as a live session does: the bridge is
+  // published BEFORE the extension loads, `session_start` binds the checkout,
+  // and ONE drawn frame starts the read.
+  async function warmRail(root, state, options = {}) {
+    const registered = [];
+    globalThis[BRIDGE_SLOT] = {
+      schema: 'gentle-shell-bridge/api',
+      version: 1,
+      registerRows: () => {},
+      registerSection: (section) => { registered.push(section); return () => {}; },
+      createStore: () => ({}),
+      requestRepaint: () => {},
+    };
+    const loaded = await loadExtension();
+    const gh = assignmentRunner(state, options.failure);
+    ghIssues.setGhRunner(gh.runner);
+    await fireSessionStart(loaded.hooks, gateCtx(root, []));
+    assert.equal(registered.length, 1, 'the rail section is registered through the bridge');
+    const section = registered[0];
+    const ctx = { cwd: root, ui: { notify: () => {} } };
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      const rows = section.lines(ctx);
+      if (!(rows.length === 1 && rows[0].label === 'loading…')) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return { loaded, gh, section, ctx };
+  }
+
+  async function mountPanel(loaded, root) {
+    loaded.mod.setIssuesTuiLoader(async () => stubTui);
+    let factory = null;
+    const { ctx } = makeCtx({ cwd: root });
+    ctx.ui.custom = async (captured) => { factory = captured; return null; };
+    await loaded.commands.get('issues').handler('', ctx);
+    assert.ok(factory, 'the overlay opens');
+    const host = makeHostTui(24);
+    const { component } = openComponent(factory, host.tui);
+    return { component, host };
+  }
+
+  const isRailRead = (call) => call.argv[0] === 'api' && call.argv[1] === 'graphql'
+    && (graphqlField(call.argv, 'query', '-f') || '').includes('mine: search(');
+  const railReads = (gh) => gh.calls.filter(isRailRead);
+  const railQuery = (call) => graphqlField(call.argv, 'query', '-f');
+  const assigneeWrites = (gh) => gh.calls.filter((call) => call.argv[0] === 'issue'
+    && call.argv[1] === 'edit'
+    && (call.argv.includes('--add-assignee') || call.argv.includes('--remove-assignee')));
+  const frameOf = (component) => clean(component.render(240).join('\n'));
+
+  test('unassigning yourself repaints the tab, refetches the full rail entry and counts one less', async () => {
+    const root = makeRepo({ tag: 'issues-self-assign' });
+    const state = repoState();
+    const { loaded, gh, section, ctx } = await warmRail(root, state);
+    assert.equal(section.meta(ctx), '2 issues', 'the rail starts with both rows');
+
+    const { component } = await mountPanel(loaded, root);
+    // `Assigned` is where the viewer's own row lives; the tab reads it on entry.
+    component.handleInput('tab');
+    assert.ok(await waitFor(() => frameOf(component).includes('Assigned twenty-one')),
+      'the Assigned tab paints the viewer\'s row before the write');
+
+    // The editor key requires the repository role the DETAIL confirms, so the
+    // press waits for that answer exactly like the panel's other editor tests.
+    assert.ok(await waitFor(() => frameOf(component).includes('a assign')), 'the detail confirmed the role');
+    component.handleInput('a');
+    assert.ok(await waitFor(() => frameOf(component).includes('Assignees') && frameOf(component).includes('space toggle')),
+      'the assignee editor opened');
+    assert.ok(await waitFor(() => !frameOf(component).includes('loading assignees')),
+      'the assignable users answered');
+    component.handleInput('space');
+    component.handleInput('ctrl+s');
+    assert.ok(await waitFor(() => assigneeWrites(gh).length === 1), 'the assignee save reached gh');
+    assert.deepEqual(assigneeWrites(gh)[0].argv,
+      ['issue', 'edit', '21', '--remove-assignee', VIEWER],
+      'the write names the viewer exactly as the editor toggled it');
+
+    // The panel: the Assigned bucket was read again and its count follows.
+    assert.ok(await waitFor(() => frameOf(component).includes('Assigned (0)')),
+      'the Assigned tab count follows the removal without reopening the panel');
+    assert.ok(!frameOf(component).includes('Assigned twenty-one'), 'and the row is gone');
+    const assignedReads = gh.calls
+      .filter((call) => call.argv[0] === 'api' && call.argv[1] === 'graphql')
+      .map((call) => graphqlField(call.argv, 'search'))
+      .filter((value) => value !== null && value.includes('assignee:@me'));
+    assert.ok(assignedReads.length >= 2, 'the write invalidated the Assigned page, so it was read again');
+
+    // The rail: one read started by the write itself, and it is the FULL one —
+    // a delta could only merge by issue number and could never drop the row.
+    assert.ok(await waitFor(() => railReads(gh).length >= 2), 'the write started a rail read of its own');
+    assert.match(railQuery(railReads(gh)[1]), /first: 100/,
+      'the dropped entry makes the next rail read the full size, so a removal can land');
+    assert.ok(await waitFor(() => section.meta(ctx) === '1 issues'), 'the rail count follows the removal');
+    assert.deepEqual(section.lines(ctx).map((row) => row.label), ['#12 Mine twelve'],
+      'and the merged rows are the ones the full read answered');
+  });
+
+  test('a rejected assignee save repaints nothing and keeps the row and the count', async () => {
+    const root = makeRepo({ tag: 'issues-self-assign-fail' });
+    const state = repoState();
+    // GitHub refuses the write: the answer is the only source of truth here, so
+    // a rejection that reached the surface must leave every row and count alone.
+    const failure = { on: false };
+    const { loaded, gh, section, ctx } = await warmRail(root, state, { failure });
+    const { component } = await mountPanel(loaded, root);
+    component.handleInput('tab');
+    assert.ok(await waitFor(() => frameOf(component).includes('Assigned twenty-one')), 'the row is on screen');
+    assert.ok(await waitFor(() => frameOf(component).includes('a assign')), 'the detail confirmed the role');
+    component.handleInput('a');
+    assert.ok(await waitFor(() => !frameOf(component).includes('loading assignees')), 'the users answered');
+    component.handleInput('space');
+    const before = railReads(gh).length;
+    failure.on = true;
+    component.handleInput('ctrl+s');
+    assert.ok(await waitFor(() => /Forbidden/.test(frameOf(component))), 'the rejection is visible');
+    await tick();
+    await tick();
+    assert.equal(component.state.mode, 'assignees', 'the editor keeps the draft');
+    assert.equal(railReads(gh).length, before, 'a failed write invalidates nothing, so no rail read starts');
+    assert.equal(section.meta(ctx), '2 issues', 'the rail keeps the pre-write count');
+    assert.match(frameOf(component), /Assigned \(1\)/, 'and the panel keeps the pre-write count');
+    assert.ok(frameOf(component).includes('Assigned twenty-one'), 'the row never left');
   });
 });

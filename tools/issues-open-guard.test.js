@@ -26,7 +26,7 @@
 // under os.tmpdir() and are removed in `after()`. The bridge slot is
 // process-wide, so it is always deleted again.
 
-const { test, after, afterEach } = require('node:test');
+const { test, after, afterEach, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -73,6 +73,14 @@ afterEach(() => {
     try { restore(); } catch {}
   }
   restores = [];
+});
+
+// S4 (issues-startup-performance T3): the issues read cache has a disk half, and
+// this file DRAWS the rail, so every test gets an empty cache directory of its
+// own — nothing here can read or write the real `$XDG_CACHE_HOME`/`~/.cache`
+// document, and no test inherits a warm identity from another.
+beforeEach(() => {
+  process.env.XDG_CACHE_HOME = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-guard-cache-')));
 });
 
 function track(dir) {
@@ -628,8 +636,21 @@ test('S1: a shutdown releases the guard', async () => {
   await waitFor(() => h.sent.length === 1, 'the click never dispatched');
   await fireHook(h.loaded.hooks, 'session_shutdown', h.ctx);
 
+  // T18 (S11): `session_shutdown` DISPOSES the section with the session, so the
+  // rows it retained are inert — a click from a dead session never reaches a live
+  // panel, and it never even asks the single-flight guard.
   h.rows[1].onClick();
+  await settle(50);
+  assert.equal(h.sent.length, 1, 'a row retained across shutdown dispatched');
+
+  // The guard is still released: the next session binds its OWN section, and a
+  // click on one of its fresh rows dispatches exactly once.
+  await fireSessionStart(h.loaded.hooks, h.ctx);
+  const rows = await waitForRows(h.registered[h.registered.length - 1], h.ctx);
+  const number = numberOf(rows[1].label);
+  rows[1].onClick();
   await waitFor(() => h.sent.length === 2, 'a shutdown left the next click dead');
+  assert.deepEqual(h.sent[1], { text: `/issues ${number}`, opts: { expandPromptTemplates: true } });
 });
 
 test('S1: a typed /issues is never swallowed by a click in flight', async () => {

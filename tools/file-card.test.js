@@ -10,15 +10,13 @@
 //
 // The text seam and the themes are the fakes `tools/bash-card.test.js` uses: this
 // package has no node_modules, so width measurement, truncation and wrapping are
-// injected, and colour only ever arrives as `theme.fg(role, text)`. The two switches
-// and the content level are the process-wide slots the shell publishes, and the
-// preference document lives in a scratch home, so no case reads or writes the real
-// Pi home.
+// injected, and colour only ever arrives as `theme.fg(role, text)`. The one switch is
+// the bridge's published reader (`api.resolveToolDesignSelection`), a process-wide slot
+// this file publishes and withdraws; the content level is the shell's own slot.
 const assert = require('node:assert/strict');
-const { mkdtempSync, readFileSync, rmSync } = require('node:fs');
-const { tmpdir } = require('node:os');
+const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { after, before, beforeEach, test } = require('node:test');
+const { after, afterEach, beforeEach, test } = require('node:test');
 
 const {
   FILE_TOOLS,
@@ -27,7 +25,10 @@ const {
   fileResultRows,
 } = require('../lib/file-card.js');
 const { createFileCardResolver, registerFileCard } = require('../lib/file-card-resolver.js');
-const { CARD_FILES_SLOT, writeCardFileSwitch } = require('../lib/card-files-mode.js');
+// The design this package registers on the bridge's `Card tools` line: the card's one
+// switch is that line's answer for the tool being drawn, so the card is only painted
+// for a tool the line actually covers.
+const { toolsActivityDesign } = require('../lib/bash-design.js');
 const { CARD_CONTENT_SLOT } = require('../lib/card-content.js');
 const { CARD_STYLE, CARD_STYLE_SLOT } = require('../lib/card-style.js');
 
@@ -93,29 +94,54 @@ const bandTheme = {
   bg: (_role, value) => `\x1b[48;5;240m${value}\x1b[49m`,
 };
 
-// The two slots the shell publishes, and a scratch preference home.
-const savedHome = process.env.GENTLE_PI_CONFIG_HOME;
-let configHome;
-
-before(() => {
-  configHome = mkdtempSync(join(tmpdir(), 'odd-worktree-file-card-'));
-  process.env.GENTLE_PI_CONFIG_HOME = configHome;
-});
+// The two slots the shell publishes, and the bridge's own published object.
+const BRIDGE_API_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
 
 beforeEach(() => {
   globalThis[CARD_STYLE_SLOT] = CARD_STYLE.NEON;
-  delete globalThis[CARD_FILES_SLOT];
   delete globalThis[CARD_CONTENT_SLOT];
+  delete globalThis[BRIDGE_API_SLOT];
+});
+
+afterEach(() => {
+  delete globalThis[BRIDGE_API_SLOT];
 });
 
 after(() => {
   delete globalThis[CARD_STYLE_SLOT];
-  delete globalThis[CARD_FILES_SLOT];
   delete globalThis[CARD_CONTENT_SLOT];
-  if (savedHome === undefined) delete process.env.GENTLE_PI_CONFIG_HOME;
-  else process.env.GENTLE_PI_CONFIG_HOME = savedHome;
-  rmSync(configHome, { recursive: true, force: true });
+  delete globalThis[BRIDGE_API_SLOT];
 });
+
+// ---- the bridge's one switch (S1/S7) ----
+
+const ACTIVITY = Object.freeze({ kind: 'design', design: { id: 'odd-worktree.bash-activity' } });
+const NATIVE = Object.freeze({ kind: 'native' });
+
+/**
+ * A published bridge object, exactly as the host hands it over: identity, major version,
+ * its release, and the ONE optional reader this card asks. `selection` is an answer or a
+ * function of the tool being drawn; `asked` collects every question.
+ */
+function publishedBridge(selection, asked) {
+  return {
+    schema: 'gentle-shell-bridge/api',
+    version: 1,
+    VERSION: '0.7.0',
+    registerToolDesign: () => () => {},
+    resolveToolDesignSelection(tool) {
+      if (asked !== undefined) asked.push(tool);
+      return typeof selection === 'function' ? selection(tool) : selection;
+    },
+  };
+}
+
+/** Publish a bridge on the slot the host publishes it on, and hand it back. */
+function publishBridge(selection, asked) {
+  const api = publishedBridge(selection, asked);
+  globalThis[BRIDGE_API_SLOT] = api;
+  return api;
+}
 
 // ---- the resolver under test ----
 
@@ -214,7 +240,7 @@ test('a skill call heads with its mark, its label, the tool and the path', () =>
   const row = callRow(resolver, 'read', { path: SKILL }, taggedTheme);
   const text = unpaint(row);
   assert.match(text, /▤ skill · read lib\/skills\/one\/SKILL\.md/u, text);
-  assert.ok(row.includes('<toolTitle>▤ skill</toolTitle>'), 'the label keeps the read card\'s own title role');
+  assert.ok(row.includes('<toolTitle>▤</toolTitle> <toolTitle>skill</toolTitle>'), 'the glyph and the label keep the read card\'s own title role');
   assert.ok(row.includes('<muted>·</muted>'), 'the one separator is painted muted');
   assert.equal(text.split('·').length - 1, 1, 'exactly one separator');
   assert.match(text, /[^ ] · [^ ]/u, 'one space on each side of the separator');
@@ -229,7 +255,10 @@ test('an odd call names its file while collapsed and its whole path once expande
   const collapsed = unpaint(callRow(resolver, 'read', args, taggedTheme));
   assert.match(collapsed, /📑 odd · read cards-skill-odd\.md/u, collapsed);
   assert.equal(collapsed.includes('odd/tasks'), false, 'the collapsed heading names the file, not its folder');
-  assert.ok(callRow(resolver, 'read', args, taggedTheme).includes('<mdHeading>📑 odd</mdHeading>'), 'the ODD label wears the theme\'s mdHeading role');
+  assert.ok(
+    callRow(resolver, 'read', args, taggedTheme).includes('<mdHeading>📑</mdHeading> <mdHeading>odd</mdHeading>'),
+    'the ODD mark and label wear the theme\'s mdHeading role',
+  );
 
   const expanded = callRows(resolver, 'read', args, plainTheme, 80, { isPartial: false, expanded: true }).map(bodyText).join('\n');
   assert.match(expanded, /📑 odd · read odd\/tasks\/cards-skill-odd\.md/u, expanded);
@@ -240,6 +269,60 @@ test('an odd call names its file while collapsed and its whole path once expande
   assert.equal(fileCardHeading('read', { path: 'src/app.js' }, false), undefined);
   assert.equal(fileCardHeading('read', { path: ODD }, true).identity, 'odd');
   assert.equal(fileCardHeading('read', { path: SKILL }, false).identity, 'skill');
+});
+
+test('the heading wears one theme role per element (S2)', () => {
+  const resolver = fileResolver();
+  const row = callRow(resolver, 'read', { path: SKILL, offset: 2, limit: 3 }, taggedTheme);
+
+  // The glyph AND the label wear the identity's own role (`toolTitle` for a skill); the
+  // label is the only one bolded, and the glyph is never bold.
+  assert.equal(row.includes('<toolTitle>▤</toolTitle>'), true, `the glyph wears the title role: ${row}`);
+  assert.equal(row.includes('<toolTitle>skill</toolTitle>'), true, 'the label wears the title role');
+  // The `·` separator in `muted`, the tool name unpainted, the path in `accent`, the range
+  // in `warning` — in that order, on one row.
+  assert.equal(row.includes('<muted>·</muted> read <accent>lib/skills/one/SKILL.md</accent><warning>:2-4</warning>'), true, row);
+  assert.equal(row.includes('<accent>lib/skills/one/SKILL.md</accent>'), true, 'the path is the accent role');
+  assert.equal(row.includes('read '), true, 'the tool name is unpainted: no role wraps it');
+  assert.doesNotMatch(row, /<[a-z]+>read<\/[a-z]+>/u, 'never a role around the tool name');
+
+  // A theme with a bold attribute: the label carries it, inside the role.
+  const boldTheme = { fg: (role, value) => `<${role}>${value}</${role}>`, bold: (value) => `*${value}*` };
+  const bolded = callRow(resolver, 'read', { path: SKILL }, boldTheme);
+  assert.equal(bolded.includes('<toolTitle>*skill*</toolTitle>'), true, `the label is bold: ${bolded}`);
+  assert.equal(bolded.includes('<toolTitle>*▤*</toolTitle>'), false, 'the glyph is not bold');
+
+  // An ODD artifact heads in the theme's own `mdHeading`, and while collapsed it names its
+  // file, in the accent role like every path.
+  const odd = callRow(resolver, 'read', { path: ODD, offset: 10, limit: 30 }, taggedTheme);
+  assert.equal(odd.includes('<mdHeading>📑</mdHeading>'), true, odd);
+  assert.equal(odd.includes('<mdHeading>odd</mdHeading>'), true, odd);
+  assert.equal(odd.includes('read <accent>cards-skill-odd.md</accent><warning>:10-39</warning>'), true, odd);
+});
+
+test('a heading that fits keeps every role through the expansion too', () => {
+  const resolver = fileResolver();
+  const rows = callRows(resolver, 'read', { path: ODD, offset: 2, limit: 3 }, taggedTheme, 80, { isPartial: false, expanded: true });
+  const heading = rows[0];
+  // Expanded states the whole path, and the whole path is still the accent role.
+  assert.equal(heading.includes('<accent>odd/tasks/cards-skill-odd.md</accent>'), true, heading);
+  assert.equal(heading.includes('<warning>:2-4</warning>'), true, heading);
+  assert.equal(heading.includes('<mdHeading>odd</mdHeading>'), true, heading);
+});
+
+test('an expanded heading that overflows states its identity on the rule and its path once', () => {
+  const resolver = fileResolver();
+  const rows = callRows(resolver, 'read', { path: ODD }, plainTheme, 40, { isPartial: false, expanded: true });
+  const text = rows.map(unpaint).join('\n');
+  // The continued layout drops the detail AND the segments it is drawn from: the rule
+  // states the identity alone, exactly as the baseline did, and the full detail follows
+  // on the rows below it.
+  assert.equal(unpaint(rows[0]), `╭─ 📑 odd ${'─'.repeat(30)}╮`, `the identity alone on the rule: ${unpaint(rows[0])}`);
+  assert.equal(text.includes('odd/tasks'), true, 'the whole path is stated below');
+  assert.equal(text.split('odd/tasks/cards-skill-odd.md').length - 1, 1, `the path is stated once: ${text}`);
+  assert.equal(text.split('·').length - 1, 1, `one separator, never two: ${text}`);
+  assert.match(unpaint(rows[1]), /^│ · read odd\/tasks\/cards-skill-odd\.md +│$/u, `the detail continues once: ${unpaint(rows[1])}`);
+  assertFramed(rows, 40);
 });
 
 test('only a read names a line range', () => {
@@ -292,55 +375,139 @@ test('every tool this card does not own is handed back exactly as the chain reso
   assert.deepEqual([...FILE_TOOLS].sort(), ['edit', 'read', 'write']);
 });
 
-// ---- S1: the two switches, read per paint ----
+// ---- S1/S7: one switch, asked of the bridge on every paint ----
 
-test('each switch forwards only its own kind, and reading it per paint repaints a drawn row', () => {
+test('the bridge\'s answer decides, and asking it per paint repaints a drawn row', () => {
   const resolver = fileResolver();
-  const skillCall = resolver('read', () => HOST).renderCall({ path: SKILL }, plainTheme, { isPartial: false });
-  const oddCall = resolver('read', () => HOST).renderCall({ path: ODD }, plainTheme, { isPartial: false });
-  assert.match(unpaint(skillCall.render(60)[0]), /▤ skill/u, 'both cards are on by default');
+  const asked = [];
+  const call = resolver('read', () => HOST).renderCall({ path: SKILL }, plainTheme, { isPartial: false });
 
-  globalThis[CARD_FILES_SLOT] = { skill: false, odd: true };
-  try {
-    assert.deepEqual(forwardedText(skillCall.render(60)), ['host read call'], 'Card skill off: the chain draws the row');
-    assert.match(unpaint(oddCall.render(60)[0]), /📑 odd/u, 'Card odd is still on');
-  } finally {
-    delete globalThis[CARD_FILES_SLOT];
-  }
-  assert.match(unpaint(skillCall.render(60)[0]), /▤ skill/u, 'switching back repaints the same component');
+  // A bridge that names another value (the reserved `default`, a design of the line that
+  // has left it, or one that does not cover this tool) means the host's own card.
+  publishBridge(NATIVE, asked);
+  assert.deepEqual(forwardedText(call.render(60)), ['host read call'], 'native: the chain draws the row');
+  assert.deepEqual(asked, ['read'], 'the question names the tool being painted');
 
-  globalThis[CARD_FILES_SLOT] = { skill: true, odd: false };
-  try {
-    assert.deepEqual(forwardedText(oddCall.render(60)), ['host read call'], 'Card odd off: only the odd row is forwarded');
-    assert.match(unpaint(skillCall.render(60)[0]), /▤ skill/u, 'Card skill is still on');
-  } finally {
-    delete globalThis[CARD_FILES_SLOT];
+  // The same component is asked again on the next frame: a mid-session switch reaches a
+  // card already on screen.
+  genActivity();
+  assert.match(unpaint(call.render(60)[0]), /▤ skill/u, 'activity: the card repaints itself');
+  assert.deepEqual(asked, ['read', 'read'], 'one question per paint, never cached');
+
+  function genActivity() {
+    globalThis[BRIDGE_API_SLOT] = publishedBridge(ACTIVITY, asked);
   }
 });
 
-test('a switch saved through the package\'s own writer is the switch the card paints', () => {
+test('every answer that is not this package\'s activity design is the host\'s own card', () => {
   const resolver = fileResolver();
-  delete globalThis[CARD_FILES_SLOT];
-  const saved = writeCardFileSwitch('odd', false);
-  assert.equal(saved.ok, true, JSON.stringify(saved));
-  try {
-    delete globalThis[CARD_FILES_SLOT];
+  const cases = [
+    ['native', NATIVE],
+    ['missing', { kind: 'missing', id: 'gone.design' }],
+    ['not-covered', { kind: 'not-covered', id: 'other.design' }],
+    ['another design', { kind: 'design', design: { id: 'someone-else.bash-design' } }],
+  ];
+  for (const [label, answer] of cases) {
+    publishBridge(answer);
     assert.deepEqual(
       forwardedText(resolver('read', () => HOST).renderCall({ path: ODD }, plainTheme, { isPartial: false }).render(60)),
       ['host read call'],
-      'the saved document decides, not only the live cell',
+      label,
     );
-    assert.match(
-      unpaint(resolver('read', () => HOST).renderCall({ path: SKILL }, plainTheme, { isPartial: false }).render(60)[0]),
-      /▤ skill/u,
-      'the other kind is untouched',
+    assert.deepEqual(
+      forwardedText(resolver('read', () => HOST).renderResult(textResult('# x'), { isPartial: false }, plainTheme, { args: { path: ODD } }).render(60)),
+      ['host read result'],
+      `${label} (result)`,
     );
-  } finally {
-    const restored = writeCardFileSwitch('odd', true);
-    assert.equal(restored.ok, true, JSON.stringify(restored));
-    // The writer publishes the slot on success; the next case must not inherit it.
-    delete globalThis[CARD_FILES_SLOT];
   }
+});
+
+test('the question is asked per painted tool: one tool can be carded while another is not', () => {
+  const resolver = fileResolver();
+  const asked = [];
+  publishBridge((tool) => (tool === 'read' ? ACTIVITY : NATIVE), asked);
+  assert.match(
+    unpaint(resolver('read', () => HOST).renderCall({ path: SKILL }, plainTheme, { isPartial: false }).render(60)[0]),
+    /▤ skill/u,
+    'read is covered by the activity design',
+  );
+  assert.deepEqual(
+    forwardedText(resolver('write', () => HOST).renderCall({ path: ODD, content: '# x' }, plainTheme, { isPartial: false }).render(60)),
+    ['host read call'],
+    'write is not: the host draws that row',
+  );
+  assert.deepEqual(asked, ['read', 'write'], 'each paint asked about the tool it draws');
+});
+
+test('no bridge and a bridge older than the reader both paint the card, never hide it', () => {
+  // The resolver-absence case this feature pins: a host whose published object has no
+  // `resolveToolDesignSelection` (gentle-shell-bridge before 0.7.0), and no bridge at
+  // all. Neither may hide the card, because neither can answer the question.
+  const resolver = fileResolver();
+  delete globalThis[BRIDGE_API_SLOT];
+  assert.match(
+    unpaint(resolver('read', () => HOST).renderCall({ path: SKILL }, plainTheme, { isPartial: false }).render(60)[0]),
+    /▤ skill/u,
+    'no bridge: the card paints, exactly as before the switch was joined',
+  );
+
+  globalThis[BRIDGE_API_SLOT] = { schema: 'gentle-shell-bridge/api', version: 1, VERSION: '0.6.0', registerToolDesign: () => () => {} };
+  assert.match(
+    unpaint(resolver('read', () => HOST).renderCall({ path: ODD }, plainTheme, { isPartial: false }).render(60)[0]),
+    /📑 odd/u,
+    'an older bridge: the card still paints',
+  );
+  assert.match(
+    unpaint(resolver('read', () => HOST).renderResult(textResult('# Design'), { isPartial: false }, plainTheme, { args: { path: ODD } }).render(60)[0]),
+    /^│ /u,
+    'and so does its body',
+  );
+});
+
+test('a foreign, hostile or unreadable bridge never hides the card', () => {
+  const resolver = fileResolver();
+  const draw = () => unpaint(resolver('read', () => HOST).renderCall({ path: ODD }, plainTheme, { isPartial: false }).render(60)[0]);
+
+  // Another library on the same slot: its gate fails, and this package still paints.
+  globalThis[BRIDGE_API_SLOT] = { schema: 'someone-else/api', version: 1, resolveToolDesignSelection: () => NATIVE };
+  assert.match(draw(), /📑 odd/u, 'a foreign object on the slot is no bridge');
+
+  // A reader that throws breaks the bridge's own contract; the card stays visible.
+  globalThis[BRIDGE_API_SLOT] = { ...publishedBridge(NATIVE), resolveToolDesignSelection: () => { throw new Error('boom'); } };
+  assert.match(draw(), /📑 odd/u, 'a reader that throws never hides a row');
+
+  // An answer in a shape this build does not know is unreadable, not a refusal.
+  globalThis[BRIDGE_API_SLOT] = publishedBridge({ kind: 'future-kind' });
+  assert.match(draw(), /📑 odd/u, 'an unknown kind keeps the card');
+});
+
+test('S1: a write is covered by the Card tools line, so its file card paints and `default` restores the host row', () => {
+  // A bridge answers from the design's own `tools` list, exactly as it resolves
+  // coverage: a tool the line does not name is `not-covered`, which is the host's own
+  // card. `write` is declared on that line so the file card can be asked about it.
+  const design = toolsActivityDesign();
+  const asked = [];
+  publishBridge((tool) => (design.tools.includes(tool) ? { kind: 'design', design } : { kind: 'not-covered' }), asked);
+  const resolver = fileResolver();
+  for (const tool of ['read', 'write']) {
+    assert.equal(design.tools.includes(tool), true, `${tool} is covered by the Card tools line`);
+    const row = callRow(resolver, tool, { path: ODD, content: '# x\n' }, plainTheme);
+    assert.match(unpaint(row), /📑 odd/u, `${tool}: the file card paints its heading`);
+    assert.match(unpaint(row), new RegExp(`${tool} cards-skill-odd\\.md`, 'u'), `${tool}: and names the call`);
+  }
+  // A tool the line does not cover is still the host's row: a write is declared, but
+  // nothing else is.
+  const edit = resolver('edit', () => HOST).renderCall({ path: ODD }, plainTheme, { isPartial: false }).render(60);
+  assert.deepEqual(forwardedText(edit), ['host read call'], 'an uncovered tool keeps the host card');
+  assert.deepEqual(asked, ['read', 'write', 'edit'], 'each paint asked about the tool it draws');
+
+  // `default` is the bridge's `native`: the host draws every row again.
+  publishBridge(NATIVE);
+  assert.deepEqual(
+    forwardedText(resolver('write', () => HOST).renderCall({ path: ODD, content: '# x\n' }, plainTheme, { isPartial: false }).render(60)),
+    ['host read call'],
+    'default: no write file card',
+  );
 });
 
 // ---- the host's own outer box, reproduced for every row this card hands back ----
@@ -507,19 +674,15 @@ test('a chain row that cannot be drawn adds nothing and never throws', () => {
   assert.match(unpaint(bare[1]), /^ host read call +$/u, 'a theme without bg keeps the box\'s padding');
 });
 
-test('a row forwarded because its switch is off is the same boxed row as a path with no identity', () => {
+test('a row the bridge\'s answer withholds is the same boxed row as a path with no identity', () => {
   const resolver = fileResolver();
   const plain = boxTheme();
-  const off = boxTheme();
+  const withheld = boxTheme();
   const plainRows = resolver('read', () => HOST).renderCall({ path: 'src/app.js' }, plain, { isPartial: false }).render(40);
-  globalThis[CARD_FILES_SLOT] = { skill: false, odd: false };
-  try {
-    const offRows = resolver('read', () => HOST).renderCall({ path: ODD }, off, { isPartial: false }).render(40);
-    assert.deepEqual(offRows, plainRows, 'both are the host\'s own boxed row');
-    assert.deepEqual(off.roles, plain.roles);
-  } finally {
-    delete globalThis[CARD_FILES_SLOT];
-  }
+  publishBridge(NATIVE);
+  const withheldRows = resolver('read', () => HOST).renderCall({ path: ODD }, withheld, { isPartial: false }).render(40);
+  assert.deepEqual(withheldRows, plainRows, 'both are the host\'s own boxed row');
+  assert.deepEqual(withheld.roles, plain.roles);
 });
 
 // ---- S2: the content level, read per paint ----
@@ -590,44 +753,220 @@ test('the same card is drawn in both styles, and the style is read on every pain
   assert.equal(content(result(CARD_STYLE.FLOAT)), content(result(CARD_STYLE.NEON)), 'the body is the same in both styles');
 });
 
-// ---- L5: the expanded Markdown body ----
+// ---- S3/S4/S5: the document body, drawn by Pi's own Markdown renderer ----
 
-test('an expanded read of a Markdown file renders the document, not its source', () => {
-  const resolver = fileResolver();
-  const source = ['# Design', '', '## Specs', '', 'Some **bold** text and `code`', ''].join('\n');
-  const rows = resultRows(resolver, 'read', { path: ODD }, textResult(source), { expanded: true, isPartial: false }, plainTheme, 60);
-  const body = rows.slice(0, -1).map(bodyText).join('\n');
-  assert.doesNotMatch(body, /## /u, `a Markdown heading is drawn, not typed: ${JSON.stringify(body)}`);
-  assert.doesNotMatch(body, /\*\*/u, 'emphasis is consumed by the renderer');
-  assert.match(body, /Design/u);
-  assert.match(body, /▌ Specs|Specs/u, 'the heading keeps its own mark');
-  assert.match(body, /Some bold text and code/u);
+/**
+ * A stand-in for Pi's `Markdown` component that behaves the way the real one does where
+ * this card depends on it: it asks the theme TABLE it was handed for every element, and
+ * every row it returns is already PAINTED. A heading goes through `heading`, a bullet
+ * through `listBullet`, inline code through `code`, a fence through `codeBlockBorder` and
+ * `codeBlock`, a quote through `quoteBorder` and `quote`, and a rule through `hr`.
+ */
+class OutlineMarkdown {
+  constructor(source, paddingX, paddingY, theme) {
+    this.source = source;
+    this.theme = theme;
+    this.padding = { paddingX, paddingY };
+  }
 
-  // A write draws the content it wrote, which the call carries and the result does not echo.
+  render() {
+    const theme = this.theme;
+    let fenced = false;
+    return this.source.split('\n').map((line) => {
+      if (line.startsWith('```')) {
+        fenced = !fenced;
+        return theme.codeBlockBorder(line);
+      }
+      if (fenced) return theme.codeBlock(line);
+      if (line.startsWith('# ')) return theme.heading(line.slice(2));
+      if (line.startsWith('- ')) return `${theme.listBullet('-')} ${line.slice(2)}`;
+      if (line.startsWith('> ')) return `${theme.quoteBorder('>')} ${theme.quote(line.slice(2))}`;
+      if (line === '---') return theme.hr('────');
+      return line.replace(/`([^`]+)`/gu, (_match, code) => theme.code(code));
+    });
+  }
+
+  invalidate() {}
+}
+
+// A document with every element S3 names, one per row.
+const DOCUMENT = [
+  '# Design',
+  '- one',
+  'Some `inline` code',
+  '```',
+  'const a = 1;',
+  '```',
+  '> quoted',
+  '---',
+].join('\n');
+
+const documentResolver = () => fileResolver({ markdownClass: OutlineMarkdown });
+
+test('the document is drawn by the host renderer, one theme role per element (S3)', () => {
+  const resolver = documentResolver();
+  const rows = resultRows(resolver, 'read', { path: ODD }, textResult(DOCUMENT), { expanded: true, isPartial: false }, taggedTheme, 60);
+  // The raw rows: `bodyText` strips the very tags these cases read.
+  const body = rows.slice(0, -1).join('\n');
+
+  assert.equal(body.includes('<mdHeading>Design</mdHeading>'), true, `a heading wears mdHeading: ${body}`);
+  assert.equal(body.includes('<mdListBullet>-</mdListBullet>'), true, 'a bullet wears mdListBullet');
+  assert.equal(body.includes('<mdCode>inline</mdCode>'), true, 'inline code wears mdCode');
+  assert.equal(body.includes('<mdCodeBlockBorder>```</mdCodeBlockBorder>'), true, 'a fence wears mdCodeBlockBorder');
+  assert.equal(body.includes('<mdCodeBlock>const a = 1;</mdCodeBlock>'), true, 'fenced content wears mdCodeBlock');
+  assert.equal(body.includes('<mdQuoteBorder>></mdQuoteBorder>'), true, 'a quote border wears mdQuoteBorder');
+  assert.equal(body.includes('<mdQuote>quoted</mdQuote>'), true, 'quoted text wears mdQuote');
+  assert.equal(body.includes('<mdHr>'), true, 'a rule wears mdHr');
+});
+
+// A theme that paints real, zero-width ANSI and records the roles it was asked for: the
+// fake metrics strips ANSI, so its widths are the host's own visible widths.
+function ansiRoles() {
+  const roles = [];
+  return {
+    roles,
+    fg(role, value) {
+      roles.push(role);
+      return `\x1b[36m${value}\x1b[39m`;
+    },
+    bold: (value) => `\x1b[1m${value}\x1b[22m`,
+  };
+}
+
+test('S5: the document\'s painted rows are placed, never painted again', () => {
+  const resolver = documentResolver();
+  const rows = resultRows(resolver, 'read', { path: ODD }, textResult(DOCUMENT), { expanded: true, isPartial: false }, taggedTheme, 60);
+  const body = rows.slice(0, -1).join('\n');
+  // The body role is the one this card paints its own rows with; the document's rows keep
+  // exactly the paint they arrived with, so none of them carries it.
+  assert.equal(body.includes('<text>'), false, `the body role is never applied over the document: ${body}`);
+  assert.equal(body.split('<mdHeading>Design</mdHeading>').length - 1, 1, 'each painted cell is placed once');
+
+  // The same document with a theme that paints real, zero-width ANSI: the sequences survive,
+  // and each row is still exactly the width the host asked for — proof that the placement
+  // measured it with the ANSI-aware seam and not with a codepoint count.
+  const ansiTheme = ansiRoles();
+  const ansiRows = resultRows(resolver, 'read', { path: ODD }, textResult(DOCUMENT), { expanded: true, isPartial: false }, ansiTheme, 60);
+  assert.equal(ansiRows.slice(0, -1).join('\n').includes('\x1b[36m'), true, 'the document keeps the host paint');
+  for (const row of ansiRows) assert.equal(metrics.visibleWidth(row), 60, `"${row}" is not 60 columns`);
+});
+
+test('S4: the collapsed preview is the first drawn rows of the same document, with its roles', () => {
+  const resolver = documentResolver();
+  const collapsed = resultRows(resolver, 'read', { path: ODD }, textResult(DOCUMENT), { isPartial: false }, taggedTheme, 60);
+  assert.equal(collapsed.length, PREVIEW_ROWS + 1, 'three preview rows and the closing rule');
+  const preview = collapsed.slice(0, PREVIEW_ROWS).join('\n');
+  assert.equal(preview.includes('<mdHeading>Design</mdHeading>'), true, `the first drawn row is the heading: ${preview}`);
+  assert.equal(preview.includes('<mdListBullet>-</mdListBullet>'), true);
+  assert.equal(preview.includes('<mdCode>inline</mdCode>'), true);
+  assert.equal(preview.includes('<mdCodeBlock>const a = 1;</mdCodeBlock>'), false, 'the preview stops at its budget');
+  // Not the raw source: no heading is typed out while the renderer can draw it.
+  assert.doesNotMatch(unpaint(preview), /^# Design$/mu, 'a preview is not the file\'s own text');
+
+  // `minimal` still suppresses the whole body, preview included.
+  globalThis[CARD_CONTENT_SLOT] = 'minimal';
+  try {
+    const minimal = resultRows(resolver, 'read', { path: ODD }, textResult(DOCUMENT), { isPartial: false }, taggedTheme, 60);
+    assert.equal(minimal.length, 1, 'the closing rule alone');
+    assert.match(unpaint(minimal[0]), /^╰/u);
+  } finally {
+    delete globalThis[CARD_CONTENT_SLOT];
+  }
+
+  // A write previews the document it wrote, exactly as a read previews the one it read.
   const written = resultRows(
     resolver,
     'write',
-    { path: ODD, content: '## Task\n\n- one\n' },
+    { path: ODD, content: '# Task\n\n- one\n' },
     textResult('Wrote 20 bytes'),
-    { expanded: true, isPartial: false },
-    plainTheme,
+    { isPartial: false },
+    taggedTheme,
     60,
   );
-  const writtenBody = written.slice(0, -1).map(bodyText).join('\n');
-  assert.match(writtenBody, /Task/u);
-  assert.doesNotMatch(writtenBody, /## Task/u, 'the write body is the document it wrote');
+  const writtenBody = written.slice(0, -1).join('\n');
+  assert.equal(writtenBody.includes('<mdHeading>Task</mdHeading>'), true, writtenBody);
+  assert.equal(written.slice(0, -1).length, PREVIEW_ROWS, 'the preview budget is the same');
 });
 
-test('a collapsed row, a failed call and a non-Markdown file keep their plain rows', () => {
-  const resolver = fileResolver();
+test('a document the renderer cannot draw falls back to the plain source, unstyled', () => {
+  const source = ['# Design', '', '## Specs', '', 'Body text'].join('\n');
+  const drawsNothing = class { render() { return []; } invalidate() {} };
+  const throws = class { render() { throw new Error('renderer exploded'); } invalidate() {} };
+  const blanks = class { render() { return ['', '   ']; } invalidate() {} };
+  const cases = [
+    ['no renderer', null],
+    ['a renderer that throws', throws],
+    ['a renderer that draws nothing', drawsNothing],
+    ['a renderer that draws only blanks', blanks],
+  ];
+  for (const [label, markdownClass] of cases) {
+    const resolver = fileResolver({ markdownClass });
+    const rows = resultRows(resolver, 'read', { path: ODD }, textResult(source), { expanded: true, isPartial: false }, taggedTheme, 60);
+    const body = rows.slice(0, -1).join('\n');
+    assert.equal(body.includes('# Design'), true, `${label}: the source is shown`);
+    assert.equal(body.includes('## Specs'), true, `${label}: every line of it`);
+    assert.equal(body.includes('<mdHeading>'), false, `${label}: in no Markdown role`);
+  }
+});
+
+test('a write whose document cannot be drawn shows the document it wrote, never the result (S3)', () => {
+  const source = ['# Design', '', '## Specs', '', 'Body text'].join('\n');
+  const drawsNothing = class { render() { return []; } invalidate() {} };
+  const throws = class { render() { throw new Error('renderer exploded'); } invalidate() {} };
+  const cases = [
+    ['no renderer', null],
+    ['a renderer that throws', throws],
+    ['a renderer that draws nothing', drawsNothing],
+  ];
+  for (const [label, markdownClass] of cases) {
+    const resolver = fileResolver({ markdownClass });
+    const args = { path: ODD, content: source };
+    const result = textResult('Successfully wrote 42 bytes');
+    for (const options of [{ isPartial: false }, { expanded: true, isPartial: false }]) {
+      const written = resultRows(resolver, 'write', args, result, options, taggedTheme, 60);
+      const body = written.slice(0, -1).join('\n');
+      assert.equal(unpaint(body).includes('Successfully wrote'), false, `${label}: the result is never a write's body`);
+      assert.equal(body.includes('# Design'), true, `${label}: the document is`);
+      // Expanded, the whole document; collapsed, its first rows, exactly as a read's.
+      assert.equal(body.includes('Body text'), options.expanded === true, `${label}: ${JSON.stringify(options)}`);
+      assert.equal(body.includes('<mdHeading>'), false, `${label}: and it is drawn as plain source`);
+    }
+    // A read keeps the text it read, exactly as before.
+    const read = resultRows(resolver, 'read', { path: ODD }, textResult(source), { expanded: true, isPartial: false }, taggedTheme, 60);
+    assert.equal(read.slice(0, -1).join('\n').includes('## Specs'), true, `${label}: a read keeps its result text`);
+  }
+});
+
+test('the real host renderer draws the document with the theme roles (S3)', (t) => {
+  let Markdown;
+  try {
+    ({ Markdown } = require('@earendil-works/pi-tui'));
+  } catch {
+    t.skip('requires @earendil-works/pi-tui');
+    return;
+  }
+  const resolver = fileResolver({ markdownClass: Markdown });
+  const source = ['# Design', '', '## Specs', '', 'Some **bold** text and `code`', '', '- one', ''].join('\n');
+  const theme = ansiRoles();
+  const rows = resultRows(resolver, 'read', { path: ODD }, textResult(source), { expanded: true, isPartial: false }, theme, 60);
+  const body = rows.slice(0, -1).join('\n');
+  assert.doesNotMatch(body, /## Specs/u, `a heading is drawn, not typed: ${JSON.stringify(rows.map(unpaint))}`);
+  assert.equal(theme.roles.includes('mdHeading'), true, 'headings wear mdHeading');
+  assert.equal(theme.roles.includes('mdListBullet'), true, 'bullets wear mdListBullet');
+  assert.equal(theme.roles.includes('mdCode'), true, 'inline code wears mdCode');
+  assert.match(body, /Design/u);
+  assertFramed(rows, 60);
+});
+
+test('a failed call and a non-Markdown file keep their plain rows (S8)', () => {
+  const resolver = documentResolver();
   const source = ['# Design', '', '## Specs'].join('\n');
-  const collapsed = resultRows(resolver, 'read', { path: ODD }, textResult(source), { isPartial: false }, plainTheme, 60);
-  assert.deepEqual(collapsed.slice(0, -1).map(bodyText), ['# Design', '', '## Specs'], 'a preview is the file\'s own rows');
 
-  const failed = resultRows(resolver, 'read', { path: ODD }, textResult(source, { isError: true }), { expanded: true, isPartial: false }, plainTheme, 60);
+  const failed = resultRows(resolver, 'read', { path: ODD }, textResult(source, { isError: true }), { expanded: true, isPartial: false }, taggedTheme, 60);
   assert.match(unpaint(failed[0]), /^│ # Design/u, 'a failure keeps its rows as they were reported');
+  assert.equal(failed.slice(0, -1).join('\n').includes('<mdHeading>'), false, 'a failure is never a document');
 
-  const json = resultRows(resolver, 'read', { path: 'odd/tasks/data.json' }, textResult('{"a":1}'), { expanded: true, isPartial: false }, plainTheme, 60);
+  const json = resultRows(resolver, 'read', { path: 'odd/tasks/data.json' }, textResult('{"a":1}'), { expanded: true, isPartial: false }, taggedTheme, 60);
   assert.deepEqual(json.slice(0, -1).map(bodyText), ['{"a":1}'], 'a non-Markdown file is drawn as it is');
 });
 
@@ -697,9 +1036,9 @@ test('the ODD mark\'s two columns are measured by the injected seam', () => {
   }
 });
 
-// ---- paint last: no painted string is ever measured ----
+// ---- paint last: no row of OURS is ever measured after it was painted ----
 
-test('the body is measured and clipped as plain text, and painted only afterwards', () => {
+test('the plain body is measured and clipped as plain text, and painted only afterwards', () => {
   const seen = [];
   const spyMetrics = {
     visibleWidth(value) {
@@ -715,7 +1054,8 @@ test('the body is measured and clipped as plain text, and painted only afterward
       return metrics.wrapTextWithAnsi(value, width);
     },
   };
-  const resolver = fileResolver({ metrics: spyMetrics });
+  // No document renderer: every row below takes the plain path this card owns.
+  const resolver = fileResolver({ metrics: spyMetrics, markdownClass: null });
   for (const style of [CARD_STYLE.NEON, CARD_STYLE.FLOAT]) {
     globalThis[CARD_STYLE_SLOT] = style;
     try {
@@ -735,15 +1075,43 @@ test('the body is measured and clipped as plain text, and painted only afterward
   }
 });
 
+test('the document\'s rows reach the seam PAINTED, and the ANSI-aware width is what measures them', () => {
+  // S5: the one exception to "paint last", and the host's own: Pi's renderer hands back
+  // painted rows, so they are measured as they are (with a visible width, never a codepoint
+  // count) and no role of ours is applied over them.
+  const seen = [];
+  const spyMetrics = {
+    visibleWidth(value) {
+      seen.push(value);
+      return metrics.visibleWidth(value);
+    },
+    truncateToWidth(value, width, ellipsis) {
+      seen.push(value);
+      return metrics.truncateToWidth(value, width, ellipsis);
+    },
+    wrapTextWithAnsi(value, width) {
+      seen.push(value);
+      return metrics.wrapTextWithAnsi(value, width);
+    },
+  };
+  const resolver = fileResolver({ metrics: spyMetrics, markdownClass: OutlineMarkdown });
+  const theme = ansiRoles();
+  const rows = resultRows(resolver, 'read', { path: ODD }, textResult(DOCUMENT), { expanded: true, isPartial: false }, theme, 44);
+  assert.ok(seen.includes('\x1b[36mDesign\x1b[39m'), 'the document\'s own painted heading reached the seam, escape and all');
+  assertFramed(rows, 44);
+});
+
 // ---- geometry ----
 
 test('the card draws at every width the host may ask for', () => {
-  const resolver = fileResolver();
+  const resolver = documentResolver();
   for (const width of [0, 1, 2, 3, 5, 9, 10, 12, 16, 61]) {
     for (const drawn of [
       callRows(resolver, 'read', { path: ODD }, plainTheme, width, { isPartial: true }),
       callRows(resolver, 'read', { path: ODD, offset: 2, limit: 4 }, plainTheme, width, { isPartial: false, expanded: true }),
       resultRows(resolver, 'read', { path: SKILL }, textResult('a\nb\nc\nd'), { isPartial: false }, plainTheme, width),
+      resultRows(resolver, 'read', { path: ODD }, textResult(DOCUMENT), { isPartial: false }, plainTheme, width),
+      resultRows(resolver, 'read', { path: ODD }, textResult(DOCUMENT), { expanded: true, isPartial: false }, plainTheme, width),
       resultRows(resolver, 'write', { path: ODD }, textResult('# T\n\n## S'), { expanded: true, isPartial: false }, plainTheme, width),
     ]) {
       for (const row of drawn) assert.ok(metrics.visibleWidth(unpaint(row)) <= width, `"${unpaint(row)}" overflows ${width}`);

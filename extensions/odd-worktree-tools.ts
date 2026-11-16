@@ -2,8 +2,7 @@
 // odd-worktree-tools.ts — the standalone odd-worktree Pi extension.
 //
 // One package, one surface: the two agent worktree tools and the four
-// read/inspect panels, plus the two file-card preferences this package owns and
-// the one tools design it contributes.
+// read/inspect panels, plus the one tools design it contributes.
 //
 // Registers four commands:
 //   /warp      move this session to another checkout of the project
@@ -13,14 +12,14 @@
 //   /issues    read this checkout's GitHub issues, with label/assignee,
 //              comment and close actions when the repository permits them
 //
-// The bash heading is not a preference of this package: it contributes one DESIGN
+// The bash heading is not a preference of this package either: it contributes one DESIGN
 // (`activity`) to gentle-shell-bridge's `/gentle:customize` → `Cards` page, on its
 // `Card tools` line when the bridge can group tools (`default` | `activity`) and on
 // the per-tool `bash` line on anything older, which the bridge owns, persists and
-// repaints (lib/bash-design.js). The two file-card switches (`Card skill`, `Card
-// odd`) ARE this package's preferences, with one strict document of their own
-// (lib/card-files-mode.js) and their rows in the same `Cards` page
-// (lib/cards-customize.js).
+// repaints (lib/bash-design.js). The skill/ODD file card owns no preference at all: it
+// is painted while that same `Card tools` line answers with this design, asked of the
+// bridge per paint (lib/file-card-resolver.js), and the host draws its own row for any
+// other value. Nothing of that is registered here.
 //
 // Plus two tools: worktree_create and worktree_list. Create prompts for approval
 // when the host offers dialog UI; list never mutates anything; `/warp` is the
@@ -9030,24 +9029,17 @@ export default function (pi) {
   } catch {
     // CodeGraph is best effort.
   }
-  // S1 (T5): the file cards, through the same host hook. A `read`/`edit`/`write` call whose
-  // path names a skill or an ODD artifact heads as that file while its switch
-  // (`Card skill` / `Card odd`) is on; every other call keeps the host's own boxed row, which
-  // the card reproduces because the hook decides per tool name and never sees the arguments.
-  // A host without `pi.registerToolRenderer` registers nothing and keeps drawing them itself.
+  // S1 (T2): the file cards, through the same host hook. A `read`/`edit`/`write` call whose
+  // path names a skill or an ODD artifact heads as that file while the bridge's `Card tools`
+  // line answers with this package's activity design; every other call keeps the host's own
+  // boxed row, which the card reproduces because the hook decides per tool name and never
+  // sees the arguments. No preference of ours is registered: the gate is the bridge's own
+  // published reader, asked on every paint. A host without `pi.registerToolRenderer`
+  // registers nothing and keeps drawing them itself.
   try {
     libRequire("file-card-resolver.js").registerFileCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
   } catch {
     // The card is cosmetic.
-  }
-  // S1 (T5): the two switches in `/gentle:customize` -> `Cards`, through the bridge's
-  // `registerRows` alone — no command, no tool, no store of its own: the choice is this
-  // package's document (`lib/card-files-mode.js`). Without a bridge nothing is registered and
-  // no surface changes.
-  try {
-    libRequire("cards-customize.js").registerCardsCustomize(pi);
-  } catch {
-    // The switches are best effort.
   }
   // Register every live checkout the registry does not own yet. Dispatched here
   // and awaited by the barrier below: the host runs session_start handlers one

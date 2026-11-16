@@ -293,6 +293,9 @@ describe('S4: leaving the default branch of the principal checkout is refused', 
       'git switch -C feat/x',
       'git switch --create feat/x',
       'git switch --force-create feat/x',
+      'git switch --create=feat/x',
+      'git switch --force-create=feat/x',
+      'git checkout --orphan=odd-a',
       'git checkout -q -b feat/x',
       'git status && git switch -c feat/x',
       'git -C /repo switch -c feat/x',
@@ -300,6 +303,14 @@ describe('S4: leaving the default branch of the principal checkout is refused', 
       const { run } = harness();
       assert.deepEqual(run(command), { block: true, reason: BRANCH_SWITCH_REFUSAL }, command);
     }
+  });
+
+  test('a switch that lands on a named branch is the branch the next segment leaves', () => {
+    // The command moves the checkout from `dev` to `main` and then leaves `main`.
+    const { run, reads } = harness({ currentBranch: 'dev' });
+    assert.deepEqual(run('git switch main && git switch develop'), { block: true, reason: BRANCH_SWITCH_REFUSAL });
+    assert.equal(reads.currentBranch, 1, 'the branch the command moved to is the one the next segment leaves');
+    assert.deepEqual(run('git switch main && git switch main'), { block: false });
   });
 
   test('the same command is allowed inside a linked worktree, reading no current branch', () => {
@@ -365,6 +376,41 @@ describe('S11: a cd moves the checkout the switch is judged in', () => {
     const { run } = harness({ identity: identityByCwd });
     assert.deepEqual(run('cd repo && git switch develop', { cwd: '/' }), { block: true, reason: BRANCH_SWITCH_REFUSAL });
     assert.deepEqual(run('cd odd-a && git switch develop', { cwd: '/elsewhere/repo-worktrees' }), { block: false });
+  });
+
+  test('git -C names the checkout that segment is judged in', () => {
+    const { run } = harness({ identity: identityByCwd });
+    // Typed in the principal, run in a linked worktree: that checkout is judged, and it
+    // leaves nothing (S8 forbids the false block the principal's own branch would give).
+    assert.deepEqual(run(`git -C ${LINKED.root} switch develop`), { block: false });
+    assert.deepEqual(run(`git -C ${LINKED.root} checkout -b feat/x`), { block: false });
+    // Typed in a linked worktree, run in the principal: the principal is judged.
+    assert.deepEqual(run(`git -C ${PRINCIPAL.root} switch develop`, { cwd: LINKED.root }), { block: true, reason: BRANCH_SWITCH_REFUSAL });
+    // `-C` may repeat, and the last one wins, as with git.
+    assert.deepEqual(run(`git -C ${LINKED.root} -C ${PRINCIPAL.root} switch develop`, { cwd: LINKED.root }), { block: true, reason: BRANCH_SWITCH_REFUSAL });
+    assert.deepEqual(run(`git -C ${PRINCIPAL.root} -C ${LINKED.root} switch develop`), { block: false });
+    // A `-C` target is a literal path, resolved against the cwd in force for the segment.
+    assert.deepEqual(run('git -C repo switch develop', { cwd: '/' }), { block: true, reason: BRANCH_SWITCH_REFUSAL });
+    assert.deepEqual(run('git -C odd-a switch develop', { cwd: '/elsewhere/repo-worktrees' }), { block: false });
+    for (const command of ['git -C $WORKTREE switch develop', 'git -C ~ switch develop']) {
+      assert.deepEqual(run(command), { block: false }, command);
+    }
+  });
+
+  test('a cd inside a quoted argument is text, not a directory change', () => {
+    const { run } = harness({ identity: identityByCwd });
+    // This shell never runs a quoted argument, so its `cd` moves nothing (S11).
+    assert.deepEqual(run(`echo 'cd ${LINKED.root}'; git switch develop`), { block: true, reason: BRANCH_SWITCH_REFUSAL });
+    assert.deepEqual(run(`git commit -m "cd ${LINKED.root}"; git switch develop`), { block: true, reason: BRANCH_SWITCH_REFUSAL });
+    assert.deepEqual(run(`echo "cd ${PRINCIPAL.root}"; git switch develop`, { cwd: LINKED.root }), { block: false });
+    // A shell script argument, a substitution and a backtick span ARE run, so they move it.
+    for (const command of [
+      `echo $(cd ${LINKED.root}) && git switch develop`,
+      `echo \`cd ${LINKED.root}\` && git switch develop`,
+      `bash -c 'cd ${LINKED.root}'; git switch develop`,
+    ]) {
+      assert.deepEqual(run(command), { block: false }, command);
+    }
   });
 
   test('a cd to a checkout that is not this repository blocks nothing', () => {

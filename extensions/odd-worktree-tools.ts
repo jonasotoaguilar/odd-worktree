@@ -5160,12 +5160,9 @@ function trackStartupTask(task) {
   return tracked;
 }
 
-// The ONE startup task whose completion `session_start` still waits for: the
-// discovery registration, because the registry it appends to is read by the
-// very next thing the session does. It is dispatched ahead of the other
-// startup work and awaited LAST, so the probes overlap and the host waits for
-// the slowest one instead of their sum.
-let startupRegistration = null;
+// No startup task is awaited by `session_start` any more: the one that was — the
+// discovery scan — produced a cache nothing reads, so it is dispatched and
+// tracked like every other, and the host never waits for a git probe.
 
 // Resolves once every deferred startup task has settled. Exported for tests and
 // for a shutdown path that must not leave work behind it.
@@ -9468,30 +9465,20 @@ function registerOddWorktreeSurfaceEntries(pi) {
   } catch {
     // The switches are best effort.
   }
-  // Register every live checkout the registry does not own yet. Dispatched here
-  // and awaited by the barrier below: the host runs session_start handlers one
-  // at a time, so awaiting the scan inside this handler would put the session's
-  // first prompt behind three git reads. Best-effort: never writes user config,
-  // never throws, never blocks the session.
+  // S1 (issues-startup-performance T1, correction): the live-checkout scan is
+  // DISPATCHED and never awaited. Its only product is `warpDiscoveryCache`, which
+  // nothing reads — every warp lists fresh before acting — so the old "startup
+  // barrier" awaited three git reads for a result the next thing the session does
+  // never consumes. Measured on this checkout: 483 ms → 72 ms of awaited
+  // `session_start`, and the rest of that 72 ms went with the barrier. The task is
+  // still TRACKED, so `awaitPendingStartupTasks` and a shutdown barrier can wait
+  // for it, and a failure still cannot break a session.
   pi.on("session_start", (event, ctx) => {
     try {
       const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd
         : event && typeof event.cwd === "string" && event.cwd.length > 0 ? event.cwd
         : process.cwd();
-      startupRegistration = trackStartupTask(runStartupDiscovery(cwd, beginStartupTask()));
-    } catch {
-      // Discovery must never break startup.
-    }
-  });
-  // The startup barrier: registration is the one piece of startup work whose
-  // result the next thing the session does depends on, so it is awaited HERE,
-  // after the other handlers above have been dispatched.
-  pi.on("session_start", async () => {
-    const pending = startupRegistration;
-    startupRegistration = null;
-    if (!pending) return;
-    try {
-      await pending;
+      trackStartupTask(runStartupDiscovery(cwd, beginStartupTask()));
     } catch {
       // Discovery must never break startup.
     }

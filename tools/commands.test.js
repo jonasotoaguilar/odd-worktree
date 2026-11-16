@@ -611,3 +611,45 @@ describe('S8 (T6): the naming observer’s git probes', () => {
     }
   });
 });
+
+// S1 (issues-startup-performance T1, correction): the live-checkout scan used to be
+// awaited by a second `session_start` handler — a "startup barrier" — for a result
+// nothing consumed: its only product is `warpDiscoveryCache`, and every warp lists
+// fresh before acting. Measured on this checkout, that barrier was 65 ms of three git
+// probes in front of the first prompt. It is dispatched and tracked like every other
+// startup task now, so the awaited path never waits for a git read either.
+test('S1 (T1): the awaited session_start resolves while the discovery git read is pending', async () => {
+  const repo = makeRepo();
+  const loaded = await loadExtensionWithModule({});
+  const git = loaded.mod.libModule('worktree-git.js');
+  const realIdentity = git.repoIdentityAsync;
+  const realList = git.listWorktreesAsync;
+  let released;
+  const held = new Promise((resolve) => { released = resolve; });
+  // Never answers until this test says so: an awaited barrier could not return.
+  git.repoIdentityAsync = () => held.then(() => ({ root: repo, commonDir: path.join(repo, '.git') }));
+  git.listWorktreesAsync = () => held.then(() => []);
+  try {
+    const ctx = makeCtx(repo);
+    let settled = false;
+    const run = (async () => {
+      for (const [event, handler] of loaded.hooks) {
+        if (event !== 'session_start') continue;
+        const out = handler({}, ctx);
+        if (out && typeof out.then === 'function') await out;
+      }
+      settled = true;
+    })();
+    // The host awaits the handlers in order; the tree is racing a 500 ms window.
+    await Promise.race([
+      run,
+      new Promise((resolve) => setTimeout(resolve, 500)),
+    ]);
+    assert.equal(settled, true, 'the awaited session_start path waited for a git probe');
+  } finally {
+    released();
+    git.repoIdentityAsync = realIdentity;
+    git.listWorktreesAsync = realList;
+    await loaded.mod.awaitPendingStartupTasks();
+  }
+});

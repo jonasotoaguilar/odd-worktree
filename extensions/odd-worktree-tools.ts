@@ -6805,6 +6805,35 @@ function filesSettle(done, value) {
   }
 }
 
+/**
+ * S27: every close path of the picker overlay forces ONE full repaint after the
+ * overlay settled — the reference's `withOverlayRepaint`
+ * (`lib/overlay-repaint.ts:17-26`), which its `/changes` panel wraps around
+ * `done` on every close it has (`extensions/gentle-shell.ts:1800`, and
+ * `:1804`/`:1808` — `onOpen` closes the overlay, `onClose` closes it too).
+ *
+ * The order matters and this package now keeps it: the overlay settles and this
+ * repaint lands while the terminal is STILL the session's, and only afterwards
+ * does `mountFilesPicker` start the editor (which stops the terminal for the
+ * duration, `lib/external-editor.ts:19,27-28`). Pi restores the editor behind a
+ * closed overlay with an incremental diff render, and a fullscreen overlay's
+ * stale cell state survives that pass — the prompt keeps working while the screen
+ * stops updating, reported as a frozen session after `ctrl+e`.
+ * `requestRender(true)` resets the written-frame state so the next paint rewrites
+ * EVERY cell. `done` runs first, so the overlay is torn down before the forced
+ * paint is scheduled, and a dead terminal never breaks the close path.
+ */
+function filesCloseOverlay(hostTui, done) {
+  return (value) => {
+    filesSettle(done, value);
+    try {
+      if (hostTui && typeof hostTui.requestRender === 'function') hostTui.requestRender(true);
+    } catch {
+      // Best-effort repaint: never break the overlay's close path.
+    }
+  };
+}
+
 // The one runner shape the files modules take: `run(args, { cwd, timeoutMs })`
 // over ONE fixed argv array and the package's bounded async runner, so no caller
 // builds a shell string and no read blocks the host event loop (invariant 9).
@@ -6847,7 +6876,7 @@ async function filesCheckouts(cwd) {
   const others = registry
     .ownedCheckouts(entries.slice(main === undefined ? 0 : 1), mainRoot)
     .filter((entry) => isLiveGitRecord(entry, repo.root));
-  return { repo, mainRoot, others };
+  return { repo, mainRoot, others, entries };
 }
 
 // S9: the ODD directory IS a checkout's identity in this package (invariant 12),
@@ -6856,6 +6885,40 @@ async function filesCheckouts(cwd) {
 function filesWorktreeLabel(root, branch) {
   const name = path.basename(root);
   return typeof branch === 'string' && branch.length > 0 ? `${name} · ${branch}` : name;
+}
+
+/** The canonical spelling of a path, or the one Git answered when it cannot be resolved. */
+function filesCanonicalPath(value) {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * S20: every worktree of the clone, minus its principal checkout — the list `a`
+ * toggles to. Discovered the way `worktree_list` discovers them (Git's own
+ * `git worktree list --porcelain` listing) and kept by the SAME liveness rule the
+ * registered list uses, so a record whose directory is gone is never offered. The
+ * root keeps Git's spelling, which is the spelling the registered rows carry, so a
+ * scope both lists hold is the same scope to the view's cursor.
+ */
+function filesAllWorktrees(checkouts) {
+  const seen = new Set([filesCanonicalPath(checkouts.mainRoot)]);
+  const others = [];
+  for (const entry of checkouts.entries) {
+    if (!isLiveGitRecord(entry, checkouts.repo.root)) continue;
+    const canonical = filesCanonicalPath(entry.path);
+    if (seen.has(canonical)) continue;
+    seen.add(canonical);
+    others.push({
+      root: entry.path,
+      kind: 'worktree',
+      label: filesWorktreeLabel(entry.path, entry.branch),
+    });
+  }
+  return others;
 }
 
 /**
@@ -6896,25 +6959,33 @@ async function filesScopeFacts(index, detailLib, run, scope) {
   return { ...scope, ...facts };
 }
 
-/** The scopes S9 offers, principal first; the view orders the rest by recency. */
-async function filesScopes(cwd) {
+/**
+ * S9/S20: the two lists the scope step offers. `registered` is the default — the
+ * session's own checkout first and then the worktrees this package created — and
+ * `all` is every worktree of the clone, which `a` switches to. Both are built
+ * here, before the step opens, because the view takes finished lists and never
+ * reads Git itself; and both read their facts whether or not there is a second
+ * checkout, because S20 always shows the step.
+ */
+async function filesScopeLists(cwd) {
   const checkouts = await filesCheckouts(cwd);
-  const mainScope = { root: checkouts.mainRoot, kind: 'main', label: 'main' };
-  // S9: with nothing else to offer the step never appears — and neither the
-  // uncommitted counts nor the Git detail are read at all, because the picker
-  // paints none of them.
-  if (checkouts.others.length === 0) return [mainScope];
   const index = libRequire('files-index.js');
   const detailLib = libRequire('files-scope-detail.js');
   const run = filesRunner(libRequire('worktree-git.js'));
-  return Promise.all([
-    filesScopeFacts(index, detailLib, run, mainScope),
-    ...checkouts.others.map((entry) => filesScopeFacts(index, detailLib, run, {
+  const read = (scope) => filesScopeFacts(index, detailLib, run, scope);
+  const registered = await Promise.all([
+    read({ root: checkouts.mainRoot, kind: 'main', label: 'main' }),
+    ...checkouts.others.map((entry) => read({
       root: entry.path,
       kind: 'worktree',
       label: filesWorktreeLabel(entry.path, entry.branch),
     })),
   ]);
+  const all = await Promise.all([
+    read({ root: checkouts.mainRoot, kind: 'main', label: 'main' }),
+    ...filesAllWorktrees(checkouts).map((scope) => read(scope)),
+  ]);
+  return { registered, all };
 }
 
 /**
@@ -7008,30 +7079,63 @@ async function mountFilesPicker(ctx, input) {
   const run = filesRunner(libRequire('worktree-git.js'));
   const agent = await filesAgentSeam();
   const scope = input.scope;
-  await ctx.ui.custom(
-    (hostTui, theme, _keybindings, done) => pickerView.createFilesPickerView({
-      theme,
-      helpers: input.helpers,
-      rowsAvailable: () => filesTerminalRows(hostTui),
-      scope,
-      cwd: input.cwd,
-      // The listing and the preview are the T1 reader's own, read from the scope
-      // root rather than the session cwd: the picker browses another checkout.
-      loadEntries: () => index.listRepositoryEntries({ run, cwd: scope.root }),
-      loadPreview: (relative) => index.readFilePreview(scope.root, relative),
-      ...(agent.highlight === undefined ? {} : { highlight: agent.highlight }),
-      ...(agent.languageForPath === undefined ? {} : { languageForPath: agent.languageForPath }),
-      onInsert: (paths) => filesInsert(ctx, insertLib, scope, input.cwd, paths, input.notify),
-      onOpen: (relative) => {
-        // The file's real absolute path, never the repository-relative one: the
-        // editor is a plain child process and knows no checkout.
-        void filesOpenEditor(hostTui, path.join(scope.root, relative), input.notify);
+  // S27: the terminal is handed over the way the reference does it — the overlay
+  // settles FIRST (`ctrl+e` only RECORDS the file here), so the forced close
+  // repaint lands on a live terminal, and the editor starts afterwards, when
+  // `ctx.ui.custom` has resolved. The view is disposed in the same `finally` that
+  // follows the handoff, so no path leaves it alive.
+  let hostTui = null;
+  let view = null;
+  let openPath = null;
+  const disposeView = () => {
+    const created = view;
+    view = null;
+    if (created === null || typeof created.dispose !== 'function') return;
+    try {
+      created.dispose();
+    } catch {
+      // A view that cannot clean up is not a failed command.
+    }
+  };
+  try {
+    await ctx.ui.custom(
+      (tui, theme, _keybindings, done) => {
+        hostTui = tui;
+        const close = filesCloseOverlay(tui, done);
+        view = pickerView.createFilesPickerView({
+          theme,
+          helpers: input.helpers,
+          rowsAvailable: () => filesTerminalRows(tui),
+          scope,
+          cwd: input.cwd,
+          // The listing and the preview are the T1 reader's own, read from the scope
+          // root rather than the session cwd: the picker browses another checkout.
+          loadEntries: () => index.listRepositoryEntries({ run, cwd: scope.root }),
+          loadPreview: (relative) => index.readFilePreview(scope.root, relative),
+          ...(agent.highlight === undefined ? {} : { highlight: agent.highlight }),
+          ...(agent.languageForPath === undefined ? {} : { languageForPath: agent.languageForPath }),
+          onInsert: (paths) => filesInsert(ctx, insertLib, scope, input.cwd, paths, input.notify),
+          // S27: record only. Spawning here would stop the terminal before the
+          // overlay settled, which is exactly the order the reference does not use.
+          onOpen: (relative) => {
+            openPath = relative;
+          },
+          onClose: () => close(null),
+          requestRender: () => filesRepaint(tui),
+        });
+        return view;
       },
-      onClose: () => filesSettle(done, null),
-      requestRender: () => filesRepaint(hostTui),
-    }),
-    FILES_PICKER_OVERLAY,
-  );
+      FILES_PICKER_OVERLAY,
+    );
+    if (openPath !== null && hostTui !== null) {
+      // The file's real absolute path, never the repository-relative one: the
+      // editor is a plain child process and knows no checkout.
+      await filesOpenEditor(hostTui, path.join(scope.root, openPath), input.notify);
+    }
+  } finally {
+    // Insert, `esc` and the editor path all land here; the view never outlives it.
+    disposeView();
+  }
 }
 
 async function executeFiles(rawArgs, ctx) {
@@ -7056,9 +7160,9 @@ async function executeFiles(rawArgs, ctx) {
     return;
   }
   const cwd = toolCwd(ctx);
-  let scopes;
+  let lists;
   try {
-    scopes = await filesScopes(cwd);
+    lists = await filesScopeLists(cwd);
   } catch (err) {
     const message = (err && err.message) || String(err);
     if (notify) {
@@ -7072,28 +7176,29 @@ async function executeFiles(rawArgs, ctx) {
   } catch {
     helpers = {};
   }
-  let scope = scopes[0];
-  // S9: the scope step appears only when there is a choice to make.
-  if (scopes.length > 1) {
-    const scopeView = libRequire('files-scope-view.js');
-    const picked = await ctx.ui.custom(
-      (hostTui, theme, _keybindings, done) => scopeView.createFilesScopeView({
-        scopes,
-        theme,
-        helpers,
-        rowsAvailable: () => filesTerminalRows(hostTui),
-        // The step answers the ORIGINAL scope object, which is what the picker
-        // then lists: nothing is re-resolved from a label or a path.
-        onSelect: (chosen) => filesSettle(done, chosen),
-        onClose: () => filesSettle(done, null),
-        requestRender: () => filesRepaint(hostTui),
-      }),
-      FILES_SCOPE_OVERLAY,
-    );
-    if (!picked) return;
-    scope = picked;
-  }
-  await mountFilesPicker(ctx, { scope, cwd, helpers, notify });
+  // S20: the checkout selector opens on EVERY invocation, the session's own
+  // checkout included and even when nothing is registered — `a` widens it to
+  // every worktree of the clone. Both lists are resolved above, so the step never
+  // reads Git or awaits anything while it is painted.
+  const scopeView = libRequire('files-scope-view.js');
+  const picked = await ctx.ui.custom(
+    (hostTui, theme, _keybindings, done) => scopeView.createFilesScopeView({
+      scopes: lists.registered,
+      allScopes: lists.all,
+      theme,
+      helpers,
+      rowsAvailable: () => filesTerminalRows(hostTui),
+      // The step answers the ORIGINAL scope object, which is what the picker
+      // then lists: nothing is re-resolved from a label or a path.
+      onSelect: (chosen) => filesSettle(done, chosen),
+      onClose: () => filesSettle(done, null),
+      requestRender: () => filesRepaint(hostTui),
+    }),
+    FILES_SCOPE_OVERLAY,
+  );
+  // The `esc` path closes the step and opens nothing else.
+  if (!picked) return;
+  await mountFilesPicker(ctx, { scope: picked, cwd, helpers, notify });
 }
 
 // S18 (files-picker T8): the handler `/files` registered, kept so the key the
@@ -8888,7 +8993,10 @@ const FILES_BRIDGE_LABEL = "File picker";
 // `GENTLE_PI_AGENTS_VIEW_KEY`); the default is a convenience, never a
 // requirement: `/files` stays reachable from the palette with no key at all.
 const FILES_KEYMAP_ENV = "GENTLE_PI_FILES_KEY";
-const FILES_KEYMAP_DEFAULT = "alt+p";
+// S28: `alt+f`, because Pi claims `alt+p` for `app.model.cycleBackward` on
+// Windows and WSL. Still overridable through the environment variable above and
+// assignable in the bridge's Keymaps page.
+const FILES_KEYMAP_DEFAULT = "alt+f";
 // S19: the palette row joins Gentle Shell's own section, matched by that
 // section's exact title. The host lists the row only while the `files` command
 // is registered, so it can never be a dead row.

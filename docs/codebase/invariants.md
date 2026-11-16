@@ -77,7 +77,7 @@ The question this page answers: which rules must every change preserve, and what
    not from the bridge that registered it. Its ONLY Gentle Shell hooks are those
    optional additions, and they go through the same published object as every other
    bridge surface: the `files` keymap action (label `File picker`, env
-   `GENTLE_PI_FILES_KEY`, default `alt+p`) and the palette row in `Session`, both
+   `GENTLE_PI_FILES_KEY`, default `alt+f`) and the palette row in `Session`, both
    via `registerKeymap` / `registerCommands`, with the key bound here from
    `resolveKeymap`; a bridge that publishes the object without them simply leaves
    them absent, not an error. The

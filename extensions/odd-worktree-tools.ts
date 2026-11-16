@@ -2704,10 +2704,12 @@ function oddRelFor(absPath, worktreePath, principalRoot) {
 // relative to it (`tasks/plan.md`). Never throws: any unreadable directory
 // contributes nothing.
 // Hot path: `repoIdentity` spawns two git children (~17ms here) and the ODD
-// naming hook runs on EVERY tool_call and tool_result. A session's cwd resolves to
-// the same root/common dir for its whole life, so the answer is memoized per
+// naming hook rides every `tool_call` and `tool_result`. A session's cwd resolves
+// to the same root/common dir for its whole life, so the answer is memoized per
 // cwd instead of respawned twice per tool call. Bounded LRU: a long session
 // visiting many checkouts keeps the most recent ones, never unbounded state.
+// S8 (T6): the filter below answers most events before this memo is even reached,
+// so the common tool call pays neither a `git` nor a lookup.
 const REPO_IDENTITY_CACHE_LIMIT = 32;
 const repoIdentityCache = new Map();
 
@@ -2728,10 +2730,119 @@ function cachedRepoIdentity(git, cwd) {
   return value;
 }
 
+// S8 (T6): the listing behind `git worktree list` is memoized per repository
+// root for a SHORT window, so a burst of tool events in one turn costs ONE `git`
+// instead of one per event. It is deliberately shorter than a turn, and a listing
+// taken BEFORE a checkout was created is never trusted — that is what
+// `notBefore` carries, so the memo cannot hide the checkout the agent just made.
+const WORKTREE_LISTING_MEMO_MS = 1500;
+const WORKTREE_LISTING_CACHE_LIMIT = 32;
+const worktreeListingCache = new Map();
+// When this process last OBSERVED a checkout being created, or null. Only a
+// timestamp: nothing is read from it and no git runs for it.
+let worktreeCreatedAt = null;
+// The one tool that creates a checkout, so its result is what a memoized listing
+// may not predate.
+const WORKTREE_CREATE_TOOL = "worktree_create";
+
+function cachedWorktreeListing(git, root, notBefore) {
+  const key = String(root);
+  const at = Date.now();
+  const hit = worktreeListingCache.get(key);
+  const age = hit === undefined ? Number.NaN : at - hit.at;
+  const recent = Number.isFinite(age) && age >= 0 && age < WORKTREE_LISTING_MEMO_MS;
+  // A listing older than `notBefore` — a checkout created after it — answers
+  // about a world that no longer exists, so it is bypassed instead of trusted.
+  const afterCreation = notBefore === null || notBefore === undefined
+    || (hit !== undefined && Number.isFinite(hit.at) && hit.at >= notBefore);
+  if (recent && afterCreation) {
+    // Refresh recency so the checkout in use is never the one evicted.
+    worktreeListingCache.delete(key);
+    worktreeListingCache.set(key, hit);
+    return hit.live;
+  }
+  const live = git.listWorktrees(key);
+  worktreeListingCache.set(key, { at, live });
+  if (worktreeListingCache.size > WORKTREE_LISTING_CACHE_LIMIT) {
+    worktreeListingCache.delete(worktreeListingCache.keys().next().value);
+  }
+  return live;
+}
+
+// S8 (T6): a touched path names a session only when it is an ODD TASK document
+// (`odd/tasks/*.md`), which is exactly what `lib/session-auto-name.js` derives a
+// label from. The test is lexical — the worktree's own `odd/` may be a symlink to
+// the principal's, and the document behind either spelling carries the same
+// segments — so it costs no child process and no file read.
+const ODD_TASK_PARENT = "tasks";
+const ODD_ROOT = "odd";
+
+function oddTaskDocumentPath(rawPath, cwd) {
+  if (typeof rawPath !== "string" || rawPath.length === 0) return false;
+  if (!rawPath.endsWith(".md")) return false;
+  let resolved;
+  try {
+    const abs = path.isAbsolute(rawPath) ? rawPath : path.join(cwd, rawPath);
+    resolved = path.resolve(abs);
+  } catch {
+    return false;
+  }
+  const segments = resolved.split(path.sep);
+  // The file itself is the last segment, so the parent pair is what is looked for.
+  for (let i = segments.length - 2; i >= 1; i -= 1) {
+    if (segments[i] === ODD_TASK_PARENT && segments[i - 1] === ODD_ROOT) return true;
+  }
+  return false;
+}
+
+// The gentle-pi ODD phase tool, read from `lib/session-auto-name.js` (the module
+// that owns the name) once per load instead of per event: this runs on every
+// non-naming `tool_result`, so the answer is memoized here.
+let oddPhaseToolNameCache;
+
+function oddPhaseToolName() {
+  if (oddPhaseToolNameCache === undefined) {
+    try {
+      const auto = libRequire("session-auto-name.js");
+      oddPhaseToolNameCache = typeof auto.ODD_PHASE_TOOL_NAME === "string" ? auto.ODD_PHASE_TOOL_NAME : "";
+    } catch {
+      oddPhaseToolNameCache = "";
+    }
+  }
+  return oddPhaseToolNameCache;
+}
+
+// S8 (T6): can this event name a session at all? The naming path only ever
+// applies to the `read`/`edit`/`write` tools touching an `odd/tasks/*.md`
+// document, plus the phase trigger, which carries no path and re-applies a label
+// the session already derived. Everything else answers `false` HERE — before any
+// `git`, which is the whole point: the observer used to spawn two blocking child
+// processes per tool call to learn there was nothing to name.
+function oddNamingCandidate(event, cwd, allowPhaseTrigger) {
+  const toolName = oddToolNameOf(event);
+  if (ODD_NAMING_TOOLS.has(toolName)) {
+    for (const raw of oddTouchedPaths(oddArgsOf(event))) {
+      if (oddTaskDocumentPath(raw, cwd)) return true;
+    }
+    return false;
+  }
+  if (allowPhaseTrigger !== true) return false;
+  const phaseTool = oddPhaseToolName();
+  return phaseTool.length > 0 && toolName === phaseTool;
+}
+
 // The pipeline hook proper (M1): every event is observed. Whether a session is
 // renamed at all is decided in lib/session-auto-name.js.
 function observeOddWriteForNaming(event, ctx, pi, allowPhaseTrigger) {
+  // S8 (T6): the create's own result is the fact that a memoized listing may now
+  // be wrong. It costs a timestamp and no git, and it is recorded before the
+  // filter so the events that follow it in the same turn see the new checkout.
+  if (allowPhaseTrigger === true && oddToolNameOf(event) === WORKTREE_CREATE_TOOL) {
+    worktreeCreatedAt = Date.now();
+  }
   const cwd = oddEventCwd(event, ctx);
+  // S8 (T6): filter first, synchronously, with no child process.
+  if (!oddNamingCandidate(event, cwd, allowPhaseTrigger)) return;
   const git = libRequire("worktree-git.js");
   const registry = libRequire("worktree-registry.js");
   let repo;
@@ -2744,10 +2855,13 @@ function observeOddWriteForNaming(event, ctx, pi, allowPhaseTrigger) {
     ? path.dirname(repo.commonDir)
     : repo.root;
   // Git's listing supplies the checkout this write happened in and its branch. There
-  // is no stored row to read (S3): the checkout's own path is the record.
+  // is no stored row to read (S3): the checkout's own path is the record. S8 (T6):
+  // the listing rides a short per-root memo, so a turn's burst of events pays one
+  // `git` — and a listing that predates a create is bypassed, so the memo can never
+  // hide the checkout the agent just made.
   let live;
   try {
-    live = git.listWorktrees(repo.root);
+    live = cachedWorktreeListing(git, repo.root, worktreeCreatedAt);
   } catch {
     return;
   }
@@ -5062,12 +5176,9 @@ function trackStartupTask(task) {
   return tracked;
 }
 
-// The ONE startup task whose completion `session_start` still waits for: the
-// discovery registration, because the registry it appends to is read by the
-// very next thing the session does. It is dispatched ahead of the other
-// startup work and awaited LAST, so the probes overlap and the host waits for
-// the slowest one instead of their sum.
-let startupRegistration = null;
+// No startup task is awaited by `session_start` any more: the one that was — the
+// discovery scan — produced a cache nothing reads, so it is dispatched and
+// tracked like every other, and the host never waits for a git probe.
 
 // Resolves once every deferred startup task has settled. Exported for tests and
 // for a shutdown path that must not leave work behind it.
@@ -7295,33 +7406,71 @@ const ISSUES_SIDEBAR_INSTALL_WINDOW_MS = 2000;
 const ISSUES_SIDEBAR_WARN_SLOT = Symbol.for("odd-worktree/issues-sidebar/install-warned");
 // S3 (activity floor): a frame only exists when the host has a reason to produce
 // one, so the TTL never fires on a session that is merely in use. The session's
-// own events ask for a read at most once per this floor: in use, the rail is
-// never more than about half a minute behind, and an idle session still makes no
-// `gh` call and starts no timer.
+// own events ask for a read at most once per this floor.
 const ISSUES_SIDEBAR_ACTIVITY_FLOOR_MS = 30000;
+// S10 (T8, L9): what the user asked for in his own words ("deberia ser algo que
+// compruebe cada cierto tiempo nomas, como cada 10seg o 20seg") and what the
+// parent decided: while the section is DRAWN, one self-scheduled, unref'd timer
+// reads the rail at this floor. It is the reason an idle session is no longer
+// stale, and the activity hooks below never add a read on top of it.
+const ISSUES_SIDEBAR_TIME_FLOOR_MS = 20000;
+// S10 (T9, L9): a `bash` command that mutates an issue or a pull request forces
+// ONE read after its result — capped to one per this floor, so a script running
+// several `gh` writes cannot storm the API.
+const ISSUES_SIDEBAR_FORCED_FLOOR_MS = 5000;
 // S3 amended (T13, L11: "estas comprobaciones se hacen solo si la sidebar de
 // issues esta mostrada, o sea, no hidden"): the DRAWN WINDOW. The activity hooks
-// read only while the section was drawn in the last two minutes, so a section the
-// human hid stops the network entirely — no child process, no timer — and
-// showing it again starts from `loading…`.
+// read only while the section was drawn in the last two minutes, and S10 (T8)
+// makes it the floor timer's own stop window — the timer stops by itself once the
+// section leaves it — so a section the human hid stops the network for good once
+// the window passes (no child process, no timer), and showing it again starts
+// from `loading…`.
 const ISSUES_SIDEBAR_DRAWN_WINDOW_MS = 120000;
+// S4 (issues-startup-performance T3): the ONE bound the read cache and its disk
+// half share. `lib/related-issues-cache.js` measures how long a FULL read stays
+// authoritative from the last full apply; the loader holds a stored entry to the
+// SAME bound before it hydrates it, so persistence can never turn a stale entry
+// into a fresh one.
+const ISSUES_CACHE_FULL_TTL_MS = 600000;
 // The most recent `session_start` context: the section's `load` and `open`
 // belong to the checkout the session runs in, not to whatever cwd this process
 // happens to have.
 let issuesSidebarCtx = null;
+// T18 (S11): the live binding of the rail section. `issuesSidebarHandle` is the
+// section module's handle (its `dispose()` is what finally stops the floor timer),
+// `issuesSidebarDisposer` is the bridge's own unregister for it, and
+// `issuesSidebarApi` is the published bridge object the bash design was registered
+// on. A new publication (a republished bridge) is a new object and therefore a
+// new binding; the previous one is torn down before the new one is made, exactly
+// like the file picker's own bridge contribution.
 let issuesSidebarHandle = null;
 let issuesSidebarDisposer = null;
+let issuesSidebarApi = null;
 let issuesSidebarSubscribed = false;
 // S9 (issues-sidebar T14): the process-local cache of the three scoped issue
 // views. It is pure (`lib/related-issues-cache.js`), keyed by the PROVEN repository
-// identity and never written to disk; the extension owns its lifetime so a
-// session's shutdown clears it beside the section's snapshot.
+// identity, and it is the layer that decides what a read means. Its DISK half is
+// `lib/issues-cache-store.js` (S4/T3 of issues-startup-performance), reached from
+// the async loader alone; a session boundary no longer clears these entries.
 let issuesSidebarCache = null;
+// S4 (T3): the disk half, built lazily like the cache. Missing or broken, the
+// read is exactly the in-process one it always was.
+let issuesCacheStore = null;
+// S21 (T17): identities a panel write invalidated because it changed the
+// VIEWER's own assignment. Dropping the entry is what makes `plan` answer the
+// FULL read, but the disk half would hydrate that same stale entry back before
+// `plan` sees the drop (an entry past the window is the only one the store
+// refuses), so the identity is marked here until a full read lands: the next
+// read of it skips hydration. It is keyed by repository identity like the cache
+// itself, survives a session boundary for the same reason the disk half does,
+// and costs nothing once the read replaces the document.
+const issuesSidebarFullReadIdentities = new Set();
 // T15 (S9, defect 4): the cache wiring's generation. Every read captures it when
-// it STARTS and may write its answer only while it is still current; a shutdown
-// clear (or a rebinding) moves it on, so a read that outlived its session can
-// never repopulate the cache it just cleared. A discarded answer still returns
-// its rows to the section, whose own token decides whether they paint.
+// it STARTS and may write its answer only while it is still current; a session
+// boundary, a shutdown or a rebinding moves it on, so a read that outlived its
+// session can never apply its answer to the cache the next session reads. A
+// discarded answer still returns its rows to the section, whose own token decides
+// whether they paint.
 let issuesSidebarCacheGeneration = 0;
 // T15 (S9, defect 5): every read is numbered when it STARTS (before any await), so
 // the cache can ignore an answer that is older than the last one applied for the
@@ -7618,20 +7767,24 @@ async function issuesBrowserRepoIdentity(gh, checkoutRoot, fresh) {
 // where `openIssuesPanel` releases it, before the human is looking at it). The
 // release is scoped to the token captured HERE, so a typed `/issues` (which owns
 // no token) releases nothing and can never clear a newer click's guard.
-async function executeIssues(rawArgs, ctx) {
+async function executeIssues(rawArgs, ctx, checkoutRoot) {
   const openToken = issuesPanelOpenToken;
   const releaseOpen = () => {
     if (openToken === null) return;
     releaseIssuesPanelOpen(openToken);
   };
   try {
-    return await openIssuesPanel(rawArgs, ctx, releaseOpen);
+    return await openIssuesPanel(rawArgs, ctx, releaseOpen, checkoutRoot);
   } finally {
     releaseOpen();
   }
 }
 
-async function openIssuesPanel(rawArgs, ctx, releaseOpen) {
+// S3 (issues-startup-performance T2): `checkoutRoot` is the local resolution the
+// command's own gate ALREADY performed (one `git rev-parse` pair) — handed over so
+// the open never pays for a second one. Absent, the open resolves it itself exactly
+// as before.
+async function openIssuesPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
   // S7: `/issues <number>` (also `#<number>`) opens the same panel on one
@@ -7653,7 +7806,9 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen) {
   // The reader belongs to the checkout the session runs in: inside a worktree
   // that is the worktree, never the principal. Anything that cannot resolve to
   // a Git root fails closed instead of guessing.
-  const checkoutRoot = await oddCheckoutRootAsync(cwd);
+  const checkoutRoot = typeof resolvedCheckoutRoot === "string" && resolvedCheckoutRoot.length > 0
+    ? resolvedCheckoutRoot
+    : await oddCheckoutRootAsync(cwd);
   if (!checkoutRoot) {
     if (typeof notify === "function") notify(notGitRepositoryLine(cwd), "info");
     return;
@@ -7831,11 +7986,18 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen) {
     })(), "cannot comment"),
     // Assignee toggles save only the add/remove delta through one fixed-argv
     // `gh issue edit`; the repository role check inside the client is the final
-    // authority, so a refused save is reported, never assumed.
+    // authority, so a refused save is reported, never assumed. S21 (T17): the
+    // write's own answer says whether it touched the VIEWER's assignment, and
+    // that is the one case where the rail's cache entry for this repository is
+    // no longer true — so only that case invalidates it.
     editAssignees: (number, { add, remove }) => issuesWrapFailure((async () => {
       const gate = await scopeDrift();
       if (gate.ok !== true) return gate;
-      return await gh.editAssignees(number, { add, remove }, { cwd: checkoutRoot, scope: gate.scope });
+      const result = await gh.editAssignees(number, { add, remove }, { cwd: checkoutRoot, scope: gate.scope });
+      if (result && result.ok === true && result.self === true) {
+        invalidateIssuesSidebarAssignment(gate.scope);
+      }
+      return result;
     })(), "cannot edit assignees"),
     setState: (number, state) => issuesWrapFailure((async () => {
       const gate = await scopeDrift();
@@ -7951,18 +8113,101 @@ function issuesGateMessage(error) {
   return `issues: ${text} — /issues cannot open until then`;
 }
 
+// S13 (issues-startup-performance T11, corrected): without the `gh` CLI the two
+// issues surfaces are NEVER REGISTERED — "/issues nunca se carga ni nunca se agrega
+// a sidebar github sidebar, pues no serian funcionales". So there is no dim line, no
+// startup notice and no refusal line for that host: with nothing registered there
+// is nothing to draw, announce or refuse. The decision is REGISTRATION-TIME and
+// LOCAL — one PATH walk through `lib/which-command.js`, never a child process and
+// never a `gh` invocation "to see whether gh exists" — and it covers exactly two
+// registrations: the `/issues` command and the `GITHUB` rail section.
+//
+// Every other surface keeps working without `gh` — `/warp`, `/odd`, `/files`,
+// the tools, the cards, the bash design, the prompt append and CodeGraph — because
+// "no desactiva todo el plugin, eso dije". The only plugin-wide switch in this
+// package is the missing `gentle-shell-bridge` (S18).
+//
+// The guards below stay as DEFENCE IN DEPTH, not as the policy: a `gh` that
+// disappears after the extension loaded still fails the gate and the rail's read
+// closed, with no child and no network call.
+const ISSUES_GH_CLI_MISSING = "the gh CLI is not installed or not on PATH";
+// The rail's read-time line for the one case registration cannot cover: `gh` was
+// on PATH when this extension loaded and is gone now. It is a dim settled state
+// with no child behind it, exactly like its `not a git repository` sibling.
+const ISSUES_GH_CLI_MISSING_RAIL = "gh CLI not installed";
+
+// True only when the local probe can PROVE the CLI is absent. A host whose probe
+// cannot answer at all is not a missing CLI: failing the surfaces off on an
+// internal error would hide the reader for a working install.
+function issuesGhCliMissing() {
+  try {
+    const gh = libRequire("gh-issues.js");
+    if (!gh || typeof gh.ghCliPresent !== "function") return false;
+    return gh.ghCliPresent({ env: process.env }) === false;
+  } catch {
+    return false;
+  }
+}
+
+// The REGISTRATION-time answer, taken once per load. This one is the POLICY: it
+// decides whether the two issues surfaces exist at all, so it is asked where they
+// register and never again — a chrome-less host keeps no surface and no probe, and
+// `/reload` rebuilds this module, so a fresh install is noticed on the next load
+// and not before. The live `issuesGhCliMissing()` above stays the RUNTIME question,
+// asked by the gate and by the rail's read, so a `gh` that vanishes mid-session
+// still fails closed with no child.
+const ISSUES_GH_CLI_ABSENT = issuesGhCliMissing();
+
 // The probe alone: `gh api user` (and, through the client, `gh repo view`), which is
 // ~1.1 s of network plus the checkout's git probes. It reads and writes no module
 // state and no UI, so the background startup task and a typed command can share it,
 // and the client's own in-flight cache turns the second caller into a waiter on the
 // FIRST probe instead of a second pair of children. Never rejects: a missing or
 // broken `gh` is a verdict, not a crash.
+//
+// S1/S3 (issues-startup-performance T1, T2): and it is STARTUP WORK, never an
+// awaited step of `session_start`: the host awaits every handler it is handed, so
+// awaiting this probe put `gh api user` (≈485 ms) and `gh repo view` (≈550 ms) —
+// serially — in front of the first prompt of every session start AND every session
+// switch. `/issues` takes the same verdict when it opens (`probeIssuesGate`), so
+// nothing is lost by answering it in the background.
+//
+// T2: repository-ness comes FIRST, through the same local checkout seam every
+// other surface uses, so a session outside a repository costs one `git rev-parse`
+// and no `gh` child at all — and says nothing, because that is a state, not an
+// error. A late verdict is dropped by the generation `dispatchIssuesGate` captures:
+// it sets no state and notifies no dead UI, and `issuesGateNotified` stays clear so
+// the next session's gate can still speak.
 async function probeIssuesGateStatus(ctx) {
   try {
     const gh = libRequire("gh-issues.js");
+    // S13 (T11) defence in depth: with `gh` absent nothing was registered, so this
+    // path is a `gh` that vanished after load. It costs no child either way, and
+    // the gate then fails like any other `gh` failure.
+    if (issuesGhCliMissing()) {
+      return { ok: false, error: ISSUES_GH_CLI_MISSING };
+    }
     const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
-    const res = await gh.cachedGhStatus({ cwd });
-    return res && res.ok === true ? { ok: true } : { ok: false, error: (res && res.error) || "gh check failed" };
+    let checkoutRoot = null;
+    try {
+      checkoutRoot = await oddCheckoutRootAsync(cwd);
+    } catch {
+      checkoutRoot = null;
+    }
+    if (!checkoutRoot) {
+      return { ok: false, notRepository: true, error: ISSUES_SIDEBAR_NOT_REPOSITORY };
+    }
+    // S3 (T2): the gate asks gh ONE thing — is it usable this session (installed,
+    // authenticated, and able to answer)? `scope: null` keeps the checkout's own
+    // repository OUT of it: a checkout whose remote is not a GitHub repository is
+    // the READ's question, and the panel answers it with its own honest error
+    // instead of being refused before it can even open. Through the client's cache
+    // the gate shares one probe with a typed `/issues`, so the second caller waits
+    // on the first promise instead of spawning a second pair of children.
+    const res = await gh.cachedGhStatus({ cwd: checkoutRoot, scope: null });
+    const ok = !!(res && res.ok === true);
+    if (ok) return { ok: true, checkoutRoot };
+    return { ok: false, error: (res && res.error) || "gh check failed", checkoutRoot };
   } catch (err) {
     // The gate must never break startup.
     return { ok: false, error: (err && err.message) || String(err) };
@@ -7976,9 +8221,13 @@ async function probeIssuesGateStatus(ctx) {
 // own, fuller refusal as the only thing it says.
 function applyIssuesGateStatus(gate, ctx, notifyStartup = true) {
   issuesGateOpen = !!(gate && gate.ok === true);
-  if (issuesGateOpen) return { ok: true };
+  if (issuesGateOpen) return { ok: true, checkoutRoot: gate && gate.checkoutRoot };
   const error = (gate && gate.error) || "gh check failed";
-  if (notifyStartup && !issuesGateNotified && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
+  // S3 (T2): a cwd outside a repository speaks for itself — the surfaces draw the
+  // state and there is nothing for the human to fix — so nothing is announced.
+  // `gh`'s own wording (`gh auth login`, a killed probe) still is.
+  const notRepository = !!(gate && gate.notRepository === true);
+  if (notifyStartup && !issuesGateNotified && !notRepository && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
     try {
       ctx.ui.notify(issuesGateMessage(error), "info");
       issuesGateNotified = true;
@@ -7986,7 +8235,11 @@ function applyIssuesGateStatus(gate, ctx, notifyStartup = true) {
       // Notifying never breaks startup.
     }
   }
-  return { ok: false, error };
+  return {
+    ok: false,
+    error,
+    ...(notRepository ? { notRepository: true } : {}),
+  };
 }
 
 // S5 (T8): dispatch the session's gate and return at once. The host awaits every
@@ -8021,16 +8274,48 @@ function sessionIssuesGate(ctx) {
 // re-probes; while its own probe is still in flight the command WAITS for that one
 // promise rather than spawning a second pair of `gh` children, and a failure
 // notifies the same honest fix every time it is asked.
+//
+// S3 (T2): the checkout comes FIRST, from THIS ctx — one local `git rev-parse` pair
+// that the panel then reuses — so a cwd outside a repository is handed back as that
+// state (the caller draws the shared line) instead of a `gh` error string. S13 (T11)
+// defence in depth: a `gh` that disappeared after registration is refused here,
+// before any child.
 async function probeIssuesGate(ctx) {
-  if (issuesGateOpen === true) return { ok: true };
-  const gate = await sessionIssuesGate(ctx);
-  return gate && gate.ok === true
-    ? { ok: true }
-    : { ok: false, error: (gate && gate.error) || "gh check failed" };
+  if (issuesGhCliMissing()) {
+    return { ok: false, error: ISSUES_GH_CLI_MISSING };
+  }
+  const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
+  let checkoutRoot = null;
+  try {
+    checkoutRoot = await oddCheckoutRootAsync(cwd);
+  } catch {
+    checkoutRoot = null;
+  }
+  if (!checkoutRoot) return { ok: false, notRepository: true, error: ISSUES_SIDEBAR_NOT_REPOSITORY };
+  if (issuesGateOpen === true) return { ok: true, checkoutRoot };
+  let gate = await sessionIssuesGate(ctx);
+  // S3 (T2): `notRepository` is a fact about the directory it was measured in, and
+  // this ctx just resolved a checkout of its own. A command typed in a session that
+  // started elsewhere asks its own question instead of inheriting a refusal about
+  // another directory; the shared probe stays shared for every `gh` answer.
+  if (gate && gate.notRepository === true) {
+    gate = await dispatchIssuesGate(ctx, false);
+  }
+  if (gate && gate.ok === true) return { ok: true, checkoutRoot };
+  return {
+    ok: false,
+    error: (gate && gate.error) || "gh check failed",
+    ...(gate && gate.notRepository === true ? { notRepository: true } : {}),
+  };
 }
 
 function registerIssuesCommand(pi) {
   if (typeof pi?.registerCommand !== "function") return;
+  // S13 (T11, corrected): without the `gh` CLI there is nothing this command could
+  // do, so it is never registered — "/issues nunca se carga". The answer is the one
+  // recorded at registration, with no child process, and every other command and
+  // tool this package contributes is registered above and below regardless.
+  if (ISSUES_GH_CLI_ABSENT) return;
   pi.registerCommand("issues", {
     description: "Browse fresh GitHub issue pages and details; edit labels/assignees, comment or close when permitted",
     handler: async (args, ctx) => {
@@ -8040,10 +8325,16 @@ function registerIssuesCommand(pi) {
         // S1 (issues-sidebar-click T1): the rail click whose command refuses here
         // is over, so the guard goes with it instead of waiting for its timer.
         releaseIssuesPanelOpen();
+        // S3 (T2): a cwd outside a repository is the shared statement every
+        // surface makes, at info — never a `gh` error and never an error tone.
+        if (gate.notRepository === true) {
+          if (typeof notify === "function") notify(notGitRepositoryLine(toolCwd(ctx)), "info");
+          return;
+        }
         if (typeof notify === "function") notify(issuesGateMessage(gate.error), "error");
         return;
       }
-      await executeIssues(args, ctx);
+      await executeIssues(args, ctx, gate.checkoutRoot);
     },
   });
 }
@@ -8079,23 +8370,186 @@ function issuesSidebarRelatedCache() {
   try {
     const factory = libRequire("related-issues-cache.js");
     if (!factory || typeof factory.createIssuesCache !== "function") return null;
-    issuesSidebarCache = factory.createIssuesCache();
+    // S4 (T3): the full-read TTL is named ONCE, so the in-memory cache and the
+    // loader's hydration hold a stored entry to the same bound.
+    issuesSidebarCache = factory.createIssuesCache({ fullTtlMs: ISSUES_CACHE_FULL_TTL_MS });
   } catch {
     issuesSidebarCache = null;
   }
   return issuesSidebarCache;
 }
 
-function clearIssuesSidebarCache() {
-  // T15 (defect 4): the bump comes FIRST, so a read still holding the previous
-  // generation can never write the entry this clear is about to remove.
-  issuesSidebarCacheGeneration += 1;
-  if (issuesSidebarCache === null) return;
+// S4 (T3): the DISK half of the same cache, built lazily exactly like it. A
+// missing module is not fatal — the read is then the in-process one it always
+// was — and nothing is created here: a host that never draws the rail never
+// touches the file.
+function issuesSidebarCacheStore() {
+  if (issuesCacheStore !== null) return issuesCacheStore;
   try {
-    issuesSidebarCache.clear();
+    const factory = libRequire("issues-cache-store.js");
+    if (!factory || typeof factory.createIssuesCacheStore !== "function") return null;
+    issuesCacheStore = factory.createIssuesCacheStore();
   } catch {
-    // The cache is optional: a failed clear never breaks the end of a session.
+    issuesCacheStore = null;
   }
+  return issuesCacheStore;
+}
+
+// S4 (T3): the read the loader replays into the cache for a stored entry. It is
+// the SAME `{ ok, buckets: { <id>: { issueCount, issues } } }` shape a real answer
+// has, so the cache's own `apply` re-applies every invariant it owns (the count
+// per bucket, the truncation rule, the sort and the cap) instead of this file
+// inventing a second way to write an entry.
+function issuesSidebarHydratedRead(entry) {
+  const buckets = {};
+  const source = entry && entry.buckets && typeof entry.buckets === "object" ? entry.buckets : {};
+  const counts = entry && entry.counts && typeof entry.counts === "object" ? entry.counts : {};
+  for (const spec of ISSUES_PAGE_QUERIES) {
+    const rows = Array.isArray(source[spec.id]) ? source[spec.id] : [];
+    const count = Number.isInteger(counts[spec.id]) ? counts[spec.id] : rows.length;
+    buckets[spec.id] = { issueCount: count, issues: rows };
+  }
+  return { ok: true, buckets };
+}
+
+// S4 (T3): hydrate ONE identity from the disk half, lazily, before `plan` — so a
+// warm identity's first read in a new process is already a delta. It runs on the
+// async loader alone: never at `session_start`, never on `lines()`/`meta()` and
+// never on a paint path, and it answers `false` for every reason it could not
+// (an identity already warm in memory, no store, no entry, a late session, an
+// entry the cache's own rules would not trust, a hostile document).
+async function hydrateIssuesSidebarCache(cache, identity, cacheGeneration) {
+  if (cache === null || typeof identity !== "string" || identity.length === 0) return false;
+  let warm = null;
+  try {
+    warm = cache.get(identity);
+  } catch {
+    warm = null;
+  }
+  if (warm !== null) return false;
+  const store = issuesSidebarCacheStore();
+  if (store === null) return false;
+  let entry = null;
+  try {
+    entry = await store.load(identity);
+  } catch {
+    entry = null;
+  }
+  if (!entry) return false;
+  // T15 (defect 4): a load that answered after its session ended fills nothing.
+  if (cacheGeneration !== issuesSidebarCacheGeneration) return false;
+  // S4 (T3): persistence never defeats the correctness rules the cache already
+  // enforces — an entry whose rows no longer match the count its response reported,
+  // or one past the full-read TTL, is one `plan` must answer a FULL read for, so it
+  // is never hydrated at all.
+  //
+  // Nuance accepted here (S4/T3 correction): `cache.apply(..., { full: false })` on a
+  // COLD cache takes the `!previous` branch, so it stamps `fullAt` at hydration time
+  // — a hydrated entry restarts the full-read clock instead of inheriting the stored
+  // one. That is safe: every later read is a delta, and a delta MERGES by issue
+  // number and is held to the cache's count invariant, so the moment the cached rows
+  // stop matching the `issueCount` its own answer reports the entry is
+  // `inconsistent` and `plan` answers a FULL read. The stored `fullAt` still decides
+  // WHETHER an entry is hydrated (the TTL check below), so a stale document is never
+  // trusted; only the clock of a trusted one is renewed, by at most this
+  // process's own lifetime.
+  if (entry.inconsistent === true) return false;
+  const age = Date.now() - entry.fullAt;
+  if (!Number.isFinite(age) || age >= ISSUES_CACHE_FULL_TTL_MS) return false;
+  try {
+    cache.apply(identity, issuesSidebarHydratedRead(entry), { full: false });
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+// S4 (T3): the snapshot one answer's `apply` left in the cache, in the shape the
+// disk half stores. The rows and the cache's own facts come from the cache (so the
+// file can never disagree with memory); the counts come from the response, which is
+// the only place the authoritative total lives. Synchronous and side-effect free:
+// the write it feeds is queued below.
+function issuesSidebarCacheSnapshot(cache, identity, read, plan, sequence) {
+  let entry = null;
+  try {
+    entry = cache.get(identity);
+  } catch {
+    return null;
+  }
+  if (!entry || !entry.buckets) return null;
+  const readBuckets = read && read.buckets && typeof read.buckets === "object" ? read.buckets : {};
+  const counts = {};
+  for (const spec of ISSUES_PAGE_QUERIES) {
+    const rows = Array.isArray(entry.buckets[spec.id]) ? entry.buckets[spec.id] : [];
+    const bucket = readBuckets[spec.id];
+    counts[spec.id] = bucket && Number.isInteger(bucket.issueCount) ? bucket.issueCount : rows.length;
+  }
+  return {
+    buckets: entry.buckets,
+    counts,
+    truncated: entry.truncated,
+    inconsistent: entry.inconsistent === true,
+    full: plan.full === true,
+    syncedAt: Number.isFinite(entry.syncedAt) ? entry.syncedAt : Date.now(),
+    lastApplied: Number.isFinite(sequence) ? sequence : issuesSidebarReadSequence,
+  };
+}
+
+// S4 (T3 correction): the disk half is FIRE AND FORGET, because the read must
+// settle the moment `apply` made its answer visible in memory — the section's own
+// `running` gate refuses to schedule while a read is in flight, so a read that
+// waits for a file write postpones every later read and the rail paints late. Two
+// rules keep that freedom safe:
+//   - ONE write is in flight per process, so a second save can never interleave
+//     its own read-modify-write over the one document;
+//   - a save that arrives while one runs lands in a single PENDING slot that the
+//     latest entry overwrites, so a stalled disk accumulates nothing and the next
+//     finished write carries the newest state (coalescing costs at most one full
+//     read later, never correctness).
+// A save that never settles therefore defers nothing: the read has already
+// returned, the pending slot keeps the newest entry, and no rejection can escape —
+// the tracked promise swallows both outcomes.
+let issuesCacheWriteInFlight = null;
+let issuesCacheWritePending = null;
+
+function drainIssuesSidebarCacheWrites() {
+  if (issuesCacheWriteInFlight !== null || issuesCacheWritePending === null) return;
+  const job = issuesCacheWritePending;
+  issuesCacheWritePending = null;
+  let run;
+  try {
+    run = Promise.resolve(job.store.save(job.identity, job.snapshot));
+  } catch {
+    run = Promise.resolve(false);
+  }
+  const settled = run.then(() => undefined, () => undefined);
+  issuesCacheWriteInFlight = settled;
+  settled.then(() => {
+    if (issuesCacheWriteInFlight === settled) issuesCacheWriteInFlight = null;
+    drainIssuesSidebarCacheWrites();
+  });
+}
+
+function queueIssuesSidebarCacheWrite(cache, identity, read, plan, sequence) {
+  const store = issuesSidebarCacheStore();
+  if (store === null) return false;
+  const snapshot = issuesSidebarCacheSnapshot(cache, identity, read, plan, sequence);
+  if (snapshot === null) return false;
+  issuesCacheWritePending = { store, identity, snapshot };
+  drainIssuesSidebarCacheWrites();
+  return true;
+}
+
+// S4 (T3, L7): a session boundary no longer throws the cache away — the entries
+// are the whole point of it, and the next session's first read is a delta because
+// they are still there. What a boundary DOES still do is move the generation on,
+// so an answer the ended session is still holding can never land in the cache the
+// next session reads; the section's snapshot is dropped by `invalidateIssuesSidebar`
+// beside it, so no frame drawn afterwards shows the ended session's rows.
+function clearIssuesSidebarCache() {
+  // The bump comes FIRST, so a read still holding the previous generation can
+  // never write an entry this boundary has already moved past.
+  issuesSidebarCacheGeneration += 1;
 }
 
 // S5 (T8): the client's cached gate answers (`gh-issues.js`) belong to the session
@@ -8222,6 +8676,16 @@ function issuesSidebarInitialBucket(pinned, number) {
 async function loadIssuesSidebar() {
   const sequence = (issuesSidebarReadSequence += 1);
   const cacheGeneration = issuesSidebarCacheGeneration;
+  // S13 (T11) defence in depth: a host without the CLI never mounts this section,
+  // so reaching this line means `gh` was on PATH at registration and is gone now.
+  // Nothing to read, then — no `gh` child, no cache hydrate, not even the git
+  // checkout probe (so this settled state costs zero children, which is what the
+  // rail's own test measures). The line is the short dim one, exactly like the
+  // non-repository state below, so the section's `stateSettled` keeps NO timer and
+  // no later frame retries it.
+  if (issuesGhCliMissing()) {
+    return { ok: false, error: ISSUES_GH_CLI_MISSING_RAIL, errorTone: "dim" };
+  }
   if (issuesSidebarCtx === null) {
     return { ok: false, error: "cannot read issues: the session has ended" };
   }
@@ -8248,6 +8712,22 @@ async function loadIssuesSidebar() {
   }
   const identity = resolved.identity;
   const cache = issuesSidebarRelatedCache();
+  // S21 (T17): a panel write marked this identity, which means its entry was
+  // dropped on purpose and the disk half must not hand the stale one back: the
+  // write invalidated the buckets, so the next read of them is the full one.
+  const mustReadFull = issuesSidebarFullReadIdentities.has(identity);
+  if (mustReadFull && cache !== null && typeof cache.drop === "function") {
+    try {
+      cache.drop(identity);
+    } catch {
+      // The mark alone still refuses the hydration below.
+    }
+  }
+  // S4 (T3): hydrate the identity from the disk half BEFORE `plan`, so a warm
+  // identity's first read in a new process is already a delta. Lazy by identity,
+  // best effort, and only ever here. S21: never for an identity a write just
+  // invalidated — that read exists to replace what the removed entry said.
+  if (!mustReadFull) await hydrateIssuesSidebarCache(cache, identity, cacheGeneration);
   const plan = cache !== null ? cache.plan(identity) : { full: true, first: 20 };
   let read;
   try {
@@ -8267,6 +8747,17 @@ async function loadIssuesSidebar() {
       cache.apply(identity, read, { full: plan.full === true, sequence });
     } catch {
       // A cache that refuses the answer is no reason to lose the read itself.
+    }
+    // S21 (T17): the full read a write asked for has landed, so the buckets the
+    // old entry held are replaced and the mark has done its job.
+    if (plan.full === true) issuesSidebarFullReadIdentities.delete(identity);
+    // S4 (T3): and only after a successful apply is the entry offered to the disk
+    // half, so the file never holds rows memory refused — and only by a read that
+    // is still the newest one STARTED, so an older answer can never overwrite the
+    // file a newer read just wrote. It is QUEUED, never awaited: the answer is
+    // already visible, and a slow disk must not hold the rail's next read.
+    if (issuesSidebarReadSequence === sequence) {
+      queueIssuesSidebarCacheWrite(cache, identity, read, plan, sequence);
     }
   }
   const cached = canWriteCache ? cache.get(identity) : null;
@@ -8455,6 +8946,36 @@ function registerIssuesRefusalEntryRenderer(pi) {
   }
 }
 
+// T18 (S11): end ONE binding — the bridge's own unregister first, then the
+// section's `dispose()`, each guarded on its own so a teardown that throws still
+// leaves the caller free to register the replacement. The slots are cleared
+// BEFORE either call, so a re-entrant teardown cannot run twice and nothing keeps
+// pointing at a section this module no longer owns. It is what a replacement (a
+// republished bridge, a second mount) and `session_shutdown` both perform: without
+// it the abandoned section keeps its self-scheduled floor timer alive for the
+// rest of its drawn window and keeps reading the same `gh` traffic this feature
+// exists to remove.
+function teardownIssuesSidebar() {
+  const disposer = issuesSidebarDisposer;
+  const handle = issuesSidebarHandle;
+  issuesSidebarDisposer = null;
+  issuesSidebarHandle = null;
+  if (disposer !== null) {
+    try {
+      disposer();
+    } catch {
+      // A bridge that refuses the unregister still gets its section disposed.
+    }
+  }
+  if (handle !== null && typeof handle.dispose === "function") {
+    try {
+      handle.dispose();
+    } catch {
+      // A section that refuses `dispose()` never blocks the replacement.
+    }
+  }
+}
+
 // S3 (issues-sidebar): the repaint the bridge offers is the only thing the
 // refresh reports; a host that paints by other means gets nothing extra.
 function mountIssuesSidebar(pi, api) {
@@ -8465,6 +8986,11 @@ function mountIssuesSidebar(pi, api) {
     return;
   }
   if (!factory || typeof factory.createIssuesSection !== "function") return;
+  // T18 (S11): a mount REPLACES the binding, so the previous one is torn down
+  // before a new section exists (`/reload`, a republished bridge, a second
+  // mount). Tearing down only once the factory is known to exist keeps a broken
+  // module from costing the rail that was working.
+  teardownIssuesSidebar();
   // T15 (S9, defect 4): binding the section to the bridge is a rebinding of this
   // cache wiring, like `/reload`; an answer a previous binding still holds must
   // not land in the new section's cache. S1 (issues-sidebar-click T1): a rebinding
@@ -8485,6 +9011,12 @@ function mountIssuesSidebar(pi, api) {
   try {
     handle = factory.createIssuesSection({
       load: () => loadIssuesSidebar(),
+      // S10 (T8, L9): the rail re-reads on TIME, not on the session's activity.
+      // The section owns the timer (armed by a draw, unref'd, cleared by
+      // `invalidate()`/`dispose()`) and stops it once the section leaves the
+      // drawn window below, so a hidden section keeps no timer (S11).
+      refreshFloorMs: ISSUES_SIDEBAR_TIME_FLOOR_MS,
+      timerDrawnWindowMs: ISSUES_SIDEBAR_DRAWN_WINDOW_MS,
       // T12/T17/S9: a row click and the overflow row dispatch the panel command.
       // The row's number and the bucket it came from ride the seam; the panel
       // proves the repository itself when it opens, so no proof runs on the click
@@ -8507,6 +9039,7 @@ function mountIssuesSidebar(pi, api) {
   }
   issuesSidebarHandle = handle;
   issuesSidebarDisposer = typeof disposer === "function" ? disposer : null;
+  issuesSidebarApi = api;
 }
 
 // The bridge announces its publication on ONE event, and this package answers it
@@ -8568,11 +9101,26 @@ function registerBashDesignRows(api) {
 // bridge surface this package contributes.
 function registerIssuesSidebar(pi) {
   try {
-    if (issuesSidebarHandle !== null) return;
     const api = issuesSidebarBridge();
     if (api !== null) {
-      registerBashDesignRows(api);
-      mountIssuesSidebar(pi, api);
+      // T18 (S11): the SAME published object is the same bridge, so a second
+      // moment (a `session_start` after a `session_shutdown` disposed the
+      // section) binds the rail again only when it has no section; otherwise it
+      // contributes nothing twice. A DIFFERENT object is a republished bridge:
+      // its surfaces are registered on it and the previous binding is replaced,
+      // with `mountIssuesSidebar` tearing the old section down first.
+      if (api !== issuesSidebarApi) {
+        registerBashDesignRows(api);
+        issuesSidebarApi = api;
+      } else if (issuesSidebarHandle !== null) {
+        return;
+      }
+      // S13 (T11, corrected): without the `gh` CLI this section is NEVER ADDED to
+      // the rail — "nunca se agrega a sidebar github sidebar" — and there is no
+      // line, notice or refusal to draw for it, because nothing was registered.
+      // Only the GITHUB section is withheld: the bash design above, the picker's
+      // `alt+f` shortcut and every other surface still register.
+      if (!ISSUES_GH_CLI_ABSENT) mountIssuesSidebar(pi, api);
       return;
     }
     if (issuesSidebarSubscribed) return;
@@ -8759,7 +9307,188 @@ function refreshIssuesSidebarIfDrawn() {
     // A failed activity read never breaks the session; the next frame retries.
   }
 }
+
+// S10 (T9): the result of a `bash` call whose COMMAND mutates a GitHub issue or
+// pull request is the one moment the plugin knows something changed, so it forces
+// ONE read right after that tool ends. The decision is the classifier's
+// (`lib/issues-bash-mutation.js`, text only, no child process), and the cap is the
+// section's (`forceRefresh`, L9: one forced read per 5 s, so a script running
+// several `gh` writes cannot storm the API). Nothing happens for a non-`bash`
+// tool — the classifier never even runs — and nothing happens while the section
+// is not drawn (S11) or for a result the session that is running did not produce.
+// Best effort like its neighbours: a throwing seam never breaks the result it
+// rides on.
+function forceIssuesSidebarRefreshForBash(event, ctx) {
+  try {
+    // S10 (T9): the event is read through the SAME accessors every other handler
+    // uses — `oddToolNameOf`/`oddArgsOf` accept the host's other spellings, so a
+    // result that arrives as `tool`/`args` is the same bash call and forces the
+    // same read instead of silently matching nothing.
+    if (oddToolNameOf(event) !== "bash") return;
+    const handle = issuesSidebarHandle;
+    if (!handle) return;
+    // S11: the whole feature only serves a section that is on screen.
+    if (typeof handle.drawnWithin !== "function") return;
+    if (handle.drawnWithin(ISSUES_SIDEBAR_DRAWN_WINDOW_MS) !== true) return;
+    // A result from a session that already ended forces nothing: the ctx it
+    // carries is not the session this rail belongs to.
+    if (!oddSessionStillCurrent(ctx)) return;
+    if (typeof handle.forceRefresh !== "function") return;
+    const input = oddArgsOf(event);
+    const command = input && typeof input === "object" ? input.command : undefined;
+    if (typeof command !== "string" || command.length === 0) return;
+    const mutation = libRequire("issues-bash-mutation.js");
+    if (!mutation || typeof mutation.bashMutatesIssuesOrPullRequests !== "function") return;
+    if (mutation.bashMutatesIssuesOrPullRequests(command) !== true) return;
+    handle.forceRefresh(ISSUES_SIDEBAR_FORCED_FLOOR_MS);
+  } catch {
+    // A forced read is best effort: it never breaks the result it rides on.
+  }
+}
+
+// S21 (T17): a panel write changed the viewer's OWN assignment, so the rail's
+// `mine`+`assigned` merge for THIS repository is no longer what the cache
+// holds. A DELTA read can never say so: it merges by issue number, so a row
+// the viewer was removed from would survive it forever. The entry is dropped
+// (which is what makes `plan` answer the full size) and the identity is marked
+// so the disk half cannot hydrate it back before that plan, and the rail reads
+// NOW when it is on screen — a human's save is one action, so it is neither a
+// script that needs the bash anti-storm cap nor something to wait 20 s for.
+// Nothing here starts a read for a section nobody is drawing (S11).
+function invalidateIssuesSidebarAssignment(identity) {
+  if (typeof identity !== "string" || identity.length === 0) return;
+  issuesSidebarFullReadIdentities.add(identity);
+  const cache = issuesSidebarRelatedCache();
+  if (cache !== null && typeof cache.drop === "function") {
+    try {
+      cache.drop(identity);
+    } catch {
+      // A cache that refuses the drop still leaves the marked read full.
+    }
+  }
+  const handle = issuesSidebarHandle;
+  if (!handle) return;
+  try {
+    if (typeof handle.drawnWithin !== "function") return;
+    if (handle.drawnWithin(ISSUES_SIDEBAR_DRAWN_WINDOW_MS) !== true) return;
+    if (typeof handle.refresh !== "function") return;
+    const pending = handle.refresh();
+    if (pending && typeof pending.catch === "function") pending.catch(() => {});
+  } catch {
+    // The rail is optional: a failed refresh never breaks the panel's write.
+  }
+}
+
+// The event's own session, against the one this rail was bound to. A host that
+// gives no id on either side is answered by the drawn window instead, and a rail
+// with no remembered session (a `/reload`, a shutdown) is answered with `false`.
+function oddSessionStillCurrent(ctx) {
+  const current = issuesSidebarCtx === null ? undefined : oddSessionId(issuesSidebarCtx);
+  if (current === undefined) return false;
+  const event = oddSessionId(ctx);
+  return event === undefined || event === current;
+}
+// ---------------------------------------------------------------------------
+// S18 (T14, L13): the bridge gate. This package is a guest of
+// gentle-shell-bridge — the rail, the bash design and the `Cards` rows all live
+// on its published object (the picker's `alt+f` shortcut is bound on the host
+// itself, but only once this gate has registered the command it opens) — and the human's
+// answer for what to do without it was exactly "Desactivar todo el plugin":
+// register NOTHING. No command, no tool, no message or entry renderer, no card,
+// no rail, no hook, no prompt append.
+//
+// The bridge publishes ASYNCHRONOUSLY, and Pi may load this package before or after
+// it, so the registration is DEFERRED rather than eager: everything registers the
+// moment the bridge is known present (already on its slot at load, or announced on
+// its ready event later), and if the announcement never comes the package registers
+// nothing and only says how to install it. Nothing may register twice, whichever
+// path arrives first.
+//
+// The one thing that is NOT deferred is the notice's observer: `ctx.ui.notify`
+// lives on a session, so the only way to name the missing plugin in a primary
+// session is to observe `session_start` until the gate opens — one hook, kept sole
+// while the gate is closed and released the moment the surface registers.
+let oddSurfaceRegistered = false;
+let bridgeGateDisposer = null;
+
+function releaseBridgeGateObserver() {
+  const dispose = bridgeGateDisposer;
+  bridgeGateDisposer = null;
+  if (typeof dispose !== "function") return;
+  try {
+    dispose();
+  } catch {
+    // A host that will not release the observer still has a harmless one.
+  }
+}
+
+// ONE registration per gate episode. The flag is set FIRST, so a path that fails
+// half way can never re-register the parts that did land, and the two gate paths
+// (already published at load, announced later) share it: whichever arrives first
+// registers, the other is a no-op.
+function registerOddWorktreeSurface(pi) {
+  if (oddSurfaceRegistered) return false;
+  // The bridge is the precondition, whichever path arrives: an announcement with
+  // no published object is not a bridge this package may load on.
+  if (issuesSidebarBridge() === null) return false;
+  oddSurfaceRegistered = true;
+  try {
+    registerOddWorktreeSurfaceEntries(pi);
+  } catch {
+    // A host that refuses a registration keeps the rest of the surface.
+  }
+  releaseBridgeGateObserver();
+  return true;
+}
+
+// While the bridge is absent: ONE ready-announcement subscription (the bridge may
+// publish after us) and ONE session_start observer (the missing-plugin notice).
+// Nothing else is registered.
+function holdSurfaceForBridge(pi) {
+  try {
+    subscribeBridgeReady(pi, () => {
+      try {
+        registerOddWorktreeSurface(pi);
+      } catch {
+        // The gate stays closed; the announcement is not retried.
+      }
+    });
+  } catch {
+    // No bus: a bridge that publishes later is noticed at the next session start.
+  }
+  if (typeof pi?.on !== "function") return;
+  try {
+    const dispose = pi.on("session_start", (event, ctx) => {
+      // A bridge that was there all along, or arrived without an announcement,
+      // makes the notice untrue: register instead of warning.
+      if (issuesSidebarBridge() !== null) {
+        registerOddWorktreeSurface(pi);
+        return;
+      }
+      checkIssuesSidebarInstall(pi, ctx);
+    });
+    bridgeGateDisposer = typeof dispose === "function" ? dispose : null;
+  } catch {
+    // A host that refuses the observer still gets the install line nowhere else.
+  }
+}
+
 export default function (pi) {
+  // A factory call is one registration episode. Pi builds a fresh registry for a
+  // `/reload` and expects the same surfaces again, which is why the episode starts
+  // HERE; the gate's own two paths share the episode, so neither of them can
+  // register the surface twice.
+  oddSurfaceRegistered = false;
+  // S18 (T14): no bridge, no package. The published object is read from its slot
+  // after its own schema and version gate — never imported, never a dependency.
+  if (issuesSidebarBridge() !== null) {
+    registerOddWorktreeSurface(pi);
+    return;
+  }
+  holdSurfaceForBridge(pi);
+}
+
+function registerOddWorktreeSurfaceEntries(pi) {
   // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
   // moves the session, so the command is where a handoff waits and lands.
   warpHandoffPi = pi;
@@ -8803,7 +9532,16 @@ export default function (pi) {
   // so the first DRAW is what starts the section's read: an absent snapshot is
   // stale inside `lines()`, which schedules its own refresh. The hidden section
   // therefore makes no child process and no network call, and starts no timer.
-  pi.on("session_start", async (event, ctx) => {
+  // S1/S2/S3 (issues-startup-performance T1, T2): and NOTHING awaited here spawns a
+  // child process or makes a network call. The `gh` gate is dispatched as tracked
+  // startup work instead of being awaited, so the host's own await of this handler
+  // returns at once — on every session start and every session switch — and it
+  // resolves the checkout first, so outside a repository it does not even start a
+  // `gh` child. The handler is therefore NOT `async`.
+  // S36 (files-picker T15): the picker's key is no longer a bridge contribution
+  // that a later moment retries — it is bound ONCE at load through the host's own
+  // `registerShortcut`, so this boundary has nothing of the picker's to do.
+  pi.on("session_start", (event, ctx) => {
     rememberIssuesSidebarSession(ctx);
     // T16 (S6/S9): a session that starts in another checkout also cuts the CACHE
     // write path, not just the section's snapshot. The identity — not the checkout
@@ -8817,6 +9555,10 @@ export default function (pi) {
     // above.
     releaseIssuesPanelOpen();
     invalidateIssuesSidebar();
+    // T18 (S11): a shutdown disposed the section, and a republished bridge is a
+    // new binding. This is the moment both are picked up again; with a live
+    // section on the same bridge it is a no-op.
+    registerIssuesSidebar(pi);
     // T11 (S2 amended): the missing-plugin hint. It is armed in the same
     // boundary as the section's own state, and it says nothing yet when the
     // host could still announce.
@@ -8831,7 +9573,10 @@ export default function (pi) {
     // promise instead of starting a second probe.
     issuesGateGeneration += 1;
     issuesGateProbe = null;
-    dispatchIssuesGate(ctx);
+    // S13 (T11): without the CLI there is nothing for this gate to answer and
+    // nothing registered to use the answer, so no probe is dispatched at all — no
+    // child, no network, nothing said.
+    if (!ISSUES_GH_CLI_ABSENT) dispatchIssuesGate(ctx);
   });
   // A queued warp is session state: shutdown clears its record and its timer so
   // nothing outlives the session that asked for the move. S6 (issues-sidebar):
@@ -8841,6 +9586,10 @@ export default function (pi) {
   // nowhere and never repaints a torn-down host, and the remembered context is
   // cleared, so a frame drawn after shutdown can never read with a dead
   // session's cwd.
+  // S4 (issues-startup-performance T3, L7): the READ CACHE is not session state.
+  // `clearIssuesSidebarCache` still moves the generation on — a late answer lands
+  // nowhere — but the entries STAY, so the next session's first read is a delta
+  // and a rail click opens `/issues` already populated.
   pi.on("session_shutdown", (event, ctx) => {
     forgetPendingWarp(ctx);
     forgetInFlightWarpTools();
@@ -8857,6 +9606,11 @@ export default function (pi) {
     issuesGateProbe = null;
     clearIssuesGateCache();
     issuesSidebarCtx = null;
+    // T18 (S11): the session that is ending leaves no floor timer behind. The
+    // snapshot was dropped by `invalidateIssuesSidebar` above and the binding is
+    // ended here: the bridge's unregister and the section's own `dispose()`, so a
+    // frame the host still paints after shutdown arms nothing and reads nothing.
+    teardownIssuesSidebar();
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,
   // so startup work still in flight drops instead of writing into the session
@@ -8871,6 +9625,11 @@ export default function (pi) {
   // exactly as the host proposed it. Nothing about it is callable by the agent (S7).
   pi.on("tool_call", (event, ctx) => guardWorktreeBashCall(event, ctx));
   pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
+  // S10 (T9): ONE `tool_result` observation for the rail's forced refresh. It
+  // answers the `bash` tool only — every other tool returns before the classifier
+  // is even loaded — and it is separate from the naming handler because the two
+  // answer different questions about the same event.
+  pi.on("tool_result", (event, ctx) => forceIssuesSidebarRefreshForBash(event, ctx));
   // S10: the host's execution pair feeds the queue's in-flight tool counter for
   // EVERY tool of the session, not only this package's.
   pi.on("tool_execution_start", (event) => warpNoteToolExecution(event, false));
@@ -8983,30 +9742,19 @@ export default function (pi) {
   } catch {
     // The card is cosmetic.
   }
-  // Register every live checkout the registry does not own yet. Dispatched here
-  // and awaited by the barrier below: the host runs session_start handlers one
-  // at a time, so awaiting the scan inside this handler would put the session's
-  // first prompt behind three git reads. Best-effort: never writes user config,
-  // never throws, never blocks the session.
+  // The live-checkout scan is DISPATCHED and never awaited. Its only product is
+  // `warpDiscoveryCache`, which nothing reads — every warp lists fresh before
+  // acting — so the old "startup barrier" awaited three git reads for a result the
+  // next thing the session does never consumes. Measured on this checkout:
+  // 483 ms → 72 ms of awaited `session_start`, and the rest of that 72 ms went with
+  // the barrier. The task is still TRACKED, so `awaitPendingStartupTasks` and a
+  // shutdown barrier can wait for it, and a failure still cannot break a session.
   pi.on("session_start", (event, ctx) => {
     try {
       const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd
         : event && typeof event.cwd === "string" && event.cwd.length > 0 ? event.cwd
         : process.cwd();
-      startupRegistration = trackStartupTask(runStartupDiscovery(cwd, beginStartupTask()));
-    } catch {
-      // Discovery must never break startup.
-    }
-  });
-  // The startup barrier: registration is the one piece of startup work whose
-  // result the next thing the session does depends on, so it is awaited HERE,
-  // after the other handlers above have been dispatched.
-  pi.on("session_start", async () => {
-    const pending = startupRegistration;
-    startupRegistration = null;
-    if (!pending) return;
-    try {
-      await pending;
+      trackStartupTask(runStartupDiscovery(cwd, beginStartupTask()));
     } catch {
       // Discovery must never break startup.
     }

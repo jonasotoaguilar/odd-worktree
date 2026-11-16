@@ -18,7 +18,7 @@ const { join } = require('node:path');
 const { after, before, test } = require('node:test');
 const { pathToFileURL } = require('node:url');
 
-const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
+const { LIB_DIR, stubbedSource, installDefaultBridge } = require('./fixtures/load-extension.js');
 
 const {
   CARD_CONTENT,
@@ -992,6 +992,10 @@ async function loadComposedExtension() {
       registerToolRenderer: (resolver) => resolvers.push(resolver),
     };
     await withCodegraphCli(() => {
+      // S18 (T14): the extension registers nothing without gentle-shell-bridge, so
+      // this file's own host publishes the shared fixture's bridge before the factory
+      // runs.
+      installDefaultBridge();
       mod.default(host);
     });
     // The cards measure text through the extension's own injected seam, so the test

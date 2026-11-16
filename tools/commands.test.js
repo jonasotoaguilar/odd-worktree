@@ -12,7 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
-const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
+const { LIB_DIR, stubbedSource, installDefaultBridge } = require('./fixtures/load-extension.js');
 
 const scratch = [];
 function track(dir) {
@@ -84,6 +84,7 @@ function renderedRows(component, width = 100) {
 let host;
 let commands;
 let tools;
+let hooks;
 let mod;
 before(async () => {
   process.env.GENTLE_WORKTREE_THREAD = 'thread-1';
@@ -93,6 +94,7 @@ before(async () => {
   host = loaded.host;
   commands = loaded.commands;
   tools = loaded.tools;
+  hooks = loaded.hooks;
   mod = loaded.mod;
   host.sent = sent;
 });
@@ -104,6 +106,9 @@ before(async () => {
 // exported seams: how the panel's pending-changes answer and its specific-path
 // selection are driven through the panel front (never through the tool).
 async function loadExtensionWithModule(pi) {
+  // S18 (T14): nothing loads without gentle-shell-bridge, so this file's own host
+  // publishes the shared fixture's bridge before the factory runs.
+  installDefaultBridge();
   process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-cmd-ext-'));
   try {
@@ -483,4 +488,168 @@ describe('/odd', () => {
     await commands.get('odd').handler('nope', makeCtx(makeRepo()));
     assert.deepEqual(notifications, [['error', 'Unknown option "nope". Use /odd.']]);
   });
+});
+
+// ---------------------------------------------------------------------------
+// S8 (T6): the naming observer used to pay a `git worktree list` plus a
+// `git rev-parse` pair on EVERY tool event, before it could know whether it could
+// name anything — two blocking child processes per tool call. The filter is now
+// first and text-only: only the `read`/`edit`/`write` tools, and only when the
+// touched path is an ODD task document (`odd/tasks/*.md`), reach git at all, and a
+// burst of events in one turn costs one listing.
+// ---------------------------------------------------------------------------
+describe('S8 (T6): the naming observer’s git probes', () => {
+  // `repoIdentity` and `listWorktrees` are documented seams of
+  // lib/worktree-git.js, so a test counts the child processes the extension really
+  // makes through them instead of trusting the source.
+  function countingGit() {
+    const git = mod.libModule('worktree-git.js');
+    const realIdentity = git.repoIdentity;
+    const realList = git.listWorktrees;
+    const counts = { identity: 0, listing: 0 };
+    git.repoIdentity = (...args) => { counts.identity += 1; return realIdentity.apply(git, args); };
+    git.listWorktrees = (...args) => { counts.listing += 1; return realList.apply(git, args); };
+    return {
+      counts,
+      restore: () => {
+        git.repoIdentity = realIdentity;
+        git.listWorktrees = realList;
+      },
+    };
+  }
+
+  async function fireHostEvent(name, event, ctx) {
+    for (const [hook, handler] of hooks) {
+      if (hook !== name) continue;
+      const out = handler(event, ctx);
+      if (out && typeof out.then === 'function') await out;
+    }
+  }
+
+  test('an event that cannot name anything spawns no git at all', async () => {
+    const repo = makeRepo();
+    const counted = countingGit();
+    try {
+      const ctx = makeCtx(repo);
+      await fireHostEvent('tool_call', { toolName: 'bash', input: { command: 'ls' } }, ctx);
+      await fireHostEvent('tool_call', { toolName: 'read', input: { path: 'README.md' } }, ctx);
+      // An ODD document that is not a TASK document names the session after nothing.
+      await fireHostEvent('tool_call', { toolName: 'edit', input: { path: 'odd/notes.md' } }, ctx);
+      await fireHostEvent('tool_result', { toolName: 'bash', input: { command: 'gh issue list' } }, ctx);
+      assert.deepEqual(counted.counts, { identity: 0, listing: 0 },
+        'no child process runs for a call that can name nothing');
+    } finally {
+      counted.restore();
+    }
+  });
+
+  test('a write of an odd/tasks document probes, and a burst costs one listing', async () => {
+    const repo = makeRepo();
+    const counted = countingGit();
+    try {
+      const ctx = makeCtx(repo);
+      const documentPath = path.join(repo, 'odd', 'tasks', 'feature.md');
+      await fireHostEvent('tool_call', { toolName: 'edit', input: { path: documentPath } }, ctx);
+      assert.equal(counted.counts.identity, 1, 'the naming path read the checkout identity');
+      assert.equal(counted.counts.listing, 1, 'and git’s worktree listing');
+      // The same turn's result and a sibling event inside the memo window reuse it.
+      await fireHostEvent('tool_result', { toolName: 'edit', input: { path: documentPath } }, ctx);
+      await fireHostEvent('tool_call', { toolName: 'write', input: { path: 'odd/tasks/feature.md' } }, ctx);
+      assert.equal(counted.counts.listing, 1, 'a burst of events in one turn costs ONE git listing');
+    } finally {
+      counted.restore();
+    }
+  });
+
+  // PRESERVE: the filter above must not stop the naming it filters FOR. A write
+  // of an `odd/tasks/*.md` document still names the session after that document
+  // and its branch — the behaviour the observer existed for.
+  test('a write of an odd/tasks document still names the session', async () => {
+    const repo = makeRepo();
+    const created = await tools.get('worktree_create').execute(
+      'call-named', { branch: 'feat/named', odd: 'named' }, undefined, undefined, makeCtx(repo),
+    );
+    assert.notEqual(created.isError, true, resultText(created));
+    const checkout = created.details.path;
+    fs.mkdirSync(path.join(checkout, 'odd', 'tasks'), { recursive: true });
+    const documentPath = path.join(checkout, 'odd', 'tasks', 'named.md');
+    fs.writeFileSync(documentPath, '# Named session\n');
+
+    let name = '';
+    const naming = await loadExtensionWithModule({
+      getSessionName: () => name,
+      setSessionName: (next) => { name = next; },
+    });
+    const ctx = {
+      ...makeCtx(checkout),
+      sessionManager: { getSessionId: () => 'thread-named' },
+    };
+    for (const [hook, handler] of naming.hooks) {
+      if (hook !== 'tool_result') continue;
+      const out = handler({ toolName: 'write', input: { path: documentPath }, toolResults: [] }, ctx);
+      if (out && typeof out.then === 'function') await out;
+    }
+    assert.equal(name, 'Named session @ feat/named', 'the write still names the session after its document');
+  });
+
+  test('a checkout created moments ago is still seen by the next naming step', async () => {    const repo = makeRepo();
+    const counted = countingGit();
+    try {
+      const ctx = makeCtx(repo);
+      const documentPath = path.join(repo, 'odd', 'tasks', 'feature.md');
+      await fireHostEvent('tool_call', { toolName: 'edit', input: { path: documentPath } }, ctx);
+      assert.equal(counted.counts.listing, 1, 'the turn opened with one listing');
+      // The create that happens inside the same turn: the listing the first event
+      // warmed knows no such checkout, so the next naming step must not trust it.
+      await fireHostEvent('tool_result', { toolName: 'worktree_create', input: {} }, ctx);
+      await fireHostEvent('tool_call', { toolName: 'edit', input: { path: documentPath } }, ctx);
+      assert.equal(counted.counts.listing, 2, 'a create bypasses the memo for the events that follow it');
+      await fireHostEvent('tool_result', { toolName: 'edit', input: { path: documentPath } }, ctx);
+      assert.equal(counted.counts.listing, 2, 'and the listing the bypass made is memoized again');
+    } finally {
+      counted.restore();
+    }
+  });
+});
+
+// S1 (issues-startup-performance T1, correction): the live-checkout scan used to be
+// awaited by a second `session_start` handler — a "startup barrier" — for a result
+// nothing consumed: its only product is `warpDiscoveryCache`, and every warp lists
+// fresh before acting. Measured on this checkout, that barrier was 65 ms of three git
+// probes in front of the first prompt. It is dispatched and tracked like every other
+// startup task now, so the awaited path never waits for a git read either.
+test('S1 (T1): the awaited session_start resolves while the discovery git read is pending', async () => {
+  const repo = makeRepo();
+  const loaded = await loadExtensionWithModule({});
+  const git = loaded.mod.libModule('worktree-git.js');
+  const realIdentity = git.repoIdentityAsync;
+  const realList = git.listWorktreesAsync;
+  let released;
+  const held = new Promise((resolve) => { released = resolve; });
+  // Never answers until this test says so: an awaited barrier could not return.
+  git.repoIdentityAsync = () => held.then(() => ({ root: repo, commonDir: path.join(repo, '.git') }));
+  git.listWorktreesAsync = () => held.then(() => []);
+  try {
+    const ctx = makeCtx(repo);
+    let settled = false;
+    const run = (async () => {
+      for (const [event, handler] of loaded.hooks) {
+        if (event !== 'session_start') continue;
+        const out = handler({}, ctx);
+        if (out && typeof out.then === 'function') await out;
+      }
+      settled = true;
+    })();
+    // The host awaits the handlers in order; the tree is racing a 500 ms window.
+    await Promise.race([
+      run,
+      new Promise((resolve) => setTimeout(resolve, 500)),
+    ]);
+    assert.equal(settled, true, 'the awaited session_start path waited for a git probe');
+  } finally {
+    released();
+    git.repoIdentityAsync = realIdentity;
+    git.listWorktreesAsync = realList;
+    await loaded.mod.awaitPendingStartupTasks();
+  }
 });

@@ -5646,3 +5646,185 @@ describe('S10/S11: the footer offers only the keys that work now', () => {
     assert.deepEqual(calls, [], 'and no action ran');
   });
 });
+
+// S21 (T17): the human's own words — «me la asigne a mi o me quite la
+// asignacion … no se refresca altiro los tabs … actualmente eso demora o no
+// refrezca de hecho hasta que lo cierro y abro panel». A save that changed the
+// VIEWER's own assignment changed which bucket of this panel holds the issue:
+// `assigned` gains or loses the row while `mine` (authored) and `involved`
+// (excludes the viewer's own issues) are untouched. The page the reader holds is
+// answered by the bucket's OLD read, so it kept painting the pre-write row and
+// count. The write's own answer names the fact (`self`), and the stale page is
+// read again through the same seam — never patched with a row invented here.
+describe('S21: a self-assignment repaints the panel without reopening it', () => {
+  const serverPage = (issues) => ({ ok: true, issues, total: issues.length, hasNextPage: false });
+
+  function assignmentView(state) {
+    const requests = [];
+    const details = { assignees: state.detailAssignees };
+    const view = createIssuesView({
+      helpers,
+      pages: [
+        { id: 'mine', label: 'My issues', issues: state.mine, total: state.mine.length },
+        { id: 'assigned', label: 'Assigned', issues: state.assigned, total: state.assigned.length },
+        { id: 'involved', label: 'Involved', issues: [], total: 0 },
+      ],
+      rowsAvailable: () => 24,
+      requestRender: () => {},
+      done: () => {},
+      loadIssuePage: (request) => {
+        requests.push(request.bucketId);
+        if (request.bucketId === 'assigned') return serverPage(state.assigned);
+        if (request.bucketId === 'mine') return serverPage(state.mine);
+        return serverPage([]);
+      },
+      loadIssue: (n) => ({
+        ok: true,
+        issue: issue(n, { permissions: EDITABLE, assignees: details.assignees.map((login) => ({ login })) }),
+        comments: [],
+      }),
+      loadAssignees: () => ({ ok: true, users: [{ login: 'me', name: '' }, { login: 'bob', name: 'Bob' }] }),
+      actions: {
+        editAssignees: (number, changes) => {
+          requests.push(['write', number, changes]);
+          return state.onWrite(number, changes);
+        },
+      },
+    });
+    return { view, requests };
+  }
+
+  test('assigning yourself adds the row to Assigned and its count follows', async () => {
+    const state = {
+      mine: [cursorRow('c1', issue(1))],
+      assigned: [],
+      detailAssignees: [],
+      onWrite: (number, changes) => {
+        if (changes.add.includes('me')) state.assigned = [cursorRow('c2', issue(number))];
+        return { ok: true, changed: true, self: true };
+      },
+    };
+    const { view, requests } = assignmentView(state);
+    view.render(160);
+    await tick();
+    assert.match(bodyOf(view, 160), /Assigned \(0\)/, 'the bucket starts empty');
+    view.handleInput('a');
+    await tick();
+    view.handleInput('space');
+    const before = requests.length;
+    view.handleInput('ctrl+s');
+    await tick();
+    await tick();
+    assert.deepEqual(requests.slice(before).filter((entry) => typeof entry === 'string'), ['assigned'],
+      'the write invalidated the Assigned page, so that bucket is read again');
+    assert.match(bodyOf(view, 160), /Assigned \(1\)/, 'and its count follows at once, without a tab switch');
+    view.handleInput('tab');
+    await tick();
+    assert.equal(leftColumn(view, 160).match(/issue title 1(?!\d)/g).length, 1,
+      'the row is in the Assigned tab, once');
+  });
+
+  test('removing your own assignment takes the row and its count off the Assigned tab at once', async () => {
+    const state = {
+      mine: [],
+      assigned: [cursorRow('c1', issue(21))],
+      detailAssignees: ['me'],
+      onWrite: (_number, changes) => {
+        if (changes.remove.includes('me')) state.assigned = [];
+        return { ok: true, changed: true, self: true };
+      },
+    };
+    const { view } = assignmentView(state);
+    view.render(160);
+    await tick();
+    view.handleInput('tab');
+    await tick();
+    assert.match(bodyOf(view, 160), /Assigned \(1\)/, 'the row is on the Assigned tab before the write');
+    view.handleInput('a');
+    await tick();
+    view.handleInput('space');
+    view.handleInput('ctrl+s');
+    await tick();
+    await tick();
+    const body = bodyOf(view, 160);
+    assert.match(body, /Assigned \(0\)/, 'the count follows the removal on the tab itself');
+    assert.ok(!leftColumn(view, 160).includes('issue title 21'), 'and the row is gone, not just unmarked');
+  });
+
+  test('an issue you authored appears once in each tab it belongs to', async () => {
+    const state = {
+      mine: [cursorRow('c1', issue(12))],
+      assigned: [],
+      detailAssignees: [],
+      onWrite: (number, changes) => {
+        if (changes.add.includes('me')) state.assigned = [cursorRow('c2', issue(number))];
+        return { ok: true, changed: true, self: true };
+      },
+    };
+    const { view } = assignmentView(state);
+    view.render(160);
+    await tick();
+    view.handleInput('a');
+    await tick();
+    view.handleInput('space');
+    view.handleInput('ctrl+s');
+    await tick();
+    await tick();
+    assert.equal(leftColumn(view, 160).match(/issue title 12(?!\d)/g).length, 1,
+      'the authored issue stays in My issues, exactly once');
+    view.handleInput('tab');
+    await tick();
+    assert.equal(leftColumn(view, 160).match(/issue title 12(?!\d)/g).length, 1,
+      'and it is in Assigned too, exactly once');
+  });
+
+  test('an assignee save that is not the viewer\'s reads no bucket again', async () => {
+    const state = {
+      mine: [cursorRow('c1', issue(1))],
+      assigned: [],
+      detailAssignees: [],
+      onWrite: () => ({ ok: true, changed: true, self: false }),
+    };
+    const { view, requests } = assignmentView(state);
+    view.render(160);
+    await tick();
+    view.handleInput('a');
+    await tick();
+    view.handleInput('down');
+    view.handleInput('space');
+    const before = requests.length;
+    view.handleInput('ctrl+s');
+    await tick();
+    await tick();
+    assert.deepEqual(requests.slice(before).filter((entry) => typeof entry === 'string'), [],
+      'a write that leaves the viewer\'s own assignment alone repaints no bucket');
+    assert.match(bodyOf(view, 160), /Assigned \(0\)/, 'and no count moved');
+  });
+
+  test('a rejected assignee save leaves the old rows and count exactly as they were', async () => {
+    const state = {
+      mine: [],
+      assigned: [cursorRow('c1', issue(21))],
+      detailAssignees: ['me'],
+      onWrite: () => ({ ok: false, error: 'permission denied by GitHub' }),
+    };
+    const { view, requests } = assignmentView(state);
+    view.render(160);
+    await tick();
+    view.handleInput('tab');
+    await tick();
+    view.handleInput('a');
+    await tick();
+    view.handleInput('space');
+    const before = requests.length;
+    view.handleInput('ctrl+s');
+    await tick();
+    await tick();
+    assert.deepEqual(requests.slice(before).filter((entry) => typeof entry === 'string'), [],
+      'a failed write invalidates nothing');
+    assert.match(bodyOf(view, 100), /permission denied by GitHub/, 'the rejection is visible');
+    assert.equal(view.state.mode, 'assignees', 'the editor keeps the draft');
+    assert.match(bodyOf(view, 160), /Assigned \(1\)/, 'the count is the pre-write one');
+    assert.ok(leftColumn(view, 160).includes('issue title 21'), 'and the row is still there');
+  });
+});

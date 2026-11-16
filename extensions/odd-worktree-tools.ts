@@ -7161,9 +7161,9 @@ async function executeFiles(rawArgs, ctx) {
   await mountFilesPicker(ctx, { scope: picked, cwd, helpers, notify });
 }
 
-// S18 (files-picker T8): the handler `/files` registered, kept so the key the
-// bridge resolves runs the SAME path — a key and its command can never drift
-// apart. `null` until the command is registered.
+// S36 (files-picker T15): the handler `/files` registered, kept so the bound
+// shortcut runs the SAME path — a key and its command can never drift apart.
+// `null` until the command is registered.
 let filesCommandHandler = null;
 
 // `/files` (files-picker T7): browse one checkout's files, insert the chosen
@@ -8496,12 +8496,11 @@ function mountIssuesSidebar(pi, api) {
   issuesSidebarDisposer = typeof disposer === "function" ? disposer : null;
 }
 
-// S18/S19 (files-picker T8): the bridge announces its publication on ONE event,
-// and this package answers it with ONE subscription — a second `events.on` for
-// the same announcement would be a second surface listening to one fact. Every
-// surface the bridge contributes (the issues rail, the file picker's keymap
-// action and its palette row) registers its retry here, and the one announcement
-// runs them all.
+// The bridge announces its publication on ONE event, and this package answers it
+// with ONE subscription — a second `events.on` for the same announcement would be
+// a second surface listening to one fact. Every surface the bridge contributes
+// (the issues rail and the bash design) registers its retry here, and the one
+// announcement runs them all.
 const bridgeReadyRetries = [];
 let bridgeReadySubscribed = false;
 
@@ -8581,99 +8580,38 @@ function registerIssuesSidebar(pi) {
 }
 
 // ---------------------------------------------------------------------------
-// S18/S19 (files-picker T8): the file picker's place in Gentle Shell.
+// S36 (files-picker T15): the file picker's ONE key, bound directly.
 //
-// The bridge read here is the SAME published object the rail reads — its symbol
-// slot, its schema and version gate, never an import and never a dependency.
-// What `/files` needs from it are the two OPTIONAL members `registerKeymap` and
-// `registerCommands`, so a bridge that carries neither is simply not a usable
-// bridge for this surface and nothing is contributed.
-//
-// The key itself is bound HERE, because the bridge carries no handler: it answers
-// which key the action uses (`resolveKeymap`: environment → saved binding →
-// default, one implementation instead of a second copy that would drift) and this
-// package binds that key through the host's own `registerShortcut`.
+// The key is bound HERE, on the host's own seam and bound once at extension load:
+// that is the whole registration this surface makes, and `/files` itself stays a
+// command.
 // ---------------------------------------------------------------------------
 
-const FILES_BRIDGE_ID = "files";
-const FILES_BRIDGE_LABEL = "File picker";
 // The env name follows Gentle Shell's own convention (`GENTLE_PI_COMMANDS_KEY`,
 // `GENTLE_PI_AGENTS_VIEW_KEY`); the default is a convenience, never a
-// requirement: `/files` stays reachable from the palette with no key at all.
+// requirement: `/files` stays reachable as a command with no key at all.
 const FILES_KEYMAP_ENV = "GENTLE_PI_FILES_KEY";
 // S28: `alt+f`, because Pi claims `alt+p` for `app.model.cycleBackward` on
-// Windows and WSL. Still overridable through the environment variable above and
-// assignable in the bridge's Keymaps page.
+// Windows and WSL.
 const FILES_KEYMAP_DEFAULT = "alt+f";
-// S19: the palette row joins Gentle Shell's own section, matched by that
-// section's exact title. The host lists the row only while the `files` command
-// is registered, so it can never be a dead row.
-const FILES_PALETTE_SECTION = "Session";
 const FILES_SHORTCUT_DESCRIPTION = "Open the file picker: enter inserts the paths, ctrl+e opens $EDITOR";
 
-// The api object the current contribution was registered on (`null` until then),
-// the disposers the bridge handed back, and the ONE key this package bound.
-let filesBridgeApi = null;
-let filesBridgeSubscribed = false;
-let filesKeymapDisposer = null;
-let filesCommandsDisposer = null;
-let filesShortcutDisposer = null;
-let filesBoundKey = null;
-
-// Absent, malformed or missing the members this surface uses is `null` — never a
-// throw, and never a fallback that registers a surface the bridge did not take.
-function filesBridge() {
-  try {
-    const api = globalThis[ISSUES_SIDEBAR_BRIDGE_SLOT];
-    if (!api || api.schema !== "gentle-shell-bridge/api" || api.version !== 1) return null;
-    if (typeof api.registerKeymap !== "function") return null;
-    if (typeof api.registerCommands !== "function") return null;
-    return api;
-  } catch {
-    return null;
+// S36: the environment's key when it holds a non-empty one, the default otherwise.
+function filesShortcutKey() {
+  const configured = process.env[FILES_KEYMAP_ENV];
+  if (typeof configured === "string") {
+    const trimmed = configured.trim();
+    if (trimmed !== "") return trimmed;
   }
+  return FILES_KEYMAP_DEFAULT;
 }
 
-// A republished bridge replaces the contribution in place: whatever the previous
-// one handed back is released FIRST, so nothing this package contributed is left
-// behind and the stable id never leaves a second row behind.
-function releaseFilesBridgeContribution() {
-  for (const dispose of [filesKeymapDisposer, filesCommandsDisposer]) {
-    if (typeof dispose !== "function") continue;
-    try {
-      dispose();
-    } catch {
-      // A contribution the bridge will not release never blocks the next one.
-    }
-  }
-  filesKeymapDisposer = null;
-  filesCommandsDisposer = null;
-}
-
-// S18: the effective key comes from the shell. `{ unavailable }`, an empty answer
-// and a bridge that throws are the same silence: nothing is bound, nothing is
-// said. The host's shortcut is process-wide, so the ONE key this package bound is
-// released before another is bound, and the same key is never bound twice.
-function bindFilesKey(pi, api) {
+// S36: bound ONCE, at extension load. A host with no `registerShortcut`, a host
+// that throws from it and a host that took no `files` command are the same
+// silence: no key, no message, nothing else touched.
+function bindFilesShortcut(pi) {
   try {
     if (typeof pi?.registerShortcut !== "function") return;
-    let answer = null;
-    try {
-      answer = api.resolveKeymap(FILES_BRIDGE_ID);
-    } catch {
-      return;
-    }
-    const key = answer && typeof answer === "object" && typeof answer.key === "string" ? answer.key.trim() : "";
-    if (key === "" || key === filesBoundKey) return;
-    if (typeof filesShortcutDisposer === "function") {
-      try {
-        filesShortcutDisposer();
-      } catch {
-        // A binding the host will not release never blocks the next one.
-      }
-      filesShortcutDisposer = null;
-      filesBoundKey = null;
-    }
     const handler = (...args) => {
       const run = filesCommandHandler;
       if (typeof run !== "function") return;
@@ -8686,85 +8624,9 @@ function bindFilesKey(pi, api) {
         // A key never breaks the host.
       }
     };
-    let disposable = null;
-    try {
-      disposable = pi.registerShortcut(key, { description: FILES_SHORTCUT_DESCRIPTION, handler });
-    } catch {
-      return;
-    }
-    filesBoundKey = key;
-    filesShortcutDisposer = typeof disposable === "function" ? disposable : null;
+    pi.registerShortcut(filesShortcutKey(), { description: FILES_SHORTCUT_DESCRIPTION, handler });
   } catch {
-    // The key is a convenience: a broken bridge or host never breaks this extension.
-  }
-}
-
-function mountFilesBridge(pi, api) {
-  releaseFilesBridgeContribution();
-  // `command:` ids belong to the palette and the bridge refuses them, so the
-  // action's id is this package's own name.
-  let keymapDisposer = null;
-  try {
-    const dispose = api.registerKeymap({
-      id: FILES_BRIDGE_ID,
-      label: FILES_BRIDGE_LABEL,
-      env: FILES_KEYMAP_ENV,
-      defaultKey: FILES_KEYMAP_DEFAULT,
-      command: FILES_BRIDGE_ID,
-    });
-    keymapDisposer = typeof dispose === "function" ? dispose : null;
-  } catch {
-    // A bridge that refuses the action still gets the palette row asked for below.
-  }
-  let commandsDisposer = null;
-  try {
-    const dispose = api.registerCommands({
-      id: FILES_BRIDGE_ID,
-      label: FILES_BRIDGE_LABEL,
-      command: FILES_BRIDGE_ID,
-      section: FILES_PALETTE_SECTION,
-    });
-    commandsDisposer = typeof dispose === "function" ? dispose : null;
-  } catch {
-    // The palette row is optional too: the key and `/files` keep working.
-  }
-  filesKeymapDisposer = keymapDisposer;
-  filesCommandsDisposer = commandsDisposer;
-  filesBridgeApi = api;
-  bindFilesKey(pi, api);
-}
-
-// S18/S19: the contribution is idempotent and comes from two moments — this
-// extension's own registration (a bridge already published at load time works)
-// and the ready announcement (a bridge that publishes later). Without a bridge
-// nothing is registered, nothing is bound, nothing is notified and no other
-// surface changes.
-function registerFilesBridge(pi) {
-  try {
-    const api = filesBridge();
-    if (api !== null) {
-      // The SAME published object is the same bridge, so a second moment
-      // contributes ONCE and the bridge never reports a duplicate. Only the key is
-      // retried, because the shell may not have published its resolver yet when
-      // this loads.
-      if (api === filesBridgeApi) {
-        if (filesBoundKey === null) bindFilesKey(pi, api);
-        return;
-      }
-      mountFilesBridge(pi, api);
-      return;
-    }
-    if (filesBridgeSubscribed) return;
-    const subscribed = subscribeBridgeReady(pi, () => {
-      try {
-        registerFilesBridge(pi);
-      } catch {
-        // Nothing is contributed; `/files` keeps working from the command.
-      }
-    });
-    if (subscribed) filesBridgeSubscribed = true;
-  } catch {
-    // The bridge is optional: a broken one never breaks this extension.
+    // The key is a convenience: a host that refuses it never breaks this extension.
   }
 }
 
@@ -8904,9 +8766,9 @@ export default function (pi) {
   // T7 (files-picker): the file picker is the fourth command. It mounts its own
   // overlays, reads Git through the package's async runner and adds no tool.
   registerFilesCommand(pi);
-  // S18/S19 (files-picker T8): the keymap action and the palette row reach Gentle
-  // Shell ONLY through gentle-shell-bridge, and only when it is published.
-  registerFilesBridge(pi);
+  // S36 (files-picker T15): the picker's ONE key, bound directly on the host and
+  // bound once — `alt+f` (S28) unless `GENTLE_PI_FILES_KEY` says otherwise.
+  bindFilesShortcut(pi);
   registerIssuesCommand(pi);
   pi.registerTool(worktreeCreateTool);
   pi.registerTool(worktreeListTool);
@@ -8929,10 +8791,6 @@ export default function (pi) {
   // stale inside `lines()`, which schedules its own refresh. The hidden section
   // therefore makes no child process and no network call, and starts no timer.
   pi.on("session_start", async (event, ctx) => {
-    // S18/S19 (files-picker T8): the second moment the bridge contribution comes
-    // from. It is idempotent, and it is what binds the key once the shell on this
-    // session has published its keymap resolver.
-    registerFilesBridge(pi);
     rememberIssuesSidebarSession(ctx);
     // T16 (S6/S9): a session that starts in another checkout also cuts the CACHE
     // write path, not just the section's snapshot. The identity — not the checkout

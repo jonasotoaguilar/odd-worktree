@@ -7352,8 +7352,16 @@ const ISSUES_CACHE_FULL_TTL_MS = 600000;
 // belong to the checkout the session runs in, not to whatever cwd this process
 // happens to have.
 let issuesSidebarCtx = null;
+// T18 (S11): the live binding of the rail section. `issuesSidebarHandle` is the
+// section module's handle (its `dispose()` is what finally stops the floor timer),
+// `issuesSidebarDisposer` is the bridge's own unregister for it, and
+// `issuesSidebarApi` is the published bridge object the bash design was registered
+// on. A new publication (a republished bridge) is a new object and therefore a
+// new binding; the previous one is torn down before the new one is made, exactly
+// like the file picker's own bridge contribution.
 let issuesSidebarHandle = null;
 let issuesSidebarDisposer = null;
+let issuesSidebarApi = null;
 let issuesSidebarSubscribed = false;
 // S9 (issues-sidebar T14): the process-local cache of the three scoped issue
 // views. It is pure (`lib/related-issues-cache.js`), keyed by the PROVEN repository
@@ -8854,6 +8862,36 @@ function registerIssuesRefusalEntryRenderer(pi) {
   }
 }
 
+// T18 (S11): end ONE binding — the bridge's own unregister first, then the
+// section's `dispose()`, each guarded on its own so a teardown that throws still
+// leaves the caller free to register the replacement. The slots are cleared
+// BEFORE either call, so a re-entrant teardown cannot run twice and nothing keeps
+// pointing at a section this module no longer owns. It is what a replacement (a
+// republished bridge, a second mount) and `session_shutdown` both perform: without
+// it the abandoned section keeps its self-scheduled floor timer alive for the
+// rest of its drawn window and keeps reading the same `gh` traffic this feature
+// exists to remove.
+function teardownIssuesSidebar() {
+  const disposer = issuesSidebarDisposer;
+  const handle = issuesSidebarHandle;
+  issuesSidebarDisposer = null;
+  issuesSidebarHandle = null;
+  if (disposer !== null) {
+    try {
+      disposer();
+    } catch {
+      // A bridge that refuses the unregister still gets its section disposed.
+    }
+  }
+  if (handle !== null && typeof handle.dispose === "function") {
+    try {
+      handle.dispose();
+    } catch {
+      // A section that refuses `dispose()` never blocks the replacement.
+    }
+  }
+}
+
 // S3 (issues-sidebar): the repaint the bridge offers is the only thing the
 // refresh reports; a host that paints by other means gets nothing extra.
 function mountIssuesSidebar(pi, api) {
@@ -8864,6 +8902,11 @@ function mountIssuesSidebar(pi, api) {
     return;
   }
   if (!factory || typeof factory.createIssuesSection !== "function") return;
+  // T18 (S11): a mount REPLACES the binding, so the previous one is torn down
+  // before a new section exists (`/reload`, a republished bridge, a second
+  // mount). Tearing down only once the factory is known to exist keeps a broken
+  // module from costing the rail that was working.
+  teardownIssuesSidebar();
   // T15 (S9, defect 4): binding the section to the bridge is a rebinding of this
   // cache wiring, like `/reload`; an answer a previous binding still holds must
   // not land in the new section's cache. S1 (issues-sidebar-click T1): a rebinding
@@ -8912,6 +8955,7 @@ function mountIssuesSidebar(pi, api) {
   }
   issuesSidebarHandle = handle;
   issuesSidebarDisposer = typeof disposer === "function" ? disposer : null;
+  issuesSidebarApi = api;
 }
 
 // S18/S19 (files-picker T8): the bridge announces its publication on ONE event,
@@ -8974,10 +9018,20 @@ function registerBashDesignRows(api) {
 // bridge surface this package contributes.
 function registerIssuesSidebar(pi) {
   try {
-    if (issuesSidebarHandle !== null) return;
     const api = issuesSidebarBridge();
     if (api !== null) {
-      registerBashDesignRows(api);
+      // T18 (S11): the SAME published object is the same bridge, so a second
+      // moment (a `session_start` after a `session_shutdown` disposed the
+      // section) binds the rail again only when it has no section; otherwise it
+      // contributes nothing twice. A DIFFERENT object is a republished bridge:
+      // its surfaces are registered on it and the previous binding is replaced,
+      // with `mountIssuesSidebar` tearing the old section down first.
+      if (api !== issuesSidebarApi) {
+        registerBashDesignRows(api);
+        issuesSidebarApi = api;
+      } else if (issuesSidebarHandle !== null) {
+        return;
+      }
       // S13 (T11, corrected): without the `gh` CLI this section is NEVER ADDED to
       // the rail — "nunca se agrega a sidebar github sidebar" — and there is no
       // line, notice or refusal to draw for it, because nothing was registered.
@@ -9555,6 +9609,11 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // above.
     releaseIssuesPanelOpen();
     invalidateIssuesSidebar();
+    // T18 (S11): a shutdown disposed the section, and a republished bridge is a
+    // new binding. This is the moment both are picked up again, exactly like the
+    // file picker's own bridge contribution; with a live section on the same
+    // bridge it is a no-op.
+    registerIssuesSidebar(pi);
     // T11 (S2 amended): the missing-plugin hint. It is armed in the same
     // boundary as the section's own state, and it says nothing yet when the
     // host could still announce.
@@ -9602,6 +9661,11 @@ function registerOddWorktreeSurfaceEntries(pi) {
     issuesGateProbe = null;
     clearIssuesGateCache();
     issuesSidebarCtx = null;
+    // T18 (S11): the session that is ending leaves no floor timer behind. The
+    // snapshot was dropped by `invalidateIssuesSidebar` above and the binding is
+    // ended here: the bridge's unregister and the section's own `dispose()`, so a
+    // frame the host still paints after shutdown arms nothing and reads nothing.
+    teardownIssuesSidebar();
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,
   // so startup work still in flight drops instead of writing into the session

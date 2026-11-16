@@ -1123,18 +1123,22 @@ test('S5: loading, empty and error are rows, never a throw', async () => {
 function installBridge() {
   const registered = [];
   const repaints = [];
+  // T18 (S11): every section registration's own disposer is observable, so a
+  // replacement can be asserted to UNREGISTER the binding it replaces before the
+  // new section is registered (the order the tear-down contract names).
+  const released = [];
   globalThis[BRIDGE_SLOT] = {
     schema: 'gentle-shell-bridge/api',
     version: 1,
     registerRows: () => {},
     registerSection: (section) => {
       registered.push(section);
-      return () => {};
+      return () => { released.push(section); };
     },
     createStore: () => ({}),
     requestRepaint: () => { repaints.push(1); },
   };
-  return { registered, repaints };
+  return { registered, repaints, released };
 }
 
 function git(cwd, args) {
@@ -2163,23 +2167,16 @@ test('S3: session_shutdown drops the ended rows and clears the session context',
   assert.deepEqual(section.lines(ctx), [{ label: 'loading…', tone: 'dim' }],
     "the ended session's rows are gone, the rail falls back to the loading row");
 
-  // A frame drawn after shutdown must not read with the ended session's cwd:
-  // the remembered context is cleared, so nothing is bound to that checkout.
+  // T18 (S11): the session that ended DISPOSED its section, so a frame the host
+  // still paints reads nothing at all — no cwd of the dead session is ever used,
+  // and no floor timer outlives the shutdown.
   const before = calls.length;
-  section.lines(ctx);
-  await waitFor(
-    () => !(section.lines(ctx).length === 1 && section.lines(ctx)[0].label === 'loading…'),
-    'the post-shutdown frame never settled',
-  );
-  const after = calls.slice(before);
-  assert.ok(
-    !after.some((call) => call.cwd === checkout || call.env.GH_REPO === 'github.com/myfork/project'),
-    `no read after shutdown uses the dead session's context (saw ${JSON.stringify(after.map((call) => [call.argv[0], call.cwd, call.env.GH_REPO]))})`,
-  );
-  assert.ok(
-    !section.lines(ctx).some((row) => row.label === '#11 Assigned one'),
-    "the ended session's rows never paint again",
-  );
+  assert.deepEqual(section.lines(ctx), [{ label: 'loading…', tone: 'dim' }],
+    'a frame after shutdown still paints the loading row');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(calls.length, before, 'a frame drawn after shutdown reads nothing');
+  assert.deepEqual(section.lines(ctx), [{ label: 'loading…', tone: 'dim' }],
+    "the ended session's rows never paint again");
 });
 
 // ---------------------------------------------------------------------------
@@ -2927,6 +2924,119 @@ test('S10 (T8): a drawn section reads on the extension\'s own 20 s timer, and ac
   }
 });
 
+// T18 (S11, PR #89 review): the extension stored the bridge's unregister and the
+// section's handle but ran neither, so a section that was REPLACED — a republished
+// bridge, a second mount — kept its 20 s floor timer alive for the rest of its
+// drawn window. A replaced section must be torn down before the replacement is
+// registered, and must read nothing afterwards: that duplicate `gh` traffic is
+// exactly what this feature exists to remove.
+test('S11 (T18): a re-mount tears the replaced section down, so it reads nothing', async () => {
+  const floor = captureFloorTimers();
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const checkout = makeCheckout();
+    const firstBridge = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const gh = sectionGithub({
+      issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
+    });
+    ghIssues.setGhRunner(gh.runner);
+    const ctx = { cwd: checkout, ui: { notify: () => {} }, sessionManager: { getSessionId: () => 'session-one' } };
+
+    await fireSessionStart(loaded.hooks, ctx);
+    await awaitIssuesGateSettled(checkout);
+    assert.equal(firstBridge.registered.length, 1, 'the first bridge holds the first section');
+    const replaced = firstBridge.registered[0];
+    await waitForRows(replaced, ctx);
+    assert.equal(graphqlCalls(gh.calls).length, 1, 'the first section read once');
+    assert.equal(floor.armed.length, 1, 'and armed its own floor timer');
+
+    // A republished bridge is a NEW published object, so the rail binds again on
+    // the next session boundary — while the replaced section is still live.
+    const republished = installBridge();
+    await fireSessionStart(loaded.hooks, ctx);
+    await awaitIssuesGateSettled(checkout);
+
+    // The replaced section must be inert: a frame the host still paints (and the
+    // clock moving past the floor with it) starts no read at all.
+    const reads = graphqlCalls(gh.calls).length;
+    replaced.lines(ctx);
+    offset = 25000;
+    for (const timer of floor.armed.slice(1)) timer.fn();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(graphqlCalls(gh.calls).length, reads,
+      'the replaced section kept reading after the re-mount');
+    assert.equal(floor.armed.length, 1, 'and the replaced section armed no floor timer');
+
+    // The replacement was registered, and the binding it replaced was unregistered
+    // FIRST — the tear-down order the contract names.
+    assert.equal(republished.registered.length, 1, 'the new bridge holds the replacement section');
+    assert.deepEqual(firstBridge.released, [replaced], 'the replaced binding was unregistered first');
+  } finally {
+    Date.now = realNow;
+    floor.restore();
+  }
+});
+
+// T18 (S11): a session that ends takes its timer with it. `invalidate()` dropped
+// the snapshot but left the section alive, so one frame the host painted after
+// shutdown re-armed the floor and kept reading for the rest of the drawn window.
+test('S11 (T18): a shut-down session leaves no floor timer behind', async () => {
+  const floor = captureFloorTimers();
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const checkout = makeCheckout();
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const gh = sectionGithub({
+      issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
+    });
+    ghIssues.setGhRunner(gh.runner);
+    const ctx = { cwd: checkout, ui: { notify: () => {} }, sessionManager: { getSessionId: () => 'session-one' } };
+
+    await fireSessionStart(loaded.hooks, ctx);
+    await awaitIssuesGateSettled(checkout);
+    const section = registered[0];
+    await waitForRows(section, ctx);
+    assert.equal(graphqlCalls(gh.calls).length, 1, 'the drawn section made its own read');
+    assert.equal(floor.armed.length, 1, 'and armed the floor');
+
+    // One floor fires, so a second floor is armed when the session ends.
+    offset = 25000;
+    floor.armed[0].fn();
+    await waitFor(() => graphqlCalls(gh.calls).length === 2, 'the floor timer started no read');
+    // Let that read settle, so the only read the post-shutdown frame could start
+    // is its own (a read still in flight would mask it behind `running`).
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(floor.armed.length, 2, 'the fire armed the next floor');
+
+    await fireHook(loaded.hooks, 'session_shutdown', ctx);
+    assert.equal(floor.armed[1].cleared, true, 'shutdown cleared the armed floor');
+
+    // The host can still paint the frame it held when the session ended, and that
+    // draw would re-open the drawn window. A shut-down section must arm nothing and
+    // start no read, however many floors pass inside that window.
+    section.lines(ctx);
+    offset = 25000 + 60000;
+    for (const timer of floor.armed.slice(2)) timer.fn();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(floor.armed.length, 2, 'a shut-down section armed no floor timer');
+    // A read attempt settles an ended-session error row; the disposed section keeps
+    // the loading row, so this is what "nothing reads" looks like from outside.
+    assert.deepEqual(section.lines(ctx), [{ label: 'loading…', tone: 'dim' }],
+      'a shut-down section started a read after its session ended');
+  } finally {
+    Date.now = realNow;
+    floor.restore();
+  }
+});
+
 // The rail's floor is a REAL 20 s timer (the extension's own constant) and no test
 // waits 20 s for it: a test that needs the floor fires the captured callback
 // itself, exactly like the host would. Every other delay still goes to the host.
@@ -3500,7 +3610,11 @@ test('S4 (T3): the cache survives a session_shutdown/start pair, so the next rea
     'the snapshot is still dropped: no frame drawn afterwards shows the ended rows');
 
   await fireSessionStart(loaded.hooks, ctx);
-  section.lines(ctx);
+  // T18 (S11): the shutdown disposed the ended section, so the new session's
+  // boundary binds the rail again; its fresh section is the one that reads.
+  const resumed = registered[registered.length - 1];
+  assert.notEqual(resumed, section, 'the new session binds the rail again');
+  resumed.lines(ctx);
   await waitFor(() => graphqlCalls(calls).length === 2, 'the new session never read its issues');
   const query = graphqlQueryOf(graphqlCalls(calls)[1]);
   assert.equal((query.match(/first: 20/g) || []).length, 3,
@@ -3712,9 +3826,12 @@ test('S9 (T15): a read in flight at session_shutdown never repopulates the cache
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   // A new session on the same checkout draws: an emptied cache means its first
-  // read is the full one.
+  // read is the full one. T18 (S11): shutdown disposed the previous section, so
+  // the new session's boundary binds a fresh one; that is the section it draws.
   await fireSessionStart(loaded.hooks, ctx);
-  section.lines(ctx);
+  const resumed = registered[registered.length - 1];
+  assert.notEqual(resumed, section, 'the new session binds the rail again');
+  resumed.lines(ctx);
   await waitFor(() => lists.length === 2, 'the new session never read its issues');
   assert.equal((lists[1].query.match(/first: 100/g) || []).length, 3,
     'the shut-down read never repopulated the cache, so the next refresh is a full read');
@@ -3723,10 +3840,10 @@ test('S9 (T15): a read in flight at session_shutdown never repopulates the cache
     assigned: [{ number: 22, title: 'New twenty-two', updatedAt: '2024-02-01T00:00:00Z' }],
   }));
   await waitFor(
-    () => section.lines(ctx).some((row) => row.label === '#22 New twenty-two'),
+    () => resumed.lines(ctx).some((row) => row.label === '#22 New twenty-two'),
     'the new session never painted its own rows',
   );
-  assert.ok(!section.lines(ctx).some((row) => row.label === '#11 Gone eleven'),
+  assert.ok(!resumed.lines(ctx).some((row) => row.label === '#11 Gone eleven'),
     "the ended session's answer never became cached rows");
 });
 

@@ -26,7 +26,7 @@ The question this page answers: which rules must every change preserve, and what
    `/files`, `/issues`; `worktree_create`, `worktree_list`; the one fourth kind of
    surface, a sidebar section (`lib/issues-section.js`) that is neither a command nor a tool and
    registers no name the host or the agent can call; the one design
-   (`lib/bash-design.js`), one `Card tools` line over `bash` and the four read-only
+   (`lib/bash-design.js`), one `Card tools` line over `bash`, `write` and the four read-only
    tools (the single `tool: "bash"` design on a bridge older than 0.6.0), which is
    neither a command nor a tool either and adds no name to either registry; and
    no `Cards` row of its own at all (the file cards add none either — see below).
@@ -390,7 +390,10 @@ The question this page answers: which rules must every change preserve, and what
     hint — and the classifier (`lib/bash-activity.js`) names exactly one family for
     it. The four read-only tools the same design covers (`grep`, `find`, `ls`, `read`)
     are headed `exploring` whatever they read, and a read-only heading that cannot be
-    proved is returned unchanged: those four have no generic word of their own. Any
+    proved is returned unchanged: those four have no generic word of their own. The
+    line also declares `write` (`lib/bash-design.js`) even though the design draws
+    nothing for it: the declaration is what lets the file card ask the bridge about a
+    write, and the rows of a write come back byte for byte. Any
     other case, a row with no fill to pay for the word included, keeps the host's `$`
     or its own `<glyph> <tool>` exactly as drawn, and a tool the design does not cover
     is returned untouched. The design never throws and never mutates its input. The

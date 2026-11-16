@@ -737,8 +737,8 @@ tool-renderer resolver, builds the host's own card (whatever `Card style` and
 `Card content` are chosen), reads its line in `/gentle:customize` → `Cards`
 (`default` | `activity`; the bridge stores `default` as `native`) on every render pass, and hands the design the rows the host
 drew. On a bridge that can put several tools on one line (`0.6.0` and later) that is ONE
-`Card tools` row covering `bash` and the four read-only tools `grep`, `find`, `ls` and
-`read`; on an older bridge the same design is registered for `bash` alone, the row is
+`Card tools` row covering `bash`, `write` and the four read-only tools `grep`, `find`, `ls`
+and `read`; on an older bridge the same design is registered for `bash` alone, the row is
 `Card bash` and those four are drawn by the host. Which shape is sent is decided from the
 bridge's own `VERSION` before anything is registered, because a grouped registration on an
 older one is refused and reported in `/bridge-status`. A release string that cannot be read

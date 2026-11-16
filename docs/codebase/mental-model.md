@@ -98,7 +98,7 @@ for each is in [`invariants.md`](invariants.md).
 | [17](invariants.md) | This repo paints last; the only painted inputs it measures are the host's key hint and Pi's own Markdown rows. |
 | [18](invariants.md) | The `## CodeGraph` section is advice, selected by the session's own facts. |
 | [19](invariants.md) | CodeGraph runs only with its CLI, in the background, and writes one config entry. |
-| [20](invariants.md) | The tools design only draws, and it draws what the classifier names (the four read-only tools are always `exploring`). |
+| [20](invariants.md) | The tools design only draws, and it draws what the classifier names (the four read-only tools are always `exploring`; `write` is declared only so the file card can ask about it, and it draws nothing for it). |
 | [21](invariants.md) | The two CodeGraph reminders advise; they never block and never add a surface. |
 | [22](invariants.md) | The `bash` guards read text, fail open and add no surface. |
 | [23](invariants.md) | The file card only draws, and it claims exactly three tools. |

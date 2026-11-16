@@ -1105,6 +1105,11 @@ read once per directory and cached for the session. It comes from a tool's own p
 target or an absolute path argument of a shell command. A path outside every git checkout (tmp, `/etc`,
 your home) triggers nothing.
 
+**A call that failed earns nothing.** A `grep` that errored or a `read` that found no such
+file returned nothing the model could read, so no reminder rides that error result, no once-per-key
+slot is spent, and a failed `codegraph` or `explore` call does not count as a use of the graph. The
+next call that does answer is still reminded.
+
 **What forgets a reminder.** A compaction forgets both guards and what the session already used, and so
 does a new session in the same process (a new, resumed or forked session; a `/reload` keeps the current
 one). A reminder that does not fire uses up no slot.

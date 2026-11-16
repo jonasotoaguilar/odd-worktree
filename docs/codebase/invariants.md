@@ -428,6 +428,9 @@ The question this page answers: which rules must every change preserve, and what
     mcp__codegraph__codegraph_explore first, if it applies.` (`mcp__codegraph__codegraph_explore`
     in backticks). It stays silent once the session used `codegraph` or the MCP tool.
 
+    **A call that failed is no subject at all**: the model got no result to read, so
+    no reminder rides an error result, no once-per-key slot is spent, and a failed
+    `codegraph` or explore call is no use of the graph either.
     **What counts as a call** is `grep`, `find`, `ls`, `read` and `bash`: `read` only
     for code, never for the `.md`/`.json`/`.yml`/`.yaml`/`.toml`/`.txt` the rule
     exempts, and `bash` only when a segment runs `grep`, `rg`, `find`, `fd`, `ls`,

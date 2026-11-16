@@ -55,7 +55,7 @@ The question this page answers: which rules must every change preserve, and what
    disposer, and does nothing at all when the API is absent or older — no throw,
    no command, no warning beyond the section's own discoverability one. The bridge
    owns Pi's one tool-renderer resolver, builds the host's own card, reads its
-   `bash` line (`native` | `activity`) on every render pass and persists the choice
+   `bash` line (`default` | `activity`, stored as `native` | the design id) on every render pass and persists the choice
    in its own store. The only thing this package writes is the first-run seed:
    `seedBashDesignSelection` selects `activity` once, only when the bridge holds no
    `bash` choice, and records `bashActivitySeeded` in its own `odd-worktree` store so

@@ -592,7 +592,7 @@ The bash card is a **design**, not a renderer and not a preference of this packa
 `activity`) through gentle-shell-bridge's `registerToolDesign`. The bridge owns Pi's one
 tool-renderer resolver, builds the host's own card (whatever `Card style` and
 `Card content` are chosen), reads its `bash` line in `/gentle:customize` → `Cards`
-(`native` | `activity`) on every render pass, and hands the design the rows the host
+(`default` | `activity`; the bridge stores `default` as `native`) on every render pass, and hands the design the rows the host
 drew. So the choice is the bridge's, survives a restart there, repaints cards already
 on screen as well as new ones, and does not depend on extension load order. With no
 bridge, or one older than `registerToolDesign`, nothing is registered.
@@ -622,13 +622,27 @@ colour in every state. A finished call's duration (`120ms`, `1.2s`, in `dim`) is
 into the closing rule right-aligned against the corner (neon `╰──── 120ms ╯`; float: the
 bar row's end), only when it fits, never while running and never without a duration. A
 theme that cannot paint, or no render context, leaves those rows exactly as the host
-drew them. The default is `native` only for a user who already chose it. The bridge has no default design (an
+drew them. The default card is the host's own only for a user who already chose it. The bridge has no default design (an
 absent value reads `native`), so on its first load with a bridge that has `createStore`,
 this package selects `activity` for `bash` **once**: only when the bridge's
 `bridge-tool-designs` store holds no `bash` choice, and it then writes its own marker
-(`odd-worktree` store, `bashActivitySeeded`). A choice already stored (`native`
+(`odd-worktree` store, `bashActivitySeeded`). A choice already stored (`default`
 included) is never overwritten, a later switch to `native` is never undone, and a failed
 write leaves no marker so the next load tries again.
+
+The room the longer label needs comes from the host's fill first and, when a long heading has
+none left, from the tail of the command, which then ends in `…` (or keeps the host's own
+`…`); the heading is a preview and the expanded call shows the whole command. Less than eight
+columns of the command would be left, and the row is left as the host drew it. A drawing is a
+pure function of the host's rows, what each theme role paints and the call's command and state,
+so repeated frames of a retained card are answered from a bounded memo (512 entries) instead of
+being classified and repainted again: Pi repaints every retained card on every frame. The
+`/gentle:customize` preview is one row, like the other `Cards` rows.
+
+The roles come from the theme, so the colours are the theme's. In `TokyoNight`, for example,
+`mdLink` and `syntaxFunction` are the same blue and `success` and `bashMode` are two close cyans,
+so `exploring`, `formatting` and `preparing` read alike there; a theme that separates those roles
+separates the cards.
 
 The CodeGraph card is separate: with the `codegraph` CLI installed it still claims
 `codegraph …` bash rows through its own resolver (invariant 19).

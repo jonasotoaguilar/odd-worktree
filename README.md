@@ -4,7 +4,7 @@ A Pi extension that gives an agent session worktrees, ODD documents and GitHub i
 
 ## What It Does
 
-Two agent tools, three panels, one sidebar section and one preference, loaded from one extension entry point. Each ODD feature gets its own checkout beside the clone, and you move between checkouts and read your ODD documents and issues without leaving Pi.
+Two agent tools, three panels, one sidebar section, one bash design and two preferences, loaded from one extension entry point. Each ODD feature gets its own checkout beside the clone, and you move between checkouts and read your ODD documents and issues without leaving Pi.
 
 | Surface | Kind | What it does |
 | --- | --- | --- |
@@ -15,10 +15,13 @@ Two agent tools, three panels, one sidebar section and one preference, loaded fr
 | `/issues` | panel | Reads this checkout's GitHub issues — the three scoped tabs on open, every open issue behind `g` — and, when your role allows it, edits them. |
 | `ISSUES` rail section | sidebar section | Lists the open issues of this checkout's repository assigned to you, seven at a time plus a count of the rest; a click opens that issue in `/issues` on `Assigned` and the overflow row opens `/issues`. Needs `gh` and gentle-shell-bridge with its rail. |
 | `activity` bash design | design on the bridge's `bash` line | Optional: `/gentle:customize` → `Cards` → `bash`, with `native` (the host's own card, the default) and `activity` (the card's heading names what the command does: `⌕ exploring`, `✓ checking`, …). Registered through gentle-shell-bridge's `registerToolDesign`; the bridge owns the choice, remembers it and repaints cards already on screen. |
+| `Card skill`, `Card odd` | customize rows | The two preferences: draw a `read`, `edit` or `write` call on a skill (a `SKILL.md` a `skills` folder holds) or on an ODD artifact (any file below an `odd/tasks` folder) as that file's own card, and leave every other file call to the host. Both on by default, both in `/gentle:customize` → `Cards`, through gentle-shell-bridge. |
 
 Moving the session and removing a checkout are human actions: only `/warp` does either, and no agent tool can. A checkout has one identity, its ODD: the directory name is the ODD it serves, and `branch` is only the git branch.
 
-The bash card is a design, not a preference of this package: it adds the value `activity` to the bridge's own `bash` line, which keeps `native` (the host's own card) as the default. Nothing is stored by this package and load order does not matter. See [the bash design](docs/reference.md#the-bash-card-and-its-preference).
+The bash card is a design, not a preference of this package: it adds the value `activity` to the bridge's own `bash` line, which keeps `native` (the host's own card) as the default. Nothing about it is stored by this package and load order does not matter. See [the bash design](docs/reference.md#the-bash-card-and-its-preference).
+
+The two preferences are the file cards' switches, `Card skill` and `Card odd`, both on by default. While one is on, a `read`, `edit` or `write` call on a customized skill or an ODD artifact heads as that file — its own mark and label, the tool, the path and a read's line range — instead of a bare tool row; an ordinary file call, and a call whose switch is off, keeps the host's own drawing. Both choices live in one document of this package's own, `<home>/card-files.json`, and both are chosen in the same `Cards` page. See [the file cards](docs/reference.md#the-file-cards-and-their-switches).
 
 ## Quick Start
 
@@ -28,7 +31,7 @@ The bash card is a design, not a preference of this package: it adds the value `
 | Node.js >= 18 and `git` | Every repository operation is a `git` child process. |
 | `gh`, authenticated (`gh auth login`) | `/issues` and the `ISSUES` rail section. Without it the command stays registered and says what is missing, and the section shows its error row. |
 | Gentle Shell (recommended) | Supplies the session records the deletion guard reads to see other sessions. |
-| Gentle Shell with `gentle-shell-bridge` and its rail | The `ISSUES` rail section, and the `activity` value of the `bash` line in `/gentle:customize` → `Cards`. Without the bridge neither is registered and no other surface changes, apart from one warning in a primary session naming `pi install npm:gentle-shell-bridge`; the package has no dependency on it. |
+| Gentle Shell with `gentle-shell-bridge` (and its rail, for the section) | The `Card skill` and `Card odd` rows and the `activity` value of the `bash` line in `/gentle:customize` → `Cards`, which need only the bridge, and the `ISSUES` rail section, which needs the rail too. Without the bridge none of them is registered and no other surface changes, apart from one warning in a primary session naming `pi install npm:gentle-shell-bridge`; the package has no dependency on it. |
 
 ```bash
 pi install npm:pi-odd-worktree
@@ -36,7 +39,7 @@ pi install npm:pi-odd-worktree
 
 Inside a Gentle Shell session, use its launcher instead: `gentle-shell install npm:pi-odd-worktree`. From a local clone, `pi install .` installs the working copy.
 
-Expected result: `/warp`, `/odd-list` and `/issues` are available as commands, the agent is offered `worktree_create` and `worktree_list`, a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows an `ISSUES` section for this checkout, and its `/gentle:customize` → `Cards` page offers `activity` on its `bash` line.
+Expected result: `/warp`, `/odd-list` and `/issues` are available as commands, the agent is offered `worktree_create` and `worktree_list`, a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows an `ISSUES` section for this checkout, and its `/gentle:customize` → `Cards` page offers `activity` on its `bash` line together with the `Card skill` and `Card odd` rows.
 
 ## Core Workflow
 
@@ -58,11 +61,12 @@ The full rules of each step, including every refusal, are in [Create, list, move
 - **The issues rail is checkout-scoped and optional.** When a Gentle Shell has `gentle-shell-bridge` installed and draws its rail, an `ISSUES` rail section lists the open issues of this checkout's repository assigned to you — that one repository, not every issue across every repository you touch — seven at a time, with `and N more issues` for the rest and a pull-request mark on the issues that already have one. A click opens that issue in the `/issues` panel on `Assigned`, not in a browser: the click first proves the number belongs to this checkout, so a row left over from another checkout — or a checkout whose repository cannot be proven — opens nothing instead of guessing, and `/issues`' own `o` key is still the browser. The overflow row opens `/issues` with no number. While the rail's cache holds this repository, `/issues` paints its first frame from it and reads one tab at mount instead of three, the other two reading the first time you open them. A frame never waits on `gh`: nothing is read at `session_start`, the rows refresh behind a 30 s floor while the section is being drawn — measured on the last attempt, so a failing `gh` is not retried every turn — there is no polling, and a failed refresh keeps the rows and marks them `stale` rather than emptying the list. With no bridge the section simply never appears; the one thing you get is a single warning naming the install command, in a primary session only. See [the rail section](docs/reference.md#the-issues-rail-section).
 - **Cards follow your shell.** Tool and warp cards use the card style Gentle Shell publishes, and a click expands that card only. See [card style](docs/reference.md#card-style-follows-your-shell).
 - **Bash headings can name the activity.** With `bash` set to `activity`, a card whose heading shows the whole command is headed with the family its command names (mark and word) instead of `$`; a command the classifier cannot name, or a heading that hides part of it, keeps the host's `$`. See [the bash design](docs/reference.md#the-bash-card-and-its-preference).
+- **File calls on a skill or an ODD are cards too.** While `Card skill` and `Card odd` are on (they both are, by default) a `read`, `edit` or `write` call whose path names a customized skill or a file below an `odd/tasks` folder heads as that file, with the tool, the path and a read's line range; an expanded Markdown read or write draws the document, and an edit always keeps its diff. Any other file call, and a call whose switch is off, is the host's own row. See [the file cards](docs/reference.md#the-file-cards-and-their-switches).
 - **`bash` cannot create or list worktrees, or branch off the principal checkout.** A `git worktree add` or `git worktree list` is refused in any cwd and pointed at `worktree_list` and `worktree_create`; in the principal checkout, creating a branch or switching to anything but the default branch is refused too. See [the guards](docs/reference.md#the-bash-guards).
 - **Two blocks in the system prompt.** `## ODD worktrees` tells the agent how worktrees and ODDs work. `## CodeGraph` tells a session that already holds a CodeGraph tool how to use it, with one text per role. Both are appended after the host's own text, and `ODD_WORKTREE_PROMPT=0` suppresses them. See [the prompt blocks](docs/reference.md#the--odd-worktrees-block-in-the-system-prompt).
 - **CodeGraph stays fresh, only when its CLI is installed.** At session start the package creates or syncs the checkout's index and warms its daemon, and makes sure your global `mcp.json` has the `codegraph` entry (it adds it or fixes only the differing fields and keeps the rest). It also syncs after a compaction, after a native `codegraph init` and after an `edit` or `write`, in the background and without ever blocking you. See [CodeGraph](docs/reference.md#codegraph-index-daemon-and-mcp-entry). Its tool rows are drawn as a card.
 - **Two reminders keep a session on the CodeGraph rule.** The first `grep`, `find`, `ls`, `read` or `bash` search in a checkout gets one sentence appended to its result: use `codegraph` first, or — for another checkout — call `mcp__codegraph__codegraph_explore` with that path as `projectPath`. Once per checkout, once per session, never a block. See [the reminders](docs/reference.md#the-two-codegraph-reminders).
-- **Deliberately absent.** No customize panel, no plugin-tools toggles, no companion-app integration and no worktree-to-issue association. There is nothing to configure here: the bash design is chosen on the bridge's own `bash` line.
+- **Deliberately absent.** No customize panel, no plugin-tools toggles, no companion-app integration and no worktree-to-issue association. There is nothing to configure here beyond the two file-card switches, whose only surface is the shell's `Cards` page: the bash design is chosen on the bridge's own `bash` line.
 
 ## Documentation
 

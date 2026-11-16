@@ -6,7 +6,7 @@ starts, which rule each change must preserve, and where to begin.
 ## What This Codebase Owns
 
 One Pi extension package, `pi-odd-worktree`: two agent tools (`worktree_create`,
-`worktree_list`), three panels (`/warp`, `/odd-list`, `/issues`), one optional
+`worktree_list`), three panels (`/warp`, `/odd`, `/issues`), one optional
 sidebar section and one tools design on the bridge (`Card tools`: bash, grep, find, ls, read). It owns creating and listing the checkouts an ODD
 works in, reading a checkout's `odd/tasks/*.md`, reading and — role permitting —
 editing that checkout's GitHub issues, and the drawing of its own cards. `git` is
@@ -42,7 +42,7 @@ gentle-shell-bridge adds only two control surfaces.
    `lib/worktree-create.js`, prepares through `lib/worktree-hooks.js`, then
    `lib/worktree-setup-runner.js` starts the install as a tracked background
    task; a listing renders in `lib/worktree-list.js`; `/warp` composes
-   `lib/warp-*.js`; `/odd-list` reads through `lib/odd-docs.js`.
+   `lib/warp-*.js`; `/odd` reads through `lib/odd-docs.js`.
 3. `lib/worktree-git.js` — the one git seam, where a child argv leaves for git,
    with `lib/worktree-remove.js` the one removal. `lib/gh-issues.js` is the `gh`
    seam for `/issues`; `lib/codegraph-mcp-config.js` is the only writer of the

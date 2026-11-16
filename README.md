@@ -11,7 +11,7 @@ Two agent tools, three panels, one sidebar section and one tool-design line, loa
 | `worktree_create` | tool | Creates `<repo-parent>/<repo-name>-worktrees/<odd>` on a branch, prepares it and starts its install in the background. |
 | `worktree_list` | tool | Read-only list of the checkouts this package created, each by its ODD and branch. |
 | `/warp` | panel | Moves this session to another checkout, creates one, and removes one. |
-| `/odd-list` | panel | Reads this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
+| `/odd` | panel | Reads this checkout's `odd/tasks/*.md`: list on the left, styled markdown on the right. |
 | `/issues` | panel | Reads this checkout's GitHub issues — the three scoped tabs on open, every open issue behind `g` — and, when your role allows it, edits them. |
 | `ISSUES` rail section | sidebar section | Lists the open issues of this checkout's repository assigned to you, seven at a time plus a count of the rest; a click opens that issue in `/issues` on `Assigned` and the overflow row opens `/issues`. Needs `gh` and gentle-shell-bridge with its rail. |
 | `activity` tools design | design on the bridge's `Card tools` line | Optional: `/gentle:customize` → `Cards` → `Card tools`, with `default` (the host's own card) and `activity`, which is selected for you on the first run. It covers `bash` and the read-only tools `grep`, `find`, `ls` and `read`: a bash card's heading names what the command does, each family in its own theme colour (`⌕ exploring`, `✓ checking`, …; an unnamed command reads `$ bash`), and those four are always `⌕ exploring`. A finished call shows its duration on the closing rule and the frame turns `warning` while the call runs and `error` when it fails. Needs gentle-shell-bridge 0.6.0 or newer for the one `Card tools` row over the five tools; on 0.5.0 the row is `Card bash`, covers bash alone and keeps everything above for bash cards. Registered through gentle-shell-bridge's `registerToolDesign`; the bridge owns the choice, remembers it and repaints cards already on screen. |
@@ -36,7 +36,7 @@ pi install npm:pi-odd-worktree
 
 Inside a Gentle Shell session, use its launcher instead: `gentle-shell install npm:pi-odd-worktree`. From a local clone, `pi install .` installs the working copy.
 
-Expected result: `/warp`, `/odd-list` and `/issues` are available as commands, the agent is offered `worktree_create` and `worktree_list`, a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows an `ISSUES` section for this checkout, and its `/gentle:customize` → `Cards` page offers `activity` on its `Card tools` line — `Card bash` on a bridge older than 0.6.0.
+Expected result: `/warp`, `/odd` and `/issues` are available as commands, the agent is offered `worktree_create` and `worktree_list`, a Gentle Shell whose `gentle-shell-bridge` is installed and whose rail is drawn shows an `ISSUES` section for this checkout, and its `/gentle:customize` → `Cards` page offers `activity` on its `Card tools` line — `Card bash` on a bridge older than 0.6.0.
 
 ## Core Workflow
 

@@ -19,7 +19,7 @@ The question this page answers: which rules must every change preserve, and what
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
 3. **The shipped surface is exactly three commands, two tools, one sidebar
-   section and one tool design.** `/warp`, `/odd-list`, `/issues`;
+   section and one tool design.** `/warp`, `/odd`, `/issues`;
    `worktree_create`, `worktree_list`; the one fourth kind of surface, a sidebar
    section (`lib/issues-section.js`) that is neither a command nor a tool and
    registers no name the host or the agent can call; and the one design

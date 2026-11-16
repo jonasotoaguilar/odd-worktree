@@ -1,5 +1,5 @@
 'use strict';
-// S4 surface: the standalone package always registers /warp, /odd-list and
+// S4 surface: the standalone package always registers /warp, /odd and
 // /issues plus the TWO agent worktree tools (S3/S4: `worktree_delete` and
 // `worktree_warp` are not registered, so `/warp` is the only front that moves
 // the session and the panel's ctrl+d the only one that removes a checkout),
@@ -76,11 +76,11 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd-list, /issues and the two worktree tools', async () => {
+  test('registers /warp, /odd, /issues and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['issues', 'odd-list', 'warp'], 'the command list is exactly the three panels');
+    assert.deepEqual(registered, ['issues', 'odd', 'warp'], 'the command list is exactly the three panels');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
@@ -235,7 +235,9 @@ describe('removed surface', () => {
 
   test('the loaded extension holds no reference to the removed packages', async () => {
     const { commands } = await loadExtension({});
-    for (const gone of ['customize', 'odd', 'herdr-gentle:warp']) {
+    // `odd` is NOT in this list any more: it is the odd viewer's own name now. What must
+    // never come back is the customize panel and the Herdr worktree panel.
+    for (const gone of ['customize', 'herdr-gentle:warp']) {
       assert.equal(commands.has(gone), false, `no /${gone} command`);
     }
     assert.equal(commands.has('issues'), true, '/issues is the migrated command');

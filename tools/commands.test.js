@@ -1,5 +1,5 @@
 'use strict';
-// S4 commands: `/warp` and `/odd-list` are driven here through the registered
+// S4 commands: `/warp` and `/odd` are driven here through the registered
 // handlers. `/issues` has its own suite (tools/issues-command.test.js), where
 // the `gh` runner is injected. The warp case also proves the handoff route end
 // to end: `/warp @<token>` is decoded as the queued move it carries instead of
@@ -456,11 +456,11 @@ describe('/warp selector after a removal', () => {
   });
 });
 
-describe('/odd-list', () => {
+describe('/odd', () => {
   test('an empty checkout says there is nothing to read', async () => {
     const repo = makeRepo();
     notifications.length = 0;
-    await commands.get('odd-list').handler('', makeCtx(repo));
+    await commands.get('odd').handler('', makeCtx(repo));
     assert.deepEqual(notifications, [['info', 'No odd documents under odd/tasks/ in this checkout.']]);
   });
 
@@ -470,7 +470,7 @@ describe('/odd-list', () => {
     fs.writeFileSync(path.join(repo, 'odd', 'tasks', 'feature.md'), '# Feature\n');
     let offered = null;
     notifications.length = 0;
-    await commands.get('odd-list').handler(
+    await commands.get('odd').handler(
       '',
       makeCtx(repo, { select: async (_title, options) => { offered = options; return options[0]; } }),
     );
@@ -480,7 +480,7 @@ describe('/odd-list', () => {
 
   test('an unknown option names the command that is valid', async () => {
     notifications.length = 0;
-    await commands.get('odd-list').handler('nope', makeCtx(makeRepo()));
-    assert.deepEqual(notifications, [['error', 'Unknown option "nope". Use /odd-list.']]);
+    await commands.get('odd').handler('nope', makeCtx(makeRepo()));
+    assert.deepEqual(notifications, [['error', 'Unknown option "nope". Use /odd.']]);
   });
 });

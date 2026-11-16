@@ -6,7 +6,7 @@
 //
 // Registers three commands:
 //   /warp      move this session to another checkout of the project
-//   /odd-list  read this checkout's odd/ documents
+//   /odd       read this checkout's odd/ documents
 //   /issues    read this checkout's GitHub issues, with label/assignee,
 //              comment and close actions when the repository permits them
 //
@@ -6488,7 +6488,7 @@ async function executeOdd(rawArgs, ctx) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
   if (raw !== "") {
-    if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd-list.`, "error");
+    if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
     return;
   }
   const cwd = toolCwd(ctx);
@@ -6597,11 +6597,11 @@ async function oddFallbackListing(root, local) {
   return usable ? ordered : local;
 }
 
-// `/odd-list` (odd-viewer S1-S8): a two-pane viewer of this checkout's odd/
+// `/odd` (odd-viewer S1-S8): a two-pane viewer of this checkout's odd/
 // documents — the list on the left, the styled markdown on the right.
 function registerOddCommand(pi) {
   if (typeof pi?.registerCommand !== "function") return;
-  pi.registerCommand("odd-list", {
+  pi.registerCommand("odd", {
     description: "Read this checkout's odd documents: list on the left, styled markdown on the right",
     handler: async (args, ctx) => {
       await executeOdd(args, ctx);

@@ -81,7 +81,7 @@ how the package is tested and released. The repository invariants live in
 | `r` | Reload the listing |
 | `esc`, `ctrl+c` | Close the panel |
 
-`/odd-list` — `↑`/`↓` select, `t` search (`T` and `/` also open the box), `o`
+`/odd` — `↑`/`↓` select, `t` search (`T` and `/` also open the box), `o`
 open the document in `$VISUAL`/`$EDITOR`, `s` toggles the order between `recent`
 and `name`, `r` reload, `esc` close. `←`/`→` and `[`/`]` scroll the list; the
 document pane pages with `ctrl+j`/`ctrl+k`.
@@ -954,7 +954,7 @@ toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. Its one
 customize-side contribution is the `activity` value of the bridge's `Card tools` line (or its `Card bash`
 line, on a bridge older than 0.6.0), which adds no
-command, tool or row of its own. There is nothing to configure here, and `/warp`, `/odd-list` and `/issues` are always
+command, tool or row of its own. There is nothing to configure here, and `/warp`, `/odd` and `/issues` are always
 on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 

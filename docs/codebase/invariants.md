@@ -26,8 +26,9 @@ The question this page answers: which rules must every change preserve, and what
    `/files`, `/issues`; `worktree_create`, `worktree_list`; the one fourth kind of
    surface, a sidebar section (`lib/issues-section.js`) that is neither a command nor a tool and
    registers no name the host or the agent can call; the one design
-   (`lib/bash-design.js`), one `Card tools` line over `bash`, `write` and the four read-only
-   tools (the single `tool: "bash"` design on a bridge older than 0.6.0), which is
+   (`lib/bash-design.js`), one `Card tools` line over `bash`, `read`, `write` and the three
+   read-only shell tools `grep`, `find`, `ls` (the single `tool: "bash"` design on a bridge older
+   than 0.6.0), which is
    neither a command nor a tool either and adds no name to either registry; and
    no `Cards` row of its own at all (the file cards add none either — see below).
    Neither moving the session nor
@@ -94,7 +95,7 @@ The question this page answers: which rules must every change preserve, and what
    process, with an idempotent disposer, and does nothing at all when the API is absent or
    older — no throw, no command, no warning beyond the section's own discoverability one.
    The shape follows the bridge's own `VERSION` and is decided BEFORE anything is
-   registered: one line over `bash`, `grep`, `find`, `ls` and `read` on `0.6.0` and later
+   registered: one line over `bash`, `grep`, `find`, `ls`, `read` and `write` on `0.6.0` and later
    (one `Card tools` row), and the single `tool: "bash"` design on anything older (one
    `Card bash` row) or on a release it cannot read — never a grouped registration an older
    bridge would refuse. The bridge owns Pi's one tool-renderer resolver, builds the host's
@@ -109,7 +110,7 @@ The question this page answers: which rules must every change preserve, and what
    `/card:bash` command and depends on no extension load order.
    The design is pure: `apply(lines, ctx)` swaps the host's `$` on the heading
    row of a `call` part for the family `lib/bash-activity.js` names (or `$ bash`
-   when nothing names it), swaps a read-only tool's `<glyph> <tool>` for the constant
+   when nothing names it), swaps a read-only shell tool's `<glyph> <tool>` for the constant
    `⌕ exploring`, taking the added columns from the row's own fill, and
    through `lib/bash-frame.js` repaints the frame cells in one theme role and
    writes a finished call's duration into the closing rule. It changes colour and
@@ -403,12 +404,13 @@ The question this page answers: which rules must every change preserve, and what
     only when the heading provably shows the WHOLE text — no `…` abbreviation, no
     `… +N lines` fold, no continuation row, nothing after it but the host's fill and
     hint — and the classifier (`lib/bash-activity.js`) names exactly one family for
-    it. The four read-only tools the same design covers (`grep`, `find`, `ls`, `read`)
+    it. The three read-only shell tools the same design paints (`grep`, `find`, `ls`)
     are headed `exploring` whatever they read, and a read-only heading that cannot be
-    proved is returned unchanged: those four have no generic word of their own. The
-    line also declares `write` (`lib/bash-design.js`) even though the design draws
-    nothing for it: the declaration is what lets the file card ask the bridge about a
-    write, and the rows of a write come back byte for byte. Any
+    proved is returned unchanged: those three have no generic word of their own. The
+    line also declares `read` and `write` (`lib/bash-design.js`) even though the design draws
+    nothing for either: `exploring` names what a SHELL COMMAND does, and a read runs no
+    command. The declaration is what lets the file card ask the bridge about a read or a
+    write, and the rows of both come back byte for byte. Any
     other case, a row with no fill to pay for the word included, keeps the host's `$`
     or its own `<glyph> <tool>` exactly as drawn, and a tool the design does not cover
     is returned untouched. The design never throws and never mutates its input. The
@@ -632,30 +634,3 @@ The question this page answers: which rules must every change preserve, and what
     `tools/issues-command.test.js` pins "without the CLI neither the command nor the
     rail section exists" and "the decision costs no child process, at load or at
     session start".
-
-29. **CodeGraph never holds the host.** A lifecycle handler returns `undefined`, never a promise the host
-    would await: `session_start` fires the index preparation and the daemon warm-up and returns,
-    `session_compact` fires its sync and returns, and `before_agent_start` and `session_shutdown` are
-    synchronous. `tool_result` is the one handler that answers with a promise, and its only host-visible
-    wait is the post-init sync race, bounded by `POST_INIT_SYNC_WAIT_MS` and reached only after a
-    successful native `codegraph init`. `tool_call` answers with a promise too, but only for a CodeGraph
-    search and only when this process already has index work in flight for that checkout: the wait is
-    bounded by `ODD_WORKTREE_CODEGRAPH_JOIN_MS` (5000 ms by default, `0` turns it off), it never starts
-    an index write, every other tool is answered synchronously in the same tick, and it can neither throw
-    nor return a block a host would treat as a veto — a `tool_call` error blocks the tool. A wait whose own
-    clock seam fails still settles, so an injected timer can never remove the cap.
-    `tools/codegraph-session.test.js` pins the return-value contract for every registered handler, the
-    bounded-join cases and the fail-safe paths.
-
-30. **An index write is complete or undone.** A seed validates the staged copy before publishing it
-    (non-empty and starting with the SQLite magic, read through the injected seam rather than inferred
-    from a stat), publishes it with a single move so no half-written database is ever visible, and — when
-    the reconciliation sync that follows fails — removes exactly the directory this session published:
-    nothing this session published survives a failure, and an index another session accepted is never
-    removed. A run that timed out is never reported as a success, and the hard kill fires inside the same
-    reporting grace whatever escalation delay a caller injects. A lock or lease release clears the record
-    only when it still carries the token the releaser acquired; the takeover path is never undone by the
-    holder it displaced, and a lease abandoned without a record is reclaimed only once it is older than
-    the write grace, so neither a stale holder nor a dead session can wedge a checkout.
-    `tools/codegraph-index.test.js` and `tools/codegraph-lock.test.js` pin these rules, including the
-    failure and takeover paths.

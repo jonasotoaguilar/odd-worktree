@@ -231,6 +231,30 @@ describe('room for the label', () => {
     assert.ok(row.length > 0);
   });
 
+  test('the timeout badge is never shortened: the command gives up the columns instead', () => {
+    // The collapsed float row with nothing left to pay with: two fill columns, and the badge the
+    // host drew after the command in its own colour is fixed call metadata, not command text.
+    const row = float(LONG.slice(0, 68) + '… (timeout 120s)');
+    const [out] = applyBashActivityHeading([row], { ...THEMED, render: render(LONG) });
+    const text = strip(out);
+    assert.ok(text.includes('⌕ exploring'), text);
+    assert.ok(text.includes('(timeout 120s)'), `the badge is whole: ${text}`);
+    assert.equal(cols(out), cols(row), 'the row keeps the width the host made it');
+    assert.match(text, /…/, 'the cut is shown as an ellipsis');
+    assert.match(text, /ctrl\+o to expand/, 'the hint survives');
+    assert.doesNotMatch(text.slice(text.indexOf('(timeout')), /…/, 'the badge carries no ellipsis');
+    const cut = text.slice(text.indexOf('⌕ exploring') + '⌕ exploring'.length, text.indexOf(' (timeout 120s)')).trim();
+    const full = strip(row).slice(strip(row).indexOf('$ ') + 2, strip(row).indexOf(' (timeout 120s)')).trim();
+    assert.ok(cut.length < full.length, `the command gave up the columns: ${cut} / ${full}`);
+  });
+
+  test('a row with no command left to give and a timeout badge is left exactly as it is', () => {
+    // Less command before the badge than the label needs, and no fill to pay with: the host's row,
+    // badge included, comes back untouched rather than with a clipped badge.
+    const row = '  $ ls -la … (timeout 120s)  ctrl+o to expand';
+    assert.deepEqual(applyBashActivityHeading([row], { ...THEMED, render: render('ls -la') }), [row]);
+  });
+
   test('a command shown in full that does not leave room is cut with an ellipsis', () => {
     const cmd = `grep -rn "needle" ${'src/'.repeat(8)} | head -40`;
     const row = neon(cmd);
@@ -599,8 +623,10 @@ describe('the first-run selection', () => {
   });
 });
 
-// The read-only tools the one `activity` value covers. The host heads their cards
-// `<glyph> <tool> <arguments>`; every one of them only reads, so the word is always the same.
+// The read-only SHELL tools the one `activity` value heads. The host heads their cards
+// `<glyph> <tool> <arguments>`; every one of them is a shell command that only reads, so the word is
+// always the same. `read` is on the same line for coverage alone — the question the file card asks
+// the bridge — and this design paints nothing for it: a read is the file card's row or the host's.
 const READ_GLYPH = { grep: '⌕', find: '⌖', ls: '☷', read: '≡' };
 const READ_ARGS = {
   grep: '/needle/ in src/app.js',
@@ -608,7 +634,7 @@ const READ_ARGS = {
   ls: 'src/lib',
   read: 'lib/bash-design.js:1-40',
 };
-const READ_TOOLS = ['grep', 'find', 'ls', 'read'];
+const READ_TOOLS = ['grep', 'find', 'ls'];
 const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 const toolHead = (tool, args) => `${READ_GLYPH[tool]} ${tool} ${args}`;
 
@@ -623,7 +649,7 @@ const readFloat = (tool, args = READ_ARGS[tool]) => {
   return `  ${head}${' '.repeat(Math.max(2, 90 - head.length - 4))}ctrl+o to expand`;
 };
 const readCtx = (tool, extra = {}) => ({ tool, part: 'call', width: 90, theme, ...extra });
-const readArgs = (tool) => ({ pattern: 'needle', path: 'src' });
+const readArgs = () => ({ pattern: 'needle', path: 'src' });
 
 describe('the read-only tools', () => {
   test('every one of them is headed `⌕ exploring` in the mdLink role, width and arguments kept', () => {
@@ -638,6 +664,23 @@ describe('the read-only tools', () => {
         assert.ok(strip(out).includes(`⌕ exploring ${READ_ARGS[tool]}`), `${tool}/${frame}: ${strip(out)}`);
         assert.match(strip(out), /ctrl\+o to expand/, `${tool}/${frame}: the hint is untouched`);
       }
+    }
+  });
+
+  test('a read is not a shell command, so its card is handed back exactly as the host drew it', () => {
+    // `exploring` names what a command does, and a read runs no command: the design paints nothing
+    // for it, so the host's own `≡ read …` heading, its colour and its width are whole.
+    const rows = [
+      `  ≡ read ~/dev/projects/x/lib/bash-design.js:261-650${' '.repeat(20)}ctrl+o to expand`,
+      `\u001b[36m╭─ \u001b[1m≡ read lib/bash-design.js:261-650\u001b[22m ${'─'.repeat(30)} ctrl+o to expand ─╮\u001b[39m`,
+    ];
+    const render = { args: { path: '~/dev/projects/x/lib/bash-design.js', offset: 261, limit: 390 }, isPartial: false, durationMs: 142 };
+    for (const row of rows) {
+      const out = applyBashActivityHeading([row], readCtx('read', { render }));
+      assert.deepEqual(out, [row]);
+      assert.doesNotMatch(strip(out[0]), /⌕|exploring/);
+      assert.ok(!out[0].includes(painted('mdLink', '⌕ exploring')), 'no colour was added');
+      assert.equal(cols(out[0]), cols(row), 'and no width changed');
     }
   });
 
@@ -663,14 +706,14 @@ describe('the read-only tools', () => {
     for (const tool of READ_TOOLS) {
       // Wrapped: the heading ends where the host ran out of rule, the rest continues below.
       const wrapped = [`╭─ ${toolHead(tool, '/needle/ in a/very')}  ╮`, '│ long/path │'];
-      const out = applyBashActivityHeading(wrapped, readCtx(tool, { render: { args: readArgs(tool) } }));
+      const out = applyBashActivityHeading(wrapped, readCtx(tool, { render: { args: readArgs() } }));
       const head = out[0];
       assert.ok(head.includes(painted('mdLink', '⌕ exploring')), `${tool}: ${head}`);
       assert.equal(cols(head), cols(wrapped[0]), `${tool} keeps its width`);
       assert.equal(strip(out[1]), wrapped[1], `${tool}: the continuation row's text is untouched`);
       // Abbreviated by the host: still the same constant word.
       const cut = [readNeon(tool, '/needle/ in some/lo…')];
-      assert.ok(applyBashActivityHeading(cut, readCtx(tool, { render: { args: readArgs(tool) } }))[0].includes(painted('mdLink', '⌕ exploring')), tool);
+      assert.ok(applyBashActivityHeading(cut, readCtx(tool, { render: { args: readArgs() } }))[0].includes(painted('mdLink', '⌕ exploring')), tool);
     }
   });
 
@@ -689,34 +732,37 @@ describe('the read-only tools', () => {
   test('a row with no room to pay for the word is left as the host drew it', () => {
     for (const tool of READ_TOOLS) {
       const row = `${READ_GLYPH[tool]} ${tool} /needle/`;
-      assert.deepEqual(applyBashActivityHeading([row], readCtx(tool, { render: { args: readArgs(tool) } })), [row], tool);
+      assert.deepEqual(applyBashActivityHeading([row], readCtx(tool, { render: { args: readArgs() } })), [row], tool);
     }
   });
 
-  test('S6: a skill or an ODD artifact is the file card\'s row, for both parts, byte for byte', () => {
-    // The file card already claims these paths (lib/skill-odd-card.js): it draws the
-    // heading, the frame and the body, so this design must add no status line over or
+  test('S6: a read is the file card\'s row or the host\'s, for both parts, byte for byte', () => {
+    // The design paints nothing for a read — it declares it for coverage alone — so every read row
+    // is the host's own, or the file card's for a skill or an ODD artifact (lib/skill-odd-card.js):
+    // it draws the heading, the frame and the body, so no status line of this design lands over or
     // under it, whichever resolver the host runs first.
     const call = [readNeon('read', 'lib/skills/one/SKILL.md:1-40')];
     const result = [`│ ${'x'.repeat(86)} │`, `╰${'─'.repeat(88)}╯`];
-    for (const path of ['lib/skills/one/SKILL.md', 'odd/tasks/design.md', '/abs/odd/tasks/a.md', 'C:\\repo\\skills\\x\\SKILL.md']) {
+    const paths = [
+      'lib/skills/one/SKILL.md', 'odd/tasks/design.md', '/abs/odd/tasks/a.md', 'C:\\repo\\skills\\x\\SKILL.md',
+      'src/app.js', 'lib/skillset/notes.md', 'docs/oddity.md', 'odd/work/a.md', 'notes/SKILL.md',
+    ];
+    for (const path of paths) {
       const render = { args: { path }, isPartial: false, durationMs: 142 };
       assert.deepEqual(applyBashActivityHeading(call, readCtx('read', { render })), call, `${path} (call)`);
       assert.deepEqual(applyBashActivityHeading(result, readCtx('read', { render, part: 'result' })), result, `${path} (result)`);
     }
-    // And only those paths: an ordinary read is still headed, and its frame still painted.
-    const render = { args: { path: 'src/app.js' }, isPartial: false, durationMs: 142 };
-    assert.ok(applyBashActivityHeading(call, readCtx('read', { render }))[0].includes(painted('mdLink', '⌕ exploring')), 'an ordinary read keeps the activity heading');
-    assert.notDeepEqual(applyBashActivityHeading(result, readCtx('read', { render, part: 'result' })), result, 'and its frame is painted');
-    // A folder that merely holds the words is not one of those paths.
-    for (const path of ['lib/skillset/notes.md', 'docs/oddity.md', 'odd/work/a.md', 'notes/SKILL.md']) {
-      assert.ok(applyBashActivityHeading(call, readCtx('read', { render: { args: { path }, isPartial: false } }))[0].includes(painted('mdLink', '⌕ exploring')), path);
-    }
+    // The path rule is still the file card's own, and it still keeps a COVERED tool's row off a
+    // skill or an ODD artifact: a `grep` that names one is that card's call, not this design's.
+    const grep = [readNeon('grep', '/needle/ in odd/tasks/design.md')];
+    const grepRender = (path) => ({ args: { pattern: 'needle', path }, isPartial: false });
+    assert.deepEqual(applyBashActivityHeading(grep, readCtx('grep', { render: grepRender('odd/tasks/design.md') })), grep);
+    assert.ok(applyBashActivityHeading(grep, readCtx('grep', { render: grepRender('src/app.js') }))[0].includes(painted('mdLink', '⌕ exploring')), 'an ordinary grep is still headed');
   });
 
   test('the frame wears one role and the call state speaks first, exactly as bash', () => {
     const closing = `╰${'─'.repeat(88)}╯`;
-    const result = (extra) => ({ tool: 'grep', part: 'result', width: 90, theme, render: { args: readArgs('grep'), isPartial: false, ...extra } });
+    const result = (extra) => ({ tool: 'grep', part: 'result', width: 90, theme, render: { args: readArgs(), isPartial: false, ...extra } });
     assert.ok(applyBashActivityHeading([closing], result({}))[0].startsWith(`\u001b[${ROLE_CODE.mdLink}m╰`), 'idle: mdLink');
     assert.ok(applyBashActivityHeading([closing], result({ isPartial: true }))[0].startsWith(`\u001b[${ROLE_CODE.warning}m╰`), 'running: warning');
     assert.ok(applyBashActivityHeading([closing], result({ isError: true }))[0].startsWith(`\u001b[${ROLE_CODE.error}m╰`), 'failed: error');
@@ -736,7 +782,7 @@ describe('the read-only tools', () => {
   test('no theme: the word is there unpainted and the row keeps its width', () => {
     for (const tool of READ_TOOLS) {
       const row = readNeon(tool);
-      const [out] = applyBashActivityHeading([row], { tool, part: 'call', width: 90, render: { args: readArgs(tool) } });
+      const [out] = applyBashActivityHeading([row], { tool, part: 'call', width: 90, render: { args: readArgs() } });
       assert.ok(strip(out).includes('⌕ exploring'), tool);
       assert.doesNotMatch(out, /\u001b\[3[1-7]m/, tool);
       assert.equal(cols(out), cols(row), tool);
@@ -752,7 +798,7 @@ describe('the read-only tools', () => {
 
   test('a repeated read-only card is a cache hit, not a second drawing every frame', () => {
     const row = readNeon('grep', '/needle/ in src/app.js');
-    const ctx = readCtx('grep', { render: { args: readArgs('grep'), isPartial: false } });
+    const ctx = readCtx('grep', { render: { args: readArgs(), isPartial: false } });
     const first = applyBashActivityHeading([row], ctx);
     const second = applyBashActivityHeading([row], ctx);
     assert.deepEqual(second, first);
@@ -782,17 +828,19 @@ const designFor = (version) => {
 };
 
 describe('the Card tools line', () => {
-  test('the line declares `write` so the file card can be asked about it, and the design paints nothing for it', () => {
+  test('the line declares `read` and `write` so the file card can be asked about them, and the design paints nothing for either', () => {
     // S1: the file card is painted only while this line resolves to the activity design
     // for the tool being drawn, and a bridge resolves coverage from the line's own
-    // `tools`. `write` is declared for the card's question — the design itself answers
-    // `undefined` for it (`computeActivity` knows only bash and the read-only marks), so
-    // a write's rows come back byte for byte and the host's own card is never lost.
+    // `tools`. `read` and `write` are declared for the card's question — the design itself
+    // answers `undefined` for both (`computeActivity` knows only bash and the three read-only
+    // shell marks), so their rows come back byte for byte and the host's own card is never lost.
     const design = designFor('0.6.0');
     assert.deepEqual(design.tools, ['bash', 'grep', 'find', 'ls', 'read', 'write']);
     const answer = (tool) => (design.tools.includes(tool) ? { kind: 'design', design } : { kind: 'not-covered' });
     assert.equal(answer('write').kind, 'design', 'a write is covered by the line');
     assert.equal(answer('write').design.id, BASH_DESIGN_ID);
+    assert.equal(answer('read').kind, 'design', 'a read is covered by the line too, for the card\'s question');
+    assert.equal(answer('read').design.id, BASH_DESIGN_ID);
     assert.equal(answer('edit').kind, 'not-covered', 'and nothing else is');
 
     // The design's own rows for a write, both parts: untouched, so the file card — not

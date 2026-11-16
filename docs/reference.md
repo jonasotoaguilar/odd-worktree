@@ -810,9 +810,10 @@ tool-renderer resolver, builds the host's own card (whatever `Card style` and
 `Card content` are chosen), reads its line in `/gentle:customize` → `Cards`
 (`default` | `activity`; the bridge stores `default` as `native`) on every render pass, and hands the design the rows the host
 drew. On a bridge that can put several tools on one line (`0.6.0` and later) that is ONE
-`Card tools` row covering `bash`, `write` and the four read-only tools `grep`, `find`, `ls`
-and `read`; on an older bridge the same design is registered for `bash` alone, the row is
-`Card bash` and those four are drawn by the host. Which shape is sent is decided from the
+`Card tools` row covering `bash`, the three read-only shell tools `grep`, `find`, `ls`, and
+`read` and `write`; on an older bridge the same design is registered for `bash` alone, the row is
+`Card bash` and those five are drawn by the host (or, for a read or a write on a skill or an ODD
+artifact, by the file card). Which shape is sent is decided from the
 bridge's own `VERSION` before anything is registered, because a grouped registration on an
 older one is refused and reported in `/bridge-status`. A release string that cannot be read
 is not guessed: the bridge is asked once, with a throwaway design nobody selects and a line
@@ -824,21 +825,23 @@ bridge, or one older than `registerToolDesign`, nothing is registered.
 
 What the design changes is one thing on the card's heading row: bash's `$` mark becomes
 the family the classifier (`lib/bash-activity.js`) names for the command —
-`⌕ exploring`, `✓ checking`, `⚠ destructive`, and so on — and a read-only tool's own
-`<glyph> <tool>` (`⌕ grep`, `⌖ find`, `☷ ls`, `≡ read`) becomes `⌕ exploring`, because
-those four only read. Nothing else is renamed: the arguments after the mark stay where the
+`⌕ exploring`, `✓ checking`, `⚠ destructive`, and so on — and a read-only shell tool's own
+`<glyph> <tool>` (`⌕ grep`, `⌖ find`, `☷ ls`) becomes `⌕ exploring`, because those three
+only read and run no command at all. Nothing else is renamed: the arguments after the mark stay where the
 host put them. The columns the longer mark adds are taken from the row's own fill, so the
 row keeps its width. Every other row comes back byte for byte, results are never touched,
-and the heading keeps the host's own paint. A `read` of a skill or an ODD artifact is one
-of those other rows: it is the file card's call, that card draws its own heading, and this
-design leaves both parts exactly as the host drew them, whichever resolver runs first.
+and the heading keeps the host's own paint. A `read` is one of those other rows whatever it
+reads: the line declares it only so that the file card can be asked about it, and this design
+paints nothing for it — a read of a skill or an ODD artifact is the file card's call, that
+card draws its own heading, and a read of anything else is the host's own row, both parts
+exactly as the host drew them, whichever resolver runs first.
 The identity rule is the file card's own (`lib/skill-odd-card.js`), so the two surfaces
 cannot disagree about which paths those are.
 
 The rule is the classifier's: never guess. A bridge that hands the design the call's
 render context (`ctx.render`: the arguments, `isPartial`, `isError`, `durationMs`) lets it
 classify the REAL command, so a heading the host truncated, folded or wrapped is still
-named; for a read-only tool that render context is only the proof that the heading is not
+named; for a read-only shell tool that render context is only the proof that the heading is not
 the whole evidence, since the word never depends on what it reads. That context is the
 bridge's, and it is handed on BOTH registration shapes — the grouped `Card tools` line and
 the historical per-tool one — with the call's own `args` by reference, exactly as Pi passes
@@ -851,9 +854,10 @@ WHOLE text: no `…` abbreviation, no `… +N lines` fold, no continuation row, 
 after it but the host's fill and hint. Either way, a bash command the classifier cannot
 name keeps the generic heading, now drawn `$ bash` (in the host's `bashMode` role) instead
 of a bare `$`, so a card never claims an activity it cannot prove; a read-only heading
-that cannot be proved stays exactly as the host drew it, because those four have no
-generic word of their own. A tool the line does not cover (`edit`, `write`, every MCP
-tool) is returned untouched.
+that cannot be proved stays exactly as the host drew it, because those three have no
+generic word of their own. A tool the line does not cover (`edit`, every MCP tool) is
+returned untouched, and so are `read` and `write`, which the line declares for the file
+card's question alone and this design draws nothing for.
 
 Colour is a theme role, never a palette (`ctx.theme`): the label wears its family's role
 (`exploring` `mdLink`, `checking` `mdHeading`, `formatting`/`preparing` `syntaxFunction`,
@@ -1222,36 +1226,11 @@ children, and none of it can fail or wait for the host.
 | After a successful `edit` or `write` | A debounced sync of the checkout of the edited file (its git toplevel), unless a live daemon already watches that checkout. |
 
 **Coordination.** Every index write goes through one init lock and one per-project sync lease,
-so two sessions never write the same index together. A lease is released only by the session that
-still holds it, so a lock another session took over is never undone, while a lease abandoned
-without a record is still reclaimed once it is older than the write grace. A request that cannot
-run now is recorded and served later; a queued, coalesced or failed run is never reported as
-synced.
-
-**A run that timed out is a failure.** The timeout kills the command and its tree; a child that
-ignores the soft kill is killed hard two seconds into the same ten-second grace, and the run still
-reports the timeout whatever exit code that child finally ends with.
-
-**A seed is published, or rolled back.** A linked worktree's seed is copied aside and checked —
-non-empty, and a real CodeGraph index rather than any file that happened to be there — before it
-is published, and the publish is one move, so a crash cannot leave a half-written database where
-the index should be. The worktree's first sync then reconciles it to that tree; a seed whose sync
-fails is removed with the `.codegraph` the seed itself created, so nothing this session published
-survives a failed seed, and an index another session published is never touched.
+so two sessions never write the same index together. A request that cannot run now is
+recorded and served later; a queued, coalesced or failed run is never reported as synced.
 
 **Read-only roles.** Verify and the judges (a command tool and no file-writing tool) never
 start an index write.
-
-**A search joins the work already in flight.** Before a CodeGraph search runs — the native
-`codegraph` tool's `query` or `explore`, and any `mcp__codegraph__*` tool — the package waits for
-the index work this session already has in flight for that checkout: a session-start preparation,
-a post-init sync, or an edit sync that is running or owed. Nothing in flight means no wait and no
-timer, so a search in an idle checkout pays nothing. The wait is bounded by
-`ODD_WORKTREE_CODEGRAPH_JOIN_MS` (milliseconds, 5000 by default; `0` turns the wait off), it never
-starts an index write, and it can never block or fail the call: a search that spends its budget
-runs against the index as it is. One limit, stated plainly: the wait keys on the session's own
-checkout, so a `projectPath` naming another checkout is not joined — following it would add a git
-read to every search.
 
 **The MCP entry.** In a primary session, once per process, the package makes sure
 `mcpServers.codegraph` of `<agent dir>/mcp.json` (`~/.pi/agent` unless `PI_CODING_AGENT_DIR`

@@ -6670,6 +6670,13 @@ let issuesGateNotified = false;
 // `null` = not probed yet, `true` = gh was usable this session, `false` = the
 // last probe failed. Registration is eager; this state gates ONLY the open.
 let issuesGateOpen = null;
+// S5 (T8): the probe `session_start` dispatched, and the generation it ran in.
+// Nothing in `session_start` awaits it; a surface that needs the verdict (`/issues`)
+// awaits this same promise instead of starting a second probe. The generation moves
+// on at every session start and shutdown, so a verdict the previous checkout is
+// still holding lands nowhere instead of gating the session that replaced it.
+let issuesGateProbe = null;
+let issuesGateGeneration = 0;
 
 // S3 (issues-sidebar): the rail section beside the `/issues` reader. The
 // bridge is read from its published slot, never imported; the section reads ONE
@@ -7211,45 +7218,82 @@ function issuesGateMessage(error) {
   return `issues: ${text} — /issues cannot open until then`;
 }
 
-async function checkIssuesGate(_pi, ctx) {
+// The probe alone: `gh api user` (and, through the client, `gh repo view`), which is
+// ~1.1 s of network plus the checkout's git probes. It reads and writes no module
+// state and no UI, so the background startup task and a typed command can share it,
+// and the client's own in-flight cache turns the second caller into a waiter on the
+// FIRST probe instead of a second pair of children. Never rejects: a missing or
+// broken `gh` is a verdict, not a crash.
+async function probeIssuesGateStatus(ctx) {
   try {
     const gh = libRequire("gh-issues.js");
     const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
-    const res = await gh.ghStatus({ cwd });
-    issuesGateOpen = !!(res && res.ok === true);
-    if (issuesGateOpen) return { ok: true };
-    const error = (res && res.error) || "gh check failed";
-    if (!issuesGateNotified && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
-      try {
-        ctx.ui.notify(issuesGateMessage(error), "info");
-        issuesGateNotified = true;
-      } catch {
-        // Notifying never breaks startup.
-      }
-    }
-    return { ok: false, error };
+    const res = await gh.cachedGhStatus({ cwd });
+    return res && res.ok === true ? { ok: true } : { ok: false, error: (res && res.error) || "gh check failed" };
   } catch (err) {
     // The gate must never break startup.
     return { ok: false, error: (err && err.message) || String(err) };
   }
 }
 
+// Apply a resolved verdict to the session that asked for it: the open state, and the
+// ONE startup notice a failing gate hands the human. Split from the probe so the
+// caller can drop a verdict whose session was superseded before it landed, and so a
+// command that dispatches on its own (`/reload` fires no `session_start`) keeps its
+// own, fuller refusal as the only thing it says.
+function applyIssuesGateStatus(gate, ctx, notifyStartup = true) {
+  issuesGateOpen = !!(gate && gate.ok === true);
+  if (issuesGateOpen) return { ok: true };
+  const error = (gate && gate.error) || "gh check failed";
+  if (notifyStartup && !issuesGateNotified && ctx && ctx.ui && typeof ctx.ui.notify === "function") {
+    try {
+      ctx.ui.notify(issuesGateMessage(error), "info");
+      issuesGateNotified = true;
+    } catch {
+      // Notifying never breaks startup.
+    }
+  }
+  return { ok: false, error };
+}
+
+// S5 (T8): dispatch the session's gate and return at once. The host awaits every
+// handler it is handed, one at a time, so awaiting this probe is what delayed the
+// first prompt on every open, resume and session switch; it now runs in the
+// background and applies its verdict when it lands. A verdict that outlives its
+// generation (another checkout, or a shutdown) is dropped whole, so it can neither
+// notify a dead UI nor gate the session that replaced it.
+function dispatchIssuesGate(ctx, notifyStartup = true) {
+  const generation = issuesGateGeneration;
+  const probe = probeIssuesGateStatus(ctx).then((gate) => {
+    if (generation !== issuesGateGeneration) return gate;
+    return applyIssuesGateStatus(gate, ctx, notifyStartup);
+  });
+  issuesGateProbe = { generation, run: probe };
+  trackStartupTask(probe);
+  return probe;
+}
+
+// The verdict this session already asked for, shared: the dispatched probe while it
+// is the current generation's, and a fresh one when the session has none (`/reload`
+// fires no `session_start`, and a superseded probe is never reused). A probe
+// dispatched from here says nothing on its own: the caller reports its own refusal.
+function sessionIssuesGate(ctx) {
+  const dispatched = issuesGateProbe;
+  if (dispatched !== null && dispatched.generation === issuesGateGeneration) return dispatched.run;
+  return dispatchIssuesGate(ctx, false);
+}
+
 // The command stays discoverable even before the session gate resolves, so
-// running it probes `gh` on demand. A session that already answered `ok` never
-// re-probes; a failure notifies the same honest fix every time it is asked.
+// running it takes the verdict on demand. A session that already answered `ok` never
+// re-probes; while its own probe is still in flight the command WAITS for that one
+// promise rather than spawning a second pair of `gh` children, and a failure
+// notifies the same honest fix every time it is asked.
 async function probeIssuesGate(ctx) {
   if (issuesGateOpen === true) return { ok: true };
-  let gate;
-  try {
-    const gh = libRequire("gh-issues.js");
-    const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
-    const res = await gh.ghStatus({ cwd });
-    gate = res && res.ok === true ? { ok: true } : { ok: false, error: (res && res.error) || "gh check failed" };
-  } catch (err) {
-    gate = { ok: false, error: (err && err.message) || String(err) };
-  }
-  issuesGateOpen = gate.ok === true;
-  return gate;
+  const gate = await sessionIssuesGate(ctx);
+  return gate && gate.ok === true
+    ? { ok: true }
+    : { ok: false, error: (gate && gate.error) || "gh check failed" };
 }
 
 function registerIssuesCommand(pi) {
@@ -7313,6 +7357,19 @@ function clearIssuesSidebarCache() {
   if (issuesSidebarCache === null) return;
   try {
     issuesSidebarCache.clear();
+  } catch {
+    // The cache is optional: a failed clear never breaks the end of a session.
+  }
+}
+
+// S5 (T8): the client's cached gate answers (`gh-issues.js`) belong to the session
+// that paid for them; a session that ends clears them so the next one starts from
+// its own probe. Best effort: a missing seam or a failed clear never breaks the end
+// of a session.
+function clearIssuesGateCache() {
+  try {
+    const gh = libRequire("gh-issues.js");
+    if (gh && typeof gh.clearCachedGhStatus === "function") gh.clearCachedGhStatus();
   } catch {
     // The cache is optional: a failed clear never breaks the end of a session.
   }
@@ -7839,9 +7896,9 @@ export default function (pi) {
   // session context the section's reads belong to.
   // S6 (issues-sidebar): the supersede of a previous checkout's read happens
   // FIRST and synchronously — the session context is remembered and the section
-  // is invalidated BEFORE the `gh` gate below is awaited. `checkIssuesGate` waits
-  // on a `gh` probe, and an answer the previous checkout's read settles with
-  // during that wait must find no latest token to win and no snapshot to keep.
+  // is invalidated before anything else in this boundary runs, so an answer the
+  // previous checkout's read settles with finds no latest token to win and no
+  // snapshot to keep.
   // S3 amended (T13, L11): NO read happens here. A hidden section costs nothing,
   // so the first DRAW is what starts the section's read: an absent snapshot is
   // stale inside `lines()`, which schedules its own refresh. The hidden section
@@ -7860,7 +7917,17 @@ export default function (pi) {
     // boundary as the section's own state, and it says nothing yet when the
     // host could still announce.
     checkIssuesSidebarInstall(pi, ctx);
-    await checkIssuesGate(pi, ctx);
+    // S5 (T8): the `gh` gate is DISPATCHED here, never awaited. The host awaits
+    // every handler it is handed, one at a time, so awaiting it put the first
+    // prompt behind `gh api user` + `gh repo view` and the checkout's own git
+    // probes on every open, resume and session switch (~1.1 s of network, every
+    // time). It now runs in the background and applies its verdict when it lands;
+    // the generation it carries is bumped FIRST, so a probe the previous checkout
+    // dispatched can never apply its verdict here, and `/issues` awaits this same
+    // promise instead of starting a second probe.
+    issuesGateGeneration += 1;
+    issuesGateProbe = null;
+    dispatchIssuesGate(ctx);
   });
   // A queued warp is session state: shutdown clears its record and its timer so
   // nothing outlives the session that asked for the move. S6 (issues-sidebar):
@@ -7875,6 +7942,13 @@ export default function (pi) {
     forgetInFlightWarpTools();
     invalidateIssuesSidebar();
     clearIssuesSidebarCache();
+    // S5 (T8): the gate's own state is session state too. The generation moves on,
+    // so a probe still in flight lands nowhere and never notifies a dead UI, and
+    // the client's cached answers are dropped so the next session probes afresh
+    // instead of inheriting its predecessor's.
+    issuesGateGeneration += 1;
+    issuesGateProbe = null;
+    clearIssuesGateCache();
     issuesSidebarCtx = null;
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,

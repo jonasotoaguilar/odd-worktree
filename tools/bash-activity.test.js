@@ -1019,3 +1019,38 @@ test('adversarial assignment runs classify in bounded time', () => {
 		assert.ok(elapsed < 250, `${command} took ${elapsed}ms`);
 	}
 });
+
+// The user's own transcripts: a read-only call must not fall to the generic card just because
+// the program is a modern replacement for one the table already names.
+test('read-only inspection programs beyond the classic ones are exploring', () => {
+	const exploring = [
+		'fd -e js lib', 'fdfind --type f src', 'fd . lib | head',
+		'bat README.md', 'batcat -n lib/a.js', 'eza -la', 'exa --tree', 'lsd -l',
+		'ag needle src', 'ack needle', 'zgrep x a.gz', 'fgrep -n x a',
+		'less README.md', 'man ls', 'id', 'hostname', 'uptime', 'free -h', 'printenv PATH', 'nproc',
+		'comm -12 a b', 'paste a b', 'rev a', 'tac a', 'seq 1 5',
+		'git stash show -p', 'git diff-tree --stat HEAD', 'git show-ref', 'git symbolic-ref HEAD', 'git cherry -v',
+		'gh cache list', 'gh secret list', 'gh variable list',
+		'docker ps -a', 'docker images', 'docker logs web', 'docker inspect web', 'kubectl get pods', 'kubectl describe pod x', 'kubectl logs x',
+		'npm ls', 'npm view react version', 'npm outdated', 'npm explain x', 'pnpm ls', 'pnpm why x', 'yarn why x', 'pip list', 'pip show x', 'pip freeze',
+	];
+	for (const command of exploring) {
+		assert.equal(inferBashActivity(command), 'exploring', command);
+	}
+});
+
+test('a CI run listing stays a check, as it was', () => {
+	for (const command of ['gh run list', 'gh run view 123']) assert.equal(inferBashActivity(command), 'checking', command);
+});
+
+test('fd names exploring only while it executes nothing', () => {
+	for (const command of ['fd -x rm {}', 'fd --exec rm {}', 'fd -X rm', 'fd --exec-batch rm', 'fd . -x sh -c "echo x"']) {
+		assert.notEqual(inferBashActivity(command), 'exploring', command);
+	}
+});
+
+test('a composition of reads with neutral separators is exploring, and one unnamed segment still keeps it generic', () => {
+	assert.equal(inferBashActivity('fd -e js lib; echo ---; bat lib/a.js && pwd'), 'exploring');
+	assert.equal(inferBashActivity('cd /tmp && fd x && echo done'), 'exploring');
+	assert.equal(inferBashActivity('fd -e js lib; frobnicate --now'), undefined);
+});

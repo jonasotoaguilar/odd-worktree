@@ -19,11 +19,12 @@ The question this page answers: which rules must every change preserve, and what
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
 3. **The shipped surface is exactly three commands, two tools, one sidebar
-   section and one bash design.** `/warp`, `/odd-list`, `/issues`;
+   section and one tool design.** `/warp`, `/odd-list`, `/issues`;
    `worktree_create`, `worktree_list`; the one fourth kind of surface, a sidebar
    section (`lib/issues-section.js`) that is neither a command nor a tool and
-   registers no name the host or the agent can call; and the one bash design
-   (`lib/bash-design.js`), which is neither a command nor a tool either and adds no
+   registers no name the host or the agent can call; and the one design
+   (`lib/bash-design.js`), one `Card tools` line over `bash` and the four read-only
+   tools, which is neither a command nor a tool either and adds no
    name to either registry. Neither moving the session nor
    removing a checkout is exposed to the agent: `/warp` is the person's front for
    both (its `ctrl+d`, the selector, a typed name, a queued handoff for moving; its
@@ -48,30 +49,36 @@ The question this page answers: which rules must every change preserve, and what
    an empty slot at `session_start` may still be a bridge that has not loaded, and
    immediate on a host with no event bus to announce on.
 
-   **The bash card is a design on the bridge, not a preference here.**
-   `lib/bash-design.js` registers ONE design (`tool: "bash"`, id
-   `odd-worktree.bash-activity`, label `activity`) through the bridge's published
-   `registerToolDesign` API, at most once per process, with an idempotent
-   disposer, and does nothing at all when the API is absent or older — no throw,
-   no command, no warning beyond the section's own discoverability one. The bridge
-   owns Pi's one tool-renderer resolver, builds the host's own card, reads its
-   `bash` line (`default` | `activity`, stored as `native` | the design id) on every render pass and persists the choice
-   in its own store. The only thing this package writes is the first-run seed:
-   `seedBashDesignSelection` selects `activity` once, only when the bridge holds no
-   `bash` choice, and records `bashActivitySeeded` in its own `odd-worktree` store so
-   a later `native` is never undone; a stored choice is never overwritten and a
-   failure seeds nothing. It reads no other file, has no `/card:bash` command and
-   depends on no extension load order.
+   **The cards are a design on the bridge, not a preference here.**
+   `lib/bash-design.js` registers ONE design (id `odd-worktree.bash-activity`, label
+   `activity`) through the bridge's published `registerToolDesign` API, at most once per
+   process, with an idempotent disposer, and does nothing at all when the API is absent or
+   older — no throw, no command, no warning beyond the section's own discoverability one.
+   The shape follows the bridge's own `VERSION` and is decided BEFORE anything is
+   registered: one line over `bash`, `grep`, `find`, `ls` and `read` on `0.6.0` and later
+   (one `Card tools` row), and the single `tool: "bash"` design on anything older (one
+   `Card bash` row) or on a release it cannot read — never a grouped registration an older
+   bridge would refuse. The bridge owns Pi's one tool-renderer resolver, builds the host's
+   own card, reads that line (`default` | `activity`, stored as `native` | the design id) on
+   every render pass and persists the choice in its own store. The only thing this package
+   writes is the first-run seed: `seedBashDesignSelection` selects `activity` once, for
+   `bash`, only when the bridge holds no `bash` choice, and it does so BEFORE the
+   registration, because a `0.6.0` bridge carries that choice over to its line's value at
+   registration time; it records `bashActivitySeeded` in its own `odd-worktree` store so a
+   later `native` is never undone. A stored choice is never overwritten, the reserved line
+   key is never written here, a failure seeds nothing. It reads no other file, has no
+   `/card:bash` command and depends on no extension load order.
    The design is pure: `apply(lines, ctx)` swaps the host's `$` on the heading
    row of a `call` part for the family `lib/bash-activity.js` names (or `$ bash`
-   when nothing names it), taking the added columns from the row's own fill, and
+   when nothing names it), swaps a read-only tool's `<glyph> <tool>` for the constant
+   `⌕ exploring`, taking the added columns from the row's own fill, and
    through `lib/bash-frame.js` repaints the frame cells in one theme role and
    writes a finished call's duration into the closing rule. It changes colour and
-   those cells only: no row's width changes, no text of the command or the output
+   those cells only: no row's width changes, no text of the command, the arguments or the output
    is rewritten, and without a theme, a render context or room every row is
    returned byte for byte (invariant 20). Its only state is two bounded memos (512
    entries each: the classification of one command, and the answer for one
-   rows/theme/call key); a cache hit is byte-identical to a fresh drawing and a
+   tool/rows/theme/call key); a cache hit is byte-identical to a fresh drawing and a
    caller always gets a new array.
 4. **Deletion refuses on a live session.** The only surface that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
@@ -314,17 +321,21 @@ The question this page answers: which rules must every change preserve, and what
     Nothing awaits an index, a daemon or the configuration on the host's path, and
     every child is a fixed argv with a bounded timeout (invariant 9).
 
-20. **The bash design only draws, and it draws what the classifier names.**
+20. **The design only draws, and it draws what the classifier names.**
     `lib/bash-design.js` changes nothing but a heading row: it executes, spawns,
     guards, intercepts and shadows nothing, and the destructive evidence of
     `lib/bash-destructive.js` is presentation: no permission, guard or execution
-    decision may read it. The design context carries no arguments, so the
-    heading is the only evidence and a call is named only when the heading provably
-    shows the WHOLE command — no `…` abbreviation, no `… +N lines` fold, no
-    continuation row, nothing after the command but the host's fill and hint — and
-    the classifier (`lib/bash-activity.js`) names exactly one family for it. Any
-    other case, a row with no fill to pay for the word included, keeps the host's
-    `$` exactly as drawn. The design never throws and never mutates its input. The
+    decision may read it. A bridge that hands over the call's arguments makes them
+    the evidence; without them the heading is the only evidence and a call is named
+    only when the heading provably shows the WHOLE text — no `…` abbreviation, no
+    `… +N lines` fold, no continuation row, nothing after it but the host's fill and
+    hint — and the classifier (`lib/bash-activity.js`) names exactly one family for
+    it. The four read-only tools the same design covers (`grep`, `find`, `ls`, `read`)
+    are headed `exploring` whatever they read, and a read-only heading that cannot be
+    proved is returned unchanged: those four have no generic word of their own. Any
+    other case, a row with no fill to pay for the word included, keeps the host's `$`
+    or its own `<glyph> <tool>` exactly as drawn, and a tool the design does not cover
+    is returned untouched. The design never throws and never mutates its input. The
     CodeGraph card (invariant 19) keeps its own resolver for `codegraph …` rows;
     this package registers no other tool-renderer resolver for `bash`.
 

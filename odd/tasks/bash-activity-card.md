@@ -27,7 +27,7 @@ Worktree `bash-activity-card`, branch `feat/bash-activity-card`, base `main@ed02
 - **T4** (S4) — room for the label from the command tail, net SGR. DONE `2aee6d5`.
 - **T5** (S6) — preview on one line.
 - **T6** (S6, S3) — one `Card tools` line: bridge multi-tool line (`line` + `tools`), then register bash +
-  grep/find/ls/read under it.
+  grep/find/ls/read under it. DONE (uncommitted; the parent commits).
 - **T7** (S4) — census of real generic commands, then rules.
 - **T8** (S5) — find and fix the slowdown on open/resume/session switch.
 - **T9** — docs for bridge 0.5.0 (`default`, min version), the theme-role caveat, `Card tools`.
@@ -37,7 +37,8 @@ Slices (delivery is the user's call; no push or PR yet):
   memo + one-line preview, docs. Suite 1772+ green.
 - **Slice 2** (open) — worker diffs: issues gate off the `session_start` path (T8) and the census-driven
   classifier rules (T7). Reviewed and committed by the parent, one commit each.
-- **Slice 3** (open) — `Card tools` on the bridge's multi-tool line and the grep/find/ls/read headings (T6).
+- **Slice 3** (awaiting commit) — `Card tools` on the bridge's multi-tool line and the grep/find/ls/read
+  headings (T6).
 
 ## Log
 

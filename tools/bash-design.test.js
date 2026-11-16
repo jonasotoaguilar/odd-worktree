@@ -520,15 +520,285 @@ describe('the first-run selection', () => {
     assert.equal(files['bridge-tool-designs'].selections.bash, BASH_DESIGN_ID);
   });
 
-  test('registering the design on a bridge seeds it, and a rejected registration seeds nothing', () => {
+  test('registering the design on a bridge seeds it, and a refused registration registers nothing', () => {
     const accepted = fakeBridge();
     const dispose = registerBashDesign(accepted.api);
     assert.equal(typeof dispose, 'function');
     assert.equal(accepted.files['bridge-tool-designs'].selections.bash, BASH_DESIGN_ID);
     dispose();
+    // The seed runs BEFORE the registration (so a 0.6.0 bridge inherits it), which means a
+    // refusal can only arrive after the choice is stored: the bridge then holds a value whose
+    // design is not registered, which its own report calls `missing` and draws as the host's card.
     const refused = fakeBridge();
     refused.api.registerToolDesign = () => { throw new Error('refused'); };
     assert.equal(registerBashDesign(refused.api), null);
-    assert.deepEqual(refused.writes, []);
+    assert.equal(refused.files['bridge-tool-designs'].selections.bash, BASH_DESIGN_ID);
+  });
+});
+
+// The read-only tools the one `activity` value covers. The host heads their cards
+// `<glyph> <tool> <arguments>`; every one of them only reads, so the word is always the same.
+const READ_GLYPH = { grep: '⌕', find: '⌖', ls: '☷', read: '≡' };
+const READ_ARGS = {
+  grep: '/needle/ in src/app.js',
+  find: '*.test.js in tools',
+  ls: 'src/lib',
+  read: 'lib/bash-design.js:1-40',
+};
+const READ_TOOLS = ['grep', 'find', 'ls', 'read'];
+const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+const toolHead = (tool, args) => `${READ_GLYPH[tool]} ${tool} ${args}`;
+
+// The host's two frames, with a read-only tool's heading instead of bash's `$`.
+const readNeon = (tool, args = READ_ARGS[tool], hint = 'ctrl+o to expand') => {
+  const head = toolHead(tool, args);
+  const fill = Math.max(2, 90 - (3 + head.length + 1 + hint.length + 4));
+  return `╭─ ${head} ${'─'.repeat(fill)} ${hint} ─╮`;
+};
+const readFloat = (tool, args = READ_ARGS[tool]) => {
+  const head = toolHead(tool, args);
+  return `  ${head}${' '.repeat(Math.max(2, 90 - head.length - 4))}ctrl+o to expand`;
+};
+const readCtx = (tool, extra = {}) => ({ tool, part: 'call', width: 90, theme, ...extra });
+const readArgs = (tool) => ({ pattern: 'needle', path: 'src' });
+
+describe('the read-only tools', () => {
+  test('every one of them is headed `⌕ exploring` in the mdLink role, width and arguments kept', () => {
+    for (const tool of READ_TOOLS) {
+      for (const [frame, mk] of [['neon', readNeon], ['float', readFloat]]) {
+        const row = mk(tool);
+        const [out] = applyBashActivityHeading([row], readCtx(tool));
+        assert.ok(out.includes(painted('mdLink', '⌕ exploring')), `${tool}/${frame}: ${strip(out)}`);
+        assert.equal(cols(out), cols(row), `${tool}/${frame} keeps its width`);
+        // The glyph and the tool's own word are gone; what it reads is untouched.
+        assert.doesNotMatch(strip(out), new RegExp(escapeRe(`${READ_GLYPH[tool]} ${tool}`)), `${tool}: own heading gone`);
+        assert.ok(strip(out).includes(`⌕ exploring ${READ_ARGS[tool]}`), `${tool}/${frame}: ${strip(out)}`);
+        assert.match(strip(out), /ctrl\+o to expand/, `${tool}/${frame}: the hint is untouched`);
+      }
+    }
+  });
+
+  test('the host paint in force where the arguments begin is re-issued after the label', () => {
+    for (const tool of READ_TOOLS) {
+      const row = `\u001b[36m╭─ \u001b[1m${READ_GLYPH[tool]} ${tool} /needle/ in src\u001b[22m ${'─'.repeat(30)} ctrl+o to expand ─╮\u001b[39m`;
+      const [out] = applyBashActivityHeading([row], readCtx(tool));
+      assert.ok(out.startsWith('\u001b[36m╭─ \u001b[1m'), tool);
+      assert.ok(out.includes(`${painted('mdLink', '⌕ exploring')}\u001b[36m\u001b[1m`), `${tool}: ${out}`);
+      assert.ok(out.endsWith('╮\u001b[39m'), tool);
+      assert.equal(cols(out), cols(row), tool);
+    }
+  });
+
+  test('a tool the line does not cover is returned byte for byte', () => {
+    for (const tool of ['edit', 'write', 'web_search', 'bash', '']) {
+      const rows = [`╭─ ✎ edit lib/a.js ${'─'.repeat(40)} ctrl+o to expand ─╮`];
+      assert.deepEqual(applyBashActivityHeading(rows, readCtx(tool, { render: { args: { path: 'lib/a.js' } } })), rows, tool);
+    }
+  });
+
+  test('a heading the host wrapped or cut is still headed when the bridge hands the arguments', () => {
+    for (const tool of READ_TOOLS) {
+      // Wrapped: the heading ends where the host ran out of rule, the rest continues below.
+      const wrapped = [`╭─ ${toolHead(tool, '/needle/ in a/very')}  ╮`, '│ long/path │'];
+      const out = applyBashActivityHeading(wrapped, readCtx(tool, { render: { args: readArgs(tool) } }));
+      const head = out[0];
+      assert.ok(head.includes(painted('mdLink', '⌕ exploring')), `${tool}: ${head}`);
+      assert.equal(cols(head), cols(wrapped[0]), `${tool} keeps its width`);
+      assert.equal(strip(out[1]), wrapped[1], `${tool}: the continuation row's text is untouched`);
+      // Abbreviated by the host: still the same constant word.
+      const cut = [readNeon(tool, '/needle/ in some/lo…')];
+      assert.ok(applyBashActivityHeading(cut, readCtx(tool, { render: { args: readArgs(tool) } }))[0].includes(painted('mdLink', '⌕ exploring')), tool);
+    }
+  });
+
+  test('without the arguments the drawn heading must prove itself, and a read-only tool never guesses', () => {
+    for (const tool of READ_TOOLS) {
+      const unproven = [readNeon(tool, '/needle/ in some/lo…')];
+      assert.deepEqual(applyBashActivityHeading(unproven, readCtx(tool)), unproven, tool);
+      const wrapped = [`╭─ ${toolHead(tool, '/needle/ in a/very')}  ╮`, '│ long/path │'];
+      assert.deepEqual(applyBashActivityHeading(wrapped, readCtx(tool)), wrapped, tool);
+      // An old bridge that hands no arguments leaves a provable heading alone only for its own row.
+      const proven = [readNeon(tool)];
+      assert.ok(applyBashActivityHeading(proven, readCtx(tool))[0].includes(painted('mdLink', '⌕ exploring')), tool);
+    }
+  });
+
+  test('a row with no room to pay for the word is left as the host drew it', () => {
+    for (const tool of READ_TOOLS) {
+      const row = `${READ_GLYPH[tool]} ${tool} /needle/`;
+      assert.deepEqual(applyBashActivityHeading([row], readCtx(tool, { render: { args: readArgs(tool) } })), [row], tool);
+    }
+  });
+
+  test('the frame wears one role and the call state speaks first, exactly as bash', () => {
+    const closing = `╰${'─'.repeat(88)}╯`;
+    const result = (extra) => ({ tool: 'grep', part: 'result', width: 90, theme, render: { args: readArgs('grep'), isPartial: false, ...extra } });
+    assert.ok(applyBashActivityHeading([closing], result({}))[0].startsWith(`\u001b[${ROLE_CODE.mdLink}m╰`), 'idle: mdLink');
+    assert.ok(applyBashActivityHeading([closing], result({ isPartial: true }))[0].startsWith(`\u001b[${ROLE_CODE.warning}m╰`), 'running: warning');
+    assert.ok(applyBashActivityHeading([closing], result({ isError: true }))[0].startsWith(`\u001b[${ROLE_CODE.error}m╰`), 'failed: error');
+    const timed = applyBashActivityHeading([closing], result({ durationMs: 142 }))[0];
+    assert.match(strip(timed), / 142ms ╯$/);
+    assert.ok(timed.includes(painted('dim', '142ms')));
+    assert.equal(cols(timed), 90);
+  });
+
+  test('never while the call runs, and never without a duration', () => {
+    const closing = `╰${'─'.repeat(88)}╯`;
+    const result = (extra) => ({ tool: 'ls', part: 'result', width: 90, theme, render: { args: { path: 'src' }, isPartial: false, ...extra } });
+    assert.doesNotMatch(strip(applyBashActivityHeading([closing], result({ isPartial: true, durationMs: 5 }))[0]), /ms/);
+    assert.doesNotMatch(strip(applyBashActivityHeading([closing], result({}))[0]), /ms/);
+  });
+
+  test('no theme: the word is there unpainted and the row keeps its width', () => {
+    for (const tool of READ_TOOLS) {
+      const row = readNeon(tool);
+      const [out] = applyBashActivityHeading([row], { tool, part: 'call', width: 90, render: { args: readArgs(tool) } });
+      assert.ok(strip(out).includes('⌕ exploring'), tool);
+      assert.doesNotMatch(out, /\u001b\[3[1-7]m/, tool);
+      assert.equal(cols(out), cols(row), tool);
+    }
+  });
+
+  test('no render context: the frame rows come back byte for byte', () => {
+    for (const tool of READ_TOOLS) {
+      const rows = [`╰${'─'.repeat(88)}╯`];
+      assert.deepEqual(applyBashActivityHeading(rows, { tool, part: 'result', width: 90, theme }), rows, tool);
+    }
+  });
+
+  test('a repeated read-only card is a cache hit, not a second drawing every frame', () => {
+    const row = readNeon('grep', '/needle/ in src/app.js');
+    const ctx = readCtx('grep', { render: { args: readArgs('grep'), isPartial: false } });
+    const first = applyBashActivityHeading([row], ctx);
+    const second = applyBashActivityHeading([row], ctx);
+    assert.deepEqual(second, first);
+    assert.notEqual(second, first, 'a caller may keep or change the array it gets');
+    const start = performance.now();
+    for (let index = 0; index < 30000; index += 1) applyBashActivityHeading([row], ctx);
+    const elapsed = performance.now() - start;
+    assert.ok(elapsed < 1000, `30000 grep frames took ${elapsed}ms`);
+  });
+});
+
+// A bridge whose published object carries a release, and records what it was asked to register.
+function versionedBridge(version) {
+  const seen = [];
+  const api = { registerToolDesign: (design) => { seen.push(design); return () => {}; } };
+  if (version !== undefined) api.VERSION = version;
+  return { api, seen };
+}
+const designFor = (version) => {
+  const { api, seen } = versionedBridge(version);
+  const dispose = registerBashDesign(api);
+  assert.equal(typeof dispose, 'function', String(version));
+  dispose();
+  return seen[0];
+};
+
+describe('the Card tools line', () => {
+  test('a 0.6.0 bridge gets ONE grouped registration over bash and the read-only tools', () => {
+    const design = designFor('0.6.0');
+    assert.equal(design.line, 'tools');
+    assert.deepEqual(design.tools, ['bash', 'grep', 'find', 'ls', 'read']);
+    assert.equal(Object.hasOwn(design, 'tool'), false, 'never both shapes');
+    assert.equal(design.id, BASH_DESIGN_ID);
+    assert.equal(design.label, BASH_DESIGN_LABEL);
+    assert.equal(design.name, 'Odd worktree');
+    assert.match(design.description, /read-only/);
+    assert.match(design.description, /exploring/);
+    const preview = design.preview();
+    assert.equal(preview.title, 'Cards · activity');
+    assert.equal(preview.sample.split('\n').length, 1, 'one row, like every Cards value');
+    assert.equal(typeof design.apply, 'function');
+  });
+
+  test('every release from 0.6.0 up gets the line', () => {
+    for (const version of ['0.6.0', '0.6.1', '0.10.0', '0.7.0-rc.1', '1.0.0', '0.6']) {
+      assert.equal(designFor(version).line, 'tools', version);
+    }
+  });
+
+  test('an older bridge or one with no readable release gets exactly today\'s single bash design', () => {
+    for (const version of ['0.5.0', '0.5.9', '0.4.2', '0.5', '', 'v0.6.0', 'nightly', undefined, 6, null, {}]) {
+      const design = designFor(version);
+      assert.equal(design.tool, 'bash', String(version));
+      assert.equal(Object.hasOwn(design, 'line'), false, `no line on ${String(version)}`);
+      assert.equal(Object.hasOwn(design, 'tools'), false, `no tools on ${String(version)}`);
+      assert.equal(design.id, BASH_DESIGN_ID);
+    }
+  });
+
+  test('an old bridge still heads bash cards, and the grouped one heads both', () => {
+    const design = designFor('0.5.0');
+    const [out] = design.apply([neon('ls -la')], { ...THEMED, render: render('ls -la') });
+    assert.ok(out.includes(painted('mdLink', '⌕ exploring')));
+    // The shape decides what is wired: an old bridge is only ever asked about `bash`, and the one
+    // registration that covers all five tools applies to every one of them.
+    const grouped = designFor('0.6.0');
+    assert.ok(grouped.apply([readNeon('grep')], readCtx('grep'))[0].includes(painted('mdLink', '⌕ exploring')));
+  });
+
+  test('one registration per process: a second call is the same disposer, whichever shape it chose', () => {
+    const { api, seen } = versionedBridge('0.6.0');
+    const dispose = registerBashDesign(api);
+    try {
+      assert.equal(registerBashDesign(api), dispose);
+      assert.equal(seen.length, 1);
+      assert.equal(seen[0].line, 'tools');
+    } finally {
+      dispose();
+    }
+  });
+});
+
+describe('the seed runs before the registration', () => {
+  // A 0.6.0 bridge, as its contract documents it: at REGISTRATION time a line with no value of its
+  // own inherits a joining tool's legacy per-tool value, and writes it then.
+  function migratingBridge(files = {}) {
+    const { api, files: store, writes } = fakeBridge(files);
+    const inherited = [];
+    api.VERSION = '0.6.0';
+    api.registerToolDesign = () => {
+      const selections = store['bridge-tool-designs']?.selections ?? {};
+      inherited.push(JSON.parse(JSON.stringify(selections)));
+      if (typeof selections.bash === 'string' && selections.bash !== 'native' && selections.$lines?.tools === undefined) {
+        store['bridge-tool-designs'] = { ...store['bridge-tool-designs'], selections: { ...selections, $lines: { tools: selections.bash } } };
+      }
+      return () => {};
+    };
+    return { api, files: store, writes, inherited };
+  }
+
+  test('a first run stores the choice before registering, so the line inherits it', () => {
+    const { api, files, inherited } = migratingBridge();
+    const dispose = registerBashDesign(api);
+    assert.equal(typeof dispose, 'function');
+    dispose();
+    assert.deepEqual(inherited[0], { bash: BASH_DESIGN_ID }, 'the seed was already stored when the bridge registered');
+    assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID, $lines: { tools: BASH_DESIGN_ID } });
+  });
+
+  test('a stored legacy choice is kept: the seed writes no selection and the line inherits that choice', () => {
+    const { api, files, writes } = migratingBridge({ 'bridge-tool-designs': { selections: { bash: 'someone.else' } } });
+    const dispose = registerBashDesign(api);
+    dispose();
+    assert.deepEqual(writes.filter(([store]) => store === SELECTIONS[0]), [], 'no selection was written');
+    assert.deepEqual(files['bridge-tool-designs'].selections, { bash: 'someone.else', $lines: { tools: 'someone.else' } });
+  });
+
+  test('the seed never writes the reserved line key itself', () => {
+    const { api, files } = migratingBridge();
+    api.registerToolDesign = () => () => {};
+    const dispose = registerBashDesign(api);
+    dispose();
+    assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID }, 'no $lines from this package');
+  });
+
+  test('an old bridge keeps today\'s per-tool choice, with no line value', () => {
+    const { api, files } = fakeBridge();
+    api.VERSION = '0.5.0';
+    const dispose = registerBashDesign(api);
+    dispose();
+    assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID });
   });
 });

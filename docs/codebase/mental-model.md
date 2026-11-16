@@ -7,7 +7,7 @@ starts, which rule each change must preserve, and where to begin.
 
 One Pi extension package, `pi-odd-worktree`: two agent tools (`worktree_create`,
 `worktree_list`), three panels (`/warp`, `/odd-list`, `/issues`), one optional
-sidebar section and one bash design on the bridge. It owns creating and listing the checkouts an ODD
+sidebar section and one tools design on the bridge (`Card tools`: bash, grep, find, ls, read). It owns creating and listing the checkouts an ODD
 works in, reading a checkout's `odd/tasks/*.md`, reading and — role permitting —
 editing that checkout's GitHub issues, and the drawing of its own cards. `git` is
 the only external requirement; Gentle Shell is recommended, and
@@ -27,7 +27,7 @@ gentle-shell-bridge adds only two control surfaces.
   path>` and the branch is kept (invariant 5).
 - CodeGraph itself: no `/codegraph-*` command and no tool named `codegraph`; it
   wires the index, the prompt text and the two reminders (invariants 19, 21).
-- Tool execution, permissions and blocks: the bash design only draws, the reminders
+- Tool execution, permissions and blocks: the tools design only draws, the reminders
   only advise, the guards read command text (invariants 20, 21, 22).
 - Every other customize surface, plugin-tools toggle and companion-app
   integration: the bash activity is a design on the bridge (invariants 2, 3).
@@ -59,7 +59,7 @@ Every module and what it owns is one row in [`code-map.md`](code-map.md).
 | `/warp` panel | Selector, extended list, create wizard, delete confirmation, queued warp | `lib/warp-selector-view.js` |
 | ODD reader | `odd/tasks/*.md` discovery, ordering and markdown rendering | `lib/odd-view.js` |
 | `/issues` | The `gh` client, the view, the repository pin, the rail section and its cache | `lib/gh-issues.js` |
-| Cards | The card substrate, the tool cards and the bash design | `lib/shell-card.js` |
+| Cards | The card substrate, the tool cards and the tools design | `lib/shell-card.js` |
 | Prompt blocks | The `## ODD worktrees` text and the `## CodeGraph` role texts | `lib/codegraph-rules.js` |
 | CodeGraph wiring | Index, lock, daemon, MCP entry, compaction, edit sync, reminders | `lib/codegraph-session.js` |
 | Tests | The suites and their fixtures | `tools/*.test.js` |
@@ -91,7 +91,7 @@ for each is in [`invariants.md`](invariants.md).
 | [17](invariants.md) | This repo paints last; the host's key hint is the one painted input it measures. |
 | [18](invariants.md) | The `## CodeGraph` section is advice, selected by the session's own facts. |
 | [19](invariants.md) | CodeGraph runs only with its CLI, in the background, and writes one config entry. |
-| [20](invariants.md) | The bash design only draws, and it draws what the classifier names. |
+| [20](invariants.md) | The tools design only draws, and it draws what the classifier names (the four read-only tools are always `exploring`). |
 | [21](invariants.md) | The two CodeGraph reminders advise; they never block and never add a surface. |
 | [22](invariants.md) | The `bash` guards read text, fail open and add no surface. |
 

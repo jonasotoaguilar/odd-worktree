@@ -6730,6 +6730,68 @@ let issuesSidebarReadSequence = 0;
 // itself lives on the process-wide slot above, so `/reload` is silent too.
 let issuesSidebarInstallArmed = false;
 let issuesSidebarInstallAnnounced = false;
+// S1 (issues-sidebar-click T1): ONE rail open at a time. A click on a row (or on
+// the overflow row) takes this token SYNCHRONOUSLY before `sendUserMessage`, so
+// two clicks in the same tick cannot both pass, and a click while it is held does
+// nothing at all: no second command, no overlay, no notice, no paint. The command
+// the host runs next RELEASES it — right before the overlay mounts, and on every
+// early return or throw before that — and the bounded timer below is the backstop,
+// because `sendUserMessage` returns `void` by contract: a command the host never
+// runs must not leave the rail dead. The token remembers the session generation
+// it was taken under (`issuesSidebarCacheGeneration`, the clock the cache already
+// uses), so a click left over by a previous session is inert and can never block
+// the next one.
+const ISSUES_PANEL_OPEN_GUARD_MS = 10000;
+let issuesPanelOpenToken = null;
+let issuesPanelOpenTimer = null;
+
+function clearIssuesPanelOpenTimer() {
+  if (issuesPanelOpenTimer === null) return;
+  const timer = issuesPanelOpenTimer;
+  issuesPanelOpenTimer = null;
+  try {
+    clearTimeout(timer);
+  } catch {
+    // A host timer that cannot be cancelled still fires into a released guard.
+  }
+}
+
+// Idempotent, and scoped to one token when one is named, so a release can never
+// clear a NEWER open's guard.
+function releaseIssuesPanelOpen(token) {
+  if (token !== undefined && issuesPanelOpenToken !== token) return;
+  clearIssuesPanelOpenTimer();
+  issuesPanelOpenToken = null;
+}
+
+// Only a token from the CURRENT session generation blocks: `session_start`,
+// `session_shutdown` and a bridge rebinding each move that generation on.
+function issuesPanelOpenBlocked() {
+  if (issuesPanelOpenToken === null) return false;
+  return issuesPanelOpenToken.generation === issuesSidebarCacheGeneration;
+}
+
+function armIssuesPanelOpenGuard(token) {
+  clearIssuesPanelOpenTimer();
+  let timer = null;
+  try {
+    timer = setTimeout(() => {
+      releaseIssuesPanelOpen(token);
+    }, ISSUES_PANEL_OPEN_GUARD_MS);
+  } catch {
+    timer = null;
+  }
+  // Unref'd: the interval is a safety net for the rail, never a reason for the
+  // process to stay alive.
+  if (timer && typeof timer.unref === "function") {
+    try {
+      timer.unref();
+    } catch {
+      // A host timer without a working unref still bounds the wait.
+    }
+  }
+  issuesPanelOpenTimer = timer;
+}
 
 function issuesPageQuery(spec, rawQuery) {
   const extra = typeof rawQuery === "string" ? rawQuery.trim() : "";
@@ -6916,7 +6978,26 @@ async function issuesBrowserRepoIdentity(gh, checkoutRoot, fresh) {
   return { ok: true, identity: normalized.identity };
 }
 
+// S1 (issues-sidebar-click T1): the rail click that dispatched this command — if
+// one did — owns the single-flight guard, and EVERY exit of the open releases it:
+// the early returns below, a throw, and the moment the overlay mounts (which is
+// where `openIssuesPanel` releases it, before the human is looking at it). The
+// release is scoped to the token captured HERE, so a typed `/issues` (which owns
+// no token) releases nothing and can never clear a newer click's guard.
 async function executeIssues(rawArgs, ctx) {
+  const openToken = issuesPanelOpenToken;
+  const releaseOpen = () => {
+    if (openToken === null) return;
+    releaseIssuesPanelOpen(openToken);
+  };
+  try {
+    return await openIssuesPanel(rawArgs, ctx, releaseOpen);
+  } finally {
+    releaseOpen();
+  }
+}
+
+async function openIssuesPanel(rawArgs, ctx, releaseOpen) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
   // S7: `/issues <number>` (also `#<number>`) opens the same panel on one
@@ -6956,15 +7037,22 @@ async function executeIssues(rawArgs, ctx) {
   // section opens the same repository this reader does.
   // Every later read, every action and the `o` opener bind exactly that string.
   const effectiveRepo = async (fresh) => issuesBrowserRepoIdentity(gh, checkoutRoot, fresh);
+  // S2 (issues-sidebar-click T1): a numbered open — the form the rail dispatches —
+  // pins the identity the checkout already proved for the rail's read, so its
+  // first frame no longer waits on a fresh `git`/`gh` proof. A typed `/issues`
+  // keeps that fresh proof, and a cached pin that cannot be read falls back to it
+  // ONCE. Nothing that mutates rides this: `scopeDrift` still re-proves the
+  // checkout with a fresh read before every action.
+  const pinIdentity = (fresh) => effectiveRepo(fresh)
+    .catch(() => ({ ok: false, error: "cannot resolve this checkout's own repository" }));
   let pinnedRepo;
   let pinnedPromise = null;
   const pinRepo = async () => {
     if (pinnedRepo !== undefined) return pinnedRepo;
     if (pinnedPromise === null) {
-      // A FRESH read at open: the identity the list displays is the one the
-      // checkout has now, never a scope cached moments before a move.
-      pinnedPromise = effectiveRepo(true)
-        .catch(() => ({ ok: false, error: "cannot resolve this checkout's own repository" }))
+      pinnedPromise = (initialIssue === null
+        ? pinIdentity(true)
+        : pinIdentity(false).then((cached) => (cached && cached.ok === true ? cached : pinIdentity(true))))
         .then((pin) => {
           pinnedRepo = pin;
           return pin;
@@ -7043,14 +7131,14 @@ async function executeIssues(rawArgs, ctx) {
   };
   const checkoutName = path.basename(checkoutRoot);
   // Pin the identity before the overlay mounts, so the first screenful is not
-  // a git probe per gh call and every row is read from that one repository.
-  await pinRepo();
-  let helpers = null;
-  try {
-    helpers = await issuesTuiLoader();
-  } catch {
-    helpers = null;
-  }
+  // a git probe per gh call and every row is read from that one repository. S2
+  // (issues-sidebar-click T1): the TUI helper load runs WITH the pin instead of
+  // behind it — it is local work, and waiting for the identity first put it on
+  // the path the human waits on.
+  const helpersPromise = Promise.resolve()
+    .then(() => issuesTuiLoader())
+    .catch(() => null);
+  const [helpers] = await Promise.all([helpersPromise, pinRepo()]);
   if (!helpers || !ctx || !ctx.ui || typeof ctx.ui.custom !== "function") {
     // No interactive host: read once so the one-line notice states a real
     // total, then say the viewer needs an interactive session.
@@ -7123,6 +7211,9 @@ async function executeIssues(rawArgs, ctx) {
   // S9 (T10): the bucket the numbered open starts on, chosen from the cache the
   // rail filled; a cold cache leaves the view's own fallback to decide.
   const initialBucket = initialIssue === null ? null : issuesSidebarInitialBucket(pinnedRepo, initialIssue);
+  // S1 (issues-sidebar-click T1): the open is over the moment the panel mounts, so
+  // the rail's clicks take effect again from the next frame on.
+  releaseOpen();
   try {
     await ctx.ui.custom(
       (hostTui, theme, _keybindings, done) => {
@@ -7260,6 +7351,9 @@ function registerIssuesCommand(pi) {
       const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
       const gate = await probeIssuesGate(ctx);
       if (gate.ok !== true) {
+        // S1 (issues-sidebar-click T1): the rail click whose command refuses here
+        // is over, so the guard goes with it instead of waiting for its timer.
+        releaseIssuesPanelOpen();
         if (typeof notify === "function") notify(issuesGateMessage(gate.error), "error");
         return;
       }
@@ -7556,16 +7650,27 @@ function announceIssuesPanelRefusal(pi, message) {
 }
 
 function dispatchIssuesPanel(pi, number, _identity, _bucket) {
+  // S1 (issues-sidebar-click T1): a click while a rail open is in flight has no
+  // effect at all — not even a visible refusal — so it returns normally and
+  // claims nothing.
+  if (issuesPanelOpenBlocked()) return { ok: true };
+  const token = { generation: issuesSidebarCacheGeneration };
+  issuesPanelOpenToken = token;
+  armIssuesPanelOpenGuard(token);
   const asked = Number(number);
   const namesIssue = Number.isInteger(asked) && asked > 0;
   const command = namesIssue ? `/issues ${asked}` : "/issues";
   if (!pi || typeof pi.sendUserMessage !== "function") {
+    // The host cannot dispatch, so nothing will run to release the guard.
+    releaseIssuesPanelOpen(token);
     announceIssuesPanelRefusal(pi, ISSUES_PANEL_DISPATCH_FAILED);
     return { ok: false, error: ISSUES_PANEL_DISPATCH_FAILED };
   }
   try {
     pi.sendUserMessage(command, { expandPromptTemplates: true });
   } catch (err) {
+    // A dispatch that threw reaches no command either.
+    releaseIssuesPanelOpen(token);
     const message = `the /issues command could not be dispatched: ${issuesSidebarError(err, "unknown error")}`;
     announceIssuesPanelRefusal(pi, message);
     return { ok: false, error: message };
@@ -7601,8 +7706,11 @@ function mountIssuesSidebar(pi, api) {
   if (!factory || typeof factory.createIssuesSection !== "function") return;
   // T15 (S9, defect 4): binding the section to the bridge is a rebinding of this
   // cache wiring, like `/reload`; an answer a previous binding still holds must
-  // not land in the new section's cache.
+  // not land in the new section's cache. S1 (issues-sidebar-click T1): a rebinding
+  // also ends any rail open the previous binding dispatched, so it releases the
+  // single-flight guard instead of leaving it to its timer.
   issuesSidebarCacheGeneration += 1;
+  releaseIssuesPanelOpen();
   const onRefreshed = typeof api.requestRepaint === "function"
     ? () => {
       try {
@@ -7855,6 +7963,10 @@ export default function (pi) {
     // the session moved to, or the moved session starts from rows it discarded and
     // its first read would be a delta instead of a full one.
     issuesSidebarCacheGeneration += 1;
+    // S1 (issues-sidebar-click T1): a rail click left over by the previous
+    // session is over — released here, and inert anyway through the generation
+    // above.
+    releaseIssuesPanelOpen();
     invalidateIssuesSidebar();
     // T11 (S2 amended): the missing-plugin hint. It is armed in the same
     // boundary as the section's own state, and it says nothing yet when the
@@ -7873,6 +7985,9 @@ export default function (pi) {
   pi.on("session_shutdown", (event, ctx) => {
     forgetPendingWarp(ctx);
     forgetInFlightWarpTools();
+    // S1 (issues-sidebar-click T1): an open the ended session dispatched never
+    // blocks the next one.
+    releaseIssuesPanelOpen();
     invalidateIssuesSidebar();
     clearIssuesSidebarCache();
     issuesSidebarCtx = null;

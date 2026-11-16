@@ -37,7 +37,7 @@ design is the read-only map of the click path, summarised in L2.
 | ID | Specs | Route | Commit |
 | --- | --- | --- | --- |
 | T1 | S1, S2, S4 | worker: single-flight in the click path and the cached-scope numbered open (`extensions/odd-worktree-tools.ts`, `lib/issues-section.js`, new `tools/issues-open-guard.test.js`, `tools/issues-section.test.js`, AGENTS.md, `docs/reference.md`) | |
-| T2 | S3 | worker: the latest linked pull request in the one related-issues query (`lib/gh-issues.js`, `tools/gh-issues.test.js`) | |
+| T2 | S3 | worker: the latest linked pull request in the one related-issues query (`lib/gh-issues.js`, `tools/gh-issues.test.js`) | Landed at the commit `fix(issues): mark the newest pull request on a rail row` (88/88 in `tools/gh-issues.test.js`; the two assertions in `tools/issues-section.test.js` that pinned the oldest-first order were rewritten by the parent) |
 
 ## Log
 

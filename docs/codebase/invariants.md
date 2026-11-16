@@ -86,6 +86,27 @@ The question this page answers: which rules must every change preserve, and what
    names, taking the added columns from the row's own fill; every other row, every
    result and every unproven heading is returned byte for byte (invariant 20).
 
+   **One rail open at a time, and the click's own identity.** A click on a rail row
+   opens one panel at a time: while it is in flight every further click has no
+   effect, and the effect returns when the panel mounts, on every exit of the
+   command that never mounted one (a refusal, an unproven identity, a throw), and
+   after the bounded safety interval of about ten seconds that covers a command the
+   host never ran. The numbered open pins the identity the CLICKED ROW was read from
+   with no probe at all; without that one-shot hint it pins the checkout's cached
+   scope, while a typed plain `/issues` keeps the fresh proof. The hint is used once,
+   only for its own number, only while the generation that READ the row is still the
+   current one — a row the host retained across a session boundary still dispatches
+   its number but leaves no hint — and only when the identity normalizes to
+   `<host>/<owner>/<repo>` with the same function every pinned read uses. Both pins
+   are reads: every action still re-proves the checkout fresh and refuses on drift, so
+   no mutation rides a pin. Accepted limit: `pi.sendUserMessage` is `void` and the
+   command it dispatches has no out-of-band channel from it, so a typed `/issues <n>`
+   of the same number run between the click's hint and its dispatched command can
+   consume that hint; the open then pins the repository the user just clicked, and
+   every write still re-proves the checkout fresh.
+   `tools/issues-open-guard.test.js` pins the guard, its release points, both pins,
+   the generation and the normalization.
+
    **The two file-card switches are the only preferences this package owns.**
    `lib/cards-customize.js` registers ONE row provider
    (`odd-worktree.cards.file-switches`) through the same published `registerRows`

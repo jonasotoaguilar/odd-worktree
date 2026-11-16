@@ -32,6 +32,13 @@ Worktree `bash-activity-card`, branch `feat/bash-activity-card`, base `main@ed02
 - **T8** (S5) — find and fix the slowdown on open/resume/session switch.
 - **T9** — docs for bridge 0.5.0 (`default`, min version), the theme-role caveat, `Card tools`.
 
+Slices (delivery is the user's call; no push or PR yet):
+- **Slice 1** `bd5dc83..dbfba67` — seed, colour/frame/ms, `fd` and read-only programs, room for the label,
+  memo + one-line preview, docs. Suite 1772+ green.
+- **Slice 2** (open) — worker diffs: issues gate off the `session_start` path (T8) and the census-driven
+  classifier rules (T7). Reviewed and committed by the parent, one commit each.
+- **Slice 3** (open) — `Card tools` on the bridge's multi-tool line and the grep/find/ls/read headings (T6).
+
 ## Log
 
 - **L1** — user: "Igual encuentro que anda muy lento ahora, se demora en abrir mas pi, se demora en cagar la

@@ -693,6 +693,27 @@ describe('the read-only tools', () => {
     }
   });
 
+  test('S6: a skill or an ODD artifact is the file card\'s row, for both parts, byte for byte', () => {
+    // The file card already claims these paths (lib/skill-odd-card.js): it draws the
+    // heading, the frame and the body, so this design must add no status line over or
+    // under it, whichever resolver the host runs first.
+    const call = [readNeon('read', 'lib/skills/one/SKILL.md:1-40')];
+    const result = [`│ ${'x'.repeat(86)} │`, `╰${'─'.repeat(88)}╯`];
+    for (const path of ['lib/skills/one/SKILL.md', 'odd/tasks/design.md', '/abs/odd/tasks/a.md', 'C:\\repo\\skills\\x\\SKILL.md']) {
+      const render = { args: { path }, isPartial: false, durationMs: 142 };
+      assert.deepEqual(applyBashActivityHeading(call, readCtx('read', { render })), call, `${path} (call)`);
+      assert.deepEqual(applyBashActivityHeading(result, readCtx('read', { render, part: 'result' })), result, `${path} (result)`);
+    }
+    // And only those paths: an ordinary read is still headed, and its frame still painted.
+    const render = { args: { path: 'src/app.js' }, isPartial: false, durationMs: 142 };
+    assert.ok(applyBashActivityHeading(call, readCtx('read', { render }))[0].includes(painted('mdLink', '⌕ exploring')), 'an ordinary read keeps the activity heading');
+    assert.notDeepEqual(applyBashActivityHeading(result, readCtx('read', { render, part: 'result' })), result, 'and its frame is painted');
+    // A folder that merely holds the words is not one of those paths.
+    for (const path of ['lib/skillset/notes.md', 'docs/oddity.md', 'odd/work/a.md', 'notes/SKILL.md']) {
+      assert.ok(applyBashActivityHeading(call, readCtx('read', { render: { args: { path }, isPartial: false } }))[0].includes(painted('mdLink', '⌕ exploring')), path);
+    }
+  });
+
   test('the frame wears one role and the call state speaks first, exactly as bash', () => {
     const closing = `╰${'─'.repeat(88)}╯`;
     const result = (extra) => ({ tool: 'grep', part: 'result', width: 90, theme, render: { args: readArgs('grep'), isPartial: false, ...extra } });

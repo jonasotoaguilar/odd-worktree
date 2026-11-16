@@ -9119,7 +9119,7 @@ function registerIssuesSidebar(pi) {
       // the rail — "nunca se agrega a sidebar github sidebar" — and there is no
       // line, notice or refusal to draw for it, because nothing was registered.
       // Only the GITHUB section is withheld: the bash design above, the picker's
-      // `alt+f` shortcut and every other surface still register.
+      // `alt+p` shortcut and every other surface still register.
       if (!ISSUES_GH_CLI_ABSENT) mountIssuesSidebar(pi, api);
       return;
     }
@@ -9152,9 +9152,11 @@ function registerIssuesSidebar(pi) {
 // `GENTLE_PI_AGENTS_VIEW_KEY`); the default is a convenience, never a
 // requirement: `/files` stays reachable as a command with no key at all.
 const FILES_KEYMAP_ENV = "GENTLE_PI_FILES_KEY";
-// S28: `alt+f`, because Pi claims `alt+p` for `app.model.cycleBackward` on
-// Windows and WSL.
-const FILES_KEYMAP_DEFAULT = "alt+f";
+// S41 (round L12): `alt+p`, the human's own call. Pi reports `alt+f` as a conflict
+// with `tui.editor.cursorWordRight` (its third default alias); `alt+p` is
+// unclaimed on Linux and macOS, where `app.model.cycleBackward` is `shift+ctrl+p`,
+// and is that action's key only on Windows and WSL.
+const FILES_KEYMAP_DEFAULT = "alt+p";
 const FILES_SHORTCUT_DESCRIPTION = "Open the file picker: enter inserts the paths, ctrl+e opens $EDITOR";
 
 // S36: the environment's key when it holds a non-empty one, the default otherwise.
@@ -9391,7 +9393,7 @@ function oddSessionStillCurrent(ctx) {
 // ---------------------------------------------------------------------------
 // S18 (T14, L13): the bridge gate. This package is a guest of
 // gentle-shell-bridge — the rail, the bash design and the `Cards` rows all live
-// on its published object (the picker's `alt+f` shortcut is bound on the host
+// on its published object (the picker's `alt+p` shortcut is bound on the host
 // itself, but only once this gate has registered the command it opens) — and the human's
 // answer for what to do without it was exactly "Desactivar todo el plugin":
 // register NOTHING. No command, no tool, no message or entry renderer, no card,
@@ -9509,7 +9511,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // overlays, reads Git through the package's async runner and adds no tool.
   registerFilesCommand(pi);
   // S36 (files-picker T15): the picker's ONE key, bound directly on the host and
-  // bound once — `alt+f` (S28) unless `GENTLE_PI_FILES_KEY` says otherwise.
+  // bound once — `alt+p` (S41) unless `GENTLE_PI_FILES_KEY` says otherwise.
   bindFilesShortcut(pi);
   registerIssuesCommand(pi);
   pi.registerTool(worktreeCreateTool);

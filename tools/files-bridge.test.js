@@ -1,13 +1,13 @@
 'use strict';
-// T15 (S36, S28) and T14 (S18) together: the picker's ONE key is bound directly
+// T19 (S36, S41) and T14 (S18) together: the picker's ONE key is bound directly
 // on the host, and the package itself loads only when gentle-shell-bridge is
 // published.
 //
 // What this file proves, all of it through the loaded extension:
-// - `alt+f` is bound with `pi.registerShortcut` at load, and `/files` is
-//   registered under its own name (S36/S28);
+// - `alt+p` is bound with `pi.registerShortcut` at load, and `/files` is
+//   registered under its own name (S36/S41);
 // - `GENTLE_PI_FILES_KEY` overrides that key, and an empty (or blank) override
-//   falls back to `alt+f`;
+//   falls back to `alt+p`;
 // - the bound handler is the SAME path `/files` opens, with the session context
 //   the host hands a shortcut;
 // - a complete bridge is handed NO keymap and NO palette row for `files`, and is
@@ -159,16 +159,16 @@ function filesRows(rows) {
 }
 
 // ---------------------------------------------------------------------------
-// S36/S28: the key is bound directly, no bridge row involved.
+// S36/S41: the key is bound directly, no bridge row involved.
 // ---------------------------------------------------------------------------
 
-test('S36/S28: the shortcut binds alt+f at load with a complete bridge published, and /files still registers', async () => {
+test('S41: the shortcut binds alt+p at load with a complete bridge published, and /files still registers', async () => {
   const bridge = installBridge();
   const host = installHost();
   const loaded = await loadExtension(host.pi);
 
   assert.equal(host.shortcuts.length, 1, 'one key is bound');
-  assert.equal(host.shortcuts[0].key, 'alt+f', 'the default key is alt+f (S28)');
+  assert.equal(host.shortcuts[0].key, 'alt+p', 'the default key is alt+p (S41)');
   assert.equal(typeof host.shortcuts[0].options.handler, 'function');
   assert.equal(typeof host.shortcuts[0].options.description, 'string');
   assert.equal(loaded.commands.has('files'), true, '/files is still registered under its own name');
@@ -178,7 +178,7 @@ test('S36/S28: the shortcut binds alt+f at load with a complete bridge published
   assert.notEqual(globalThis[BRIDGE_SLOT], undefined, 'the bridge is the host\'s own published object');
 });
 
-test('S36/S28: GENTLE_PI_FILES_KEY overrides the bound key', async () => {
+test('S41: GENTLE_PI_FILES_KEY overrides the bound key', async () => {
   installBridge();
   process.env.GENTLE_PI_FILES_KEY = 'ctrl+shift+f';
   const host = installHost();
@@ -188,14 +188,14 @@ test('S36/S28: GENTLE_PI_FILES_KEY overrides the bound key', async () => {
   assert.equal(host.shortcuts[0].key, 'ctrl+shift+f', 'the environment variable wins over the default');
 });
 
-test('S36/S28: an empty or blank override falls back to alt+f', async () => {
+test('S41: an empty or blank override falls back to alt+p', async () => {
   installBridge();
   for (const value of ['', '   ']) {
     process.env.GENTLE_PI_FILES_KEY = value;
     const host = installHost();
     await loadExtension(host.pi);
     assert.equal(host.shortcuts.length, 1, `one key is bound for the override ${JSON.stringify(value)}`);
-    assert.equal(host.shortcuts[0].key, 'alt+f', `an empty override is not a key: ${JSON.stringify(value)}`);
+    assert.equal(host.shortcuts[0].key, 'alt+p', `an empty override is not a key: ${JSON.stringify(value)}`);
   }
 });
 
@@ -229,7 +229,7 @@ test('S36: a complete bridge receives no keymap row and no palette row for files
   assert.deepEqual(bridge.commands, [], 'nor any palette row');
   assert.deepEqual(bridge.resolved, [], 'the shell is never asked to resolve a key');
   assert.equal(host.shortcuts.length, 1, 'the shortcut is still bound');
-  assert.equal(host.shortcuts[0].key, 'alt+f');
+  assert.equal(host.shortcuts[0].key, 'alt+p');
   assert.equal(loaded.commands.has('files'), true);
 });
 
@@ -359,7 +359,7 @@ test('S18/S19 (T14): the ready announcement registers the whole surface, exactly
   assert.deepEqual(filesRows(bridge.commands), [], 'nor a palette row');
   assert.deepEqual(bridge.resolved, [], 'and is never asked for a key');
   assert.equal(host.shortcuts.length, 1, 'the episode binds the ONE key');
-  assert.equal(host.shortcuts[0].key, 'alt+f', 'the default key, from the environment or alt+f');
+  assert.equal(host.shortcuts[0].key, 'alt+p', 'the default key, from the environment or alt+p');
 
   const sink = notifyHost();
   await host.shortcuts[0].options.handler(sink.ctx);

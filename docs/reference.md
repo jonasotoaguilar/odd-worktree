@@ -55,7 +55,7 @@ how the package is tested and released. The repository invariants live in
      (`<repo-name>-worktrees/<odd>`) is the whole record; there is no list file,
      no lock file and no record to keep in step.
 2. **List** — `worktree_list`, or open `/warp`. Pass `all: true` to the tool (or
-   `v` in the panel) to also see the worktrees Git knows outside
+   `a` in the panel) to also see the worktrees Git knows outside
    `<repo-name>-worktrees`. The listing is read-only: it writes nothing and
    prunes nothing.
 3. **Move** — `/warp <name>`, the selector's `enter`, or a typed name. The
@@ -69,15 +69,25 @@ how the package is tested and released. The repository invariants live in
 
 ## Panel keys
 
-`/warp` selector — the footer legend is the key reference.
+`/warp` selector — the footer legend is the key reference. Its top rule carries
+the heading `Warp · n worktrees`, `n` being the checkouts its listing holds; the
+extended list reads `Warp · all n worktrees`, that same count plus the checkouts
+outside `<repo-name>-worktrees/`. Two detail lines sit under the heading, the
+current checkout's own and the focused one's, which follows the selection; a blank
+row separates them from the list, and a second one separates the list from the keys.
+The list block is a budget of SEVEN lines shared with two fixed count lines,
+`↑ n more` and `↓ n more`: both drawn leaves five checkout rows, one drawn leaves
+six, and with nothing hidden it holds seven — or every checkout, when there are
+fewer. Those two lines are text outside the selection space, never rows and never
+selectable, so the cursor only ever lands on a real checkout.
 
 | Key | Action |
 | --- | --- |
 | `↑`/`↓`, `j`/`k` | Move the selection |
-| `enter` | Warp to the focused checkout (`enter` on the `view all worktrees` row opens the extended list) |
+| `enter` | Warp to the focused checkout |
 | `c` | Open the create flow: answer `Branch` (the change type from the eleven-type list, then the name — composed as `<type>/<name>`, `feat` by default) and `Odd` (the checkout's directory) — `tab`/`←`/`→` switch between the two fields, `↑`/`↓` pick from the active list, typing fills the active name, the ODD list's first entry is `new odd` (the only one that takes a typed name) and its other entries are the ODDs that exist in `main` minus the ones whose checkout already exists, `enter` on the ODD creates, `esc` cancels. In BOTH typed names one or more consecutive spaces become a single `-` (`change    cost` is `change-cost`), and the typed row, the preview and the create always show and use the same name |
 | `ctrl+d` | Ask to delete the focused checkout; the extension owns the confirmation, the evidence and the removal |
-| `v` | Open the extended list of every other checkout (`↑`/`↓`, `pgUp`/`pgDn`, `enter`, `T` or `/` to filter, `esc` back) |
+| `a` | Open the extended list of every other checkout (`↑`/`↓`, `pgUp`/`pgDn`, `enter`, `T` or `/` to filter, `esc` back). Its `a all` hint on the legend is painted only when a checkout other than this one stands outside `<repo-name>-worktrees/`, because only then does the list hold anything the panel does not |
 | `r` | Reload the listing |
 | `esc`, `ctrl+c` | Close the panel |
 
@@ -315,10 +325,10 @@ All three sources are read **best effort**, and none is ever guessed:
 Opening the panel reads the three scoped buckets only — `My issues`
 (`author:@me`), `Assigned` (`assignee:@me`) and `Involved`
 (`involves:@me -author:@me`) — one cursor page each, open issues, newest update
-first. When the `ISSUES` rail section has already read this checkout's repository,
+first. When the `GITHUB` rail section has already read this checkout's repository,
 the first frame is painted from that cache instead and ONE tab is read at mount —
 the other two read the first time you open them; [the rail
-section](#the-issues-rail-section) describes the cache and what it changes. `All`
+section](#the-github-rail-section) describes the cache and what it changes. `All`
 costs nothing until you ask for it, which is the point of the split:
 the common case is your own issues, and reading every open issue of the
 repository to paint three tabs was work nobody asked for.
@@ -389,17 +399,18 @@ normalized the same way, so a raw value never reaches gh.
 Nothing that mutates is loosened: every action re-proves the checkout with a fresh
 read and refuses on drift, as above.
 
-## The `ISSUES` rail section
+## The `GITHUB` rail section
 
-When Gentle Shell draws its rail, a section titled `ISSUES` lists this checkout's
+When Gentle Shell draws its rail, a section headed `GITHUB` lists this checkout's
 open issues that you AUTHORED (`author:@me`) or are ASSIGNED (`assignee:@me`),
 merged into one list: deduplicated by issue number (an issue that is both keeps
 the `assigned` row, since that is the tab its click opens), sorted by last update,
 seven drawn, and when the read answered with more, an eighth and last dim row
 reads `and N more issues` (`N+` when either contributing search was truncated at
 its cap, because the real total is larger). The section's own meta reports what it
-holds as the bare count — `8`, never `8 assigned` — and `8 · stale` while the rows
-on screen are the last good ones.
+holds as the count the last read produced, with its unit — `8 issues`, never
+`8 assigned` — and `8 issues · stale` while the rows on screen are the last good
+ones.
 
 - **One request per refresh.** A refresh is a single `gh api graphql` request with
   three aliased searches — `author:@me`, `assignee:@me` and
@@ -409,10 +420,11 @@ on screen are the last good ones.
   paints its first frame from that cache.
 - **A row is an issue, and its one mark is a pull-request number.** It reads
   `#<number> <title>`, and when one of the issue's cross-reference events is a
-  pull request (the read inspects the first ten of them) its right-hand mark is the
-  FIRST such pull request's number, `#69`, painted in the bridge's own `muted`
-  right-hand column — gray for that segment only, never the whole row. No pull
-  request, no mark; nowhere does the rail print an icon. That number arrives in the
+  pull request (the read asks for the newest ten of them) its right-hand mark is
+  `\ue726 #69`: the nerd-font pull-request glyph U+E726, one space, then `#` and
+  the number of the MOST RECENT pull request among those events. It is painted in
+  the bridge's own `muted` right-hand column — gray for that segment only, never
+  the whole row. No pull request, no mark. That number arrives in the
   same combined request as the rows, so a failed read takes the rows and their
   marks together and lands in the stale state below. The line keeps ONE click
   target — the issue — because a bridge row carries one `onClick` and has no
@@ -461,21 +473,28 @@ on screen are the last good ones.
   nothing to opt into, and `registerSection` has no `preview` field.
 - **A frame never waits on `gh`.** The host calls `lines()` and `meta()` once per
   frame and both return synchronously: they read one in-memory snapshot and only
-  ever schedule the refresh. Nothing is read at `session_start`; a snapshot older
-  than 60 s schedules exactly one deferred refresh, and only a drawn body frame
-  schedules it at all — the header call never does. Each turn of yours
-  (`before_agent_start`, then `turn_end`) asks for a read behind a 30 s floor
-  measured on the last ATTEMPT: a failed read starts the floor too, so a `gh`
+  ever schedule the refresh. The session's `gh` gate is dispatched startup work,
+  never an awaited step: no child process and no network call sits on the path
+  that opens a session or switches to another one, and `/issues` probes `gh`
+  itself the moment you open it. A snapshot older than 60 s schedules exactly one
+  deferred refresh, and only a drawn body frame schedules it at all — the header
+  call never does. While the section is DRAWN it also re-reads on TIME: one
+  self-scheduled, unref'd timer at a 20 s floor, re-armed only from its own fire
+  and stopped by itself the moment the section leaves the drawn window — two
+  minutes without a frame. A hidden section keeps no timer, spawns nothing and
+  reads nothing, and showing it again starts from `loading…`. Each turn of yours
+  (`before_agent_start`, then `turn_end`) can ask for a read too, behind a 30 s
+  floor measured on the last ATTEMPT: a failed read starts that floor, so a `gh`
   that keeps failing is not retried every turn, and the in-frame TTL counts from
   the attempt rather than from the last success. It asks only while the section
-  was drawn within the last two minutes — because a frame only exists when the
-  host has a reason to produce one — so while frames keep coming and reads keep
-  succeeding the rail does not stay stale. A hidden section draws nothing, so
-  nothing stamps it afresh and it starts no timer of its own: once the two-minute
-  window lapses it makes no call at all, while a collapsed section is still drawn
-  — its header is painted, and that stamps the frame — so the activity read
-  applies to it too. There is no polling and no repeating timer; the one
-  deferral is a task scheduled off the paint path. `session_shutdown` and a session
+  was drawn within those two minutes, and with the 20 s timer keeping the
+  snapshot fresher than its floor it adds no read of its own. A `bash` result
+  whose command mutates an issue or a pull request is the one event that FORCES a
+  read right after it — it bypasses both floors and is capped to one per 5 s, so a
+  script that runs several `gh` writes cannot storm the API. Only `bash` is
+  classified, only its command text, and only while the section is drawn. A
+  collapsed section is still drawn — its header is painted, and that stamps the
+  frame — so the timed read applies to it too. `session_shutdown` and a session
   that starts in another checkout drop the snapshot, so the rail falls back to
   `loading…` instead of the previous checkout's rows; a read still in flight at
   that boundary paints nothing and writes nothing to the cache, and a refresh
@@ -485,7 +504,8 @@ on screen are the last good ones.
   and not the host process's own directory.
 - **A failed refresh keeps the rows.** Once a list is on screen, a refresh that
   fails does not replace it: the same rows, in the same order, with the same
-  marks, stay where they are and the header reads `<n> · stale` instead. A transient `gh` stall is therefore a stale list, not an empty one, and
+  marks, stay where they are and the header reads `<n> issues · stale` instead.
+  A transient `gh` stall is therefore a stale list, not an empty one, and
   the next successful read clears the mark.
 - **Every state is a row, none is a throw.** `loading…` (dim) before the first
   answer, `no open issues` (dim) for an empty result, and one error row naming the
@@ -495,23 +515,39 @@ on screen are the last good ones.
   `/issues` reads it, and no `gh` call is made without a proven identity. A cwd
   that is not inside a repository is not that error: the section's one line is
   exactly `not a git repository`, in the `dim` gray role and with no path, while
-  `/warp` and `/issues` keep their own, fuller sentence. A failing
+  `/warp` and `/issues` keep their own, fuller sentence. A missing `gh` CLI is the
+  same kind of state: one dim line, `gh CLI not installed`, with no read and no
+  timer, while `/issues` refuses with the one sentence that names the CLI and its
+  install. A failing
   click is recorded instead of thrown, and it never turns the list into an error
   row.
-- **One cache, in memory, per repository.** The three scoped views live in one
-  in-process cache keyed by the repository identity the read was proven against;
-  nothing is ever written to disk and a session shutdown clears it, so a session
+- **One cache, two halves, per repository.** The three scoped views live in one
+  cache keyed by the repository identity the read was proven against, so a session
   that moves between checkouts never shows one repository's rows under another's
-  name. The first read takes up to 100 per view, later reads the newest 20, merged
-  by issue number. A merge cannot see an issue that was closed or unassigned, so
-  each view is held to one invariant: after a merge its cached count must equal the
-  `issueCount` the same answer reported, and a mismatch makes the NEXT read a full
-  one; so does an entry whose last FULL read is older than ten minutes, since a
-  delta renews only the sync time and never that bound. A view with more than 100 issues is
+  name. The first half is in-process (`lib/related-issues-cache.js`: no imports,
+  no child process, no disk) and owns what a read MEANS — the plan, the merge,
+  the count invariant. The second is on disk (`lib/issues-cache-store.js`): one
+  versioned document, `issues-cache.json` under `$XDG_CACHE_HOME/odd-worktree/`
+  (else `~/.cache/odd-worktree/`), one entry per identity under the same key,
+  bounded to the eight most recent identities and written through a temp file and
+  a rename, so a failed write leaves the previous document whole. Nothing there is
+  on a paint path or on `session_start`: the loader hydrates an entry before its
+  plan and queues the write fire-and-forget, one in flight, and a session boundary
+  does NOT clear it — the entries are the point — so a warm identity's first read
+  after a restart is already a delta. The first read takes up to 100 per view,
+  later reads the newest 20, merged by issue number. A merge cannot see an issue
+  that was closed or unassigned, so each view is held to one invariant: after a
+  merge its cached count must equal the `issueCount` the same answer reported, and
+  a mismatch makes the NEXT read a full one; so does an entry whose last FULL read
+  is older than ten minutes, since a delta renews only the sync time and never
+  that bound. Persistence never defeats either rule: an entry that is inconsistent
+  or past that ten-minute bound is not hydrated at all, so it is read whole. A
+  view with more than 100 issues is
   reported truncated — that is the `N+` in the overflow row — instead of being
-  looped over, and a failed read leaves the cache untouched. Clearing it is durable:
-  a read in flight when the session shuts down cannot repopulate it, and an answer
-  older than one already applied is ignored rather than written over it.
+  looped over, and a failed read leaves the cache untouched. A session boundary is
+  durable: a read in flight when the session shuts down cannot repopulate the
+  cache, and an answer older than one already applied is ignored rather than
+  written over it.
 - **`/issues` opens from this cache, and owns none of it.** When the rail has
   filled an entry for the repository the panel itself proves, `/issues` paints its
   first frame from it and reads ONE tab at mount instead of three: the tab on
@@ -519,7 +555,8 @@ on screen are the last good ones.
   open them, and every answer replaces the rows it seeded. With no entry for that
   repository the open is exactly the one it always was: three scoped reads at
   mount. The panel is a reader only — the rail keeps the entry's ownership (its
-  read, its merge, the count invariant above, its clear at shutdown), and nothing
+  read, its merge, the count invariant above, the persisted copy, its generation
+  at a session boundary), and nothing
   the panel does adds, shrinks or rewrites it. `All` is never seeded: the cache
   holds the three scoped views only, so that view still costs its own read the
   first time you enter it. A seeded row is not an answer: it carries the query it
@@ -542,7 +579,9 @@ on screen are the last good ones.
 - **What it needs.** `gh`, authenticated (`gh auth login`); a checkout whose own
   repository can be proven — a failed proof is the error row and makes no `gh`
   call; and a Gentle Shell whose `gentle-shell-bridge` published its API and draws
-  a rail.
+  a rail. Without `gh` on `PATH` neither this section nor `/issues` activates
+  anything — no child, no read, no timer — and each says so in one line naming the
+  missing CLI.
 
 ## `/files`: the picker, its scopes and its orders
 
@@ -894,6 +933,14 @@ can never disagree about a stored row.
 Session names derived from an ODD write, and the warp's fork/resume bookkeeping,
 travel in the Pi session files the host already owns. The setup logs live under
 the system temp directory (`odd-worktree-setup-*`), one directory per create.
+
+One cache document lives outside the checkout and outside the host's session
+files: the issues read cache, `issues-cache.json` under
+`$XDG_CACHE_HOME/odd-worktree/` (`~/.cache/odd-worktree/` when `XDG_CACHE_HOME` is
+unset), keyed by repository identity and bounded to the eight most recent ones.
+It is a cache, not a preference: deleting it costs one full read and nothing else,
+and a write it cannot commit is silence rather than an error ([the rail
+section](#the-github-rail-section)).
 
 One document holds a preference rather than worktrees: `<home>/card-files.json`,
 the two file-card switches the `Cards` rows write; its format, reader and writer

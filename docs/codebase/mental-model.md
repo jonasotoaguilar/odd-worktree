@@ -15,7 +15,9 @@ checkout's GitHub issues, and the drawing of its own cards. `git` is the only
 external tool requirement, and gentle-shell-bridge is the plugin's own
 prerequisite: without it the package loads nothing at all. With it, the bridge
 carries five control surfaces: the rail section, the bash design, the two file-card
-switches, and the file picker's keymap action and palette row.
+switches, and the file picker's keymap action and palette row. `gh` is optional and
+belongs to the issues surfaces alone, and whether it exists is a local `PATH` walk
+(`lib/which-command.js`), never a child process.
 
 ## What It Does Not Own
 
@@ -45,7 +47,9 @@ switches, and the file picker's keymap action and palette row.
    behind the bridge gate it registers the four commands, the two tools, the
    message renderer, the file card, the rail section, the bash design, the
    `Cards` row group and the hooks — deferred until gentle-shell-bridge is present,
-   and nothing at all without it.
+   and nothing at all without it. Its issues `gh` gate is dispatched startup work
+   under the module's epoch, never an awaited step of `session_start`, so a session
+   start or switch pays no child process and no network call for it.
 2. `lib/worktree-*.js` — a create validates and plans in
    `lib/worktree-create.js`, prepares through `lib/worktree-hooks.js`, then
    `lib/worktree-setup-runner.js` starts the install as a tracked background
@@ -53,7 +57,10 @@ switches, and the file picker's keymap action and palette row.
    `lib/warp-*.js`; `/odd-list` reads through `lib/odd-docs.js`.
 3. `lib/worktree-git.js` — the one git seam, where a child argv leaves for git,
    with `lib/worktree-remove.js` the one removal. `lib/gh-issues.js` is the `gh`
-   seam for `/issues`; `lib/card-files-mode.js` writes the one document behind the
+   seam for the issues surfaces, reached only by a read that is already off the
+   session path and only after `lib/which-command.js` found the CLI on `PATH`;
+   `lib/issues-cache-store.js` writes the one issues cache document under the
+   user's cache home; `lib/card-files-mode.js` writes the one document behind the
    two file-card switches (invariant 23); `lib/codegraph-mcp-config.js` is the only
    writer of the user's own configuration (invariant 19).
 
@@ -67,7 +74,7 @@ Every module and what it owns is one row in [`code-map.md`](code-map.md).
 | Worktrees | Create, list, ownership, removal, the `bash` guards | `lib/worktree-create.js` |
 | `/warp` panel | Selector, extended list, create wizard, delete confirmation, queued warp | `lib/warp-selector-view.js` |
 | ODD reader | `odd/tasks/*.md` discovery, ordering and markdown rendering | `lib/odd-view.js` |
-| `/issues` | The `gh` client, the view, the repository pin, the rail section and its cache | `lib/gh-issues.js` |
+| `/issues` | The `gh` client, the view, the repository pin, the rail section and its two cache halves | `lib/gh-issues.js` |
 | Cards | The card substrate, the tool cards, the file cards and the bash design | `lib/shell-card.js` |
 | Prompt blocks | The `## ODD worktrees` text and the `## CodeGraph` role texts | `lib/codegraph-rules.js` |
 | CodeGraph wiring | Index, lock, daemon, MCP entry, compaction, edit sync, reminders | `lib/codegraph-session.js` |
@@ -104,6 +111,11 @@ for each is in [`invariants.md`](invariants.md).
 | [21](invariants.md) | The two CodeGraph reminders advise; they never block and never add a surface. |
 | [22](invariants.md) | The `bash` guards read text, fail open and add no surface. |
 | [23](invariants.md) | The file card only draws, and it claims exactly three tools. |
+| [24](invariants.md) | No session path waits on `gh`, and every `gh` reach is deferred. |
+| [25](invariants.md) | A persisted cache entry never defeats the count invariant or the full-read TTL. |
+| [26](invariants.md) | The rail's timed refresh exists only while the section is drawn. |
+| [27](invariants.md) | A forced refresh happens only after a mutating `bash`, behind its cap. |
+| [28](invariants.md) | The `gh`-absent and non-repository states are settled, so nothing retries them. |
 
 ## Common Change Paths
 
@@ -124,13 +136,14 @@ Work on a branch, never on `main`: an ODD gets its own checkout at
 | A file card or one of its two switches | `lib/file-card.js`, `lib/skill-odd-card.js`, `lib/card-files-mode.js`, `lib/cards-customize.js` |
 | Prompt text the model reads | `lib/odd-prompt/odd-worktrees.md`, `lib/codegraph-prompt/*.md` via `lib/odd-worktrees-prompt.js` and `lib/codegraph-rules.js` |
 | `/issues`, its tabs or its capabilities | `lib/gh-issues.js`, `lib/issues-view.js` |
-| The rail section or its cache | `lib/issues-section.js`, `lib/related-issues-cache.js` |
+| The rail section or its cache | `lib/issues-section.js`, `lib/related-issues-cache.js`, `lib/issues-cache-store.js` |
+| A `bash` command that should force a rail read | `lib/issues-bash-mutation.js` |
 | CodeGraph indexing, daemon or MCP entry | `lib/codegraph-session.js`, `lib/codegraph-index.js`, `lib/codegraph-mcp-config.js` |
 | The `bash` guards | `lib/worktree-guard.js` |
 
 ## Related Decisions / Contracts
 
-- [`invariants.md`](invariants.md) — the 23 rules above, in full, with their tests and limits.
+- [`invariants.md`](invariants.md) — the 28 rules above, in full, with their tests and limits.
 - [`code-map.md`](code-map.md) — every module and the one responsibility it owns.
 - [`../reference.md`](../reference.md) — panel keys, refusals, and how each surface behaves.
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) — the Node versions the suite runs on.

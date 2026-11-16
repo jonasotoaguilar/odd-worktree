@@ -61,18 +61,23 @@ The question this page answers: which rules must every change preserve, and what
    an empty slot at `session_start` may still be a bridge that has not loaded, and
    immediate on a host with no event bus to announce on. That warning is the ONLY
    thing a host without the bridge ever receives from this package.
+   `tools/issues-section.test.js` pins the gate from the outside — no bridge and no
+   bus registers nothing, an announcement alone registers nothing until it fires —
+   and `tools/package-surface.test.js` pins that the bridge is never imported.
 
    **`/files` is a panel and nothing else.** It mounts its OWN overlay through
    `ctx.ui.custom` (the scope step's small card, then the picker), and a host with
    no such seam gets one honest line — `files: the file picker needs an interactive
    session with overlay support` — and no second surface in its place: no
-   transcript dump, no sub-command, nothing written. It is bridge-independent: it
-   opens as a command and needs no other package to draw. Its ONLY Gentle Shell
-   hooks are optional and go through the same published object as every other
+   transcript dump, no sub-command, nothing written. Being a command, it needs no
+   other package to DRAW: its overlay comes from the host's own `ctx.ui.custom`,
+   not from the bridge that registered it. Its ONLY Gentle Shell hooks are those
+   optional additions, and they go through the same published object as every other
    bridge surface: the `files` keymap action (label `File picker`, env
    `GENTLE_PI_FILES_KEY`, default `alt+p`) and the palette row in `Session`, both
    via `registerKeymap` / `registerCommands`, with the key bound here from
-   `resolveKeymap`; without the bridge they are simply absent, not an error. The
+   `resolveKeymap`; a bridge that publishes the object without them simply leaves
+   them absent, not an error. The
    command itself registers no store and writes nothing: it reads Git through the
    ordinary fixed argv (invariant 9) and paints.
 
@@ -477,3 +482,83 @@ The question this page answers: which rules must every change preserve, and what
     `render(width)`, so a flip repaints rows already drawn. The card only draws: it
     adds no command and no tool, and its only customize surface is the bridge's
     `Cards` rows (`lib/cards-customize.js`).
+
+24. **No session path waits on `gh`, and every `gh` reach is deferred.**
+    `session_start` DISPATCHES the issues gate as tracked startup work under the
+    module's epoch and never awaits it, so opening a session or switching to
+    another one spends no child process and no network call there. What the gate
+    does off that path is one local `git rev-parse` for repository-ness, one local
+    `PATH` walk (`lib/which-command.js`) for the CLI, and the `gh` health read only
+    when both answer yes; a late answer from a session that has ended sets no state
+    and notifies no UI. `/issues` probes `gh` itself when it opens. In the rail,
+    `lines()` and `meta()` keep their synchronous contract: they read ONE in-memory
+    snapshot and only schedule the refresh. `tools/issues-command.test.js` pins it
+    with "the awaited session_start resolves while the injected gh runner is still
+    pending" and "a session outside a repository makes no gh call at startup, and
+    stays silent"; `tools/issues-section.test.js` with "a frame never waits" and "a
+    missing gh CLI paints one dim line and spawns no gh child at all".
+
+25. **A persisted cache entry never defeats the count invariant or the full-read
+    TTL.** The disk half (`lib/issues-cache-store.js`) stores what the plan needs
+    and moves `fullAt` only on a full apply, exactly like the in-memory clock. The
+    loader hydrates an entry only for the identity it just proved, only while the
+    in-memory cache is cold for it, only when its stored `fullAt` is inside the
+    ten-minute bound, and never when it is `inconsistent`: an entry that fails any
+    of those is not hydrated at all, so `plan` still answers a FULL read and
+    persistence cannot turn a stale or untrustworthy entry into a fresh one. The
+    document is keyed exactly as the memory cache keys its own entry
+    (`<host>/<owner>/<repo>`), so no entry is served under another repository's
+    name. The write is fire-and-forget — one in flight, one latest-wins pending
+    slot, offered only by a read that is still the newest one STARTED — so a slow
+    disk postpones no read and an older answer never overwrites a newer one.
+    `tools/issues-cache-store.test.js` pins the document (round trip, a delta keeps
+    `fullAt`, the identity bound, and silence on a malformed, hostile or
+    uncommittable document); `tools/issues-section.test.js` pins "a warm identity
+    survives a process restart, so its first read is a delta", "a stored entry past
+    its full TTL, or inconsistent, is still read whole", "a held save defers no
+    read, and the newest entry waits behind it instead of interleaving" and "the
+    cache survives a session_shutdown/start pair, so the next read is a delta".
+
+26. **The rail's timed refresh exists only while the section is drawn.** With a
+    floor named, `lib/issues-section.js` keeps ONE self-scheduled, unref'd timer at
+    that floor: a DRAW arms it (`lines()` or `meta()` — a collapsed section is a
+    painted frame too), its own fire re-arms the next floor, a read already in
+    flight owns that instant, and it stops by itself the moment the section leaves
+    the drawn window, so a section the host stops painting keeps it no longer than
+    that window. `invalidate()` and `dispose()` clear it, which is what a session
+    boundary performs. A section nobody draws keeps no timer, spawns nothing and
+    reads nothing. `tools/issues-section.test.js` pins "a drawn section reads on its
+    own timer at the floor, one read per floor", "the timer never overlaps a read,
+    and it stops once the section is not drawn", "invalidate and dispose clear the
+    timer, and a queued callback is inert", "a drawn section reads on the
+    extension's own 20 s timer, and activity adds nothing" and "a hidden section
+    makes no gh call, and the drawn window gates the activity hooks".
+
+27. **A forced refresh happens only after a mutating `bash`, behind its cap.**
+    Two conditions are required together: the finished tool is a `bash` call whose
+    command text the pure classifier (`lib/issues-bash-mutation.js`) proves writes
+    an issue or a pull request, and the section is drawn — inside its window, for
+    the session this rail belongs to. It bypasses the frame TTL and the activity
+    floor, never the caller's anti-storm cap, and never a read already in flight,
+    so one result starts at most one read per cap. The classifier is text only: no
+    child, no file, no clock, no cache, and it never throws; a mutation merely
+    MENTIONED in an argument, and a read such as `gh issue list`, names no write.
+    `tools/issues-bash-mutation.test.js` pins the classifier;
+    `tools/issues-section.test.js` pins "a mutating bash result forces one read,
+    capped to one per 5 s", "a mutating bash named under `tool`/`args` forces the
+    same read" and "a hidden section forces no read, and a mutating result after
+    shutdown does nothing".
+
+28. **The `gh`-absent and non-repository states are settled.** Both are one short
+    `dim` line — `gh CLI not installed` and `not a git repository` — and a
+    `dim`/`muted` error snapshot is a STATE, not a failure to retry: no later frame,
+    no activity read, no timer and no forced read starts there, and only a session
+    boundary supersedes it. The CLI question is answered by a local `PATH` walk
+    (`lib/which-command.js`) before any child, so the absent state costs zero child
+    processes and stops the read before the checkout probe; the non-repository
+    state costs the one local `rev-parse` every surface makes and no `gh` call.
+    `tools/which-command.test.js` pins the lookup;
+    `tools/issues-section.test.js` pins "a non-repository line is a state, so no
+    frame and no activity read" and "a settled (dim) state owns no floor timer";
+    `tools/issues-command.test.js` pins "the session gate stops before any gh child
+    and says the one line once".

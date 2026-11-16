@@ -69,7 +69,10 @@ The question this page answers: which rules must every change preserve, and what
    writes a finished call's duration into the closing rule. It changes colour and
    those cells only: no row's width changes, no text of the command or the output
    is rewritten, and without a theme, a render context or room every row is
-   returned byte for byte (invariant 20).
+   returned byte for byte (invariant 20). Its only state is two bounded memos (512
+   entries each: the classification of one command, and the answer for one
+   rows/theme/call key); a cache hit is byte-identical to a fresh drawing and a
+   caller always gets a new array.
 4. **Deletion refuses on a live session.** The only surface that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
    before the pending-change question and again immediately before removal. This

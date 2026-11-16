@@ -14,6 +14,7 @@ const {
 const CALL = { tool: 'bash', part: 'call', width: 90 };
 const strip = (row) => row.replace(/\u001b\[[0-9;]*m/g, '');
 const cols = (row) => Array.from(strip(row)).length;
+const textWidth = (text) => Array.from(text).length;
 
 // The host's two frames, as the bridge hands them for a collapsed call.
 const neon = (command, hint = 'ctrl+o to expand') => {
@@ -372,6 +373,53 @@ describe('elapsed time on the closing rule', () => {
   });
 });
 
+describe('repeated frames', () => {
+  const ctxFor = (command, extra = {}) => ({ ...THEMED, render: render(command, extra) });
+  const row = neon('grep -rn needle src | head -40');
+
+  test('the same call drawn twice is the same rows, as a fresh array each time', () => {
+    const first = applyBashActivityHeading([row], ctxFor('grep -rn needle src | head -40'));
+    const second = applyBashActivityHeading([row], ctxFor('grep -rn needle src | head -40'));
+    assert.deepEqual(second, first);
+    assert.notEqual(second, first, 'a caller may keep or change the array it gets');
+    first[0] = 'changed by the caller';
+    assert.notEqual(applyBashActivityHeading([row], ctxFor('grep -rn needle src | head -40'))[0], 'changed by the caller');
+  });
+
+  test('anything the drawing depends on changes the answer, never a stale one', () => {
+    const base = applyBashActivityHeading([closing()], { ...RESULT, render: render('ls', { durationMs: 100 }) })[0];
+    assert.notEqual(applyBashActivityHeading([closing()], { ...RESULT, render: render('ls', { durationMs: 200 }) })[0], base, 'duration');
+    assert.notEqual(applyBashActivityHeading([closing()], { ...RESULT, render: render('ls', { durationMs: 100, isError: true }) })[0], base, 'error');
+    assert.notEqual(applyBashActivityHeading([closing()], { ...RESULT, render: render('ls', { durationMs: 100, isPartial: true }) })[0], base, 'running');
+    assert.notEqual(applyBashActivityHeading([closing()], { ...RESULT, render: render('rm -rf x', { durationMs: 100 }) })[0], base, 'family');
+    assert.notEqual(applyBashActivityHeading([closing().replace('─', '━')], { ...RESULT, render: render('ls', { durationMs: 100 }) })[0], base, 'rows');
+  });
+
+  test('a theme switched under the same object repaints with the new colours', () => {
+    const live = { palette: 31, fg(role, text) { return `\u001b[${this.palette}m${text}\u001b[39m`; } };
+    const ctx = { tool: 'bash', part: 'call', width: 90, theme: live, render: render('ls -la') };
+    const before = applyBashActivityHeading([neon('ls -la')], ctx)[0];
+    live.palette = 34;
+    const after = applyBashActivityHeading([neon('ls -la')], ctx)[0];
+    assert.notEqual(after, before);
+    assert.ok(after.includes('\u001b[34m'));
+  });
+
+  test('a long session of repeated cards stays cheap', () => {
+    const ctx = ctxFor('grep -rn needle src | head -40');
+    const start = performance.now();
+    for (let index = 0; index < 30000; index += 1) applyBashActivityHeading([row], ctx);
+    const elapsed = performance.now() - start;
+    assert.ok(elapsed < 1000, `30000 frames took ${elapsed}ms`);
+  });
+
+  test('the cache is bounded: many different commands never grow it without limit', () => {
+    for (let index = 0; index < 3000; index += 1) {
+      assert.doesNotThrow(() => applyBashActivityHeading([neon(`ls -la dir${index}`)], ctxFor(`ls -la dir${index}`)));
+    }
+  });
+});
+
 describe('the registration', () => {
   test('is one bash design with the label the bridge line shows and a preview', () => {
     const design = bashActivityDesign();
@@ -381,7 +429,12 @@ describe('the registration', () => {
     assert.equal(BASH_DESIGN_LABEL, 'activity');
     const preview = design.preview();
     assert.equal(preview.title, 'Cards · activity');
-    assert.ok(preview.sample.split('\n').length >= 3);
+    // One line like every other Cards row, and one that fits a narrow panel.
+    assert.equal(preview.sample.split('\n').length, 1);
+    assert.ok(textWidth(preview.sample) <= 72, preview.sample);
+    for (const word of ['exploring', 'checking', 'versioning', 'publishing', 'destructive']) {
+      assert.ok(preview.sample.includes(word), word);
+    }
     preview.title = 'changed';
     assert.equal(design.preview().title, 'Cards · activity');
   });

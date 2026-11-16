@@ -448,20 +448,22 @@ The question this page answers: which rules must every change preserve, and what
 
 22. **The `bash` guards read text, fail open and add no surface.** The extension's
     `tool_call` handler refuses a `bash` call whose command contains `git … worktree
-    add` or `git … worktree list` in any cwd, and, only when the session cwd is the
-    principal checkout (its root is the parent of the git common dir), a branch
-    creation or a switch to anything but the repository's default branch. The decision
+    add` or `git … worktree list` in any cwd, and, only when the command runs in the
+    principal checkout (its root is the parent of the git common dir) AND that checkout
+    is on the repository's default branch, a switch that leaves that branch. The decision
     lives in `lib/worktree-guard.js`, a pure function over the command string and the
-    injected `repoIdentity`, `defaultBranch` and `pathExists` seams. Detection is text
+    injected `repoIdentity`, `defaultBranch`, `currentBranch` and `pathExists` seams. Detection is text
     only: no script, alias or file is read, and a command it cannot judge passes. It
     never throws (a throwing `tool_call` handler blocks the tool), an unreadable
     repository leaves only the worktree refusals active, and the default branch is
     resolved lazily and memoized per checkout. `ODD_WORKTREE_GUARD=0` is the one way
     to turn it off, like `ODD_WORKTREE_PROMPT=0` for the prompt blocks; no other
     value, option or config file does, and it registers no command or tool name
-    (invariant 3). The refusal sentences name `worktree_list` first and
-    `worktree_create` second; the prompt block (invariant 14) is what keeps the agent
-    from reaching them, so a change to one is read against the other.
+    (invariant 3). Each refusal names the one tool that replaces the blocked command
+    — `worktree_create` for a worktree creation, `worktree_list` for a listing, the
+    ODD's checkout for a switch that leaves the principal — and the prompt block
+    (invariant 14) is what keeps the agent from reaching them, so a change to one is
+    read against the other.
 
 23. **The file card only draws, and it claims exactly three tools.** `read`, `edit`
     and `write`, and no fourth: `lib/file-card-resolver.js` registers one resolver

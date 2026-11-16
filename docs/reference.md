@@ -997,18 +997,17 @@ Shell's own `card-style.json` is read here, never written.
 
 ## The `bash` guards
 
-The extension watches every `bash` tool call and refuses four things before the command
+The extension watches every `bash` tool call and refuses three things before the command
 runs. The refusal is the call's result: it says the command did not run and names the
-order to follow, `worktree_list` first and `worktree_create` only when the ODD has no
-checkout. The prompt block above is what is meant to keep the agent from ever reaching
-them.
+single tool that replaces it, `worktree_list` for a listing and `worktree_create` for
+the other two. The prompt block above is what is meant to keep the agent from ever
+reaching them.
 
 | Refused | Where |
 | --- | --- |
 | `git worktree add` | any cwd |
 | `git worktree list` | any cwd |
-| a command that creates a branch (`checkout -b/-B/--orphan`, `switch -c/-C`, `git branch <name>`) | the principal checkout only |
-| a command that switches to anything but the repository's default branch (`checkout`/`switch <ref>`, `-`, a detached checkout) | the principal checkout only |
+| a command that leaves the branch the checkout is on (`checkout`/`switch <other>`, `-`, a detached checkout, `checkout -b/-B/--orphan`, `switch -c/-C/--create/--force-create`) | the principal checkout only, and only while that branch is the repository's default |
 
 - **Text only.** The guard reads the command string and nothing else: it finds the
   `git` … `worktree` … `add|list` sequence anywhere in it, also after `&&`, `||`, `;`,
@@ -1020,16 +1019,28 @@ them.
 - **Principal checkout.** A linked worktree shares the principal's git common dir, so
   its root is never that dir's parent and the branch guards do nothing there. A cwd that
   is not a repository, or an identity that cannot be read, blocks nothing.
-- **Default branch.** Resolved like the create's base: the local `main`, else the branch
-  `origin/HEAD` names, else `init.defaultBranch`, once per checkout. There is no
-  `main`/`master` list, and with no resolvable default a switch is not refused.
+- **Default branch, and the branch the checkout is on.** The default is resolved like
+  the create's base: the local `main`, else the branch `origin/HEAD` names, else
+  `init.defaultBranch`, once per checkout. There is no `main`/`master` list. The branch
+  the checkout is ON is read from the checkout itself (`git symbolic-ref --quiet
+  --short HEAD`), fresh at each judgement and never cached, because it changes outside
+  this process; a detached HEAD is not the default branch, so a switch there is allowed,
+  and with no resolvable default no switch is refused.
+- **The command's own `cd` decides.** Segments are walked in order and a `cd <literal
+  path>` moves the effective cwd for the segments after it, so `cd <worktree> && git
+  switch x` is judged against that worktree and refused by nothing. Only a `cd` a shell
+  runs moves it: one inside a quoted argument (`echo 'cd <worktree>'`) is argument text
+  and moves nothing, while one inside `bash -c '…'`, `$(…)` or backticks is run. A `cd`
+  argument that is not a literal path (`$VAR`, `~`, `-`, a glob, a backtick) leaves the
+  checkout unknown, and an unknown cwd refuses nothing of the branch rule.
 - **`checkout <ref>`.** `git switch` never takes a path, so its argument is a ref. For
   `git checkout`, an argument is a restore only when that path exists in the cwd, which
   is how Git settles the ambiguity; `feat/x`, `origin/main` and a bare `develop` are refs.
   `git checkout <ref> -- <path>` and `git checkout -- <path>` are always restores. Every
   segment of a compound command counts, so an allowed switch never hides a later one.
-- **Everything else passes**: `git status`, `git branch` alone or with an option,
-  `git restore`, `git worktree remove|prune|move`, and every tool but `bash`.
+- **Everything else passes**: `git status`, every `git branch` form — creating, moving,
+  copying, deleting or listing a branch changes no checkout — `git restore`,
+  `git worktree remove|prune|move`, and every tool but `bash`.
 - `ODD_WORKTREE_GUARD=0` turns them off for the process, like `ODD_WORKTREE_PROMPT=0`
   for the prompt blocks. No other value does, and nothing else configures them.
 

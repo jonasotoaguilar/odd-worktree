@@ -4,14 +4,15 @@
 // level of extension groups, each foldable through the view's per-order fold set
 // and forced open by a query. Everything is asserted through the public surface
 // (`ORDERS`, `nextOrder`, `buildRows`, `groupKey`, `holderGroup`, `toggleFold`,
-// `holderKeys`, `foldsFor`, `toggleOtherFolds`): no painting, no filesystem, no
-// module-internal state.
+// `holderKeys`, `foldsFor`, `everyGroupFolded`, `toggleEveryFold`): no painting, no
+// filesystem, no module-internal state.
 //
 // S23 renamed the folder order from `path` to `tree` — the id, the cycle and the
 // row builder — so every assertion here names `tree`; what it paints did not
-// change. S33 renamed the flat order from `modified` to `files`, and S29/S30/S34
-// added the fold rules: every group folded by default, only the focused file's
-// groups open when an order is chosen, and `shift+space` toggling the rest.
+// change. S33 renamed the flat order from `modified` to `files`, and S29/S30 added
+// the fold rules: every group folded by default, and only the focused file's groups
+// open when an order is chosen. S39 replaced S34's "every other group" toggle with
+// ONE toggle over every group, which `everyGroupFolded` states the direction of.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
@@ -25,7 +26,8 @@ const {
   toggleFold,
   holderKeys,
   foldsFor,
-  toggleOtherFolds,
+  everyGroupFolded,
+  toggleEveryFold,
 } = require('../lib/files-orders.js');
 
 function entry(path, state, mtimeMs) {
@@ -534,53 +536,62 @@ describe('the fold set an order opens with (S29, S30)', () => {
   });
 });
 
-describe('shift+space folds or unfolds every other group (S34)', () => {
-  test('when another group is still folded it expands them all, touching no holder', () => {
-    const folded = new Set(['lib', 'docs', 'tools']);
-    assert.equal(toggleOtherFolds(ENTRIES, 'tree', folded, 'lib/files-orders.js'), true);
-    assert.deepEqual([...folded], ['lib'], 'the focused file folder stays as the reader left it');
+describe('shift+space toggles every group at once (S39, S40)', () => {
+  const treeKeys = () => buildRows(ENTRIES, { order: 'tree' })
+    .filter((row) => row.kind === 'group')
+    .map((row) => row.key)
+    .sort();
+  const extKeys = () => buildRows(ENTRIES, { order: 'ext' })
+    .filter((row) => row.kind === 'group')
+    .map((row) => row.key)
+    .sort();
+
+  test('a tree with any group still expanded collapses EVERY group, the focused file folders included', () => {
+    const folded = foldsFor(ENTRIES, 'tree', 'lib/odd-prompt/odd-worktrees.md');
+    assert.equal(folded.has('lib'), false, 'the focused file folders start open');
+    assert.equal(toggleEveryFold(ENTRIES, 'tree', folded), true);
+    assert.deepEqual([...folded].sort(), treeKeys(), 'every group is folded, holders included');
   });
 
-  test('when every other group is expanded it collapses them all', () => {
-    const folded = new Set(['lib']);
-    assert.equal(toggleOtherFolds(ENTRIES, 'tree', folded, 'lib/files-orders.js'), true);
-    assert.deepEqual([...folded].sort(), ['docs', 'lib', 'lib/odd-prompt', 'tools']);
+  test('a tree whose every group is collapsed expands every group instead', () => {
+    const folded = new Set(treeKeys());
+    assert.equal(toggleEveryFold(ENTRIES, 'tree', folded), true);
+    assert.equal(folded.size, 0, 'no group is left folded');
   });
 
-  test('a hand-folded holder is never reopened, so the cursor keeps its row', () => {
-    const focused = 'lib/odd-prompt/odd-worktrees.md';
-    // The reader folded the file's own top folder by hand with `space`.
-    const folded = new Set(['lib']);
-    assert.equal(toggleOtherFolds(ENTRIES, 'tree', folded, focused), true);
-    assert.equal(folded.has('lib'), true, 'the holder is left exactly as it was');
-    assert.deepEqual([...folded].sort(), ['docs', 'lib', 'tools'], 'the other groups were open, so they collapse');
+  test('a mixed tree collapses on the first press and expands on the second', () => {
+    const folded = new Set(['docs']);
+    assert.equal(toggleEveryFold(ENTRIES, 'tree', folded), true);
+    assert.deepEqual([...folded].sort(), treeKeys(), 'the first press collapses everything');
+    assert.equal(toggleEveryFold(ENTRIES, 'tree', folded), true);
+    assert.equal(folded.size, 0, 'the second press expands everything');
   });
 
-  test('in ext it toggles only the other extension groups', () => {
-    const folded = new Set(['md']);
-    assert.equal(toggleOtherFolds(ENTRIES, 'ext', folded, 'lib/files-orders.js'), true);
-    assert.equal(folded.has('md'), false, 'the other groups were folded, so they all open');
-    assert.equal(folded.has(''), false);
-    assert.equal(toggleOtherFolds(ENTRIES, 'ext', folded, 'lib/files-orders.js'), true);
-    assert.deepEqual([...folded].sort(), ['', 'md'], 'now every other group is open, so they all collapse');
-    assert.equal(folded.has('js'), false, 'the focused file group is never touched');
+  test('ext is one level and toggles the same way', () => {
+    const folded = foldsFor(ENTRIES, 'ext', 'lib/files-orders.js');
+    assert.equal(folded.has('js'), false);
+    assert.equal(toggleEveryFold(ENTRIES, 'ext', folded), true);
+    assert.deepEqual([...folded].sort(), extKeys(), 'the focused extension group collapses too');
+    assert.equal(toggleEveryFold(ENTRIES, 'ext', folded), true);
+    assert.equal(folded.size, 0, 'every extension group is open again');
   });
 
-  test('it never touches the flat files order, no set or an empty listing', () => {
+  test('it never touches the flat files order, no set, or a listing with no group', () => {
     const folded = new Set();
-    assert.equal(toggleOtherFolds(ENTRIES, 'files', folded, 'README.md'), false);
+    assert.equal(toggleEveryFold(ENTRIES, 'files', folded), false);
     assert.equal(folded.size, 0);
-    assert.equal(toggleOtherFolds([], 'tree', folded, 'README.md'), false);
-    assert.equal(toggleOtherFolds(ENTRIES, 'tree', undefined, 'README.md'), false);
+    assert.equal(toggleEveryFold(ENTRIES, 'tree', undefined), false);
+    assert.equal(toggleEveryFold([], 'tree', folded), false);
+    assert.equal(toggleEveryFold([entry('README.md', 'clean')], 'tree', folded), false, 'a root file is no group');
+    assert.equal(folded.size, 0);
   });
 
-  test('with no focused file every group counts as another group', () => {
-    const folded = new Set();
-    const everyKey = buildRows(ENTRIES, { order: 'tree' })
-      .filter((row) => row.kind === 'group')
-      .map((row) => row.key)
-      .sort();
-    assert.equal(toggleOtherFolds(ENTRIES, 'tree', folded, undefined), true);
-    assert.deepEqual([...folded].sort(), everyKey, 'every group was open, so every group collapses');
+  test('everyGroupFolded names the direction the legend paints (S40)', () => {
+    assert.equal(everyGroupFolded(ENTRIES, 'tree', new Set(treeKeys())), true, 'every group collapsed');
+    assert.equal(everyGroupFolded(ENTRIES, 'tree', foldsFor(ENTRIES, 'tree', 'lib/files-orders.js')), false,
+      'the focused file folders open');
+    assert.equal(everyGroupFolded(ENTRIES, 'ext', new Set(extKeys())), true);
+    assert.equal(everyGroupFolded(ENTRIES, 'ext', new Set(['md'])), false);
+    assert.equal(everyGroupFolded(ENTRIES, 'files', new Set()), true, 'the flat order paints no group, so none is open');
   });
 });

@@ -250,6 +250,71 @@ test('a throwing collaborator never reaches the host', async () => {
   });
 });
 
+// ---- the host contract: a lifecycle handler is never awaited by the host ----
+//
+// The host applies what a `pi.on()` handler returns, and waits for a thenable, so an index preparation
+// handed back from `session_start` would sit on Pi's own startup path. No other test can see that: each
+// one calls the handler and awaits it itself, which works just as well for a promise as for `undefined`.
+// The one handler that may answer with a promise is `tool_result`, whose only host-visible wait is the
+// bounded post-init race (`POST_INIT_SYNC_WAIT_MS`).
+
+test('no lifecycle handler hands the host a promise, and only tool_result answers with one', async () => {
+  const { pi, ctx } = setup();
+  const events = {
+    session_start: { reason: 'startup' },
+    session_compact: {},
+    before_agent_start: { systemPromptOptions: { selectedTools: ['read'] } },
+    session_shutdown: {},
+  };
+  assert.deepEqual([...pi.handlers.keys()].sort(), ['before_agent_start', 'session_compact', 'session_shutdown', 'session_start', 'tool_result'], 'the wiring registers these and nothing else');
+  for (const [name, handlers] of pi.handlers) {
+    for (const handler of handlers) {
+      const returned = handler(events[name] || {}, ctx);
+      if (name === 'tool_result') {
+        assert.equal(typeof returned?.then, 'function', 'tool_result is the one handler the host awaits, because its patch is the answer');
+        await returned;
+        continue;
+      }
+      assert.equal(returned, undefined, `${name} must hand the host nothing: its work runs off the host's path`);
+    }
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+});
+
+test('the work a synchronous handler starts still runs after it has answered the host', async () => {
+  let releasePrepare;
+  const prepareGate = new Promise((resolve) => {
+    releasePrepare = resolve;
+  });
+  let releaseCompaction;
+  const compactionGate = new Promise((resolve) => {
+    releaseCompaction = resolve;
+  });
+  const prepared = [];
+  const compacted = [];
+  const { pi, ctx } = setup({
+    impl: {
+      prepareProject: (input) => {
+        prepared.push(input);
+        return prepareGate;
+      },
+      compactionSync: (input) => {
+        compacted.push(input);
+        return compactionGate;
+      },
+    },
+  });
+  pi.handlers.get('session_start')[0]({ reason: 'startup' }, ctx);
+  pi.handlers.get('session_compact')[0]({}, ctx);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(prepared.length, 1, 'the index preparation is requested without the host waiting for it');
+  assert.equal(compacted.length, 1, 'the compaction sync is requested without the host waiting for it');
+  releasePrepare({ index: { action: 'none', ok: true }, warm: 'skipped' });
+  releaseCompaction('synced');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(prepared[0].cwd, '/work/repo', 'and it is the session checkout that is prepared');
+});
+
 // ---- the two reminders (T3: S1, S2, S5, S6, S7) ----
 //
 // One extra text part on the result of a search call, never a separate message and never a block. The

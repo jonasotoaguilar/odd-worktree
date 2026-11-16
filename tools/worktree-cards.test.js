@@ -341,7 +341,7 @@ test("a result body is the tool's own text, wrapped, padded and closed by one ru
 	const listBody = listRows.slice(0, -1).map(bodyText);
 	assert.equal(listBody[0], 'project: gentle-shell');
 	assert.equal(listBody[1], 'path: /clone');
-	assert.equal(listBody[2], 'main: 1a2b3c4', 'the main row carries no stored state suffix');
+	assert.equal(listBody[2], 'base: main@1a2b3c4', 'the main row names its base and carries no stored state suffix');
 	assert.equal(listBody[3], '1 cards-v2 feat/cards-v2', 'the row carries the checkout name and its branch');
 });
 
@@ -408,7 +408,7 @@ test('S2: a minimal worktree card keeps its three info rows, exactly as default 
 	assert.deepEqual(listAt(CARD_CONTENT.MINIMAL), listDefault, 'minimal does not withhold the three rows');
 	assert.deepEqual(
 		listDefault.slice(0, -1).map(bodyText),
-		['project: gentle-shell', 'path: /clone', 'main: 1a2b3c4…'],
+		['project: gentle-shell', 'path: /clone', 'base: main@1a2b3c4…'],
 		'the preview is the first three rows of the expanded list, in the tool\'s own order, marked because more follow',
 	);
 	assertFramed(listDefault, 120);
@@ -579,7 +579,7 @@ function contentOf(rows) {
 
 // Short lines only, so neither style's two-column difference can move a wrap
 // boundary: this is the "same text, different chrome" card.
-const SHORT_LIST = ['project: gentle-shell', 'path: /clone', 'main: 1a2b3c4', '1 cards-v2 feat/cards-v2'].join('\n');
+const SHORT_LIST = ['project: gentle-shell', 'path: /clone', 'base: main@1a2b3c4', '1 cards-v2 feat/cards-v2'].join('\n');
 const CREATE_SHORT = ['worktree created: /clone-worktrees/cards-v2', 'branch: feat/cards-v2 (created)'].join('\n');
 
 test('the same result card is the same text in float and in neon, and only the chrome differs', () => {

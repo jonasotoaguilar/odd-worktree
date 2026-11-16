@@ -15,7 +15,7 @@ The question this page answers: which rules must every change preserve, and what
    line (invariant 23) and contribute no row of their own; the design is not a
    preference here, because the bridge owns that choice and its store. It registers no command, no page, no setting, no
    settings file and no key of its own beyond the file picker's ONE shortcut,
-   `alt+f` (invariant 3), and no other setting is read, written or offered. CodeGraph
+   `alt+p` (invariant 3), and no other setting is read, written or offered. CodeGraph
    adds no command and no model-facing tool: no `/codegraph-*` command, no tool
    named `codegraph`, no override of another extension's tool.
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
@@ -76,7 +76,7 @@ The question this page answers: which rules must every change preserve, and what
    other package to DRAW: its overlay comes from the host's own `ctx.ui.custom`,
    not from the bridge — although, like every surface here, it is registered only
    once the bridge is published (invariant 3). Its ONE key is bound DIRECTLY on
-   the host, at extension load, through `pi.registerShortcut`: `alt+f` by default
+   the host, at extension load, through `pi.registerShortcut`: `alt+p` by default
    (Pi claims `alt+p` on Windows and WSL) and `GENTLE_PI_FILES_KEY` whenever that
    environment variable holds a non-empty string. It is bound once,
    and the handler is the command's own, invoked with no argument and the session

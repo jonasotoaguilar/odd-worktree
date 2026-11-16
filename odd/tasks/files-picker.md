@@ -242,6 +242,44 @@ Round L11 (all reopen the delivered surfaces: S3, S4, S10, S22, S24):
   issues rail and the bash design still use stay as they are. "bien, sacalo entonces, saca el uso de bridge para
   command y keymap de momento, sin dejar legacy, pues no es viable actualmente, es un falso"
 
+Round L12 (reopen S21, S24, S28, S34):
+
+- S37: **The path rides the panel's own title.** The title row paints `Files · <path of the checkout being
+  listed>` at the left — the panel's name, one space, `·`, one space, then the path — elided from its left when
+  the card is too narrow for it, and `esc` keeps the far-right corner alone. S21 asked for exactly this and the
+  shipped row painted the path beside `esc` instead; that is the defect this round fixes. «la ruta no se arreglo
+  igual, dije que fuera a la izquierda, al lado de File titulo "FIle · ruta"»
+- S38: **Group rows take the cursor, and `tab` on them does nothing.** Every row of `tree` and `ext` is
+  focusable: ↑/↓, the page moves, `home`/`end`, the wheel and a click park the cursor on a folder or extension
+  row exactly as on a file row, which is what makes `space`/`enter` on it usable (S10, S32 stand). `tab` on a
+  group row marks nothing and never adds it to the payload, and `enter` on a group row with no Tab mark inserts
+  nothing and keeps the panel open. This supersedes S24's "only file rows take the cursor"; S24's mark, insert
+  and open rules for a group row stand. «otro bug es que hicimos a carpeta y extension no seleccionable pero eso
+  proboco que no pueda piscionarme para expandirla, el diseno correcto seria que si se pueda seleccionar/focus
+  pero tab en ella no hace nada, no la selecciona para enviar»
+- S39: **`shift+space` is one toggle over every group and leaves the cursor on the group it came from.** In
+  `tree` and `ext`, `shift+space` collapses every group of the active order — the ones holding the highlighted
+  file included — and parks the cursor on the group row that held that file, so the row the reader was reading
+  from stays under the cursor; when every group is already collapsed the same key expands every group instead.
+  No group is held open across the toggle: S34's "except the highlighted file's own" is superseded. «De ese modo
+  la tecla colapsar todo antes colapsaba todo excepto carpeta actual del archivo, ahora tambien la colapsa y nos
+  deja el focus en esa carpeta, seria el correcto funcionamiento replicando a un IDE.»
+- S40: **The `shift+space` hint states the action, not the key.** The footer labels it `shift+space expand all`
+  while every group of the active order is collapsed and `shift+space collapse all` otherwise, so the legend
+  always names what pressing it does; it is still painted only in `tree` and `ext` (S32). «Ademas texto shfit
+  space debe cambiar, si estan todas collapsadas seria para expandir todas, y si estan todas expandidas seria
+  para collpasar todas, y solo aparece logicamente en tree/ext orden»
+- S41: **The default key is `alt+p`.** The `files` shortcut's default is `alt+p`, bound the same way through the
+  host's `registerShortcut`, with `GENTLE_PI_FILES_KEY` still the override. Supersedes S28: `alt+p` is unclaimed
+  on Linux and macOS, where `app.model.cycleBackward` is `shift+ctrl+p`; on Windows and WSL it is that action's
+  key and the host reports the conflict, which is the trade the human chose over `alt+f`'s collision with
+  `tui.editor.cursorWordRight`. «cabimeoslo a alt p el default.»
+- S42: **The scope detail line's age says it is an age.** The field S9 painted as a bare `33s` reads `33s ago`,
+  in the same `s`/`m`/`h`/`d` units and from the same fixed-at-open clock, so the line identifies the number
+  without a legend beside it; the file rows' own age column is unchanged. «otro punto es ue sale 33s pero no se sabe
+  de que es, me imagino o recuerdo que era de cuando se modifico, falta algo visual, un icono que lo identifique o
+  sino el texto, 33s solo uno no sabe que significa»
+
 ## Tasks
 
 | ID | Specs | Route | Commit |
@@ -261,6 +299,12 @@ Round L11 (all reopen the delivered surfaces: S3, S4, S10, S22, S24):
 | T14 | S35, S20 | worker: `extensions/odd-worktree-tools.ts`, `lib/files-scope-view.js` and their tests — the default list built from the session's own registration (`main`, the session checkout, `worktree_register` entries) and `a` alone widening it to every Git worktree root . Landed at `7933a79` (command 15/15, scope 42/42) |
 | T15 | S36, S28 | worker: `extensions/odd-worktree-tools.ts`, the files bridge/command tests, and every doc that names the keymap row or the palette row — the `files` shortcut bound directly (`alt+f`, `GENTLE_PI_FILES_KEY`) and the bridge keymap and palette registration removed without a trace . Landed at `dd6b8f4` (bridge 10/10, command 15/15, package surface 21/21; full suite 2205/2205) |
 | T13 | S17, S29-S34 | parent: docs truth in README, `docs/reference.md`, `docs/codebase/code-map.md` and the footer tables . Landed at this commit |
+| T16 | S37 | worker: `lib/files-picker-view.js` and `tools/files-picker-view.test.js` — the title row carrying `Files · <path>` at the left with its left elision, and `esc` alone at the right |
+| T17 | S38 | worker: `lib/files-picker-view.js`, `lib/files-orders.js` (only if a helper is missing) and their tests — every row focusable, `tab` inert on a group row, `enter` with no mark inserting nothing, and the preview settling when the cursor rests on a group |
+| T18 | S39, S40 | worker: `lib/files-orders.js`, `lib/files-picker-view.js` and their tests — `shift+space` collapsing or expanding every group in one toggle with the cursor left on the group that held the file, and the footer legend stating the action it will perform |
+| T19 | S41 | worker: `extensions/odd-worktree-tools.ts`, `tools/files-bridge.test.js`, `tools/files-command.test.js` and every doc naming the default key — `alt+p` as the `files` keymap default |
+| T21 | S42 | worker: `lib/files-scope-detail.js` + `tools/files-scope-detail.test.js` — the scope detail's age painted as `33s ago` |
+| T20 | S17, S37-S42 | parent: docs truth in README, `docs/reference.md`, `docs/codebase/invariants.md`, `docs/codebase/code-map.md` and `docs/codebase/mental-model.md`, plus this document's Log evidence and the work-unit commits |
 
 ### Module contracts (fixed here so T6 can be written against T1, T4 and T5)
 
@@ -358,3 +402,9 @@ Plain JS, no dependencies, every child injected. Shapes:
   Not delivered by this repo: the `files` row in `/gentle:customize` -> Keymaps and the palette's `Session` page. This package registers both through the bridge exactly as the bridge's own example does; the installed gentle-shell (`95179bd6d`, upstream) has no reader of the bridge's plugin surface (`lib/plugin-surface.ts` is absent), so nothing can list a contributed row. The host half exists only as the fork's merged PR and as a hand-applied patch that a package update removed. `Risk: none` for this repo's change.
 - L13 (user, verbatim): "bien, sacalo entonces, saca el uso de bridge para command y keymap de momento, sin dejar legacy, pues no es viable actualmente, es un falso" — after the parent showed that the installed gentle-shell has no reader of the bridge's plugin surface, so the `files` row in Keymaps and the palette can never appear.
 - L14 (parent, closing evidence): T15 landed as `dd6b8f4`. `/files` registers no keymap action and no palette row through the bridge; `alt+f` is bound directly with `registerShortcut` and `GENTLE_PI_FILES_KEY` overrides it. Full suite, `node --test --test-timeout=120000 tools/*.test.js`: **2205 tests, 2205 pass, 0 fail** (the count is one below L12's 2206 because the rewritten bridge suite folds two idempotence cases whose subject no longer exists). The README, `docs/reference.md`, `docs/codebase/invariants.md`, `code-map.md` and `mental-model.md` now say so. The Keymaps/palette rows return only when an installed host reads the bridge's plugin surface. `Risk: none`.
+- L15 (user, verbatim): «cabimeoslo a alt p el default.» — after the host reported `Extension shortcut conflict: 'alt+f' is built-in shortcut for tui.editor.cursorWordRight`, which is `alt+f`'s third default alias beside `alt+right` and `ctrl+right`.
+- L16 (user, verbatim): «otro bug es que hicimos a carpeta y extension no seleccionable pero eso proboco que no pueda piscionarme para expandirla, el diseno correcto seria que si se pueda seleccionar/focus pero tab en ella no hace nada, no la selecciona para enviar. De ese modo la tecla colapsar todo antes colapsaba todo excepto carpeta actual del archivo, ahora tambien la colapsa y nos deja el focus en esa carpeta, seria el correcto funcionamiento replicando a un IDE. Ademas texto shfit space debe cambiar, si estan todas collapsadas seria para expandir todas, y si estan todas expandidas seria para collpasar todas, y solo aparece logicamente en tree/ext orden»
+- L17 (user, verbatim): «la ruta no se arreglo igual, dije que fuera a la izquierda, al lado de File titulo "FIle · ruta"» — with a screenshot of the picker whose title row still paints the path beside `esc`, so S21 was never implemented.
+- L18 (parent, decisions): the round's four calls. (a) S24 is superseded rather than amended: the cursor now stops on every row, so its "never park the cursor on a group row" cannot stand, while its mark/insert/open refusals do. (b) `shift+space`'s direction is decided by "every group collapsed", not by a majority, so a mixed tree always collapses on the first press and the second press expands it — the reading the human's own sentence gives. (c) `alt+p` is chosen knowing it is `app.model.cycleBackward` on Windows and WSL only (`docs/keybindings.md:154` of Pi 1.5.2), where the host will report the same kind of conflict the human is trying to silence; Linux and macOS keep `shift+ctrl+p` and stay clean. (d) The title is the card's own title (`Files · <root>`), not the `titleHint` cell, so the path elides with the title's room instead of fighting `esc` for the corner.
+- L19 (user, verbatim): «otro punto es ue sale 33s pero no se sabe de que es, me imagino o recuerdo que era de cuando se modifico, falta algo visual, un icono que lo identifique o sino el texto, 33s solo uno no sabe que significa» — with a screenshot of the scope step's detail line reading `Merge pull request #89 ... · ±14 files · 33s · ↑13 origin/main`.
+- L20 (parent, decision): the age gets the word, not a glyph. The line's other symbols (`±`, `↑`, `↓`, `▸`) are all narrow, and a clock glyph (`⏱`, `⌚`, `◷`) is East-Asian-ambiguous — a terminal that paints it two cells wide shifts every cell to its right, and this repo measures with `visibleWidth` before it paints. `33s ago` is the human's own second option and carries no width risk.

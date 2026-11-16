@@ -106,7 +106,7 @@ session's checkouts, or every worktree Git lists for the clone) and `esc`.
 | `ctrl+j`/`ctrl+k` | Scroll the preview one line |
 | `ctrl+o` | Cycle the order: `files`, `tree`, `ext` |
 | `space` | In `tree` and `ext`: fold or unfold the group holding the highlighted file |
-| `shift+space` | In `tree` and `ext`: open every other group, or close them when they are all open |
+| `shift+space` | In `tree` and `ext`: collapse every group, or expand them all when they are already collapsed — the label states which |
 | `ctrl+u` | Clear the query |
 | `ctrl+e` | Open the highlighted file in `$VISUAL`/`$EDITOR` |
 | `enter` | Insert the selected files plus the highlighted one, and close |
@@ -625,7 +625,7 @@ clone — the ODD ones and the ones created outside this package — and back, a
 footer names the list the key switches to (`a all`, then `a registered`); a
 checkout both lists carry keeps the cursor. Above that card's
 footer sits the focused scope's detail line: the last commit subject, then
-`±n files`, the age of the last modification, and `↑n main` / `↓n main` — the
+`±n files`, the age of the last modification as `33s ago`, and `↑n main` / `↓n main` — the
 `main` row compares with `origin/main`, every other checkout with the local
 `main` — and a field that is zero or absent is not painted at all. The `a` list costs
 two bounded Git reads per checkout before the step paints, which is why a clone
@@ -633,8 +633,9 @@ with many worktrees opens it a moment slower than the session's list alone.
 
 **One option per key.** The footer names one binding per action even when several
 work, and both keys stay live. The compatibility bindings it never names all
-work: `home`/`end` (first and last file), `ctrl+home`/`ctrl+end` (the preview's
-first and last line), `ctrl+shift+j`/`ctrl+shift+k` and `ctrl+c`.
+work: `home`/`end` (the first and last row), `pageup`/`pagedown` (a page of rows
+at a time), `ctrl+home`/`ctrl+end` (the preview's first and last line),
+`ctrl+shift+j`/`ctrl+shift+k` and `ctrl+c`.
 
 **The three orders.** `ctrl+o` cycles `files` (the default: one flat list with no
 groups, changed files first and the most recently modified first), `tree` (an IDE-style folder tree — inside a folder
@@ -648,15 +649,19 @@ the whole listing and the Tab selection in parentheses (`202/202 (4)`). `tree` a
 closed and `▾` when it is open, in the grey role so the structure reads apart
 from the files. Choosing an order (or cycling to the other tree) leaves open only
 the groups holding the highlighted file — `src` and `web` for `src/web/test.ts` in
-`tree`, only `ts` in `ext` — and closes the rest. Only file rows ever take the cursor — the arrows,
-`home`/`end`, the wheel, a click and a query all skip group rows, so a group is
-never marked, inserted or opened. `space` folds the group holding the highlighted
-file (its parent folder in `tree`, its extension group in `ext`) and a click on a
-group row folds it without focusing it; with every group folded and no file row
-left, the cursor may rest on a group row so `space` can reopen the tree.
-`shift+space` opens every group but the highlighted file's own, or closes them
-when they are all open already, so the cursor never loses its row; it needs a
-terminal that reports the chord (Kitty keyboard protocol or xterm
+`tree`, only `ts` in `ext` — and closes the rest. Every row takes the cursor — the
+arrows, `home`/`end`, the wheel, a click and a query stop on a folder or extension
+row exactly as on a file row — but a group row is never marked, inserted or
+opened: `tab` on it marks nothing and `enter` on it with no mark inserts nothing
+and keeps the panel open. `space` folds the focused group, or the one holding the
+highlighted file when the cursor is on a file (its parent folder in `tree`, its
+extension group in `ext`), so a tree is reopened by focusing its group row and
+pressing `space`; a click on a group row focuses and folds it in one move, and the
+row the key folds is the row the cursor keeps. `shift+space` collapses every group, the ones holding the
+highlighted file included, and leaves the cursor on the group row that held it;
+pressed again with every group collapsed, it expands them all. The footer labels
+it `shift+space collapse all` or `shift+space expand all` to match what it will
+do; it needs a terminal that reports the chord (Kitty keyboard protocol or xterm
 `modifyOtherKeys`), and elsewhere `space` still folds one group at a time. In the
 `files` order neither key does anything and the footer does not name them. A
 non-empty query forces every group open, and the fold keys do nothing until it is
@@ -678,7 +683,12 @@ bottom border closes on the list's last row, so the preview uses the body's whol
 height beside the list instead of sitting below the search. A full-width rule
 then closes the body under both columns, aligning the separation below the list
 with the preview. The title row carries the path being listed right after the
-panel's name, with `esc` alone in the far corner.
+panel's name — `Files · /home/you/dev/odd-worktree`, elided from its left when the
+card is narrow — with `esc` alone in the far corner.
+
+**No file under the cursor.** While the cursor rests on a group row the preview
+keeps its box and paints `No file selected.` instead of its `line/total` position,
+so the pane never looks like a file it is not showing.
 
 **The preview is bounded.** It is one `open`/`read` of at most 64 KiB, at most
 200 lines and at most 400 columns per line, so no file can stall a paint: a file
@@ -702,7 +712,7 @@ preview load, never per repaint.
 stages nothing and opens no network, and every child is a fixed argv with a
 bounded timeout — `git` through this package's async runner, plus the one
 `$VISUAL`/`$EDITOR` `ctrl+e` starts (a missing variable is reported in its own
-sentence). `alt+f` opens it from anywhere: the key is bound directly on the host
+sentence). `alt+p` opens it from anywhere: the key is bound directly on the host
 at extension load, `GENTLE_PI_FILES_KEY` overrides it when it holds a non-empty
 value, and it is bound once for the life of the process. A host with no such
 seam, or one that refuses the key, gets no shortcut and no message about it, and
@@ -1295,7 +1305,7 @@ companion-app integration, and no worktree↔issue association. Its
 customize-side contribution is the `activity` value of the bridge's `Card tools` line
 (or its `Card bash` line, on a bridge older than 0.6.0) — which the skill/ODD file
 cards obey as well. It adds no command, tool or row of its own, and the file
-picker's `alt+f` is bound on the host directly rather than contributed to any
+picker's `alt+p` is bound on the host directly rather than contributed to any
 shell surface. There is
 nothing to configure here, and `/warp`, `/odd`, `/files` and `/issues` are always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.

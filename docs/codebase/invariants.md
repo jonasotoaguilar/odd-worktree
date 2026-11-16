@@ -8,13 +8,12 @@ The question this page answers: which rules must every change preserve, and what
 2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
    invariants 18 and 19 allow.** No customize COMMAND, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
-   `herdr-gentle:` command name. This package owns exactly TWO preferences — the
-   file cards' `Card skill` and `Card odd` switches (invariant 3, invariant 23) —
-   and its customize-side contributions are only the rows that carry them and a
-   tools DESIGN (the `activity` value) on gentle-shell-bridge's own `Card tools`
-   line, or its `Card bash` line on a bridge older than 0.6.0
-   (invariant 3); the design is not a preference here, because the bridge owns
-   that choice and its store. It registers no command, no page, no setting, no
+   `herdr-gentle:` command name. This package owns NO preference of its own: its
+   only customize-side contribution is a tools DESIGN (the `activity` value) on
+   gentle-shell-bridge's own `Card tools` line, or its `Card bash` line on a
+   bridge older than 0.6.0 (invariant 3). The skill/ODD file cards obey that same
+   line (invariant 23) and contribute no row of their own; the design is not a
+   preference here, because the bridge owns that choice and its store. It registers no command, no page, no setting, no
    settings file and no key of its own beyond the file picker's ONE keymap action
    (invariant 3), and no other setting is read, written or offered. CodeGraph
    adds no command and no model-facing tool: no `/codegraph-*` command, no tool
@@ -23,16 +22,15 @@ The question this page answers: which rules must every change preserve, and what
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
 3. **The shipped surface is exactly four commands, two tools, one sidebar
-   section, one tools design and the one `Cards` row group.** `/warp`, `/odd`,
+   section and one tools design.** `/warp`, `/odd`,
    `/files`, `/issues`; `worktree_create`, `worktree_list`; the one fourth kind of
    surface, a sidebar section (`lib/issues-section.js`) that is neither a command nor a tool and
    registers no name the host or the agent can call; the one design
    (`lib/bash-design.js`), one `Card tools` line over `bash` and the four read-only
    tools (the single `tool: "bash"` design on a bridge older than 0.6.0), which is
-   neither a command nor a tool either and adds no name to either registry; and the
-   one `Cards` row group (`lib/cards-customize.js`, which carries `Card skill` and
-   `Card odd`), which is neither a command nor a tool either and adds no name to
-   either registry. Neither moving the session nor
+   neither a command nor a tool either and adds no name to either registry; and
+   no `Cards` row of its own at all (the file cards add none either — see below).
+   Neither moving the session nor
    removing a checkout is exposed to the agent: `/warp` is the person's front for
    both (its `ctrl+d`, the selector, a typed name, a queued handoff for moving; its
    `ctrl+d` for removing). That is a rule about this package's surface, not about
@@ -49,7 +47,8 @@ The question this page answers: which rules must every change preserve, and what
    that HAS the bridge but draws no rail registers the section and never paints it,
    which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the bridge, not by this package (invariant 2 keeps every customize
-   surface out of it except the `Cards` row group), and the section declares NO
+   surface out of it except the one tools-design row this package puts on the bridge's
+   own `Card tools` line), and the section declares NO
    preview: every `Sections` row draws the host's one shared list of active sections
    and the bridge adds this section's `rowLabel` to it itself, shown or left out
    with the row's own hypothetical (`registerSection` has no `preview` field — do
@@ -127,25 +126,13 @@ The question this page answers: which rules must every change preserve, and what
    `tools/issues-open-guard.test.js` pins the guard, its release points, both pins,
    the generation and the normalization.
 
-   **The two file-card switches are the only preferences this package owns.**
-   `lib/cards-customize.js` registers ONE row provider
-   (`odd-worktree.cards.file-switches`) through the same published `registerRows`
-   API, into the same `Cards` page, at most once per process: each switch is two
-   consecutive rows sharing one `choice.setting` — an `on` row then an `off` row —
-   a `current()` that reads the live switch and an `action()` that persists before
-   the host repaints. `Card skill` and `Card odd` are both on by default, add no
-   command, tool or key, and their whole state is one strict document,
-   `<home>/card-files.json`
-   (`{"schema":"gentle-pi.card-files/v1","skill":true,"odd":false}` and nothing
-   else), written only by `lib/card-files-mode.js` — atomically, owner-only,
-   document first and slot second, and never over a document it cannot parse — in
-   the one `<home>` `lib/card-style.js` resolves (`GENTLE_PI_CONFIG_HOME` →
-   `GENTLE_SHELL_CONFIG_HOME` → `~/.pi/gentle-ai`). A missing, unreadable,
-   malformed, wrong-schema or non-boolean document reads as both on. A refused
-   write leaves the row's `action` as a throw, which the customize menu reports as
-   ONE error notice, with the stored value and the drawn switch unchanged
-   (invariant 23). Without the bridge neither switch has a control surface, and
-   nothing throws.
+   **The file cards add no surface and own no switch.** They obey the bridge's own
+   `Card tools` line: the card is painted while that line answers with this
+   package's activity design (`odd-worktree.bash-activity`), so the file cards
+   contribute no `Cards` row, no preference and no document of their own, and they
+   are read through the same published object the design registers through. The
+   gate itself — its reader, the id it accepts and its fail-open rule — is
+   invariant 23.
 4. **Deletion refuses on a live session.** The only surface that removes a checkout
    is `/warp`'s `ctrl+d`, and it goes through `lib/worktree-session-guard.js`
    before the pending-change question and again immediately before removal. This
@@ -317,23 +304,28 @@ The question this page answers: which rules must every change preserve, and what
     REFERENCE's roles (`tools/shell-card.test.js` for all four tones,
     `tools/worktree-card.test.js` and `tools/worktree-cards.test.js` for the card
     each draws), never a role this package would prefer.
-17. **This repo paints last; the host's key hint is the one painted input it
-    measures.** Rows are wrapped, clipped to the inner width with the `…` mark and
+17. **This repo paints last; the only painted inputs it measures are the host's
+    key hint and Pi's own Markdown rows.** Rows are wrapped, clipped to the inner
+    width with the `…` mark and
     padded as PLAIN text and painted in their role afterwards (`cardBodyRows`,
     `cardLine`), so no painted string this repo composes is ever measured or
     clipped — which is why the `/warp` card's ANSI-unaware fallback clip draws the
     same text as the host's ANSI-aware helpers and copies the host's truncation
     rule (a width of zero or less is nothing; an ellipsis too wide for the budget
-    is clipped and emitted itself). The ONE painted input it measures is the host's
+    is clipped and emitted itself). One painted input it measures is the host's
     `keyHint`, which the host paints before handing it over (`keyHint` returns
     `fg("dim", …) + fg("muted", …)`): `lib/worktree-cards.js:185` forwards it, it
     is measured only by `metrics.visibleWidth` at `lib/shell-card.js:218`, `:378`
     and `:424`, and the `/warp` path strips that paint at
-    `lib/worktree-card.js:158`. `tools/warp-fallback-regression.test.js` states
+    `lib/worktree-card.js:158`. The other is the file card's document body, which
+    Pi's Markdown renderer painted: the card PLACES those rows with the ANSI-aware
+    helpers (`cardPaintedRows`, `lib/shell-card.js:461`) and never paints them
+    again (invariant 23). `tools/warp-fallback-regression.test.js` states
     both halves: the two seams draw the same text at the same width, and no body
-    row ever hands a helper a string THIS REPO painted. The host's key hint is the
-    named exception above: it arrives already painted, it is measured here with the
-    host's ANSI-aware width functions, and this repo then wraps it ONCE MORE in
+    row ever hands a helper a string THIS REPO painted. The host's key hint is one
+    of the two named exceptions above: it arrives already painted, it is measured
+    here with the host's ANSI-aware width functions, and this repo then wraps it
+    ONCE MORE in
     `dim` when it draws the tail (`lib/shell-card.js:225`) — a redundant outer
     layer over the host's own paint, harmless, but it means the hint is both
     measured AND repainted here. Write no assertion that no helper ever receives a
@@ -476,7 +468,8 @@ The question this page answers: which rules must every change preserve, and what
     with both separators, and a path that names both is decided by the marker
     closest to the file. The card states that identity's mark and label, the tool,
     the path and — for a read only — the line range the call asked for. A path
-    naming neither identity, and a call whose switch is off, is the chain's own row.
+    naming neither identity is the chain's own row, and so is a row of one of these
+    three tools while the bridge's line answers with anything but this design.
 
     **The host's shell is fixed per tool name, so the card reproduces its box.**
     `registerToolRenderer` decides per TOOL NAME and never sees a call's arguments,
@@ -489,9 +482,40 @@ The question this page answers: which rules must every change preserve, and what
     a default-shell renderer (`read`, `write`), and untouched, with no box, no
     padding and no background, for one that frames itself (Pi's `edit`).
 
-    Both switches (`Card skill`, `Card odd`, read through `lib/card-files-mode.js`),
-    the card style slot (`lib/card-style.js`) and the content level
+    **The bridge's design selection is the one switch, and this card owns none of
+    it.** The card is painted while — and only while — the bridge's published
+    reader answers that this package's activity design draws the tool being
+    painted. That reader is `api.resolveToolDesignSelection(tool)`, reached from
+    the `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
+    gate (`lib/file-card-resolver.js:51`, `:160`) and never imported, and the
+    answer that paints is `{ kind: "design", design }` with
+    `design.id === "odd-worktree.bash-activity"` (the id at
+    `lib/file-card-resolver.js:54`, the decision at `:78`). `native`, `missing`,
+    `not-covered` and any other design hand the row back to the host, its box and
+    its key hint included. The question is asked per painted tool, on every frame,
+    never cached, which is what repaints a card already on screen after a
+    mid-session switch. It fails OPEN: the reader is an
+    OPTIONAL member of the published object, so a bridge older than 0.7.0 — or none
+    at all — cannot answer and an answer this build cannot read is unreadable, and
+    in both cases the card paints exactly as it did before it joined that line: an
+    unavailable gate never hides a row, and nothing here throws. The answer, the
+    card style slot (`lib/card-style.js`) and the content level
     (`lib/card-content.js`) are read at paint time, inside the component's
-    `render(width)`, so a flip repaints rows already drawn. The card only draws: it
-    adds no command and no tool, and its only customize surface is the bridge's
-    `Cards` rows (`lib/cards-customize.js`).
+    `render(width)`. The card only draws: it adds no command, no tool and no
+    customize row of its own.
+
+    **The document body is Pi's own renderer.** An expanded — or previewed —
+    Markdown document is drawn by `Markdown` from `@earendil-works/pi-tui`
+    (`markdownRows`, `lib/file-card-markdown.js:116`) with a theme table
+    (`fileCardMarkdownTheme`, `:82`) that gives every Markdown element a theme ROLE
+    (the table is `MARKDOWN_ROLES`, `lib/file-card-markdown.js:26`:
+    `heading`→`mdHeading`, `listBullet`→`mdListBullet`,
+    `code`→`mdCode`, `codeBlock`→`mdCodeBlock`, `codeBlockBorder`→`mdCodeBlockBorder`,
+    `quote`→`mdQuote`, `quoteBorder`→`mdQuoteBorder`, `link`→`mdLink`,
+    `linkUrl`→`mdLinkUrl`, `hr`→`mdHr`, and the text attributes from the theme's own
+    handlers). Those rows arrive ALREADY PAINTED, so invariant 17's exception is the
+    host's own: the substrate PLACES them with the injected ANSI-aware width
+    (`cardPaintedRows`, `lib/shell-card.js:461`) and never re-paints them with a
+    body role, while the frame, the background and the padding stay ours. A host
+    with no TUI package, a renderer that throws and a document that draws no row
+    all fall back to the wrapped plain source, unstyled.

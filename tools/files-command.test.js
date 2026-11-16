@@ -1,13 +1,14 @@
 'use strict';
-// T7 (S9, S14, S17): the `/files` command driven through the registered handler
-// and the fake host. The interactive panels themselves have their own suites
-// (tools/files-picker-view.test.js, tools/files-scope-view.test.js); what this
-// file proves is the COMMAND: that it is registered with the other four, that a
-// host without an overlay gets one honest line instead of a throw, and that it
-// wires the landed modules — the scopes from Git and the ownership rule, the
-// picker with its `loadEntries`/`loadPreview`/`highlight`/`languageForPath` seams,
-// the insertion form through `pasteToEditor`, and the editor handoff that stops
-// the terminal before anything repaints (S14).
+// T7 (S9, S14, S17) and T10 (S20, S27): the `/files` command driven through the
+// registered handler and the fake host. The interactive panels themselves have
+// their own suites (tools/files-picker-view.test.js,
+// tools/files-scope-view.test.js); what this file proves is the COMMAND: that it
+// is registered with the other four, that a host without an overlay gets one
+// honest line instead of a throw, and that it wires the landed modules — the two
+// scope lists from Git and the ownership rule, the picker with its
+// `loadEntries`/`loadPreview`/`highlight`/`languageForPath` seams, the insertion
+// form through `pasteToEditor`, and the editor handoff that stops the terminal,
+// forces one full repaint on the close path and disposes its view (S14, S27).
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -62,6 +63,19 @@ function addOwnedWorktree(repo, odd, branch) {
   return fs.realpathSync(target);
 }
 
+/**
+ * S20: a checkout Git knows that this package never created, so it is on the `a`
+ * list and not on the registered one. Its parent is realpath'd first, so the path
+ * Git records is the path the picker paints.
+ */
+function addLooseWorktree(repo, name, branch) {
+  const parent = track(fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-files-loose-wt-'))));
+  const target = path.join(parent, name);
+  git(repo, ['worktree', 'add', '-b', branch, target, 'main']);
+  fs.writeFileSync(path.join(target, 'loose.js'), 'const loose = 1;\n');
+  return target;
+}
+
 // ---- the fake host -------------------------------------------------------
 //
 // One extension instance per load, because `setFilesTuiLoader` and
@@ -100,6 +114,7 @@ function stripAnsi(text) {
 function mountHost({ rows = 40 } = {}) {
   const mounts = [];
   const events = [];
+  const renders = [];
   const pasted = [];
   const notifications = [];
   const tui = {
@@ -107,8 +122,13 @@ function mountHost({ rows = 40 } = {}) {
     stopped: false,
     stop() { tui.stopped = true; events.push('stop'); },
     start() { tui.stopped = false; events.push('start'); },
+    // Pi records the request even while stopped: `requestRender(true)` resets the
+    // written-frame state at once and defers only the paint, which is how the
+    // next frame after `start()` rewrites every cell (S27). `renders` keeps the
+    // terminal state each request was made in, so a test can tell whether the
+    // paint was asked for while the terminal was still ours.
     requestRender(force) {
-      if (tui.stopped) return;
+      renders.push({ force: force === true, stopped: tui.stopped });
       events.push(force === true ? 'render:force' : 'render');
     },
   };
@@ -120,7 +140,7 @@ function mountHost({ rows = 40 } = {}) {
       mounts.push({ options, component });
     }),
   };
-  return { tui, mounts, events, pasted, notifications, ui };
+  return { tui, mounts, events, renders, pasted, notifications, ui };
 }
 
 function ctxFor(repo, ui) {
@@ -258,8 +278,8 @@ describe('a host without an overlay (S17)', () => {
   });
 });
 
-describe('one checkout: the picker opens directly (S9, S7/S8)', () => {
-  test('Enter pastes the `@` reference of the session checkout and sends nothing', async () => {
+describe('one checkout: the scope step still opens (S20, S7/S8)', () => {
+  test('the step offers the session checkout alone, and Enter pastes its `@` reference', async () => {
     const repo = makeRepo();
     const { commands } = await loadFilesExtension();
     const host = mountHost();
@@ -267,14 +287,27 @@ describe('one checkout: the picker opens directly (S9, S7/S8)', () => {
     // started and driven, never awaited before the panel answers.
     const running = commands.get('files').handler('', ctxFor(repo, host.ui));
 
-    await waitFor(() => host.mounts.length >= 1, 'the picker mount');
-    assert.equal(host.mounts.length, 1, 'no scope step appears when there is nothing to choose');
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    assert.equal(host.mounts.length, 1, 'the step opens even when there is nothing else to choose (S20)');
     assert.deepEqual(host.mounts[0].options, {
+      overlay: true,
+      overlayOptions: { anchor: 'center', width: '70%', minWidth: 60, maxHeight: '85%' },
+    }, 'the step is its own smaller card');
+    const step = host.mounts[0].component;
+    const stepRows = textOf(step);
+    assert.ok(stepRows.includes('main'), 'the session checkout is the row');
+    assert.ok(!stepRows.includes('±'), 'a clean checkout paints no count');
+    assert.ok(stepRows.includes('a all'), 'the footer names the list `a` switches to (S20)');
+
+    step.handleInput('enter');
+
+    await waitFor(() => host.mounts.length >= 2, 'the picker mount');
+    assert.deepEqual(host.mounts[1].options, {
       overlay: true,
       overlayOptions: { anchor: 'center', width: '85%', minWidth: 76, maxHeight: '100%' },
     }, 'the picker takes the terminal width S15 needs');
 
-    const picker = host.mounts[0].component;
+    const picker = host.mounts[1].component;
     await waitFor(() => textOf(picker).includes('a.js'), 'the listing');
     // The order footer and the one-option-per-key legend are the view's; the
     // command only has to hand it a listing to paint.
@@ -286,6 +319,42 @@ describe('one checkout: the picker opens directly (S9, S7/S8)', () => {
     assert.deepEqual(host.pasted, ['@README.md'], 'the session checkout keeps the `@` form');
     assert.deepEqual(host.notifications, [], 'inserting never notifies');
     await running;
+  });
+});
+
+describe('the `a` list of every worktree (S20)', () => {
+  test('`a` offers a worktree this package never registered, and it is browsable', async () => {
+    const repo = makeRepo();
+    const loose = addLooseWorktree(repo, 'loose', 'feat/loose');
+    const { mod, commands } = await loadFilesExtension();
+    mod.setFilesTuiLoader(async () => helpers);
+    const host = mountHost();
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui));
+
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    const step = host.mounts[0].component;
+    assert.ok(!textOf(step).includes('loose · feat/loose'), 'the registered list does not carry it');
+    assert.ok(textOf(step).includes('a all'));
+
+    step.handleInput('a');
+    const widened = textOf(step);
+    assert.ok(widened.includes('loose · feat/loose'), 'Git\'s own listing offers it under the same label');
+    assert.ok(widened.includes('a registered'), 'and the footer names the way back');
+
+    step.handleInput('\u001b[B');
+    step.handleInput('\r');
+
+    await waitFor(() => host.mounts.length >= 2, 'the picker over the loose checkout');
+    const picker = host.mounts[1].component;
+    await waitFor(() => textOf(picker).includes('loose.js'), 'the loose checkout listing');
+    assert.ok(textOf(picker).includes(loose), 'the picker lists the checkout the step answered');
+
+    const disposeOnce = picker.dispose.bind(picker);
+    let disposed = 0;
+    picker.dispose = () => { disposed += 1; disposeOnce(); };
+    picker.handleInput('\u001b');
+    await running;
+    assert.equal(disposed, 1, 'a close that never reached the editor still disposes its view (S27)');
   });
 });
 
@@ -350,8 +419,10 @@ describe('the preview and the editor (S12, S14)', () => {
     mod.setFilesAgentLoader(async () => agentStub);
     const host = mountHost();
     const running = commands.get('files').handler('', ctxFor(repo, host.ui));
-    await waitFor(() => host.mounts.length >= 1, 'the picker mount');
-    const picker = host.mounts[0].component;
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    host.mounts[0].component.handleInput('enter');
+    await waitFor(() => host.mounts.length >= 2, 'the picker mount');
+    const picker = host.mounts[1].component;
     const painted = () => picker.render(120).join('\n');
     await waitFor(() => textOf(picker).includes('a.js'), 'the listing');
     // The highlight follows the HIGHLIGHTED row: the order opens on README.md,
@@ -364,7 +435,7 @@ describe('the preview and the editor (S12, S14)', () => {
     await running;
   });
 
-  test('ctrl+e stops the terminal before anything repaints, and reports a missing editor (S14)', async () => {
+  test('ctrl+e settles the overlay on a live terminal, then stops it for the editor, and disposes once it returns (S27)', async () => {
     const repo = makeRepo();
     delete process.env.VISUAL;
     delete process.env.EDITOR;
@@ -372,25 +443,43 @@ describe('the preview and the editor (S12, S14)', () => {
     mod.setFilesTuiLoader(async () => helpers);
     const host = mountHost();
     const running = commands.get('files').handler('', ctxFor(repo, host.ui));
-    await waitFor(() => host.mounts.length >= 1, 'the picker mount');
-    const picker = host.mounts[0].component;
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    host.mounts[0].component.handleInput('enter');
+    await waitFor(() => host.mounts.length >= 2, 'the picker mount');
+    const picker = host.mounts[1].component;
     await waitFor(() => textOf(picker).includes('a.js'), 'the listing');
 
+    // The view the command constructed is the component the host was handed, so
+    // its `dispose` calls are observable on the very object the factory returned.
+    const disposeOnce = picker.dispose.bind(picker);
+    let disposed = 0;
+    picker.dispose = () => { disposed += 1; disposeOnce(); };
+
     host.events.length = 0;
+    host.renders.length = 0;
     picker.handleInput('\u0005');
-    // Nothing is painted on the way out: the handoff stops the terminal first.
-    assert.deepEqual(host.events, ['stop'], 'the terminal is stopped and nothing is repainted yet');
-    assert.equal(host.tui.stopped, true);
+    // The reference's order: the overlay settles and the forced close repaint
+    // lands while the terminal is STILL ours; only then is it stopped for the
+    // editor. `ctl+e` records the path in `onOpen`, it never spawns from there.
+    assert.deepEqual(host.events, ['render:force'], 'the close path repaints BEFORE anything stops the terminal');
+    assert.deepEqual(host.renders, [{ force: true, stopped: false }], 'and that repaint is the forced one, on a live terminal');
+    assert.equal(host.tui.stopped, false, 'the terminal is still ours when the overlay settles');
 
     await waitFor(() => host.events.includes('start'), 'the terminal resumed after the editor step');
     assert.equal(host.tui.stopped, false);
-    assert.ok(host.events.indexOf('start') < host.events.indexOf('render:force'), 'the one full repaint comes after the terminal is back');
+    assert.deepEqual(host.events, ['render:force', 'stop', 'start', 'render:force'],
+      'stop arrives after the settle, and the resume repaint is the second forced one');
+    assert.deepEqual(host.renders, [
+      { force: true, stopped: false },
+      { force: true, stopped: false },
+    ], 'the resume repaint is asked for once the terminal is back');
+    await waitFor(() => disposed === 1, 'the view disposed once the handoff returned');
+    await running;
+    assert.equal(disposed, 1, 'disposed exactly once');
     assert.deepEqual(host.notifications, [[
       'warning',
       'files: no editor configured: set $VISUAL or $EDITOR to open documents outside Pi',
     ]]);
     assert.deepEqual(host.pasted, [], 'opening a file pastes nothing');
-    picker.handleInput('\u001b');
-    await running;
   });
 });

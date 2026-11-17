@@ -14,8 +14,9 @@ The question this page answers: which rules must every change preserve, and what
    bridge older than 0.6.0 (invariant 3). The skill/ODD file cards obey that same
    line (invariant 23) and contribute no row of their own; the design is not a
    preference here, because the bridge owns that choice and its store. It registers no command, no page, no setting, no
-   settings file and no key of its own beyond the file picker's ONE shortcut,
-   `alt+p` (invariant 3), and no other setting is read, written or offered. CodeGraph
+   settings file and no key of its own beyond the TWO host shortcuts, the file
+   picker's `alt+p` and the issues panel's `alt+i` (invariant 3), and no other
+   setting is read, written or offered. CodeGraph
    adds no command and no model-facing tool: no `/codegraph-*` command, no tool
    named `codegraph`, no override of another extension's tool.
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
@@ -76,8 +77,10 @@ The question this page answers: which rules must every change preserve, and what
    transcript dump, no sub-command, nothing written. Being a command, it needs no
    other package to DRAW: its overlay comes from the host's own `ctx.ui.custom`,
    not from the bridge — although, like every surface here, it is registered only
-   once the bridge is published (invariant 3). Its ONE key is bound DIRECTLY on
-   the host, at extension load, through `pi.registerShortcut`: `alt+p` by default
+   once the bridge is published (invariant 3). This package binds exactly TWO host
+   shortcuts, and each one keeps every property below: the picker's `alt+p` and
+   the issues panel's `alt+i` (invariant 28). The picker's key is bound DIRECTLY
+   on the host, at extension load, through `pi.registerShortcut`: `alt+p` by default
    (Pi claims `alt+p` on Windows and WSL) and `GENTLE_PI_FILES_KEY` whenever that
    environment variable holds a non-empty string. It is bound once,
    and the handler is the command's own, invoked with no argument and the session
@@ -621,7 +624,13 @@ The question this page answers: which rules must every change preserve, and what
     `PATH` walk (`lib/which-command.js`) with no child process: absent, `/issues` is
     never registered and the `GITHUB` section is never added to the rail, so there
     is no line, notice or refusal to draw for it — nothing appears, because nothing
-    was registered — and every other surface keeps working. The path guards that
+    was registered — and every other surface keeps working. The panel's own host
+    shortcut is bound only when that command actually registered, so the gate
+    leaves no dead key behind: `alt+i` by default, `GENTLE_PI_ISSUES_KEY`
+    overriding it when that variable holds a non-empty string, bound once at load
+    through `pi.registerShortcut`, its handler the command's own invoked with no
+    argument and the session context — the picker's silence applies unchanged to a
+    host with no `registerShortcut` and to one that throws from it. The path guards that
     remain (the gate, `/issues`' own probe, the rail's read) are defence in depth
     for a `gh` that disappears after load: they still fail closed with no child, and
     the rail's `gh CLI not installed` `dim` line is that case alone. A cwd outside a

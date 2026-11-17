@@ -69,6 +69,14 @@ how the package is tested and released. The repository invariants live in
 
 ## Panel keys
 
+Two host shortcuts are not panel keys at all: they are what OPENS a panel,
+bound directly on the host at extension load rather than contributed to any shell
+surface — `alt+p` for [the file
+picker](#files-the-picker-its-scopes-and-its-orders) and `alt+i` for
+[`/issues`](#issues-three-tabs-one-shortcut-one-filter). `GENTLE_PI_FILES_KEY`
+and `GENTLE_PI_ISSUES_KEY` override them when they hold a non-empty value, and
+`/files` and `/issues` stay reachable as commands with no key at all.
+
 `/warp` selector — the footer legend is the key reference. Its top rule carries
 the heading `Warp · n worktrees`, `n` being the checkouts its listing holds; the
 extended list reads `Warp · all n worktrees`, that same count plus the checkouts
@@ -334,6 +342,12 @@ costs nothing until you ask for it, which is the point of the split:
 the common case is your own issues, and reading every open issue of the
 repository to paint three tabs was work nobody asked for.
 
+- **`alt+i` opens it from anywhere.** The key is bound directly on the host at
+  extension load, never contributed to a shell surface, and it invokes the
+  command's own handler with the session context — so it opens exactly what
+  `/issues` opens, with `/issues`' own refusals. `GENTLE_PI_ISSUES_KEY` overrides
+  it when it holds a non-empty value, and it is bound only when the `gh` probe
+  registered the command: without the CLI there is no key and no dead key either.
 - **`All` is read on first entry, then reused.** The `g` view reads its first page
   the first time you enter it and paints what it already holds on the way back, so
   moving in and out costs one read. A changed filter and a successful edit are
@@ -714,7 +728,9 @@ bounded timeout — `git` through this package's async runner, plus the one
 `$VISUAL`/`$EDITOR` `ctrl+e` starts (a missing variable is reported in its own
 sentence). `alt+p` opens it from anywhere: the key is bound directly on the host
 at extension load, `GENTLE_PI_FILES_KEY` overrides it when it holds a non-empty
-value, and it is bound once for the life of the process. A host with no such
+value, and it is bound once for the life of the process. The same seam binds
+`alt+i` for [`/issues`](#issues-three-tabs-one-shortcut-one-filter), with
+`GENTLE_PI_ISSUES_KEY` as its override. A host with no such
 seam, or one that refuses the key, gets no shortcut and no message about it, and
 `/files` keeps working as the command it is. The picker is contributed to no
 shell surface of its own: this package claims no row a plugin would have to
@@ -1319,8 +1335,8 @@ companion-app integration, and no worktree↔issue association. Its
 customize-side contribution is the `activity` value of the bridge's `Card tools` line
 (or its `Card bash` line, on a bridge older than 0.6.0) — which the skill/ODD file
 cards obey as well. It adds no command, tool or row of its own, and the file
-picker's `alt+p` is bound on the host directly rather than contributed to any
-shell surface. There is
+picker's `alt+p` and the issues panel's `alt+i` are bound on the host directly
+rather than contributed to any shell surface. There is
 nothing to configure here, and `/warp`, `/odd`, `/files` and `/issues` are always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 

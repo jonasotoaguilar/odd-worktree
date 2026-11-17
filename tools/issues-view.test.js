@@ -1207,7 +1207,7 @@ describe('issues view preview metadata (S9)', () => {
     assert.ok(!/projects?:/i.test(thin), 'an issue without projects names none');
     assert.ok(!/linked PR/i.test(thin), 'an empty linked-PR list is omitted, never rendered as "0 PR"');
     assert.ok(!/read:project|scope/i.test(thin), 'no scope text leaks into the compact preview');
-    assert.match(thin, /metadata unavailable: projects/, 'a lost relation is named in one concise status');
+    assert.ok(!/metadata/i.test(thin), 'a lost relation is never announced: the pane stays quiet about it');
   });
 });
 

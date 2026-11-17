@@ -219,11 +219,18 @@ describe('the preview title follows the shared palette (S13)', () => {
     assert.ok(!calls.some((call) => call.text.startsWith('👍')), 'the counter stays plain text');
   });
 
-  test('a partially unavailable metadata read names the fields it lost', () => {
+  test('a metadata read that lost a relation paints no note about it, and the rest still renders', () => {
     const text = render({ ...FULL, projects: [], unavailable: ['projects'] }, []);
-    assert.match(text, /metadata unavailable: projects/, 'the missing relation is named, not just announced');
-    assert.match(text, /linked PRs: #69, #77/, 'the relations that did resolve still render');
+    assert.doesNotMatch(text, /metadata/i, 'the pane never announces a lost relation');
     assert.doesNotMatch(text, /read:project|scope/i, 'the scope behind the failure never leaks');
+    assert.doesNotMatch(text, /projects:/, 'a relation that could not be read adds no row');
+    assert.match(text, /linked PRs: #69, #77/, 'the relations that did resolve still render');
+  });
+
+  test('a whole failed metadata read paints no note either', () => {
+    const text = render({ ...FULL, metadataError: 'boom', unavailable: ['linked PRs', 'projects'] }, []);
+    assert.doesNotMatch(text, /metadata|boom/i);
+    assert.match(text, /assignees: ana, beto/, 'the facts the row already had still render');
   });
 
   test('an absent list and a truncated list stay honest', () => {
@@ -235,12 +242,11 @@ describe('the preview title follows the shared palette (S13)', () => {
     );
   });
 
-  test('a closed issue and an unreadable-metadata note keep their own roles', () => {
+  test('a closed issue keeps its own role and an unreadable read paints no note', () => {
     const { calls } = renderSpy({ ...FULL, state: 'closed', metadataError: 'boom' }, []);
     assert.ok(calls.some((call) => call.role === 'muted' && call.text === '[closed]'),
       'a closed state is muted, not the title role');
-    assert.ok(calls.some((call) => call.role === 'muted' && call.text === 'metadata unavailable'),
-      'the unreadable-metadata note stays muted');
+    assert.ok(!calls.some((call) => /metadata/i.test(call.text)), 'no metadata note is painted in any role');
     assert.ok(calls.some((call) => call.role === 'muted' && call.text === 'loading…') === false,
       'a ready read paints no pending word');
   });

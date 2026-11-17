@@ -1179,11 +1179,11 @@ describe('issues view detail assignees (adopted reference idea 1)', () => {
 });
 
 describe('issues view preview metadata (S9)', () => {
-  test('shows every assignee, projects and a nonzero linked PR count, and omits empty metadata', async () => {
+  test('shows every assignee, projects and the linked PR list, and omits empty metadata', async () => {
     const full = issue(5, {
       assignees: [{ login: 'ann' }, { login: 'bob' }],
       projects: [{ title: 'Roadmap', url: 'https://example.test/p/1' }],
-      linkedPullRequestCount: 2,
+      linkedPullRequests: [69, 77],
     });
     const rich = makeView({
       pages: pagesOf([[full], [], []]),
@@ -1194,9 +1194,9 @@ describe('issues view preview metadata (S9)', () => {
     const body = bodyOf(rich.view, 120);
     assert.match(body, /assignees: ann, bob/, 'every assigned person is shown');
     assert.match(body, /projects: Roadmap/, 'the associated project is shown');
-    assert.match(body, /linked PRs: 2/, 'the nonzero PR count is shown');
+    assert.match(body, /linked PRs: #69, #77/, 'every linked PR is named by number');
 
-    const bare = issue(6, { metadataError: 'Project metadata is unavailable or incomplete (read:project)' });
+    const bare = issue(6, { unavailable: ['projects'] });
     const empty = makeView({
       pages: pagesOf([[bare], [], []]),
       issues: [bare],
@@ -1205,9 +1205,9 @@ describe('issues view preview metadata (S9)', () => {
     await tick();
     const thin = bodyOf(empty.view, 120);
     assert.ok(!/projects?:/i.test(thin), 'an issue without projects names none');
-    assert.ok(!/linked PR/i.test(thin), 'a zero PR count is omitted, never rendered as "0 PR"');
+    assert.ok(!/linked PR/i.test(thin), 'an empty linked-PR list is omitted, never rendered as "0 PR"');
     assert.ok(!/read:project|scope/i.test(thin), 'no scope text leaks into the compact preview');
-    assert.match(thin, /metadata unavailable/, 'unavailable metadata is one concise status');
+    assert.match(thin, /metadata unavailable: projects/, 'a lost relation is named in one concise status');
   });
 });
 
@@ -4095,7 +4095,7 @@ describe('issues preview shares lib/issue-preview.js (S16)', () => {
     labels: [{ name: 'bug' }, { name: 'urgent' }],
     assignees: [{ login: 'ann' }, { login: 'bob' }],
     projects: [{ title: 'Roadmap' }],
-    linkedPullRequestCount: 2,
+    linkedPullRequests: [69, 77],
     reactions: { plusOne: 4 },
     commentsCount: 2,
     body: 'the body the preview renders',

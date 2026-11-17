@@ -381,7 +381,7 @@ function makeIssuesRunner({ failComment = false, role = 'WRITE', connectionRows 
           viewerPermission: role,
           issue: {
             assignees: { nodes: [{ login: 'jonasotoaguilar' }], pageInfo: { hasNextPage: false } },
-            closedByPullRequestsReferences: { totalCount: 2 },
+            closedByPullRequestsReferences: { nodes: [{ number: 69 }, { number: 77 }], pageInfo: { hasNextPage: false } },
           },
         } } }));
       }
@@ -2496,7 +2496,7 @@ describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)
             viewerPermission: 'WRITE',
             issue: {
               assignees: { nodes: (row ? row.assignees : []).map((login) => ({ login })), pageInfo: { hasNextPage: false } },
-              closedByPullRequestsReferences: { totalCount: 0 },
+              closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } },
             },
           } } }));
         }

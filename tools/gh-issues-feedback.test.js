@@ -104,34 +104,58 @@ test('malformed assignee changes are rejected before any read or write', async (
 });
 
 test('permission and relation metadata is explicit and omits absent project/PR data', async () => {
-  runner(() => ok({ data: { repository: { viewerPermission: 'TRIAGE', issue: { assignees: { nodes: [{ login: 'alice' }, { login: 'bob' }] }, projectItems: { nodes: [{ project: { title: 'Roadmap', url: 'https://example.invalid/project' } }] }, closedByPullRequestsReferences: { totalCount: 2 } } } } }));
+  runner(() => ok({ data: { repository: { viewerPermission: 'TRIAGE', issue: { assignees: { nodes: [{ login: 'alice' }, { login: 'bob' }] }, projectItems: { nodes: [{ project: { title: 'Roadmap', url: 'https://example.invalid/project' } }] }, closedByPullRequestsReferences: { nodes: [{ number: 77 }, { number: 69 }], pageInfo: { hasNextPage: false } } } } } }));
   const result = await gh.getIssueMetadata(3);
   assert.equal(result.ok, true);
   assert.deepEqual(result.permissions, { canEditLabels: true, canEditAssignees: true, canCreateLabels: false, canCloseIssues: true });
   assert.deepEqual(result.assignees, ['alice', 'bob']);
   assert.equal(result.projects[0].title, 'Roadmap');
-  assert.equal(result.linkedPullRequestCount, 2);
-  runner(() => ok({ data: { repository: { viewerPermission: 'READ', issue: { assignees: { nodes: [] }, projectItems: { nodes: [] }, closedByPullRequestsReferences: { totalCount: 0 } } } } }));
+  assert.deepEqual(result.linkedPullRequests, [69, 77], 'every linked PR is carried by number, ascending');
+  assert.equal('linkedPullRequestCount' in result, false, 'no count replaces the list');
+  assert.equal('metadataError' in result, false, 'a complete read reports nothing unavailable');
+  runner(() => ok({ data: { repository: { viewerPermission: 'READ', issue: { assignees: { nodes: [] }, projectItems: { nodes: [] }, closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } } } } } }));
   const empty = await gh.getIssueMetadata(3);
   assert.equal(empty.permissions.canEditLabels, false);
   assert.equal(empty.permissions.canCloseIssues, false);
   assert.equal('projects' in empty, false);
-  assert.equal('linkedPullRequestCount' in empty, false);
+  assert.equal('linkedPullRequests' in empty, false);
 });
 
 test('project scope failures preserve confirmed triage rights, assignees and linked PRs', async () => {
   runner((argv) => {
     if (field(argv, 'query').includes('projectItems')) return ok({ errors: [{ message: 'read:project scope required' }] });
-    return ok({ data: { repository: { viewerPermission: 'WRITE', issue: { assignees: { nodes: [{ login: 'alice' }] }, closedByPullRequestsReferences: { totalCount: 2 } } } } });
+    return ok({ data: { repository: { viewerPermission: 'WRITE', issue: { assignees: { nodes: [{ login: 'alice' }] }, closedByPullRequestsReferences: { nodes: [{ number: 77 }], pageInfo: { hasNextPage: false } } } } } });
   });
   const result = await gh.getIssueMetadata(3);
   assert.equal(result.ok, true);
   assert.equal(result.permissions.canEditAssignees, true);
   assert.equal(result.permissions.canCreateLabels, true);
   assert.deepEqual(result.assignees, ['alice']);
-  assert.equal(result.linkedPullRequestCount, 2);
+  assert.deepEqual(result.linkedPullRequests, [77]);
   assert.equal('projects' in result, false);
-  assert.match(result.metadataError, /read:project/);
+  assert.deepEqual(result.unavailable, ['projects'], 'only the lost relation is named');
+  assert.equal('metadataError' in result, false, 'a lost optional relation is not a failed read');
+});
+
+test('an unreadable linked-PR page is named instead of being counted', async () => {
+  runner((argv) => {
+    if (field(argv, 'query').includes('projectItems')) return ok({ data: { repository: { issue: { projectItems: { nodes: [], pageInfo: { hasNextPage: false } } } } } });
+    return ok({ data: { repository: { viewerPermission: 'READ', issue: { assignees: { nodes: [] }, closedByPullRequestsReferences: { nodes: [{ number: 0 }, { number: 'x' }], pageInfo: { hasNextPage: false } } } } } });
+  });
+  const result = await gh.getIssueMetadata(3);
+  assert.equal(result.ok, true);
+  assert.equal('linkedPullRequests' in result, false, 'an unusable page carries no list');
+  assert.deepEqual(result.unavailable, ['linked PRs'], 'and the loss is named');
+});
+
+test('a capped linked-PR page is marked truncated, never passed off as the whole list', async () => {
+  runner((argv) => {
+    if (field(argv, 'query').includes('projectItems')) return ok({ data: { repository: { issue: { projectItems: { nodes: [], pageInfo: { hasNextPage: false } } } } } });
+    return ok({ data: { repository: { viewerPermission: 'READ', issue: { assignees: { nodes: [] }, closedByPullRequestsReferences: { nodes: [{ number: 69 }], pageInfo: { hasNextPage: true } } } } } });
+  });
+  const result = await gh.getIssueMetadata(3);
+  assert.deepEqual(result.linkedPullRequests, [69]);
+  assert.equal(result.linkedPullRequestsTruncated, true);
 });
 
 test('assignee mutation failures are not converted to success', async () => {

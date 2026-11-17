@@ -1157,7 +1157,11 @@ short hint; it can never land inside or in place of another extension's text.
 A session that already holds a CodeGraph tool (the native `codegraph` tool or
 `mcp__codegraph__codegraph_explore`) gets a short section on how to use it: call
 the graph before searching or reading code, treat its answer as a map and not as
-proof, and keep the other tools for what it does not index. Each role gets its
+proof, and keep the other tools for what it does not index. The orchestrator's text also
+sizes a change with the graph only when one read batch does not already explain it (a
+known file or location needs no call), and points its look at the ODD's own worktree
+through `projectPath` when the session runs elsewhere; the explorer's text gives its
+second look a stop. Each role gets its
 own text, read from `lib/codegraph-prompt/<role>.md`: the primary session the
 orchestrator's, a gentle-shell child (explore, verify, worker, fix, judges) its
 own, chosen from the agent name in the child's own command line, and any other

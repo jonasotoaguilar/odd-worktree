@@ -77,6 +77,31 @@ describe('the seven texts on disk', () => {
   });
 });
 
+describe('the orchestrator and explore texts stay inside their role', () => {
+  const prose = (variant) => file(variant).replace(/\s+/g, ' ');
+
+  test('the orchestrator sizes with the graph only when one read batch does not already explain the change', () => {
+    const text = prose('orchestrator');
+    assert.match(text, /before you plan or size a change that one read batch does not already explain/, text);
+    assert.match(text, /a file or location you already know/, 'a known location needs no call, not only a known file');
+    assert.match(text, /which is what scope, size and any handoff depend on/, 'the small path has no handoff');
+  });
+
+  test('the orchestrator looks at the ODD\'s own worktree through projectPath when the session runs elsewhere', () => {
+    const text = prose('orchestrator');
+    assert.match(text, /An ODD works in its own worktree: when the session runs elsewhere, look at that worktree, at a sibling worktree or at another git project/, text);
+    assert.match(text, /`projectPath` set to that checkout/, text);
+  });
+
+  test('the orchestrator repeats no permission rule: that one is stated, and guarded, elsewhere', () => {
+    assert.doesNotMatch(prose('orchestrator'), /authori[sz]ation|ask first|permission/i);
+  });
+
+  test('the explorer\'s second look has a stop', () => {
+    assert.match(prose('explore'), /when the next layer is what the question needs, then stop/);
+  });
+});
+
 describe('selection', () => {
   test('a primary session holding the native tool gets the orchestrator text', () => {
     assert.equal(run({ selectedTools: ['codegraph', 'read'] }, {}, ['node']), file('orchestrator'));

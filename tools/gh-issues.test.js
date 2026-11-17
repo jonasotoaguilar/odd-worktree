@@ -183,7 +183,7 @@ describe('repository permissions from viewerPermission', () => {
           viewerPermission: role,
           issue: {
             assignees: { nodes: [], pageInfo: { hasNextPage: false } },
-            closedByPullRequestsReferences: { totalCount: 0 },
+            closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } },
           },
         } } }));
       }

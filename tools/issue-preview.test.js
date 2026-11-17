@@ -37,7 +37,7 @@ const FULL = {
   commentsCount: 2,
   reactions: { plusOne: 3 },
   projects: [{ title: 'Roadmap' }],
-  linkedPullRequestCount: 2,
+  linkedPullRequests: [69, 77],
   body: 'the body',
 };
 
@@ -54,7 +54,7 @@ describe('issue preview formatter (S16)', () => {
     assert.match(text, /by octo · created 4d ago · updated 3d ago/);
     assert.match(text, /👍 3 · 2 comments/);
     assert.match(text, /projects: Roadmap/);
-    assert.match(text, /linked PRs: 2/);
+    assert.match(text, /linked PRs: #69, #77/, 'every linked PR is named by number, never counted');
     assert.match(text, /the body/);
     assert.match(text, /─ ana · 2d ago ─/);
     assert.match(text, /first comment/);
@@ -64,7 +64,7 @@ describe('issue preview formatter (S16)', () => {
 
   test('omits empty optional metadata instead of printing a zero or "none"', () => {
     const text = render(
-      { ...FULL, assignees: [], projects: [], linkedPullRequestCount: 0, commentsCount: 0, reactions: { plusOne: 0 } },
+      { ...FULL, assignees: [], projects: [], linkedPullRequests: [], commentsCount: 0, reactions: { plusOne: 0 } },
       [],
     );
     assert.doesNotMatch(text, /assignees:/);
@@ -217,6 +217,22 @@ describe('the preview title follows the shared palette (S13)', () => {
     assert.ok(!calls.some((call) => call.text.includes('the body')), 'the body is painted by the caller, not roled here');
     assert.ok(!calls.some((call) => call.text.startsWith('labels:')), 'labels stay plain text');
     assert.ok(!calls.some((call) => call.text.startsWith('👍')), 'the counter stays plain text');
+  });
+
+  test('a partially unavailable metadata read names the fields it lost', () => {
+    const text = render({ ...FULL, projects: [], unavailable: ['projects'] }, []);
+    assert.match(text, /metadata unavailable: projects/, 'the missing relation is named, not just announced');
+    assert.match(text, /linked PRs: #69, #77/, 'the relations that did resolve still render');
+    assert.doesNotMatch(text, /read:project|scope/i, 'the scope behind the failure never leaks');
+  });
+
+  test('an absent list and a truncated list stay honest', () => {
+    assert.doesNotMatch(render({ ...FULL, linkedPullRequests: [] }, []), /linked PRs:/);
+    assert.match(
+      render({ ...FULL, linkedPullRequests: [69], linkedPullRequestsTruncated: true }, []),
+      /linked PRs: #69, …/,
+      'a capped page is marked as truncated instead of passing for the whole list',
+    );
   });
 
   test('a closed issue and an unreadable-metadata note keep their own roles', () => {

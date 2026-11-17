@@ -160,31 +160,45 @@ describe('the section is prose on disk', () => {
   });
 });
 
-// The policy the block states, in its three paragraphs.
+// The policy the block states, in its five paragraphs.
 describe('the section states the worktree policy', () => {
   const prose = () => SECTION.replace(/\s+/g, ' ');
+
+  test('the work happens in the ODD\'s worktree, never in the primary checkout or on the default branch', () => {
+    const text = prose();
+    assert.match(text, /An ODD writes only in its own worktree, never in the primary checkout or on the default branch; the feature branch lives there/, text);
+    assert.match(text, /Reading anywhere is fine, and a request that stays read-only needs no worktree/, text);
+    // The rule is the premise: it opens the section, before the worktree is described.
+    assert.ok(text.indexOf('never in the primary checkout') < text.indexOf('A worktree lives at'), text);
+  });
 
   test('a worktree is the ODD: find the assignment, resume it, create it, carry pending work', () => {
     const text = prose();
     assert.match(text, /A worktree lives at `/, text);
     assert.match(text, /directory IS the ODD/, text);
-    assert.match(text, /Before you create a worktree, start an ODD or resume one, call `worktree_list`/, text);
-    assert.match(text, /if the ODD already has a worktree, work there/, text);
+    assert.match(text, /Before the ODD's first write, call `worktree_list`/, text);
+    assert.match(text, /if it already has a worktree, work there/, text);
     assert.match(text, /if not, create it with `worktree_create`/, text);
     assert.match(text, /use `copy_changes: true` if the pending changes of the current checkout belong to that work/, text);
   });
 
-  test('one ODD, one worktree, and parallel subagents that edit different files', () => {
+  test('one ODD, one worktree', () => {
     const text = prose();
     assert.match(text, /One ODD, one worktree\./, text);
-    assert.match(text, /An ODD is an area of work: everything within the same area goes into the same ODD and worktree/, text);
-    assert.match(text, /work on a different area is another ODD with its own worktree/, text);
-    assert.match(text, /Delegate agents in parallel, on the same or different worktrees, unless they would edit the same files/, text);
+    assert.match(text, /An ODD is one request and its follow-ups, big or small: everything that belongs to it goes into the same ODD and worktree/, text);
+    assert.match(text, /an unrelated request is another ODD with its own worktree/, text);
+    assert.doesNotMatch(text, /area of work/i, 'the unit is a request, never an area of the code');
   });
 
-  test('after the merge the default branch is updated, then the worktree removed and its branch kept, unless a session stands there', () => {
+  test('independent units are delegated in parallel, each into the ODD\'s worktree, and never onto the same file', () => {
     const text = prose();
-    assert.match(text, /After the merge, update the default branch, then remove the worktree and keep its branch, unless a session is standing in that checkout/, text);
+    assert.match(text, /Delegate an ODD's independent units of behavior to agents in parallel, each with the `workspace_root` of that ODD's worktree; the only limit is that two agents never edit the same file/, text);
+    assert.doesNotMatch(text, /same or different worktrees/, 'one ODD has one worktree, so the choice does not exist');
+  });
+
+  test('after the merge the default branch is always updated; only the removal waits for a dirty tree or a session standing there', () => {
+    const text = prose();
+    assert.match(text, /After the merge, update the default branch\. Then remove the worktree, keeping its branch, unless its tree is dirty or a session is standing in it/, text);
     assert.doesNotMatch(text, /never remove/i);
   });
 

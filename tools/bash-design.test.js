@@ -752,11 +752,15 @@ describe('the read-only tools', () => {
       assert.deepEqual(applyBashActivityHeading(call, readCtx('read', { render })), call, `${path} (call)`);
       assert.deepEqual(applyBashActivityHeading(result, readCtx('read', { render, part: 'result' })), result, `${path} (result)`);
     }
-    // The path rule is still the file card's own, and it still keeps a COVERED tool's row off a
-    // skill or an ODD artifact: a `grep` that names one is that card's call, not this design's.
+    // The path rule is the file card's own, and so is the list of tools it claims: only `read`,
+    // `edit` and `write` can be that card's row, so a `grep` or an `ls` that names a skill or an ODD
+    // artifact is still this design's to head and frame.
     const grep = [readNeon('grep', '/needle/ in odd/tasks/design.md')];
     const grepRender = (path) => ({ args: { pattern: 'needle', path }, isPartial: false });
-    assert.deepEqual(applyBashActivityHeading(grep, readCtx('grep', { render: grepRender('odd/tasks/design.md') })), grep);
+    assert.ok(
+      applyBashActivityHeading(grep, readCtx('grep', { render: grepRender('odd/tasks/design.md') }))[0].includes(painted('mdLink', '⌕ exploring')),
+      'a covered tool keeps its row: the file card claims no grep',
+    );
     assert.ok(applyBashActivityHeading(grep, readCtx('grep', { render: grepRender('src/app.js') }))[0].includes(painted('mdLink', '⌕ exploring')), 'an ordinary grep is still headed');
   });
 

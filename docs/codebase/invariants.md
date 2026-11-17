@@ -488,10 +488,12 @@ The question this page answers: which rules must every change preserve, and what
     tool back exactly as the chain resolved it, registers nothing when that hook is
     absent, and leaves a host without a usable measurement seam its own rows. What a
     call heads as comes from its `path` alone, through the pure functions of
-    `lib/skill-odd-card.js`: a skill is a `SKILL.md` a `skills` folder holds, an ODD
-    artifact is any file below an `odd/tasks` folder, both read as path components
-    with both separators, and a path that names both is decided by the marker
-    closest to the file. The card states that identity's mark and label, the tool,
+    `lib/skill-odd-card.js`: a skill is anything below a `skills` folder, an ODD
+    artifact is anything below an `odd` folder, both read as path components with
+    both separators, and a path that names both is decided by the marker closest to
+    the file. The file's own name decides no identity — a skill's references are part
+    of the skill — and the three tools are one shared claim (`FILE_CARD_TOOLS`), so a
+    `grep` or an `ls` that names such a path is still the activity design's row. The card states that identity's mark and label, the tool,
     the path and — for a read only — the line range the call asked for. A path
     naming neither identity is the chain's own row, and so is a row of one of these
     three tools while the bridge's line answers with anything but this design.

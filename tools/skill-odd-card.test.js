@@ -5,7 +5,9 @@
 // is Markdown, the line range only a read states, and the document a call draws.
 //
 // Paths are components, never substrings, so `lib/skillset/x.ts` is an ordinary file;
-// both separators read alike, so a Windows path classifies exactly like a POSIX one.
+// both separators read alike, so a Windows path classifies exactly like a POSIX one. The
+// convention is the FOLDER: everything below a `skills` folder is that skill and
+// everything below an `odd` folder is an ODD artifact, whatever the file is called.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
@@ -15,22 +17,27 @@ const {
 	fileCardIdentity,
 	fileCardLineRange,
 	fileCardName,
+	fileCardSkillPath,
 	isMarkdownFile,
 	markdownDocumentSource,
 } = require('../lib/skill-odd-card.js');
 
 const identity = (path) => fileCardIdentity(path)?.identity;
 
-// A skill is a document named SKILL.md held by an ancestor folder named `skills`.
-test('a SKILL.md a skills folder holds is a skill, at any depth and in any case', () => {
+// A skill is EVERYTHING a `skills` folder holds: its document, its references, its
+// scripts. The skill is the folder, so a reference file belongs to the skill it serves.
+test('any file below a skills folder is a skill', () => {
 	for (const path of [
 		'skills/gentle-ai/SKILL.md',
+		'skills/gentle-ai/references/commands.md',
+		'skills/gentle-ai/references/deep/x.txt',
 		'packages/gentle/skills/tdd/SKILL.md',
 		'skills/tdd/references/SKILL.md',
 		'skills/tdd/skill.md',
-		'skills/tdd/Skill.MD',
-		'Skills/tdd/SKILL.md',
+		'skills/tdd/notes.md',
+		'Skills/tdd/references/chain.md',
 		'C:\\repo\\skills\\tdd\\SKILL.md',
+		'C:\\repo\\skills\\tdd\\references\\commands.md',
 		'\\\\server\\share\\skills\\tdd\\SKILL.md',
 	]) {
 		assert.equal(identity(path), FILE_CARD_IDENTITY.SKILL, path);
@@ -38,14 +45,18 @@ test('a SKILL.md a skills folder holds is a skill, at any depth and in any case'
 	}
 });
 
-// An ODD artifact is any file below an `odd/tasks/` folder; the `odd` folder alone is not enough.
-test('any file below odd/tasks is an ODD artifact', () => {
+// The same convention for ODD: the folder decides, not the file's own name nor its depth.
+test('any file below an odd folder is an ODD artifact', () => {
 	for (const path of [
 		'odd/tasks/checkout.md',
 		'odd/tasks/checkout/design.md',
 		'odd/tasks/checkout/references/readme.txt',
+		'odd/work/a.md',
+		'odd/design.md',
+		'odd/tasks.md',
 		'src/odd/tasks/design.md',
 		'C:\\repo\\odd\\tasks\\design.md',
+		'C:\\repo\\odd\\work\\design.md',
 		'\\\\server\\share\\odd\\tasks\\design.md',
 	]) {
 		assert.equal(identity(path), FILE_CARD_IDENTITY.ODD, path);
@@ -56,7 +67,7 @@ test('any file below odd/tasks is an ODD artifact', () => {
 // A path can name both kinds, and then the marker closest to the file decides.
 test('a path both rules name is judged by the marker closest to the file', () => {
 	assert.equal(identity('odd/tasks/skills/tdd/SKILL.md'), FILE_CARD_IDENTITY.SKILL);
-	assert.equal(identity('odd/tasks/skills/tdd/notes.md'), FILE_CARD_IDENTITY.ODD);
+	assert.equal(identity('odd/tasks/skills/tdd/notes.md'), FILE_CARD_IDENTITY.SKILL);
 	assert.equal(identity('skills/pack/odd/tasks/SKILL.md'), FILE_CARD_IDENTITY.ODD);
 	assert.equal(identity('odd/tasks/skills/x/SKILL.md'), FILE_CARD_IDENTITY.SKILL);
 });
@@ -71,11 +82,8 @@ test('every other file wears no card identity', () => {
 		'docs/oddity.md',
 		'docs/odd',
 		'docs/readme.md',
-		'odd/work/a.md',
-		'odd/design.md',
-		'odd/tasks.md',
-		'skills/notes.md',
-		'skills/gentle-ai/references/notes.md',
+		'docs/tasks.md.bak',
+		'skills.md',
 		'SKILL.md',
 		'/home/dev/repo/SKILL.md',
 		'docs/SKILL.md',
@@ -96,11 +104,13 @@ test('a non-string or an empty path is nothing, not an error', () => {
 // Each kind ships its own label, mark and theme role; the roles are the theme's to paint.
 test('each identity carries its own label, mark and theme role', () => {
 	assert.deepEqual(FILE_CARD_IDENTITY, { SKILL: 'skill', ODD: 'odd' });
-	assert.deepEqual(SKILL_FILE_CARD, { identity: 'skill', title: 'skill', glyph: '▤', titleRole: 'toolTitle' });
+	assert.deepEqual(SKILL_FILE_CARD, { identity: 'skill', title: 'skill', glyph: '▤', titleRole: 'mdHeading' });
 	assert.deepEqual(ODD_FILE_CARD, { identity: 'odd', title: 'odd', glyph: '📑', titleRole: 'mdHeading' });
 	for (const value of [FILE_CARD_IDENTITY, SKILL_FILE_CARD, ODD_FILE_CARD]) assert.ok(Object.isFrozen(value));
-	// The ODD heading wears the theme's own heading role, never a status color.
-	for (const role of ['warning', 'error', 'success', 'toolTitle']) assert.notEqual(ODD_FILE_CARD.titleRole, role, role);
+	// BOTH headings wear the theme's own heading role, never a status color.
+	for (const card of [SKILL_FILE_CARD, ODD_FILE_CARD]) {
+		for (const role of ['warning', 'error', 'success', 'toolTitle']) assert.notEqual(card.titleRole, role, role);
+	}
 });
 
 // The file's own name is the last component on either separator, and nothing else.
@@ -114,6 +124,25 @@ test('the collapsed heading can name the file itself', () => {
 	assert.equal(fileCardName('C:\\'), 'C:');
 	// Nothing to name is nothing, never an invented file.
 	for (const value of ['', '/', undefined, null, 7]) assert.equal(fileCardName(value), '', String(value));
+});
+
+// A skill's collapsed heading names the path from the skill's own folder down, however
+// deep the file sits: the folders above `skills` are what a reader already knows.
+test('a skill card can name its path from its skill folder down', () => {
+	assert.equal(fileCardSkillPath('/x/skills/gentle-ai/SKILL.md'), 'gentle-ai/SKILL.md');
+	assert.equal(fileCardSkillPath('/x/skills/gentle-ai/references/chain.md'), 'gentle-ai/references/chain.md');
+	assert.equal(fileCardSkillPath('/x/skills/gentle-ai/references/deep/x.md'), 'gentle-ai/references/deep/x.md');
+	// Both separators are read, so a Windows path names the same components.
+	assert.equal(fileCardSkillPath('C:\\repo\\skills\\tdd\\SKILL.md'), 'tdd/SKILL.md');
+	assert.equal(fileCardSkillPath('\\\\server\\share\\skills\\tdd\\references\\chain.md'), 'tdd/references/chain.md');
+	// The folder is a component, never a substring, and any case reads alike.
+	assert.equal(fileCardSkillPath('Skills/one/SKILL.md'), 'one/SKILL.md');
+	// A path with no `skills` folder names its file, exactly as the collapsed heading did.
+	for (const path of ['docs/readme.md', 'C:\\repo\\docs\\readme.md', 'lib/skillset/x.ts', 'design.md', 'skills']) {
+		assert.equal(fileCardSkillPath(path), fileCardName(path), path);
+	}
+	// Nothing to name is nothing, never an invented path.
+	for (const value of ['', '/', undefined, null, 7]) assert.equal(fileCardSkillPath(value), '', String(value));
 });
 
 // Markdown is the shape a document is written in: the extension, and the extension alone.

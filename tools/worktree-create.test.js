@@ -220,6 +220,78 @@ test('S2: the base branch itself is refused as the worktree branch', async () =>
 	assert.equal(error.code, 'base-branch-is-target');
 });
 
+// ---- An explicit base: any branch the worktree should start from ----
+
+test('base: an explicit base starts the new branch from that branch, not from main', async () => {
+	const stub = gitStub({ refs: { 'refs/heads/main': BASE_SHA, 'refs/heads/dev': OTHER_SHA } });
+	const plan = await expectedPlan({ ...REQUEST, base: 'dev' }, REPOSITORY, seamsFor(stub.git).seams);
+	assert.equal(plan.base, 'dev');
+	assert.equal(plan.startRef, 'refs/heads/dev');
+	assert.equal(plan.baseSha, OTHER_SHA);
+	assert.deepEqual(plan.args, ['worktree', 'add', '-b', 'feat/worktree-tools', DESTINATION, 'refs/heads/dev']);
+});
+
+test('base: a base that only exists on origin is used, and a local one wins over it', async () => {
+	const remoteOnly = await expectedPlan({ ...REQUEST, base: 'dev' }, REPOSITORY, seamsFor(gitStub({
+		refs: { 'refs/heads/main': BASE_SHA, 'refs/remotes/origin/dev': OTHER_SHA },
+	}).git).seams);
+	assert.equal(remoteOnly.startRef, 'refs/remotes/origin/dev');
+	assert.equal(remoteOnly.baseSha, OTHER_SHA);
+
+	const both = await expectedPlan({ ...REQUEST, base: 'dev' }, REPOSITORY, seamsFor(gitStub({
+		refs: { 'refs/heads/main': BASE_SHA, 'refs/heads/dev': OTHER_SHA, 'refs/remotes/origin/dev': BASE_SHA },
+	}).git).seams);
+	assert.equal(both.startRef, 'refs/heads/dev');
+});
+
+test('base: omitting it, or passing undefined, keeps the main-first resolution unchanged', async () => {
+	const stub = gitStub({ refs: { 'refs/heads/main': BASE_SHA, 'refs/heads/dev': OTHER_SHA } });
+	const omitted = await expectedPlan(REQUEST, REPOSITORY, seamsFor(stub.git).seams);
+	const undefinedBase = await expectedPlan({ ...REQUEST, base: undefined }, REPOSITORY, seamsFor(stub.git).seams);
+	assert.equal(omitted.base, 'main');
+	assert.deepEqual(undefinedBase, omitted);
+});
+
+test('base: an unknown base is refused with its own sentence and nothing is created', async () => {
+	const stub = gitStub();
+	const error = await expectedError({ ...REQUEST, base: 'nope' }, REPOSITORY, seamsFor(stub.git).seams);
+	assert.deepEqual(error, { code: 'base-not-found', message: 'could not resolve base branch nope: tried nope, origin/nope' });
+	assert.equal(stub.calls.some((call) => call.args[0] === 'worktree' && call.args[1] === 'add'), false);
+});
+
+test('base: a value that cannot name a branch is refused before Git runs', async () => {
+	for (const bad of ['', '   ', 42, null, '-x', 'a\nb']) {
+		const stub = gitStub();
+		const error = await expectedError({ ...REQUEST, base: bad }, REPOSITORY, seamsFor(stub.git).seams);
+		assert.equal(error.code, 'invalid-base', JSON.stringify(bad));
+		assert.match(error.message, /^invalid base: /, JSON.stringify(bad));
+		assert.deepEqual(stub.calls, [], `${JSON.stringify(bad)} asked Git nothing`);
+	}
+});
+
+test('base: the base itself is still refused as the worktree branch', async () => {
+	const stub = gitStub({ refs: { 'refs/heads/main': BASE_SHA, 'refs/heads/dev': OTHER_SHA } });
+	const error = await expectedError({ odd: 'x', branch: 'dev', base: 'dev' }, REPOSITORY, seamsFor(stub.git).seams);
+	assert.equal(error.code, 'base-branch-is-target');
+});
+
+test('base: it only applies when the branch is created, so an existing branch with a base is refused', async () => {
+	const stub = gitStub({ refs: { 'refs/heads/main': BASE_SHA, 'refs/heads/dev': OTHER_SHA, 'refs/heads/feat/worktree-tools': BASE_SHA } });
+	const error = await expectedError({ ...REQUEST, base: 'dev' }, REPOSITORY, seamsFor(stub.git).seams);
+	assert.deepEqual(error, {
+		code: 'base-on-existing-branch',
+		message: 'branch feat/worktree-tools already exists, so it is checked out as it is; base only applies when the branch is created',
+	});
+});
+
+test('base: the create text names the base the branch started from', async () => {
+	const stub = gitStub({ refs: { 'refs/heads/main': BASE_SHA, 'refs/heads/dev': OTHER_SHA } });
+	const plan = await expectedPlan({ ...REQUEST, base: 'dev' }, REPOSITORY, seamsFor(stub.git).seams);
+	const view = worktreeCreateView({ plan, registered: true });
+	assert.match(view.text, new RegExp(`^base: dev@${OTHER_SHA.slice(0, 7)}$`, 'm'));
+	assert.equal(view.details.base, 'dev');
+});
+
 test('S3: an existing branch is adopted and a held one names its holder', async () => {
 	const adopted = await expectedPlan(REQUEST, REPOSITORY, seamsFor(gitStub({
 		refs: { 'refs/heads/main': BASE_SHA, 'refs/heads/feat/worktree-tools': OTHER_SHA },
@@ -366,6 +438,35 @@ test('S18: a conflict is reported with its failing paths in the copy_changes lin
 });
 
 // ---- Creation cases in real clones ----
+
+test('base: a real clone starts the new branch from the base branch\'s commit, not main\'s', async (t) => {
+	const repository = repositoryFixture(t);
+	const identity = ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid'];
+	repository.git(repository.root, ['switch', '-q', '-c', 'dev']);
+	writeFileSync(join(repository.root, 'dev-only.txt'), 'only on dev\n');
+	repository.git(repository.root, ['add', 'dev-only.txt']);
+	repository.git(repository.root, [...identity, 'commit', '-m', 'Dev work']);
+	const devSha = repository.git(repository.root, ['rev-parse', 'HEAD']).trim();
+	repository.git(repository.root, ['switch', '-q', 'main']);
+	const mainSha = repository.git(repository.root, ['rev-parse', 'HEAD']).trim();
+	assert.notEqual(devSha, mainSha, 'the fixture really has two different tips');
+
+	const stub = repository.seam();
+	const seams = { git: stub.git, exists: (path) => existsSync(path) };
+	const fromDev = await planWorktreeCreate({ ...REQUEST, base: 'dev' }, { mainRoot: repository.root }, seams);
+	if (fromDev.ok === false) assert.fail(fromDev.error.message);
+	const execution = await executeWorktreeCreatePlan({ plan: fromDev.plan, git: stub.git });
+	if (execution.ok === false) assert.fail(execution.error.message);
+	assert.equal(repository.git(fromDev.plan.path, ['rev-parse', 'HEAD']).trim(), devSha, 'the worktree starts at dev');
+	assert.equal(existsSync(join(fromDev.plan.path, 'dev-only.txt')), true, 'and carries dev\'s files');
+	assert.match(worktreeCreateView({ plan: fromDev.plan, registered: true }).text, new RegExp(`^base: dev@${devSha.slice(0, 7)}$`, 'm'));
+
+	// Without a base the same clone still starts from main.
+	const fromMain = await planWorktreeCreate({ odd: 'other', branch: 'feat/other' }, { mainRoot: repository.root }, seams);
+	if (fromMain.ok === false) assert.fail(fromMain.error.message);
+	assert.equal(fromMain.plan.baseSha, mainSha);
+	assert.equal(fromMain.plan.base, 'main');
+});
 
 test('S1/S3: a real clone creates the worktree, its branch, and no document at all', async (t) => {
 	const repository = repositoryFixture(t);

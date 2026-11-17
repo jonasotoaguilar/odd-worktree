@@ -8,7 +8,7 @@ how the package is tested and released. The repository invariants live in
 
 1. **Create** — `worktree_create` with an `odd` and a `branch`, or press `c` in
    `/warp`.
-   - `odd` and `branch` are required; `copy_changes` is optional.
+   - `odd` and `branch` are required; `copy_changes` and `base` are optional.
    - `odd` IS the checkout's directory: one path segment (letters, digits, dash,
      underscore, dot), nothing that could escape the directory it names. The
      branch never names a directory, so `branch: feat/login` with
@@ -22,6 +22,15 @@ how the package is tested and released. The repository invariants live in
      names, else `init.defaultBranch`. When none of them resolves, the create is
      refused with `could not resolve a base branch: tried main, origin/HEAD,
      init.defaultBranch` before anything is written.
+   - `base` (the agent tool only; the `/warp` create never takes one) starts the new
+     branch from another branch instead: a `dev` branch in a git-flow repository, or
+     the branch a piece of work resumes from. A local branch is used first, then
+     `origin/<base>`; omitted, nothing changes. An unusable value is refused with
+     `invalid base: …`, an unknown branch with `could not resolve base branch …:
+     tried <base>, origin/<base>`, and a `base` given with a branch that already
+     exists with `base only applies when the branch is created`, since an existing
+     branch is checked out as it is. The base branch is still refused as the
+     worktree's own branch.
    - Four refusals protect what already exists, each before a single write:
      `odd … already has a worktree: …` (use that worktree instead of creating
      another), `worktree path already exists: …` (remove it or pass a different

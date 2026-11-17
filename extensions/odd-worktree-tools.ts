@@ -673,6 +673,7 @@ async function runPortedWorktreeCreate(input, ctx) {
       // S18: the boolean mode belongs to the ported hook; a path list travels on the
       // panel's own line instead, so the plan never carries both at once.
       copy_changes: request.copy_changes === true,
+      base: request.base,
     },
     { mainRoot },
     { git: portedGit, exists: (target) => fs.existsSync(target) },
@@ -922,6 +923,8 @@ async function executePortedWorktreeCreate(params, ctx) {
       odd: params ? params.odd : undefined,
       branch: params ? params.branch : undefined,
       copy_changes: params ? params.copy_changes === true : false,
+      // Only the agent tool carries a base; the panel's create never does.
+      base: params ? params.base : undefined,
     },
   }, ctx);
 }
@@ -933,10 +936,11 @@ const worktreeCreateTool = defineTool({
   // `codemode` put the tool behind `tools.worktree_create(...)` inside a script
   // while its sibling `worktree_list` stayed direct, and the prompt names both
   // bare: the asymmetry is what a bare call reported as "Tool not found".
-  description: "Create a Git worktree for this clone at <repo-parent>/<repo-name>-worktrees/<odd>, starting from the base branch (main when it exists). `odd` names the ODD this worktree serves and is REQUIRED: it IS the checkout's directory name. The branch is created with the worktree when it does not exist and checked out when it is free; no command ever passes --force. `copy_changes` carries the uncommitted changes of the checkout the call was made from — not necessarily the canonical main checkout — and that source checkout keeps them.",
+  description: "Create a Git worktree for this clone at <repo-parent>/<repo-name>-worktrees/<odd>, starting from the base branch (main when it exists, or the branch `base` names). `odd` names the ODD this worktree serves and is REQUIRED: it IS the checkout's directory name. The branch is created with the worktree when it does not exist and checked out when it is free; no command ever passes --force. `copy_changes` carries the uncommitted changes of the checkout the call was made from — not necessarily the canonical main checkout — and that source checkout keeps them.",
   parameters: Type.Object({
     odd: Type.String({ description: "The ODD this worktree serves, and the name of its directory under <repo-name>-worktrees. One path segment (letters, digits, dash, underscore, dot). It need not exist as a file." }),
     branch: Type.String({ description: "The branch this worktree works on. It is created with the worktree when it does not exist and checked out when it is free." }),
+    base: opt(Type.String({ description: "The branch the new branch starts from, instead of main: for example `dev` in a git-flow repository, or a feature branch to resume from. A local branch is used first, then `origin/<base>`. Omitted, the base is main as always. It only applies when the branch is created: with an existing branch it is refused." })),
     copy_changes: opt(Type.Boolean({ description: "Omitted or false copies nothing. true carries the uncommitted changes of the checkout the call was made from — the one the session stands in, not necessarily the main checkout — staged and unstaged plus untracked non-ignored files, into the new worktree; the source checkout keeps them." })),
   }),
   ...worktreeToolRenderers("worktree_create"),

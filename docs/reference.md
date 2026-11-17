@@ -665,8 +665,8 @@ groups, changed files first and the most recently modified first), `tree` (an ID
 its subfolders come first and then its own files, so at the top level every
 folder group paints before the files at the repository root) and `ext` (one group
 per extension named with its dot, alphabetical by path inside, the extensionless
-group last). The active order is painted at the right of the info row under the
-search row, which also carries the counts: how many files the query lists out of
+group last). The active order is painted, once, at the right of the info row under the
+search row (the footer does not repeat it), which also carries the counts: how many files the query lists out of
 the whole listing and the Tab selection in parentheses (`202/202 (4)`). `tree` and
 `ext` are foldable and open folded: every group row paints `▸` when it is
 closed and `▾` when it is open, in the grey role so the structure reads apart

@@ -459,7 +459,7 @@ describe('the footer (S4)', () => {
     for (const hidden of ['space', 'fold', 'ctrl+k', 'ctrl+shift', 'ctrl+c', 'esc/', 'home', 'end', 'enter/']) {
       assert.ok(!flat.includes(hidden), `the flat footer never names ${hidden}: ${flat}`);
     }
-    assert.ok(flat.endsWith('files'), flat);
+    assert.ok(flat.endsWith('esc close'), `the flat footer ends at its last key, not at an order name: ${flat}`);
 
     // S32, S40: the trees earn the two fold keys, in the same one-key style, and the
     // shift+space one names the action it would perform.
@@ -469,7 +469,8 @@ describe('the footer (S4)', () => {
       for (const token of ['space fold', action, 'ctrl+u clear', 'ctrl+e edit', 'enter insert', 'esc close']) {
         assert.ok(tree.includes(token), `the ${order} footer names ${token}: ${tree}`);
       }
-      assert.ok(tree.endsWith(order), tree);
+      assert.ok(tree.endsWith('esc close'), `the ${order} footer ends at its last key: ${tree}`);
+      assert.match(infoCell(rowsOf(view, 200), 200), new RegExp(` ${order}$`), `the info row names the ${order} order`);
     }
   });
 
@@ -517,15 +518,16 @@ describe('the footer (S4)', () => {
     for (const row of tiny) assert.equal(helpers.visibleWidth(row), 40);
   });
 
-  test('the active order is always visible and follows ctrl+o', async () => {
+  test('the active order is named once, on the info row, and never again in the footer', async () => {
     const { view } = await open();
-    assert.ok(footerOf(rowsOf(view)).endsWith('files'), 'S33: the flat order is named files');
-    view.handleInput('ctrl+o');
-    assert.ok(footerOf(rowsOf(view)).endsWith('tree'), 'S23: the folder order is named tree');
-    view.handleInput('ctrl+o');
-    assert.ok(footerOf(rowsOf(view)).endsWith('ext'));
-    view.handleInput('ctrl+o');
-    assert.ok(footerOf(rowsOf(view)).endsWith('files'));
+    for (const order of ['files', 'tree', 'ext', 'files']) {
+      const rows = rowsOf(view);
+      assert.match(infoCell(rows), new RegExp(` ${order}$`), `S33/S23: the info row names the ${order} order`);
+      const footer = footerOf(rows);
+      assert.match(footer, /esc( close)?$/, `the footer is the legend alone and ends at its last key: ${footer}`);
+      assert.doesNotMatch(footer, / {2,}(files|tree|ext)$/, `the footer does not repeat the ${order} order at its right edge: ${footer}`);
+      view.handleInput('ctrl+o');
+    }
   });
 });
 
@@ -906,7 +908,7 @@ describe('keys (S4)', () => {
     view.handleInput('down');
     view.handleInput('ctrl+o');
     assert.match(selectedRow(rowsOf(view)), /cursor\.ts/);
-    assert.ok(footerOf(rowsOf(view)).endsWith('tree'));
+    assert.match(infoCell(rowsOf(view)), / tree$/, 'the repainted order is named on the info row');
   });
 
   test('ctrl+e opens the highlighted file and closes, with no repaint before the terminal stops', async () => {

@@ -8309,6 +8309,12 @@ async function probeIssuesGate(ctx) {
   };
 }
 
+// S5 (issues-linked-prs-and-alt-i T2): the handler `/issues` registered, kept the
+// way `filesCommandHandler` is — the bound key runs the SAME path as the command,
+// never a second copy of it. `null` until the command is registered, which this
+// `gh`-absent gate may leave it for the whole process.
+let issuesCommandHandler = null;
+
 function registerIssuesCommand(pi) {
   if (typeof pi?.registerCommand !== "function") return;
   // S13 (T11, corrected): without the `gh` CLI there is nothing this command could
@@ -8316,27 +8322,29 @@ function registerIssuesCommand(pi) {
   // recorded at registration, with no child process, and every other command and
   // tool this package contributes is registered above and below regardless.
   if (ISSUES_GH_CLI_ABSENT) return;
-  pi.registerCommand("issues", {
-    description: "Browse fresh GitHub issue pages and details; edit labels/assignees, comment or close when permitted",
-    handler: async (args, ctx) => {
-      const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
-      const gate = await probeIssuesGate(ctx);
-      if (gate.ok !== true) {
-        // S1 (issues-sidebar-click T1): the rail click whose command refuses here
-        // is over, so the guard goes with it instead of waiting for its timer.
-        releaseIssuesPanelOpen();
-        // S3 (T2): a cwd outside a repository is the shared statement every
-        // surface makes, at info — never a `gh` error and never an error tone.
-        if (gate.notRepository === true) {
-          if (typeof notify === "function") notify(notGitRepositoryLine(toolCwd(ctx)), "info");
-          return;
-        }
-        if (typeof notify === "function") notify(issuesGateMessage(gate.error), "error");
+  const handler = async (args, ctx) => {
+    const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
+    const gate = await probeIssuesGate(ctx);
+    if (gate.ok !== true) {
+      // S1 (issues-sidebar-click T1): the rail click whose command refuses here
+      // is over, so the guard goes with it instead of waiting for its timer.
+      releaseIssuesPanelOpen();
+      // S3 (T2): a cwd outside a repository is the shared statement every
+      // surface makes, at info — never a `gh` error and never an error tone.
+      if (gate.notRepository === true) {
+        if (typeof notify === "function") notify(notGitRepositoryLine(toolCwd(ctx)), "info");
         return;
       }
-      await executeIssues(args, ctx, gate.checkoutRoot);
-    },
+      if (typeof notify === "function") notify(issuesGateMessage(gate.error), "error");
+      return;
+    }
+    await executeIssues(args, ctx, gate.checkoutRoot);
+  };
+  pi.registerCommand("issues", {
+    description: "Browse fresh GitHub issue pages and details; edit labels/assignees, comment or close when permitted",
+    handler,
   });
+  issuesCommandHandler = handler;
 }
 
 // S2 (issues-sidebar): the published bridge object, read from its Symbol slot
@@ -9193,6 +9201,53 @@ function bindFilesShortcut(pi) {
   }
 }
 
+// S5 (issues-linked-prs-and-alt-i T2): the issues panel's key, the SECOND host
+// shortcut and the picker's twin — same env-name convention, same fallback rule:
+// the default is a convenience, never a requirement, and `/issues` stays reachable
+// as a command with no key at all.
+const ISSUES_KEYMAP_ENV = "GENTLE_PI_ISSUES_KEY";
+// S5 (round L2): `alt+i` is the human's own call, exactly as `alt+p` was (S41),
+// and it is bound the same way: on the host, once, never through the bridge.
+const ISSUES_KEYMAP_DEFAULT = "alt+i";
+const ISSUES_SHORTCUT_DESCRIPTION = "Open the issues panel: three scoped tabs, a filter and edits when permitted";
+
+// S5: the environment's key when it holds a non-empty one, the default otherwise.
+function issuesShortcutKey() {
+  const configured = process.env[ISSUES_KEYMAP_ENV];
+  if (typeof configured === "string") {
+    const trimmed = configured.trim();
+    if (trimmed !== "") return trimmed;
+  }
+  return ISSUES_KEYMAP_DEFAULT;
+}
+
+// S5: bound ONCE, at load, and ONLY when the `issues` command actually registered:
+// the `gh`-absent gate skips that registration entirely, and a key with no command
+// behind it would be a key that opens nothing forever. A host with no
+// `registerShortcut` and a host that throws from it are that same silence — no key,
+// no message, nothing else touched.
+function bindIssuesShortcut(pi) {
+  try {
+    if (typeof pi?.registerShortcut !== "function") return;
+    if (typeof issuesCommandHandler !== "function") return;
+    const handler = (...args) => {
+      const run = issuesCommandHandler;
+      if (typeof run !== "function") return;
+      // The host hands a shortcut the session context; the command's own handler
+      // is the ONE implementation, invoked with no argument (exactly `/issues`).
+      const ctx = args.length > 0 ? args[args.length - 1] : undefined;
+      try {
+        void run("", ctx);
+      } catch {
+        // A key never breaks the host.
+      }
+    };
+    pi.registerShortcut(issuesShortcutKey(), { description: ISSUES_SHORTCUT_DESCRIPTION, handler });
+  } catch {
+    // The key is a convenience: a host that refuses it never breaks this extension.
+  }
+}
+
 // T11 (S2 amended, L10): discoverability is the ONE thing a host without the
 // bridge gets. Nothing throws today — every bridge call is guarded — so this is a
 // hint, not error handling: ONE warning per process, from a primary session only
@@ -9514,6 +9569,10 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // bound once — `alt+p` (S41) unless `GENTLE_PI_FILES_KEY` says otherwise.
   bindFilesShortcut(pi);
   registerIssuesCommand(pi);
+  // S5 (issues-linked-prs-and-alt-i T2): the issues panel's key, beside the
+  // picker's — bound after its command exists, and therefore never when the
+  // `gh`-absent gate left that command unregistered.
+  bindIssuesShortcut(pi);
   pi.registerTool(worktreeCreateTool);
   pi.registerTool(worktreeListTool);
   if (typeof pi?.on !== "function") return;

@@ -15,9 +15,10 @@ checkout's files, reading and — role permitting — editing that checkout's Gi
 issues, and the drawing of its own cards. `git` is the only external requirement,
 and gentle-shell-bridge is the plugin's own prerequisite: without it the package
 loads nothing at all. With it, the bridge carries two control surfaces: the rail
-section and the design (which the file cards read). The file picker's `alt+p` is
-not one of them — it is bound directly on the host, and `GENTLE_PI_FILES_KEY`
-overrides the key. `gh` is optional and belongs to the two issues surfaces
+section and the design (which the file cards read). The two host shortcuts are
+neither: the file picker's `alt+p` and the issues panel's `alt+i` are
+bound directly on the host, and `GENTLE_PI_FILES_KEY` and `GENTLE_PI_ISSUES_KEY`
+override them. `gh` is optional and belongs to the two issues surfaces
 alone: it is a local `PATH` walk (`lib/which-command.js`), never a child process,
 and when it finds nothing, `/issues` is never registered and the rail section is
 never added — every other surface keeps working.

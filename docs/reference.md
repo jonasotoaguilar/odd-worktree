@@ -1131,15 +1131,18 @@ reaching them.
 
 ## The `## ODD worktrees` block in the system prompt
 
-The primary session's system prompt gains a short section telling the agent where
-a worktree lives and that the directory is the ODD it serves, to call
-`worktree_list` before it creates a worktree or starts or resumes an ODD (work in the
-ODD's worktree when it has one, `worktree_create` it when it has none), to carry the
-current checkout's pending changes that belong to that work with `copy_changes`, that an
-ODD is an area of work with one worktree, to delegate agents in parallel unless they
-would edit the same files, and that after the merge the default branch is updated, then the
-checkout is removed and its branch kept, unless a live session stands in it. Moving the
-session stays the human's.
+The primary session's system prompt gains a short section that opens with the rule the
+rest hangs from: an ODD's work happens in its own worktree, never in the primary checkout
+or on the default branch (reading there is fine; the first edit, the first commit and every
+delegated writer start in the worktree, and the branch ODD asks for lives there). It then
+tells the agent where a worktree lives and that the directory is the ODD it serves, to call
+`worktree_list` when it starts or resumes an ODD (work in the ODD's worktree when it has
+one, `worktree_create` it before touching anything when it has none), to carry the current
+checkout's pending changes that belong to that work with `copy_changes`, that an ODD is one
+request and its follow-ups, big or small, with one worktree (an unrelated request is another
+ODD), to delegate agents in parallel unless they would edit the same files, and that after
+the merge the default branch is always updated, then the checkout is removed with its
+branch kept, unless a live session stands in it. Moving the session stays the human's.
 
 It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other

@@ -206,6 +206,15 @@ const unpaint = (value) => stripAnsi(value).replace(/<\/?[a-zA-Z][a-zA-Z0-9]*>/g
 const bodyText = (row) => unpaint(row).replace(/^│ /, '').replace(/ +│$/, '');
 
 /**
+ * One body row's CONTENT as painted: the card's own frame cells — its side and its rail —
+ * removed, the content's own roles kept. The frame wears the identity's role, so a case
+ * about what a document's rows wear has to look past it.
+ */
+const bodyPaint = (rows) => rows
+  .replace(/^<[A-Za-z]+>(?:│|▎)<\/[A-Za-z]+> /gmu, '')
+  .replace(/ +<[A-Za-z]+>(?:│|▎)<\/[A-Za-z]+>$/gmu, '');
+
+/**
  * The content of a row inside the host's own outer box: the box's left pad and the
  * width fill removed, so a case can compare it with the row the chain itself drew.
  */
@@ -239,14 +248,27 @@ test('a skill call heads with its mark, its label, the tool and the path', () =>
   const resolver = fileResolver();
   const row = callRow(resolver, 'read', { path: SKILL }, taggedTheme);
   const text = unpaint(row);
-  assert.match(text, /▤ skill · read lib\/skills\/one\/SKILL\.md/u, text);
-  assert.ok(row.includes('<toolTitle>▤</toolTitle> <toolTitle>skill</toolTitle>'), 'the glyph and the label keep the read card\'s own title role');
+  assert.match(text, /▤ skill · read one\/SKILL\.md/u, text);
+  assert.ok(row.includes('<mdHeading>▤</mdHeading> <mdHeading>skill</mdHeading>'), 'the glyph and the label wear the theme\'s mdHeading role');
   assert.ok(row.includes('<muted>·</muted>'), 'the one separator is painted muted');
   assert.equal(text.split('·').length - 1, 1, 'exactly one separator');
   assert.match(text, /[^ ] · [^ ]/u, 'one space on each side of the separator');
   assert.match(text, /^╭─ /, 'the collapsed call is the card\'s own top rule');
   assert.match(text, /╮$/, 'the row is framed');
   assertFramed([row], 60);
+});
+
+// The convention is the folder, and it holds for every tool the card claims: a reference
+// file below a `skills` folder is that skill's, so reading, writing or editing it heads as
+// that skill, and anything below an `odd` folder heads as that ODD whatever it is called.
+test('read, write and edit all wear the identity of the folder their file lives in', () => {
+  const resolver = fileResolver();
+  for (const tool of ['read', 'write', 'edit']) {
+    const skill = unpaint(callRow(resolver, tool, { path: 'skills/merge-pr/references/commands.md' }, plainTheme));
+    assert.match(skill, new RegExp(`▤ skill · ${tool} merge-pr/references/commands\\.md`, 'u'), skill);
+    const odd = unpaint(callRow(resolver, tool, { path: 'odd/design/notes.md' }, plainTheme));
+    assert.match(odd, new RegExp(`📑 odd · ${tool} notes\\.md`, 'u'), odd);
+  }
 });
 
 test('an odd call names its file while collapsed and its whole path once expanded', () => {
@@ -275,29 +297,90 @@ test('the heading wears one theme role per element (S2)', () => {
   const resolver = fileResolver();
   const row = callRow(resolver, 'read', { path: SKILL, offset: 2, limit: 3 }, taggedTheme);
 
-  // The glyph AND the label wear the identity's own role (`toolTitle` for a skill); the
-  // label is the only one bolded, and the glyph is never bold.
-  assert.equal(row.includes('<toolTitle>▤</toolTitle>'), true, `the glyph wears the title role: ${row}`);
-  assert.equal(row.includes('<toolTitle>skill</toolTitle>'), true, 'the label wears the title role');
-  // The `·` separator in `muted`, the tool name unpainted, the path in `accent`, the range
-  // in `warning` — in that order, on one row.
-  assert.equal(row.includes('<muted>·</muted> read <accent>lib/skills/one/SKILL.md</accent><warning>:2-4</warning>'), true, row);
-  assert.equal(row.includes('<accent>lib/skills/one/SKILL.md</accent>'), true, 'the path is the accent role');
-  assert.equal(row.includes('read '), true, 'the tool name is unpainted: no role wraps it');
-  assert.doesNotMatch(row, /<[a-z]+>read<\/[a-z]+>/u, 'never a role around the tool name');
+  // The glyph AND the label wear the identity's own role (`mdHeading` for both
+  // identities); the label is the only one bolded, and the glyph is never bold.
+  assert.equal(row.includes('<mdHeading>▤</mdHeading>'), true, `the glyph wears the title role: ${row}`);
+  assert.equal(row.includes('<mdHeading>skill</mdHeading>'), true, 'the label wears the title role');
+  // The `·` separator in `muted`, the tool name in `dim`, the path in `accent`, the
+  // range in `warning` — in that order, on one row.
+  assert.equal(row.includes('<muted>·</muted> <dim>read</dim> <accent>one/SKILL.md</accent><warning>:2-4</warning>'), true, row);
+  assert.equal(row.includes('<accent>one/SKILL.md</accent>'), true, 'the path is the accent role');
+  assert.equal(row.includes('<dim>read</dim>'), true, 'the tool name is the dim role');
 
   // A theme with a bold attribute: the label carries it, inside the role.
   const boldTheme = { fg: (role, value) => `<${role}>${value}</${role}>`, bold: (value) => `*${value}*` };
   const bolded = callRow(resolver, 'read', { path: SKILL }, boldTheme);
-  assert.equal(bolded.includes('<toolTitle>*skill*</toolTitle>'), true, `the label is bold: ${bolded}`);
-  assert.equal(bolded.includes('<toolTitle>*▤*</toolTitle>'), false, 'the glyph is not bold');
+  assert.equal(bolded.includes('<mdHeading>*skill*</mdHeading>'), true, `the label is bold: ${bolded}`);
+  assert.equal(bolded.includes('<mdHeading>*▤*</mdHeading>'), false, 'the glyph is not bold');
 
   // An ODD artifact heads in the theme's own `mdHeading`, and while collapsed it names its
   // file, in the accent role like every path.
   const odd = callRow(resolver, 'read', { path: ODD, offset: 10, limit: 30 }, taggedTheme);
   assert.equal(odd.includes('<mdHeading>📑</mdHeading>'), true, odd);
   assert.equal(odd.includes('<mdHeading>odd</mdHeading>'), true, odd);
-  assert.equal(odd.includes('read <accent>cards-skill-odd.md</accent><warning>:10-39</warning>'), true, odd);
+  assert.equal(odd.includes('<dim>read</dim> <accent>cards-skill-odd.md</accent><warning>:10-39</warning>'), true, odd);
+});
+
+// The title role of BOTH identities is the theme's `mdHeading`: the card carries no
+// colour of its own, so the theme decides what a skill and an ODD artifact look like.
+test('both identities head in the theme\'s mdHeading role', () => {
+  const resolver = fileResolver();
+  for (const [path, head] of [[SKILL, '<mdHeading>▤</mdHeading> <mdHeading>skill</mdHeading>'], [ODD, '<mdHeading>📑</mdHeading> <mdHeading>odd</mdHeading>']]) {
+    const row = callRow(resolver, 'read', { path }, taggedTheme);
+    assert.equal(row.includes(head), true, `${path}: ${row}`);
+    assert.equal(/<toolTitle>/u.test(row), false, `no cell wears the old skill role: ${row}`);
+  }
+});
+
+// The tool name is the theme's `dim` grey: the call is the quiet part of the heading,
+// the path is what the card is about.
+test('the tool name is painted in dim, for a read and for a write', () => {
+  const resolver = fileResolver();
+  for (const tool of ['read', 'write']) {
+    const row = callRow(resolver, tool, { path: ODD, content: '# a\n' }, taggedTheme);
+    assert.equal(row.includes(`<dim>${tool}</dim>`), true, `${tool}: ${row}`);
+    assert.equal(row.includes(`<muted>·</muted> <dim>${tool}</dim> <accent>cards-skill-odd.md</accent>`), true, `${tool}: ${row}`);
+  }
+});
+
+// A collapsed skill names the path from the skill's own folder down; expanding it
+// states the whole path, so nothing is lost, it is only deferred.
+test('a collapsed skill names its path from its skill folder down, expanded states all of it', () => {
+  const resolver = fileResolver();
+  const path = '/home/dev/lib/skills/one/SKILL.md';
+  const collapsed = callRow(resolver, 'read', { path }, taggedTheme);
+  const text = unpaint(collapsed);
+  assert.match(text, /▤ skill · read one\/SKILL\.md/u, text);
+  assert.equal(text.includes('/home/dev'), false, 'the folders above the skill are not named while collapsed');
+  assert.equal(collapsed.includes('<accent>one/SKILL.md</accent>'), true, `the named path is the accent role: ${collapsed}`);
+
+  const expanded = callRows(resolver, 'read', { path }, plainTheme, 120, { isPartial: false, expanded: true })
+    .map(unpaint)
+    .join('\n');
+  assert.match(expanded, /read \/home\/dev\/lib\/skills\/one\/SKILL\.md/u, expanded);
+});
+
+// The whole frame is the identity's: an idle call's corners, rules, sides and closing
+// rule wear the same role as its label. A live call keeps its tone, because the state
+// speaks first (`TONE_OWNS_BOX`).
+test('an idle file card wears its identity role around the whole frame', () => {
+  const resolver = fileResolver();
+  for (const path of [SKILL, ODD]) {
+    const call = callRow(resolver, 'read', { path }, taggedTheme);
+    assert.ok(call.startsWith('<mdHeading>╭</mdHeading>'), `${path}: the top-left corner wears the identity role: ${call}`);
+    assert.ok(call.endsWith('<mdHeading>╮</mdHeading>'), `${path}: the top-right corner too: ${call}`);
+
+    const closed = resultRows(resolver, 'read', { path }, textResult('body line'), { isPartial: false }, taggedTheme);
+    assert.ok(closed[0].startsWith('<mdHeading>│</mdHeading>'), `${path}: the sides wear it: ${closed[0]}`);
+    assert.ok(closed[0].endsWith('<mdHeading>│</mdHeading>'), `${path}: both sides: ${closed[0]}`);
+    assert.ok(closed.at(-1).startsWith('<mdHeading>╰</mdHeading>'), `${path}: the closing rule too: ${closed.at(-1)}`);
+  }
+
+  // A running call and a failed one keep their own tone: the state speaks first.
+  const running = callRow(resolver, 'read', { path: SKILL }, taggedTheme, { isPartial: true });
+  assert.ok(running.startsWith('<warning>╭</warning>'), `a running call keeps the warning tone: ${running}`);
+  const failed = resultRows(resolver, 'read', { path: SKILL }, textResult('ENOENT', { isError: true }), { isPartial: false }, taggedTheme);
+  assert.ok(failed[0].startsWith('<error>│</error>'), `a failed call keeps the error tone: ${failed[0]}`);
 });
 
 test('a heading that fits keeps every role through the expansion too', () => {
@@ -349,7 +432,7 @@ test('a path that names neither a skill nor an ODD artifact is the chain\'s own 
   );
   // A folder that merely holds the word is no identity either, and neither is a
   // document called SKILL.md outside a `skills` folder.
-  for (const path of ['lib/skillset/notes.md', 'docs/oddity.md', 'odd/work/a.md', 'notes/SKILL.md', '', undefined, 42]) {
+  for (const path of ['lib/skillset/notes.md', 'docs/oddity.md', 'odd-work/a.md', 'notes/SKILL.md', '', undefined, 42]) {
     assert.deepEqual(forwardedText(slot.renderCall({ path }, plainTheme, { isPartial: false }).render(60)), ['host read call'], String(path));
   }
   // A detail too long for the row is forwarded as the chain drew it, never clipped by us.
@@ -905,7 +988,7 @@ test('a document the renderer cannot draw falls back to the plain source, unstyl
     const body = rows.slice(0, -1).join('\n');
     assert.equal(body.includes('# Design'), true, `${label}: the source is shown`);
     assert.equal(body.includes('## Specs'), true, `${label}: every line of it`);
-    assert.equal(body.includes('<mdHeading>'), false, `${label}: in no Markdown role`);
+    assert.equal(bodyPaint(rows.slice(0, -1).join('\n')).includes('<mdHeading>'), false, `${label}: in no Markdown role`);
   }
 });
 
@@ -929,7 +1012,7 @@ test('a write whose document cannot be drawn shows the document it wrote, never 
       assert.equal(body.includes('# Design'), true, `${label}: the document is`);
       // Expanded, the whole document; collapsed, its first rows, exactly as a read's.
       assert.equal(body.includes('Body text'), options.expanded === true, `${label}: ${JSON.stringify(options)}`);
-      assert.equal(body.includes('<mdHeading>'), false, `${label}: and it is drawn as plain source`);
+      assert.equal(bodyPaint(body).includes('<mdHeading>'), false, `${label}: and it is drawn as plain source`);
     }
     // A read keeps the text it read, exactly as before.
     const read = resultRows(resolver, 'read', { path: ODD }, textResult(source), { expanded: true, isPartial: false }, taggedTheme, 60);

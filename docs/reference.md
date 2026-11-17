@@ -836,7 +836,9 @@ paints nothing for it — a read of a skill or an ODD artifact is the file card'
 card draws its own heading, and a read of anything else is the host's own row, both parts
 exactly as the host drew them, whichever resolver runs first.
 The identity rule is the file card's own (`lib/skill-odd-card.js`), so the two surfaces
-cannot disagree about which paths those are.
+cannot disagree about which paths those are, and so is the list of tools that card claims
+(`read`, `edit`, `write`): a `grep` or an `ls` that names a skill's path is no file card's
+row, so this design keeps heading and framing it as it always did.
 
 The rule is the classifier's: never guess. A bridge that hands the design the call's
 render context (`ctx.render`: the arguments, `isPartial`, `isError`, `durationMs`) lets it
@@ -901,38 +903,46 @@ The CodeGraph card is separate: with the `codegraph` CLI installed it still clai
 ## The file cards
 
 A `read`, `edit` or `write` call whose `path` names one of two things is drawn as
-that file rather than as a bare tool row: a **customized skill** — a file called
-`SKILL.md`, in any case, that a `skills` folder holds — or an **ODD artifact**,
-any file below an `odd/tasks` folder. The identity is the path's components and
-nothing else (`lib/skill-odd-card.js`): both separators are read, so a Windows
-path classifies like a POSIX one; `lib/skillset/notes.md`, `docs/oddity.md`, the
-notes beside a skill and a `SKILL.md` outside a `skills` folder are ordinary
-files. A path naming both kinds is decided by the marker closest to the file, so
-a `SKILL.md` below a `skills` folder is a skill even when an `odd/tasks` folder
-sits above it, while one whose closest marker is `odd/tasks` is an ODD artifact
-like every other file there.
+that file rather than as a bare tool row: a **customized skill** — anything below a
+`skills` folder, its `SKILL.md`, its references and its scripts alike — or an **ODD
+artifact**, anything below an `odd` folder. The convention is the FOLDER and nothing
+else: the file's own name decides no identity, which is why
+`skills/x/references/commands.md` is that skill's and `docs/SKILL.md` is an ordinary
+file. The identity is the path's components (`lib/skill-odd-card.js`): both separators
+are read, so a Windows path classifies like a POSIX one, and `lib/skillset/notes.md`
+and `docs/oddity.md` are ordinary files because the folder name is a component, never
+a substring. A path naming both kinds is decided by the marker closest to the file, so
+a reference below `skills/` is a skill even when an `odd` folder sits above it, while a
+file whose closest marker is `odd` is an ODD artifact.
+
+The claim is exactly three tools — `read`, `edit` and `write` — read from that same
+module (`FILE_CARD_TOOLS`), so editing a skill's reference heads as that skill too,
+while a `grep` or an `ls` that names one of those paths is still the activity design's
+row.
 
 | The path names | Mark | Label | The role the mark and label wear |
 | --- | --- | --- | --- |
-| a `SKILL.md` a `skills` folder holds | `▤` | `skill` | the theme's `toolTitle` |
-| any file below an `odd/tasks` folder | `📑` | `odd` | the theme's `mdHeading` |
+| anything below a `skills` folder | `▤` | `skill` | the theme's `mdHeading` |
+| anything below an `odd` folder | `📑` | `odd` | the theme's `mdHeading` |
 
 **The heading** is that mark and label, then the tool, the path and — for a read
 only — the line range the call asked for (`:10-39` for `offset: 10, limit: 30`,
 `:7` for an `offset` alone). Every element wears the role the reference design
 gives it (gentle-shell PR #3061): the glyph AND the label in `card.titleRole`
-(`toolTitle` for a skill, `mdHeading` for an ODD artifact) with the label
-additionally bold, the `·` separator in `muted`, the path in `accent`, the line
-range in `warning`, and the tool name unpainted. Only a read states a range because only a read asks
+(`mdHeading` for both identities) with the label
+additionally bold, the `·` separator in `muted`, the tool name in `dim`, the path in `accent`, the line
+range in `warning`, and the card's whole closed box in the identity's role. Only a read states a range because only a read asks
 for one: a write knows how many lines it writes, never where they land, and an
 edit's real range is the diff its result carries. A range stated in a shape the
 card cannot read names nothing rather than half of itself.
 
 **Collapsed and expanded.** Collapsed, an ODD call names the file itself (`📑 odd ·
 read cards-skill-odd.md`) because its folder is long and the file's own name is
-what a reader looks for; expanding the call draws the whole path in its place, so
-a deep path is never lost behind an ellipsis. A skill's path is short enough to
-be stated either way. A call still running wears the warning tone and closes its
+what a reader looks for, while a skill names the path from its own folder down
+(`▤ skill · read merge-pr/references/commands.md`) because the folders above
+`skills` say nothing a reader of the workspace does not know. Expanding the call
+draws the whole path in either case, so a deep path is never lost behind an
+ellipsis. A call still running wears the warning tone and closes its
 own frame; the result that follows closes it in the info tone (or the error tone)
 and carries the elapsed time bottom-right, in the form the other cards use
 (`61ms`, `1.2s`). The host's expand key hint is offered on a settled call, and the

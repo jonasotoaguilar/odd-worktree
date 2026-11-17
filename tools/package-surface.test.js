@@ -217,6 +217,19 @@ describe('removed surface', () => {
     }
   });
 
+  test('worktree_create takes an optional base branch, and only that tool does', async () => {
+    const { tools } = await loadExtension({});
+    const create = tools.get('worktree_create').parameters;
+    assert.ok(create.properties.base, 'worktree_create has a base parameter');
+    // The host's schema builder is a shim in this harness, so optionality is read where it is
+    // declared: `base` goes through `opt(...)` like `copy_changes`, `odd` and `branch` do not.
+    const source = fs.readFileSync(path.join(ROOT, 'extensions', 'odd-worktree-tools.ts'), 'utf8');
+    assert.match(source, /\n    base: opt\(Type\.String\(/, 'base is optional: nothing changes without it');
+    assert.doesNotMatch(source, /\n    (odd|branch): opt\(/, 'odd and branch stay required');
+    assert.match(tools.get('worktree_create').description, /`base`/, 'the description names it');
+    assert.equal('base' in tools.get('worktree_list').parameters.properties, false, 'worktree_list is untouched');
+  });
+
   test('the CodeGraph modules are a closed list with narrow powers (S1, S2)', () => {
     const lib = path.join(ROOT, 'lib');
     const shipped = fs.readdirSync(lib).filter((entry) => /^codegraph-/.test(entry)).sort();

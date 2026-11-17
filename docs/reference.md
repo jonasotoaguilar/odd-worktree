@@ -1398,7 +1398,7 @@ whole-suite level: run the focused file while iterating, then the full command.
 | `release.yml` | tag `v*` push (a `v*-*` tag is excluded), or a manual dispatch naming an existing tag | tag/`package.json` version parity, the suite, the GitHub Release, then `npm publish`, then verification |
 
 The npm package is `pi-odd-worktree`. A release is the tag `v` plus the exact
-`package.json` version — version 2.1.0 is `v2.1.0` — and preflight stops the run
+`package.json` version — version 3.0.0 is `v3.0.0` — and preflight stops the run
 when the two disagree. Publication uses
 [Trusted Publishing](https://docs.npmjs.com/trusted-publishers): `id-token:
 write` is the only such grant in the repository and belongs to the `release` job,

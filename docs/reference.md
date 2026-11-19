@@ -126,7 +126,7 @@ session's checkouts, or every worktree Git lists for the clone) and `esc`.
 | `shift+space` | In `tree` and `ext`: collapse every group, or expand them all when they are already collapsed — the label states which |
 | `ctrl+u` | Clear the query |
 | `ctrl+e` | Open the highlighted file in `$VISUAL`/`$EDITOR` |
-| `enter` | Insert the selected files plus the highlighted one, and close |
+| `enter` | Insert the selected files plus the highlighted file, and close |
 | `esc`, `ctrl+c` | Close the panel |
 
 `/issues` — the tab bar reads `My issues (<n>)`, `Assigned (<n>)` and
@@ -675,10 +675,12 @@ the groups holding the highlighted file — `src` and `web` for `src/web/test.ts
 `tree`, only `ts` in `ext` — and closes the rest. Every row takes the cursor — the
 arrows, `home`/`end`, the wheel, a click and a query stop on a folder or extension
 row exactly as on a file row — but a group row is never marked, inserted or
-opened: `tab` on it marks nothing and `enter` on it with no mark inserts nothing
-and keeps the panel open. `space` folds the focused group, or the one holding the
-highlighted file when the cursor is on a file (its parent folder in `tree`, its
-extension group in `ext`), so a tree is reopened by focusing its group row and
+opened: `tab` on it marks nothing, and `enter` on it sends the `tab` selection
+alone, closing with those files when there is at least one and inserting nothing
+while the panel stays open when there is none. `space` folds the focused group, or
+the one holding the highlighted file when the cursor is on a file (its parent
+folder in `tree`, its extension group in `ext`), so a tree is reopened by focusing
+its group row and
 pressing `space`; a click on a group row focuses and folds it in one move, and the
 row the key folds is the row the cursor keeps. `shift+space` collapses every group, the ones holding the
 highlighted file included, and leaves the cursor on the group row that held it;
@@ -692,11 +694,15 @@ cleared. In `files` and `ext` a file row paints its parent directory at the
 right; in `tree` it does not, because the tree already places the file under that
 folder.
 
-**What `enter` inserts.** Every file selected with `tab` plus the highlighted
-one, each once, in list order, space-separated — and nothing is sent: the panel
-closes, focus stays in the input and the message still waits for you. A file
-below the session's cwd is inserted as `@` plus its path from that cwd
-(`@AGENTS.md`, `@lib/view-layout.js`); any other file — one of another checkout,
+**What `enter` inserts.** `enter` is the insert key and nothing else: in every
+order it never folds a group, which stays on `space`, `shift+space` and the
+click. Its payload is every file selected with `tab` plus the highlighted file,
+each once, in list order, space-separated — and nothing is sent: the panel
+closes, focus stays in the input and the message still waits for you. A group
+row adds no file of its own, so `enter` on a folder or extension row sends only
+what `tab` marked. A file below the session's cwd is inserted as `@` plus its
+path from that cwd (`@AGENTS.md`, `@lib/view-layout.js`); any other file — one of
+another checkout,
 or one outside the cwd — is inserted as its real absolute path, because `@`
 resolves against the current directory and would name the wrong file.
 

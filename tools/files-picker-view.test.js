@@ -848,7 +848,8 @@ describe('keys (S4)', () => {
     assert.ok(!bodyText(rows).includes('util.ts'), 'every group starts collapsed');
     assert.match(selectedRow(rows), /brand-new\.ts/);
     // S38 replaces S24's "a click folds it without focusing it": the click parks
-    // the cursor on the group row AND folds it, so `space`/`enter` have the row.
+    // the cursor on the group row AND folds it, so `space` has the row (S43 leaves
+    // `enter` to insert, and only the Tab marks on a group row).
     assert.deepEqual(view.handleMouse(mouse({ y: BODY_TOP })), { handled: true, render: true });
     rows = rowsOf(view);
     assert.ok(bodyText(rows).includes('cursor.ts'), 'the click opened the folder');
@@ -1231,16 +1232,29 @@ describe('every row of tree and ext takes the cursor (S38)', () => {
     view.handleInput('home');
     assert.equal(selectedName(rowsOf(view)), 'src');
     const before = rowsOf(view);
+    assert.ok(bodyText(before).includes('a.ts'), 'the folder holding the focused file is open (S30)');
     const renders = calls.render;
     view.handleInput('tab');
     assert.deepEqual(rowsOf(view), before, 'tab changes nothing on a group row');
     assert.equal(calls.render, renders, 'so it repaints nothing');
     assert.ok(!bodyText(rowsOf(view)).includes(SELECTION_MARK), 'and it never marks the group');
+    // S43: enter is only the insert key. With no Tab mark it sends nothing, keeps the
+    // panel open and leaves the group exactly as it found it — never a fold.
     view.handleInput('enter');
     assert.deepEqual(calls.insert, [], 'enter on a group row inserts nothing');
     assert.equal(calls.close, 0, 'and leaves the panel open');
-    // S10 still holds: enter on a group row toggles that group.
-    assert.ok(!bodyText(rowsOf(view)).includes('a.ts'), 'enter folded the focused folder');
+    const after = rowsOf(view);
+    assert.deepEqual(after, before, 'enter folds nothing and repaints nothing else');
+    assert.ok(bodyText(after).includes('a.ts'), 'the folder under the cursor is still open');
+    // S43: with a Tab mark the same row sends the marks alone, once, and closes.
+    view.handleInput('down');
+    assert.equal(selectedName(rowsOf(view)), 'a.ts');
+    view.handleInput('tab');
+    view.handleInput('home');
+    assert.equal(selectedName(rowsOf(view)), 'src', 'the cursor is back on the group row');
+    view.handleInput('enter');
+    assert.deepEqual(calls.insert, [['src/a.ts']], 'the Tab selection alone is the payload');
+    assert.equal(calls.close, 1, 'and the panel closes');
   });
 
   test('the preview settles on a group row and the panel stays live', async () => {
@@ -1333,11 +1347,15 @@ describe('every row of tree and ext takes the cursor (S38)', () => {
     assert.ok(bodyText(rows).includes('a.ts'), 'the files paint again');
     view.handleInput('down');
     assert.equal(selectedName(rowsOf(view)), 'a.ts', 'and one step down reaches the first file');
-    // S10 still holds: enter on a group row folds it as well, and never inserts.
+    // S43 supersedes S10's "enter also folds": the fold keys are space, shift+space
+    // and the click, so enter on this group row changes nothing and stays open.
     view.handleInput('up');
     view.handleInput('enter');
-    assert.ok(!bodyText(rowsOf(view)).includes('a.ts'), 'enter folded the folder from the group row');
+    rows = rowsOf(view);
+    assert.ok(bodyText(rows).includes('a.ts'), 'enter leaves the folder under the cursor open');
+    assert.equal(selectedName(rows), 'src', 'and the group row keeps the cursor');
     assert.deepEqual(calls.insert, [], 'a group row never inserts');
+    assert.equal(calls.close, 0, 'and the panel stays open');
   });
 });
 

@@ -280,6 +280,24 @@ Round L12 (reopen S21, S24, S28, S34):
   de que es, me imagino o recuerdo que era de cuando se modifico, falta algo visual, un icono que lo identifique o
   sino el texto, 33s solo uno no sabe que significa»
 
+Round L22 (reopen S7, S10, S38):
+
+- S43: **`enter` inserts in every order; a group row sends the `tab` marks alone.** The footer names `enter
+  insert`, so `enter` is only the insert key and never folds — folding stays on `space` (S10, S32),
+  `shift+space` (S39) and the click (S38). On a file row the payload stands exactly as S7 defines it: the
+  `tab` marks plus the focused file, each once, so a file under the cursor always makes the payload at least
+  one. On a group row of `tree` or `ext` the payload is the Tab selection alone, because a group row is
+  never inserted (S24, S38 stand): with one or more marks `enter` sends exactly those files and closes, and
+  with no mark it sends nothing and keeps the panel open. This supersedes the "`enter` on a group row folds
+  it" reading of S10 and S38. «pequena correcion y es que en modos tree y ext de file picker, al presionar
+  enter en una carpeta actua como space, expande/contrae, y confunde porque abajo sale que es para inserta
+  asi que enter si le da enter con focus en carpeta/ext igual funciona, o sea, inserta lo seleccionado, solo
+  que en este caso no suma la carpeta o ext seleccionado, o sea, qeu si no tenia nada seleccionado con tab
+  aparte de la carpeta/ext donde presiono enter ahi si enter no hace nada, pues mandaria vacion, si tenia 1 o
+  mas seleccionado con tab y apreta enter en una carpeta ahi mandar todos lo seleccionado. O sea que
+  enter/insert sirve solo si ttiene al menos 1 archivo para mandar y si el focus al apretar enter es un
+  archivo este se suma a la lista a mandar antes de la revision, asi siempore seria 1 claramente»
+
 ## Tasks
 
 | ID | Specs | Route | Commit |
@@ -304,6 +322,7 @@ Round L12 (reopen S21, S24, S28, S34):
 | T18 | S39, S40 | worker: `lib/files-orders.js`, `lib/files-picker-view.js` and their tests — `shift+space` collapsing or expanding every group in one toggle with the cursor left on the group that held the file, and the footer legend stating the action it will perform . Landed at `d834645` (orders 50/50, picker view 96/96) |
 | T19 | S41 | worker: `extensions/odd-worktree-tools.ts`, `tools/files-bridge.test.js`, `tools/files-command.test.js` and every doc naming the default key — `alt+p` as the `files` keymap default . Landed at `d42eb4b` (bridge 13/13, command 15/15) |
 | T21 | S42 | worker: `lib/files-scope-detail.js` + `tools/files-scope-detail.test.js` — the scope detail's age painted as `33s ago` . Landed at `9af8545` (detail 20/20, scope view 42/42) |
+| T22 | S43 | worker: `lib/files-picker-view.js` + `tools/files-picker-view.test.js` — `enter` inserting in every order, a group row sending only the Tab marks (nothing and no close when none are marked), and the fold keys left to `space`/`shift+space`/the click . Delivered in the `fix/files-enter-insert` worktree, uncommitted (picker view 96/96, orders 50/50; full suite 2385/2385) |
 | T20 | S17, S37-S42 | parent: docs truth in README, `docs/reference.md`, `docs/codebase/invariants.md`, `docs/codebase/code-map.md` and `docs/codebase/mental-model.md`, plus this document's Log evidence and the work-unit commits . Landed at `55c3910` (package surface 21/21; full suite 2305/2305) |
 
 ### Module contracts (fixed here so T6 can be written against T1, T4 and T5)
@@ -412,3 +431,8 @@ Plain JS, no dependencies, every child injected. Shapes:
   Slice boundary: 1083 authored lines across the four commits, past the ~400-line slice for T16-T18's own commit (332 in the view, 388 in its test): S37, S38 and S39/S40 touch the same two functions and the same two suites (the title's card, the cursor's row rules and the fold-all toggle all read `rows()`, `currentFolds()` and `selected`), so splitting them would leave a commit whose tests contradict its code. The other three units are well inside the slice.
   Corrections the worker made to the spec: (1) S39 says the cursor parks on "the group row that held" the file; a nested holder is hidden by its own collapse, so it parks on the nearest painted ancestor (`src/web/test.ts` -> `src`) — S39's sentence is satisfied by the row the reader can see; (2) the view had no page bindings, so `pageup`/`pagedown` were added as unnamed compatibility bindings for S38's "page moves"; (3) S40 under an active query can never read `expand all`, because a query forces every group open (S10), so the legend keeps `collapse all` there.
   Report the human asked for after the round: the `33s` in the scope line is now `33s ago` (S42), and the picker's shortcut default is `alt+p` (S41). `Risk: none` — no data, security, concurrency or delivery surface, and every changed rule is pinned by a test.
+- L22 (user, verbatim): «pequena correcion y es que en modos tree y ext de file picker, al presionar enter en una carpeta actua como space, expande/contrae, y confunde porque abajo sale que es para inserta asi que enter si le da enter con focus en carpeta/ext igual funciona, o sea, inserta lo seleccionado, solo que en este caso no suma la carpeta o ext seleccionado, o sea, qeu si no tenia nada seleccionado con tab aparte de la carpeta/ext donde presiono enter ahi si enter no hace nada, pues mandaria vacion, si tenia 1 o mas seleccionado con tab y apreta enter en una carpeta ahi mandar todos lo seleccionado. O sea que enter/insert sirve solo si ttiene al menos 1 archivo para mandar y si el focus al apretar enter es un archivo este se suma a la lista a mandar antes de la revision, asi siempore seria 1 claramente» — with a screenshot of the picker's footer reading `enter insert` while `enter` folded the focused folder.
+- L23 (parent, decision): S43 does not need a new key. `space` already folds, so `enter` loses its fold branch and keeps the S7 payload; the empty guard in `finish('insert')` is what makes a group row with no mark do nothing, which is exactly the human's sentence. Nothing in `lib/files-orders.js` changes: `insertionPaths()` already yields the Tab marks alone when the cursor rests on a group row.
+- L24 (parent, closing evidence): T22 delivered in the `fix/files-enter-insert` worktree as one unit — `lib/files-picker-view.js` (`enter` is a bare `finish('insert')` for every row kind; the `toggleFocusedGroup` docstring, the click comment, the module header and the input branch no longer claim `enter` folds), `tools/files-picker-view.test.js` (the two group-row tests rewritten: no mark sends nothing, keeps the panel open and leaves the row set byte-identical, one mark sends `['src/a.ts']` once and closes; the three file-row payload tests untouched) and the docs truth (`docs/reference.md`'s `enter` row, the group-row paragraph and "What `enter` inserts").
+  Evidence: RED before the change, `node --test tools/files-picker-view.test.js` -> 94 pass / 2 fail, both failures being exactly the fold `enter` performed (`enter folds nothing and repaints nothing else`, `enter leaves the folder under the cursor open`); GREEN after it, picker view 96/96 and orders 50/50. Full suite on the worktree, `node --test --test-timeout=120000 tools/*.test.js`: **2385 tests, 2385 pass, 0 fail**.
+  Not committed: the human asked for the correction, not a commit, so the work sits uncommitted on `fix/files-enter-insert` for review. `Risk: none` — no data, security, concurrency, delivery or consumed-contract surface, and the changed rule is pinned by the rewritten tests plus the untouched file-row payload pins.

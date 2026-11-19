@@ -120,7 +120,8 @@ function mountHost({ rows = 40 } = {}) {
   const tui = {
     terminal: { rows },
     stopped: false,
-    stop() { tui.stopped = true; events.push('stop'); },
+    stops: [],
+    stop(options) { tui.stopped = true; events.push('stop'); tui.stops.push(options); },
     start() { tui.stopped = false; events.push('start'); },
     // Pi records the request even while stopped: `requestRender(true)` resets the
     // written-frame state at once and defers only the paint, which is how the
@@ -594,6 +595,8 @@ describe('the preview and the editor (S12, S14)', () => {
     assert.equal(host.tui.stopped, false);
     assert.deepEqual(host.events, ['render:force', 'stop', 'start', 'render:force'],
       'stop arrives after the settle, and the resume repaint is the second forced one');
+    assert.deepEqual(host.tui.stops, [{ preserveScreen: true }],
+      'the suspend preserves the screen: a bare stop stamps the whole alt-screen frame into scrollback');
     assert.deepEqual(host.renders, [
       { force: true, stopped: false },
       { force: true, stopped: false },

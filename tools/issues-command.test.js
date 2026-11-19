@@ -191,12 +191,14 @@ const stubTui = {
 function makeHostTui(rows = 24) {
   const paints = [];
   const lifecycle = [];
+  const stops = [];
   return {
     paints,
     lifecycle,
+    stops,
     tui: {
       terminal: { rows },
-      stop: () => lifecycle.push('stop'),
+      stop: (options) => { lifecycle.push('stop'); stops.push(options); },
       start: () => lifecycle.push('start'),
       requestRender: (force) => { lifecycle.push('render'); paints.push(force === true); },
     },
@@ -1202,6 +1204,8 @@ describe('/issues actions (S3,S4)', () => {
     assert.ok(!gitCalls[0].argv.join(' ').includes('xdg-open'), 'never an invented opener');
     assert.deepEqual(run.host.lifecycle, ['stop', 'start', 'render'],
       'the TUI is suspended for the browser open and taken back afterwards');
+    assert.deepEqual(run.host.stops, [{ preserveScreen: true }],
+      'the suspend preserves the screen: a bare stop stamps the whole alt-screen frame into scrollback');
     assert.deepEqual(run.host.paints, [true], 'the terminal is forced to repaint on resume');
   });
 

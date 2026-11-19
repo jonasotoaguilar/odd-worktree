@@ -6515,12 +6515,15 @@ function oddTerminalRows(hostTui) {
 // behind nvim, so the two screens overlap), frames paint over the editor, and
 // keystrokes are split between the two processes.
 //
-// `tui.stop()` is the host's own suspend (the same call Pi's interactive `!`
-// command and `ctrl+z` use): it restores cooked mode, shows the cursor and
-// detaches terminal input. `tui.start()` plus a forced repaint take the
-// terminal back — and only after the editor has EXITED, because the opener
-// resolves when the child SPAWNS. So the child's exit is what the open waits
-// for; without it Pi would resume painting under a running nvim.
+// `tui.stop()` is the host's own suspend (the call Pi's interactive `!` command
+// makes): it restores cooked mode, shows the cursor and detaches terminal input.
+// It carries `preserveScreen: true`, exactly like Pi's own fullscreen suspend,
+// because a BARE stop on the alternate screen prints the whole last frame into
+// the normal buffer (pi-tui `TuiAltScreen.afterTerminalStop`) and that frame
+// would sit in scrollback above the editor. `tui.start()` plus a forced repaint
+// take the terminal back — and only after the editor has EXITED, because the
+// opener resolves when the child SPAWNS. So the child's exit is what the open
+// waits for; without it Pi would resume painting under a running nvim.
 //
 // The opener stays the shared `lib/open-external.js` one (fixed argv, honest
 // failure result); this wrapper only adds the terminal lifecycle around it. A
@@ -6562,7 +6565,7 @@ function openExternalSuspended(hostTui, target) {
   };
   try {
     if (hostTui && typeof hostTui.stop === "function") {
-      hostTui.stop();
+      hostTui.stop({ preserveScreen: true });
       suspended = true;
     }
   } catch {
@@ -7594,16 +7597,23 @@ function issuesScopeDriftLine(currentName, pinnedName) {
   return `the checkout's repository changed since this issue list loaded (now ${issuesScopeLabel(currentName)} instead of ${issuesScopeLabel(pinnedName)}); reopen /issues`;
 }
 
-// The TUI hands the terminal to another process: a browser open must give it up
-// first, exactly like the odd viewer's editor open, or the child's own output
-// and the overlay fight over the same stdin/renderer. `stop()` is the host's
+// The TUI hands the terminal to another program: a browser open must give it
+// up first, exactly like the odd viewer's editor open. `stop()` is the host's
 // own suspend; `start()` plus a forced repaint take the terminal back once the
 // child has been waited for.
+//
+// `preserveScreen: true` is part of that contract, not a detail. Pi's TUI runs
+// in the alternate screen, and a BARE `stop()` exits it by printing the whole
+// last frame into the normal buffer (pi-tui `TuiAltScreen.afterTerminalStop`),
+// so every `o` press stamps one copy of the sidebar into scrollback and the
+// open reads as a cut. Pi's own suspend passes the same option when it is in
+// fullscreen mode. A host that is not on the alternate screen ignores it, and a
+// host without `stop()` keeps the previous behaviour untouched.
 function withSuspendedTerminal(hostTui, run) {
   let suspended = false;
   try {
     if (hostTui && typeof hostTui.stop === "function") {
-      hostTui.stop();
+      hostTui.stop({ preserveScreen: true });
       suspended = true;
     }
   } catch {

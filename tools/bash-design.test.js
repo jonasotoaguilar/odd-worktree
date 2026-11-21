@@ -7,9 +7,14 @@ const {
   BASH_DESIGN_LABEL,
   applyBashActivityHeading,
   bashActivityDesign,
+  carryOverLineSelection,
   registerBashDesign,
   seedBashDesignSelection,
+  toolsActivityDesign,
 } = require('../lib/bash-design.js');
+// The second line this package registers. Its own suite owns its drawing; the release rule below is
+// here because one `VERSION` decides both lines at once.
+const { registerDiffDesign } = require('../lib/diff-design.js');
 
 const CALL = { tool: 'bash', part: 'call', width: 90 };
 const strip = (row) => row.replace(/\u001b\[[0-9;]*m/g, '');
@@ -833,7 +838,7 @@ const designFor = (version) => {
   return seen.find((design) => design.id !== 'odd-worktree.capability-probe');
 };
 
-describe('the Card tools line', () => {
+describe('the Card tags line', () => {
   test('the line declares `read` and `write` so the file card can be asked about them, and the design paints nothing for either', () => {
     // S1: the file card is painted only while this line resolves to the activity design
     // for the tool being drawn, and a bridge resolves coverage from the line's own
@@ -860,7 +865,7 @@ describe('the Card tools line', () => {
 
   test('a 0.6.0 bridge gets ONE grouped registration over bash and the read-only tools', () => {
     const design = designFor('0.6.0');
-    assert.equal(design.line, 'tools');
+    assert.equal(design.line, 'tags', 'the row the bridge derives is `Card tags` (S10)');
     assert.deepEqual(design.tools, ['bash', 'grep', 'find', 'ls', 'read', 'write']);
     assert.equal(Object.hasOwn(design, 'tool'), false, 'never both shapes');
     assert.equal(design.id, BASH_DESIGN_ID);
@@ -876,7 +881,7 @@ describe('the Card tools line', () => {
 
   test('every release from 0.6.0 up gets the line', () => {
     for (const version of ['0.6.0', '0.6.1', '0.10.0', '0.7.0-rc.1', '1.0.0', '0.6']) {
-      assert.equal(designFor(version).line, 'tools', version);
+      assert.equal(designFor(version).line, 'tags', version);
     }
   });
 
@@ -906,7 +911,7 @@ describe('the Card tools line', () => {
     try {
       assert.equal(registerBashDesign(api), dispose);
       assert.equal(seen.length, 1);
-      assert.equal(seen[0].line, 'tools');
+      assert.equal(seen[0].line, 'tags');
     } finally {
       dispose();
     }
@@ -1050,8 +1055,8 @@ describe('the seed runs before the registration', () => {
     api.registerToolDesign = () => {
       const selections = store['bridge-tool-designs']?.selections ?? {};
       inherited.push(JSON.parse(JSON.stringify(selections)));
-      if (typeof selections.bash === 'string' && selections.bash !== 'native' && selections.$lines?.tools === undefined) {
-        store['bridge-tool-designs'] = { ...store['bridge-tool-designs'], selections: { ...selections, $lines: { tools: selections.bash } } };
+      if (typeof selections.bash === 'string' && selections.bash !== 'native' && selections.$lines?.tags === undefined) {
+        store['bridge-tool-designs'] = { ...store['bridge-tool-designs'], selections: { ...selections, $lines: { tags: selections.bash } } };
       }
       return () => {};
     };
@@ -1064,7 +1069,7 @@ describe('the seed runs before the registration', () => {
     assert.equal(typeof dispose, 'function');
     dispose();
     assert.deepEqual(inherited[0], { bash: BASH_DESIGN_ID }, 'the seed was already stored when the bridge registered');
-    assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID, $lines: { tools: BASH_DESIGN_ID } });
+    assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID, $lines: { tags: BASH_DESIGN_ID } });
   });
 
   test('a stored legacy choice is kept: the seed writes no selection and the line inherits that choice', () => {
@@ -1072,7 +1077,7 @@ describe('the seed runs before the registration', () => {
     const dispose = registerBashDesign(api);
     dispose();
     assert.deepEqual(writes.filter(([store]) => store === SELECTIONS[0]), [], 'no selection was written');
-    assert.deepEqual(files['bridge-tool-designs'].selections, { bash: 'someone.else', $lines: { tools: 'someone.else' } });
+    assert.deepEqual(files['bridge-tool-designs'].selections, { bash: 'someone.else', $lines: { tags: 'someone.else' } });
   });
 
   test('the seed never writes the reserved line key itself', () => {
@@ -1083,11 +1088,303 @@ describe('the seed runs before the registration', () => {
     assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID }, 'no $lines from this package');
   });
 
+  test('a stored line choice survives the rename: the carry-over takes the key first', () => {
+    // S10: a user who chose `default` on `Card tools` has `$lines.tools` = `native`, while the
+    // first-run seed left `bash` = `activity`. A bare rename would leave `$lines.tags` absent and the
+    // bridge's own migration would resurrect that stale `activity`; the carry-over makes it a no-op.
+    const stored = { 'bridge-tool-designs': { selections: { bash: BASH_DESIGN_ID, $lines: { tools: 'native' } } } };
+    const { api, files, inherited } = migratingBridge(stored);
+    const dispose = registerBashDesign(api);
+    dispose();
+    assert.deepEqual(inherited[0].$lines, { tags: 'native' }, 'the bridge registered with the new key already taken');
+    assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID, $lines: { tags: 'native' } }, 'the user keeps `default`');
+  });
+
   test('an old bridge keeps today\'s per-tool choice, with no line value', () => {
     const { api, files } = fakeBridge();
     api.VERSION = '0.5.0';
     const dispose = registerBashDesign(api);
     dispose();
     assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID });
+  });
+});
+
+// S10: the row name is the bridge's, derived from the LINE KEY itself — `Card ` + the line, a line has
+// no label of its own — so
+// `Card tools` becoming `Card tags` is a rename of this package's line. The bridge has no rename or
+// alias path, and its own registration-time migration treats an ABSENT line key as "inherit the
+// joining tool's legacy per-tool value", which is exactly the `bash` = `activity` this package seeds
+// on a first run: a bare rename would hand `activity` back to a user who had chosen `default`. So the
+// package carries the stored value over itself, BEFORE it registers, and the bridge then finds the
+// line's key taken.
+describe('the `Card tools` -> `Card tags` carry-over', () => {
+  const stored = (selections) => ({ 'bridge-tool-designs': { selections } });
+
+  test('a stored tools value becomes the tags value and the old key is gone', () => {
+    for (const chosen of ['native', 'someone.else']) {
+      const { api, files } = fakeBridge(stored({ bash: BASH_DESIGN_ID, $lines: { tools: chosen } }));
+      assert.equal(carryOverLineSelection(api), true, chosen);
+      assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID, $lines: { tags: chosen } }, chosen);
+      assert.equal(Object.hasOwn(files['bridge-tool-designs'].selections.$lines, 'tools'), false, `${chosen}: no tools key is left`);
+    }
+  });
+
+  test('a store with no tools value writes nothing', () => {
+    const untouched = [
+      {},
+      { bash: 'native' },
+      { bash: 'native', $lines: {} },
+      { bash: 'native', $lines: { diff: 'odd-worktree.diff-color' } },
+    ];
+    for (const selections of untouched) {
+      const { api, files, writes } = fakeBridge(stored(selections));
+      assert.equal(carryOverLineSelection(api), false, JSON.stringify(selections));
+      assert.deepEqual(writes, [], JSON.stringify(selections));
+      assert.deepEqual(files['bridge-tool-designs'].selections, selections);
+    }
+    // No store file at all is the first run, not a rename.
+    const fresh = fakeBridge();
+    assert.equal(carryOverLineSelection(fresh.api), false);
+    assert.deepEqual(fresh.writes, []);
+  });
+
+  test('an invalid stored value is never migrated: the document stays byte-identical and nothing is written', () => {
+    // The bridge's own `storedId` reads a line value as a choice only when it is a non-empty,
+    // non-blank id string (`native` included). Copying anything else would write garbage under the
+    // new key and delete the old one, so an invalid value is NO migration at all.
+    for (const chosen of [42, null, {}, ' ', '', ['native'], false]) {
+      const selections = { bash: BASH_DESIGN_ID, $lines: { tools: chosen } };
+      const before = JSON.stringify(selections);
+      const { api, files, writes } = fakeBridge(stored(selections));
+      assert.equal(carryOverLineSelection(api), false, JSON.stringify(chosen));
+      assert.deepEqual(writes, [], `${JSON.stringify(chosen)}: nothing was written`);
+      assert.equal(JSON.stringify(files['bridge-tool-designs'].selections), before, `${JSON.stringify(chosen)}: byte-identical`);
+    }
+  });
+
+  test('a value already stored at tags is never overwritten', () => {
+    const selections = { bash: BASH_DESIGN_ID, $lines: { tags: 'someone.else', tools: 'native' } };
+    const { api, files, writes } = fakeBridge(stored(selections));
+    assert.equal(carryOverLineSelection(api), false);
+    assert.deepEqual(writes, [], 'nothing was written');
+    assert.deepEqual(files['bridge-tool-designs'].selections, selections, 'neither key is touched');
+  });
+
+  test('a malformed, foreign or refusing store writes nothing and never throws', () => {
+    const foreign = [
+      stored('oops'),
+      stored({ $lines: 'oops' }),
+      stored({ $lines: ['tools'] }),
+      stored({ $lines: 42 }),
+      { 'someone-else': { selections: { $lines: { tools: 'native' } } } },
+      {},
+    ];
+    for (const files of foreign) {
+      const { api, writes } = fakeBridge(files);
+      assert.doesNotThrow(() => carryOverLineSelection(api), JSON.stringify(files));
+      assert.equal(carryOverLineSelection(api), false, JSON.stringify(files));
+      assert.deepEqual(writes, [], JSON.stringify(files));
+    }
+    const refusing = { createStore: () => { throw new Error('disk full'); } };
+    assert.doesNotThrow(() => carryOverLineSelection(refusing));
+    assert.equal(carryOverLineSelection(refusing), false);
+    assert.equal(carryOverLineSelection({}), false);
+    assert.equal(carryOverLineSelection(null), false);
+  });
+
+  test('it writes the bridge\'s own store and nothing else', () => {
+    const { api, writes } = fakeBridge(stored({ $lines: { tools: 'native' } }));
+    assert.equal(carryOverLineSelection(api), true);
+    assert.deepEqual(writes, [SELECTIONS], 'one document, the bridge\'s, never a marker of ours');
+  });
+});
+
+// S3/S6: the grouped `tags` line claims `write` and `edit` only for the paths the file card itself
+// claims — `lib/skill-odd-card.js`'s own rule, reused and never copied — so a skill or an ODD
+// artifact keeps the file card it has today while every other write is another line's call. The
+// scope is a 0.9.0 member, so the shape is decided before anything is registered: an older bridge
+// takes today's unscoped list, which is exactly the registration it has always accepted.
+describe('the scoped claim', () => {
+  test('one shared scope owns exactly the paths under a skills/ or an odd/ folder', () => {
+    const design = toolsActivityDesign();
+    const scope = design.scopes.write;
+    assert.equal(scope, design.scopes.edit, 'ONE shared scope object, so the two tools can never disagree');
+    assert.equal(scope.description, 'paths under skills/ or odd/');
+    assert.doesNotMatch(scope.description, /[\r\n]/u, 'the description is one line');
+    const owned = [
+      'skills/one/SKILL.md',
+      'lib/skills/one/references/deep/x.md',
+      'odd/tasks/a.md',
+      'odd/work/a.md',
+      'a\\skills\\b\\c.md',
+      'ODD/tasks/a.md',
+    ];
+    for (const path of owned) assert.equal(scope.matches({ tool: 'write', args: { path } }), true, path);
+    const foreign = [
+      'src/app.ts',
+      'lib/bash-design.js',
+      'lib/skillset/notes.md',
+      'docs/oddity.md',
+      'odd-work/a.md',
+      'notes/SKILL.md',
+      'skills',
+      '',
+    ];
+    for (const path of foreign) assert.equal(scope.matches({ tool: 'write', args: { path } }), false, JSON.stringify(path));
+    // A call with no arguments, or with arguments that are not an object, names no file at all.
+    for (const call of [undefined, null, {}, { tool: 'write' }, { tool: 'write', args: null }, { tool: 'write', args: 'src' }, { tool: 'write', args: 42 }]) {
+      assert.equal(scope.matches(call), false, JSON.stringify(call));
+    }
+  });
+
+  test('the line gains edit, and every other tool keeps its whole claim', () => {
+    const design = toolsActivityDesign();
+    assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'edit']);
+    for (const tool of ['bash', 'grep', 'find', 'ls', 'read']) {
+      assert.equal(Object.hasOwn(design.scopes, tool), false, `${tool} is claimed for every call`);
+    }
+    for (const tool of ['write', 'edit']) assert.equal(Object.hasOwn(design.scopes, tool), true, tool);
+  });
+
+  const registering = (version) => {
+    const calls = [];
+    return {
+      calls,
+      api: {
+        VERSION: version,
+        registerToolDesign: (design) => {
+          calls.push(design);
+          return () => {};
+        },
+      },
+    };
+  };
+
+  test('a bridge older than 0.9.0 registers today\'s unscoped line, without edit', () => {
+    const cases = [['0.6.0', false], ['0.8.9', false], ['0.9.0', true], ['0.10.0', true], ['1.0.0', true]];
+    for (const [version, scoped] of cases) {
+      const { api, calls } = registering(version);
+      registerBashDesign(api)();
+      const design = calls.at(-1);
+      assert.equal(Array.isArray(design.tools), true, `${version}: still the one line`);
+      assert.equal(design.scopes !== undefined, scoped, version);
+      assert.equal(design.tools.includes('edit'), scoped, version);
+      if (scoped) {
+        assert.equal(design.scopes.write, design.scopes.edit, version);
+        continue;
+      }
+      assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write'], `${version}: today's tools`);
+      assert.deepEqual(
+        Object.keys(design).sort(),
+        ['apply', 'description', 'id', 'label', 'line', 'name', 'preview', 'tools'],
+        `${version}: today's registration byte for byte`,
+      );
+    }
+  });
+
+  test('a prerelease or a build suffix of the cutoff never meets it: 0.9.0-rc.1 keeps the unscoped line', () => {
+    // Semver puts a prerelease BELOW its own release, so `0.9.0-rc.1` carries no per-(`line`, `tool`)
+    // scope even though its digits read 0.9.0; a build suffix is read the same conservative way. Its
+    // numbers still clear the 0.6.0 line, so the grouped `Card tags` row is kept, unscoped.
+    for (const version of ['0.9.0-rc.1', '0.9.0+build.7', '0.9.0-rc.1+sha.abc']) {
+      const { api, calls } = registering(version);
+      registerBashDesign(api)();
+      assert.equal(calls.length, 1, `${version}: a readable release is never probed`);
+      const design = calls.at(-1);
+      assert.equal(design.line, 'tags', version);
+      assert.equal(design.scopes, undefined, `${version}: a prerelease of 0.9.0 does not meet the 0.9.0 cutoff`);
+      assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write'], version);
+    }
+  });
+
+  test('a release that cannot be read keeps the unscoped line', () => {
+    const { api, calls } = registering('nightly');
+    registerBashDesign(api)();
+    assert.equal(calls[0].id, 'odd-worktree.capability-probe', 'the grouped shape is still probed');
+    const design = calls.at(-1);
+    assert.equal(design.scopes, undefined, 'an unreadable release never takes a scoped registration');
+    assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write']);
+  });
+});
+
+// S6: ONE rule for every cutoff this package reads — an advertised release meets a cutoff by semver
+// order, numbers first, and a prerelease or build suffix loses ONLY when the numbers are equal. Both
+// of this package's lines sit at the same `0.9.0` cutoff, so each version is read through both
+// registrations at once: a release that is below it keeps the unscoped `Card tags` line and gets no
+// `Card diff` row, and a newer one gets both the scope and the diff line.
+describe('the release rule is semver order, on both lines at once (S6)', () => {
+  const registerBoth = (version) => {
+    const seen = [];
+    const api = { VERSION: version, registerToolDesign: (design) => { seen.push(design); return () => {}; } };
+    const disposeTags = registerBashDesign(api);
+    const disposeDiff = registerDiffDesign(api);
+    const dispose = () => {
+      if (typeof disposeTags === 'function') disposeTags();
+      if (typeof disposeDiff === 'function') disposeDiff();
+    };
+    return { seen, dispose, tags: seen.find((design) => design.line === 'tags'), diff: seen.find((design) => design.line === 'diff') };
+  };
+
+  test('a prerelease or a build suffix of 0.9.0 is BELOW it: unscoped `Card tags`, no `Card diff`', () => {
+    for (const version of ['0.9.0-rc.1', '0.9.0-beta.1+build', '0.9.0+workstation']) {
+      const registration = registerBoth(version);
+      try {
+        assert.deepEqual(registration.seen.map((design) => design.line), ['tags'], `${version}: the grouped line, and no diff line`);
+        assert.equal(registration.tags.scopes, undefined, `${version}: below 0.9.0, so no scope`);
+        assert.deepEqual([...registration.tags.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write'], `${version}: six tools, no edit`);
+        assert.equal(registration.diff, undefined, `${version}: nothing is offered for a row the bridge would refuse`);
+      } finally {
+        registration.dispose();
+      }
+    }
+  });
+
+  test('a NEWER release carrying a suffix is ABOVE 0.9.0: the scoped `Card tags` line AND `Card diff`', () => {
+    for (const version of ['0.9.1-rc.1', '0.10.0+local.2']) {
+      const registration = registerBoth(version);
+      try {
+        assert.deepEqual(registration.seen.map((design) => design.line), ['tags', 'diff'], `${version}: both lines`);
+        assert.equal(registration.tags.scopes.write, registration.tags.scopes.edit, `${version}: the scope is on the line`);
+        assert.deepEqual([...registration.tags.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'edit'], `${version}: seven tools`);
+        assert.equal(registration.diff.id, 'odd-worktree.diff', version);
+        assert.equal(registration.diff.label, 'color', version);
+        assert.deepEqual([...registration.diff.tools], ['write', 'edit'], version);
+      } finally {
+        registration.dispose();
+      }
+    }
+  });
+
+  test('0.6.0-rc.1 is BELOW 0.6.0, so it falls back to the single `tool: "bash"` design', () => {
+    // Deliberate and more conservative than the base commit, which accepted the grouped shape here:
+    // semver puts `0.6.0-rc.1` below `0.6.0`, and this package reads one rule at every cutoff. That
+    // is the `Card bash` row over bash alone — never a grouped registration a 0.6.0 bridge would
+    // accept but its own release ordering says came first.
+    const registration = registerBoth('0.6.0-rc.1');
+    try {
+      assert.equal(registration.seen.length, 1, 'a readable release is never probed');
+      const [design] = registration.seen;
+      assert.equal(design.tool, 'bash', 'the single-tool shape');
+      assert.equal(Object.hasOwn(design, 'tools'), false, 'never both shapes');
+      assert.equal(Object.hasOwn(design, 'line'), false, 'the older bridge names the row itself, `Card bash`');
+      assert.equal(design.id, 'odd-worktree.bash-activity');
+      assert.equal(design.label, 'activity');
+      assert.equal(registration.diff, undefined, 'and the diff line is not offered either');
+    } finally {
+      registration.dispose();
+    }
+  });
+
+  test('the ordinary releases still read as they always did', () => {
+    // 0.6.0 itself, and anything above it, is the grouped line; 0.5.0 is the single one.
+    for (const [version, shape] of [['0.5.0', 'bash'], ['0.6.0', 'tags'], ['0.9.0', 'tags']]) {
+      const registration = registerBoth(version);
+      try {
+        assert.equal(registration.tags === undefined, shape === 'bash', version);
+        assert.equal(registration.diff === undefined, version !== '0.9.0', version);
+      } finally {
+        registration.dispose();
+      }
+    }
   });
 });

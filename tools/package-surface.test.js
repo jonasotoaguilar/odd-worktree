@@ -13,7 +13,7 @@
 // worktree↔issue association.
 //
 // The bash activity is not a preference here: it is a design on gentle-shell-bridge's
-// own `Card tools` line, so the shipped surface is exactly four commands, two tools, one
+// own `Card tags` line, so the shipped surface is exactly four commands, two tools, one
 // sidebar section, one tools design and the one `Cards` row group the two file-card
 // switches carry.
 //
@@ -23,7 +23,7 @@ const { test, describe, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { LIB_DIR, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
+const { BRIDGE_SLOT, LIB_DIR, defaultBridge, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -72,8 +72,8 @@ describe('manifest', () => {
     // classifier and the one design registered on the bridge. The file cards add
     // their own four modules — a classifier, the card, its resolver and the document
     // body Pi's Markdown draws — and own no preference at all (S1): they are gated by
-    // the bridge's `Card tools` line, which is the bridge's, not ours.
-    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-design.js', 'bash-frame.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js']) {
+    // the bridge's `Card tags` line, which is the bridge's, not ours.
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-design.js', 'bash-frame.js', 'diff-design.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
     for (const gone of ['card-files-mode.js', 'cards-customize.js']) {
@@ -106,7 +106,7 @@ describe('registration', () => {
     }
 
     // S1: the two file-card switches and their document are gone, and the extension
-    // names neither. The file card is gated by the bridge's own `Card tools` line.
+    // names neither. The file card is gated by the bridge's own `Card tags` line.
     assert.equal(source.includes('registerCardsCustomize'), false, 'no row provider is registered for a switch');
     assert.equal(source.includes('card-files'), false, 'the extension never names their document');
     const modules = fs.readdirSync(lib).filter((entry) => entry.endsWith('.js'));
@@ -134,6 +134,26 @@ describe('registration', () => {
     for (const gone of ['bash-card', 'card-bash', 'bash']) {
       assert.equal(commands.has(gone), false, `the design adds no /${gone} command`);
       assert.equal(tools.has(gone), false, `the design adds no ${gone} tool`);
+    }
+  });
+
+  test('both Card rows are registered once each, observed through the bridge\'s own object', async () => {
+    // S2/S6: what a caller observes is the REGISTRATION, not a spelling in the source. A bridge
+    // that publishes the release both lines need sees one design per line, each with its own id and
+    // label, and nothing else — so a second registration, a renamed id or a third row fails here.
+    const bridge = defaultBridge();
+    bridge.api.VERSION = '0.9.0';
+    const previous = globalThis[BRIDGE_SLOT];
+    globalThis[BRIDGE_SLOT] = bridge.api;
+    try {
+      await loadExtension({});
+      assert.deepEqual(
+        bridge.designs.map((design) => [design.line, design.id, design.label]),
+        [['tags', 'odd-worktree.bash-activity', 'activity'], ['diff', 'odd-worktree.diff', 'color']],
+        'one design per line, once each',
+      );
+    } finally {
+      globalThis[BRIDGE_SLOT] = previous;
     }
   });
 

@@ -25,7 +25,7 @@ const {
   fileResultRows,
 } = require('../lib/file-card.js');
 const { createFileCardResolver, registerFileCard } = require('../lib/file-card-resolver.js');
-// The design this package registers on the bridge's `Card tools` line: the card's one
+// The design this package registers on the bridge's `Card tags` line: the card's one
 // switch is that line's answer for the tool being drawn, so the card is only painted
 // for a tool the line actually covers.
 const { toolsActivityDesign } = require('../lib/bash-design.js');
@@ -564,7 +564,7 @@ test('a foreign, hostile or unreadable bridge never hides the card', () => {
   assert.match(draw(), /📑 odd/u, 'an unknown kind keeps the card');
 });
 
-test('S1: a write is covered by the Card tools line, so its file card paints and `default` restores the host row', () => {
+test('S1: a write is covered by the Card tags line, so its file card paints and `default` restores the host row', () => {
   // A bridge answers from the design's own `tools` list, exactly as it resolves
   // coverage: a tool the line does not name is `not-covered`, which is the host's own
   // card. `write` is declared on that line so the file card can be asked about it.
@@ -573,15 +573,15 @@ test('S1: a write is covered by the Card tools line, so its file card paints and
   publishBridge((tool) => (design.tools.includes(tool) ? { kind: 'design', design } : { kind: 'not-covered' }), asked);
   const resolver = fileResolver();
   for (const tool of ['read', 'write']) {
-    assert.equal(design.tools.includes(tool), true, `${tool} is covered by the Card tools line`);
+    assert.equal(design.tools.includes(tool), true, `${tool} is covered by the Card tags line`);
     const row = callRow(resolver, tool, { path: ODD, content: '# x\n' }, plainTheme);
     assert.match(unpaint(row), /📑 odd/u, `${tool}: the file card paints its heading`);
     assert.match(unpaint(row), new RegExp(`${tool} cards-skill-odd\\.md`, 'u'), `${tool}: and names the call`);
   }
-  // A tool the line does not cover is still the host's row: a write is declared, but
-  // nothing else is.
-  const edit = resolver('edit', () => HOST).renderCall({ path: ODD }, plainTheme, { isPartial: false }).render(60);
-  assert.deepEqual(forwardedText(edit), ['host read call'], 'an uncovered tool keeps the host card');
+  // S3: `edit` is on the line too, scoped to the paths this card claims, so an edit of an
+  // ODD artifact wears the file card where no unscoped line could have covered it before.
+  const edit = callRow(resolver, 'edit', { path: ODD, oldText: 'a', newText: 'b' }, plainTheme);
+  assert.match(unpaint(edit), /📑 odd/u, 'an edit of an ODD artifact is this card\'s row now');
   assert.deepEqual(asked, ['read', 'write', 'edit'], 'each paint asked about the tool it draws');
 
   // `default` is the bridge's `native`: the host draws every row again.
@@ -591,6 +591,99 @@ test('S1: a write is covered by the Card tools line, so its file card paints and
     ['host read call'],
     'default: no write file card',
   );
+});
+
+// ---- S3/S4/S8: the scoped claim, and the call's arguments that make it answer ----
+
+/**
+ * The bridge's own resolution (gentle-shell-bridge 0.9.0), reduced to what this design declares: a
+ * tool no line names is `not-covered`; a scope that declines the call, and a call that arrives with
+ * no arguments at all, are `native`; everything else is the design.
+ */
+function scopedBridge(design, asked) {
+  return {
+    schema: 'gentle-shell-bridge/api',
+    version: 1,
+    VERSION: '0.9.0',
+    registerToolDesign: () => () => {},
+    resolveToolDesignSelection(tool, args) {
+      if (asked !== undefined) asked.push([tool, args]);
+      if (!design.tools.includes(tool)) return { kind: 'not-covered' };
+      const scopes = design.scopes === null || typeof design.scopes !== 'object' ? {} : design.scopes;
+      const scope = Object.hasOwn(scopes, tool) ? scopes[tool] : undefined;
+      if (scope === undefined) return { kind: 'design', design };
+      if (args === undefined) return { kind: 'native' };
+      return scope.matches({ tool, args }) === true ? { kind: 'design', design } : { kind: 'native' };
+    },
+  };
+}
+
+function publishScoped(design, asked) {
+  const api = scopedBridge(design, asked);
+  globalThis[BRIDGE_API_SLOT] = api;
+  return api;
+}
+
+test('S4: the gate asks the bridge with the call\'s own arguments', () => {
+  const asked = [];
+  publishScoped(toolsActivityDesign(), asked);
+  const resolver = fileResolver();
+  const callArgs = { path: SKILL, offset: 1, limit: 10 };
+  assert.match(unpaint(callRow(resolver, 'read', callArgs, plainTheme)), /▤ skill/u, 'the read card paints');
+  const resultArgs = { path: ODD, oldText: 'a', newText: 'b' };
+  resolver('edit', () => HOST).renderResult(textResult('ok'), { isPartial: false }, plainTheme, { args: resultArgs }).render(60);
+  assert.deepEqual(asked.map(([tool]) => tool), ['read', 'edit'], 'one question per painted tool');
+  // A scope is only answerable with the call in hand, so the SAME object the host holds travels
+  // with the question — the call's for the call half, the one the result half carries for its own.
+  assert.equal(asked[0][1], callArgs, 'the call half passes the arguments, by reference');
+  assert.equal(asked[1][1], resultArgs, 'the result half passes the ones it holds');
+});
+
+test('S3: a scoped claim paints a write and an edit of a skill or an ODD artifact, and only those', () => {
+  publishScoped(toolsActivityDesign());
+  const resolver = fileResolver();
+  const cases = [
+    [SKILL, { content: '# x\n' }, /▤ skill/u, /one\/SKILL\.md/u],
+    [ODD, { oldText: 'a', newText: 'b' }, /📑 odd/u, /cards-skill-odd\.md/u],
+    ['odd/work/plan.md', { content: '# x\n' }, /📑 odd/u, /plan\.md/u],
+    ['a/skills/b/references/deep/x.md', { oldText: 'a', newText: 'b' }, /▤ skill/u, /b\/references\/deep\/x\.md/u],
+  ];
+  for (const [path, extra, identity, name] of cases) {
+    for (const tool of ['write', 'edit']) {
+      const row = callRow(resolver, tool, { path, ...extra }, plainTheme);
+      const text = unpaint(row);
+      assert.match(text, identity, `${tool} of ${path} wears its identity`);
+      assert.match(text, name, `${tool} of ${path} names its file`);
+      assert.ok(text.includes(tool), `${tool} of ${path} names the tool`);
+    }
+  }
+  // A path the scope does not claim is no file card's row, so the chain keeps it.
+  for (const path of ['src/app.ts', 'lib/skillset/notes.md', 'docs/oddity.md', 'notes/SKILL.md']) {
+    for (const tool of ['write', 'edit']) {
+      assert.deepEqual(
+        forwardedText(resolver(tool, () => HOST).renderCall({ path }, plainTheme, { isPartial: false }).render(60)),
+        ['host read call'],
+        `${tool} of ${path}`,
+      );
+    }
+  }
+});
+
+test('S8: read keeps the claim it had, so its card is the scoped line\'s own rows unchanged', () => {
+  const draw = (design) => {
+    publishScoped(design);
+    const resolver = fileResolver();
+    return {
+      call: callRows(resolver, 'read', { path: SKILL, offset: 1, limit: 10 }, plainTheme),
+      result: resultRows(resolver, 'read', { path: SKILL }, textResult('# Design'), { isPartial: false }, plainTheme, 60),
+    };
+  };
+  const scoped = toolsActivityDesign();
+  // The registration an older bridge takes, and the one this card has always been painted by.
+  const legacy = toolsActivityDesign({ scopes: false });
+  assert.equal(Object.hasOwn(scoped.scopes, 'read'), false, 'read is claimed for every call, never scoped');
+  assert.deepEqual(draw(scoped), draw(legacy), 'the same call and result rows, byte for byte');
+  assert.match(unpaint(draw(scoped).call[0]), /▤ skill/u, 'and the card still paints its heading');
 });
 
 // ---- the host's own outer box, reproduced for every row this card hands back ----

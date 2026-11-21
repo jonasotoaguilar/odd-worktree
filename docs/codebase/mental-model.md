@@ -7,10 +7,19 @@ starts, which rule each change must preserve, and where to begin.
 
 One Pi extension package, `pi-odd-worktree`: two agent tools (`worktree_create`,
 `worktree_list`), four panels (`/warp`, `/odd`, `/files`, `/issues`), one
-optional sidebar section and one tools design on the bridge (`Card tools`: bash,
-grep, find, ls, read) — and no preference of its own: the skill/ODD file cards
-obey that same `Card tools` value. It owns creating and listing the checkouts an
-ODD works in, reading a checkout's `odd/tasks/*.md`, browsing and previewing a
+optional sidebar section and two tool designs on the bridge — the `activity`
+value of its `Card tags` line (`bash`, the read-only shell tools `grep`, `find`,
+`ls`, and `read`, `write` and `edit`, the last two through a scope limited to
+skill and ODD paths, which is what lets the file cards ask about them) and the
+`color` value of its `Card diff` line (`write` and `edit`, drawn as an IDE pane
+in the active theme's own syntax roles) — and no preference of its own: the
+skill/ODD file cards obey that same `Card tags` value. On a bridge that can put
+several tools on one line the `Card tags` row was `Card tools` until this
+release (the older single row was `Card bash`), and a choice stored under the old
+key is carried over to `tags` before the design registers — only when the bridge
+reads it as a choice at all — so nobody loses the choice they made. It owns
+creating and listing the checkouts an ODD works in, reading a checkout's
+`odd/tasks/*.md`, browsing and previewing a
 checkout's files, reading and — role permitting — editing that checkout's GitHub
 issues, and the drawing of its own cards. `git` is the only external requirement,
 and gentle-shell-bridge is the plugin's own prerequisite: without it the package
@@ -37,12 +46,14 @@ never added — every other surface keeps working.
   path>` and the branch is kept (invariant 5).
 - CodeGraph itself: no `/codegraph-*` command and no tool named `codegraph`; it
   wires the index, the prompt text and the two reminders (invariants 19, 21).
-- Tool execution, permissions and blocks: the tools design and the file cards only
+- Tool execution, permissions and blocks: the two tool designs and the file cards only
   draw, the reminders only advise, the guards read command text (invariants 20, 21,
   22, 23).
 - Every other customize surface, plugin-tools toggle and companion-app
-  integration: the bash activity is a design on the bridge, the file cards read
-  that same line, and this package owns no preference at all (invariants 2, 3, 23).
+  integration: the bash activity is a design on the bridge, the diff card is the
+  second one, the file cards read the `activity` design's line and never the
+  `color` one, and this package owns no
+  preference at all (invariants 2, 3, 23).
 - Any child process through a shell string: fixed argv, always (invariant 9).
 
 ## Main Flow
@@ -50,7 +61,7 @@ never added — every other surface keeps working.
 1. `extensions/odd-worktree-tools.ts` — the only entry point the host loads:
    behind the bridge gate it registers the four commands (`/issues` only when the
    local `gh` probe finds the CLI), the two tools, the message renderer, the file
-   card, the rail section (also `gh` only), the tools design and the hooks —
+   card, the rail section (also `gh` only), the two tool designs and the hooks —
    deferred until gentle-shell-bridge is present, and nothing at all without it.
    Its issues `gh` gate is dispatched startup work under the generation the
    dispatch captured, never an awaited step of `session_start`, so a session start
@@ -80,7 +91,7 @@ Every module and what it owns is one row in [`code-map.md`](code-map.md).
 | `/warp` panel | Selector, extended list, create wizard, delete confirmation, queued warp | `lib/warp-selector-view.js` |
 | ODD reader | `odd/tasks/*.md` discovery, ordering and markdown rendering | `lib/odd-view.js` |
 | `/issues` | The `gh` client, the view, the repository pin, the rail section and its two cache halves | `lib/gh-issues.js` |
-| Cards | The card substrate, the tool cards, the file cards and the tools design | `lib/shell-card.js` |
+| Cards | The card substrate, the tool cards, the file cards and the two tool designs | `lib/shell-card.js` |
 | Prompt blocks | The `## ODD worktrees` text and the `## CodeGraph` role texts | `lib/codegraph-rules.js` |
 | CodeGraph wiring | Index, lock, daemon, MCP entry, compaction, edit sync, reminders | `lib/codegraph-session.js` |
 | Tests | The suites and their fixtures | `tools/*.test.js` |
@@ -95,7 +106,7 @@ for each is in [`invariants.md`](invariants.md).
 | --- | --- |
 | [1](invariants.md) | One extension entry point: `pi.extensions` is exactly `["./extensions/odd-worktree-tools.ts"]` and `extensions/` holds no other file. |
 | [2](invariants.md) | No customize command, plugin-tools toggle or Herdr panel surface; CodeGraph only as 18 and 19 allow. |
-| [3](invariants.md) | The shipped surface is exactly four commands, two tools, one sidebar section and one tools design. |
+| [3](invariants.md) | The shipped surface is exactly four commands, two tools, one sidebar section and two tool designs. |
 | [4](invariants.md) | Deletion refuses on a live session and discloses every caveat it could not resolve. |
 | [5](invariants.md) | Deletion is git only: `git worktree remove <absolute path>`, branch kept. |
 | [6](invariants.md) | `/issues` keeps repository identity pinning, and refuses a mutation after the remote moves. |
@@ -112,7 +123,7 @@ for each is in [`invariants.md`](invariants.md).
 | [17](invariants.md) | This repo paints last; the only painted inputs it measures are the host's key hint and Pi's own Markdown rows. |
 | [18](invariants.md) | The `## CodeGraph` section is advice, selected by the session's own facts. |
 | [19](invariants.md) | CodeGraph runs only with its CLI, in the background, and writes one config entry. |
-| [20](invariants.md) | The tools design only draws, and it draws what the classifier names (the three read-only shell tools `grep`, `find`, `ls` are always `exploring`; `read` and `write` are declared only so the file card can ask about them, and it draws nothing for either). |
+| [20](invariants.md) | The tool designs only draw, and the `activity` one draws what the classifier names (the three read-only shell tools `grep`, `find`, `ls` are always `exploring`; `read`, `write` and `edit` are declared for the file card's question — `write` and `edit` through a scope limited to skill and ODD paths — and it draws nothing for any of the three). |
 | [21](invariants.md) | The two CodeGraph reminders advise; they never block and never add a surface. |
 | [22](invariants.md) | The `bash` guards read text, fail open and add no surface. |
 | [23](invariants.md) | The file card only draws, and it claims exactly three tools. |

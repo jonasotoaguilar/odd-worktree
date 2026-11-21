@@ -1595,6 +1595,46 @@ test('S12 (T11): a session outside a repository paints one short dim line, and t
     'the command notice keeps its own wording');
 });
 
+// A checkout that IS a repository but has no remote at all is the same kind of
+// state one step further in: gh cannot name a repository because there is
+// nothing to resolve from, so the rail says it in one short gray line — never
+// gh's long failure sentence in the red tone — and it reads nothing.
+// The boundary of that state: ONLY gh's no-remote refusal becomes the gray line.
+// Every other failure keeps today's long error row, and an unknown wording
+// degrades to it instead of being read as "nothing to do here".
+for (const [stderr, label, tone] of [
+  ['no git remotes found\nrun git remote add origin <url> first', 'not a GitHub repository', 'dim'],
+  ['NO GIT REMOTES found', 'not a GitHub repository', 'dim'],
+  ['gh: Not logged in', 'cannot resolve the repository: gh: Not logged in', 'error'],
+  ['no remotes configured for this checkout',
+    'cannot resolve the repository: no remotes configured for this checkout', 'error'],
+  ['', 'cannot resolve the repository: gh exited with status 1', 'error'],
+]) {
+  test(`S12 (T11) parity: gh's ${JSON.stringify(stderr.split('\n')[0])} paints ${tone}`, async () => {
+    const checkout = makeCheckout([]);
+    const { registered } = installBridge();
+    const loaded = await loadExtension({});
+    ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
+    const calls = [];
+    ghIssues.setGhRunner(async (bin, argv) => {
+      calls.push({ bin, argv: argv.slice() });
+      if (argv[0] === 'repo') return { status: 1, stdout: '', stderr, error: null };
+      if (argv[0] === 'api' && argv[1] === 'user') return okJson('{"login":"me"}');
+      assert.fail(`unexpected issue read: ${argv.join(' ')}`);
+    });
+
+    const ctx = { cwd: checkout, ui: { notify: () => {} } };
+    await fireSessionStart(loaded.hooks, ctx);
+    assert.equal(registered.length, 1);
+    const section = registered[0];
+    const rows = await waitForRows(section, ctx);
+
+    assert.deepEqual(rows, [{ label, tone }], 'one row, in the role this failure earns');
+    assert.equal(section.meta(ctx), undefined, 'and no count');
+    assert.equal(graphqlCalls(calls).length, 0, 'and no issue read at all');
+  });
+}
+
 // S13 (T11, corrected): without the `gh` CLI the rail section is NEVER ADDED —
 // "/issues nunca se carga ni nunca se agrega a sidebar github sidebar". The decision
 // is a LOCAL presence answer (a PATH walk; the module answers `ghCliPresent`, no

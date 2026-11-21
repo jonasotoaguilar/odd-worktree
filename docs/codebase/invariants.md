@@ -634,11 +634,16 @@ The question this page answers: which rules must every change preserve, and what
     remain (the gate, `/issues`' own probe, the rail's read) are defence in depth
     for a `gh` that disappears after load: they still fail closed with no child, and
     the rail's `gh CLI not installed` `dim` line is that case alone. A cwd outside a
-    repository is one short `dim` line — `not a git repository` — and a
-    `dim`/`muted` error snapshot is a STATE, not a failure to retry: no later frame,
+    repository is one short `dim` line — `not a git repository` — and a checkout that
+    IS a repository but has no remote is its neighbour: one short `dim` line, `not a
+    GitHub repository`, drawn from gh's own `no git remotes` refusal (there is
+    nothing to resolve FROM) instead of its long failure sentence.
+    A `dim`/`muted` error snapshot is a STATE, not a failure to retry: no later frame,
     no activity read, no timer and no forced read starts there, and only a session
-    boundary supersedes it; it costs the one local `rev-parse` every surface makes
-    and no `gh` call. `tools/which-command.test.js` pins the lookup;
+    boundary supersedes it; a non-repository cwd costs the one local `rev-parse`
+    every surface makes and no `gh` call, and the no-remote one costs that plus the
+    `gh repo view` probe the session gate already runs and never a read. `tools/which-command.test.js`
+    pins the lookup;
     `tools/issues-section.test.js` pins "a non-repository line is a state, so no
     frame and no activity read", "a settled (dim) state owns no floor timer" and
     "without the gh CLI the GITHUB section is never added to the rail";

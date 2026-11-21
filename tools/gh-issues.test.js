@@ -1190,6 +1190,32 @@ describe('fork scope (S5)', () => {
     assert.ok(gh.calls.every((call) => call.scoped === false), 'no GH_REPO is injected');
   });
 
+  // gh's `no git remotes` answer is a STATE of the checkout, not a `gh` failure:
+  // there is nothing to resolve from. `reportedRepoName` says which one it is, so
+  // a caller that draws states never has to parse gh's sentence.
+  test('reportedRepoName distinguishes a checkout with no remote from a gh failure', async () => {
+    const checkout = makeCheckout({ remotes: [] });
+    const noRemote = github();
+    ghIssues.setGhRunner(async (bin, argv, opts) => {
+      if (argv[0] === 'repo' && argv[1] === 'view') {
+        return { status: 1, stdout: '', stderr: 'no git remotes found', error: null };
+      }
+      return noRemote.runner(bin, argv, opts);
+    });
+
+    const unresolved = await ghIssues.reportedRepoName({ cwd: checkout, scope: null });
+    assert.equal(unresolved.ok, false);
+    assert.equal(unresolved.noRemote, true, 'the caller can tell this state apart');
+    assert.match(String(unresolved.error), /cannot resolve the repository/, 'and the failure sentence is unchanged');
+
+    const broken = makeCheckout({ remotes: [['origin', 'myfork/project']] });
+    ghIssues.setGhRunner(async () => ({ status: 1, stdout: '', stderr: 'gh: Not logged in', error: null }));
+    const failed = await ghIssues.reportedRepoName({ cwd: broken, scope: null });
+    assert.equal(failed.ok, false);
+    assert.notEqual(failed.noRemote, true, 'a gh failure is never reported as a missing remote');
+    assert.match(String(failed.error), /Not logged in/);
+  });
+
   // A cached scope must never outlive a changed remote: the same owner/name on
   // a different account is a different repository, and a write would land there.
   test('a changed checkout remote is picked up before the next read and the next write', async () => {

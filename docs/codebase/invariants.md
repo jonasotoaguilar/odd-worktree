@@ -9,11 +9,12 @@ The question this page answers: which rules must every change preserve, and what
    invariants 18 and 19 allow.** No customize COMMAND, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
    `herdr-gentle:` command name. This package owns NO preference of its own: its
-   only customize-side contribution is a tools DESIGN (the `activity` value) on
-   gentle-shell-bridge's own `Card tags` line, or its `Card bash` line on a
-   bridge older than 0.6.0 (invariant 3). The skill/ODD file cards obey that same
-   line (invariant 23) and contribute no row of their own; the design is not a
-   preference here, because the bridge owns that choice and its store. It registers no command, no page, no setting, no
+   customize-side contribution is the two DESIGNS (`activity` and `color`) on
+   gentle-shell-bridge's own `Cards` page — a `Card tags` line, or its `Card bash`
+   line on a bridge older than 0.6.0, and a `Card diff` line on 0.9.0 and later
+   (invariant 3). The skill/ODD file cards obey the `activity` design's line
+   (invariant 23) and contribute no row of their own, and never the `color` one; neither design is a
+   preference here, because the bridge owns those choices and its store. It registers no command, no page, no setting, no
    settings file and no key of its own beyond the TWO host shortcuts, the file
    picker's `alt+p` and the issues panel's `alt+i` (invariant 3), and no other
    setting is read, written or offered. CodeGraph
@@ -57,8 +58,8 @@ The question this page answers: which rules must every change preserve, and what
    that HAS the bridge but draws no rail registers the section and never paints it,
    which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the bridge, not by this package (invariant 2 keeps every customize
-   surface out of it except the one tools-design row this package puts on the bridge's
-   own `Card tags` line), and the section declares NO
+   surface out of it except the two tool-design rows this package puts on the bridge's
+   own `Card tags` and `Card diff` lines), and the section declares NO
    preview: every `Sections` row draws the host's one shared list of active sections
    and the bridge adds this section's `rowLabel` to it itself, shown or left out
    with the row's own hypothetical (`registerSection` has no `preview` field — do
@@ -101,25 +102,31 @@ The question this page answers: which rules must every change preserve, and what
    process, with an idempotent disposer, and does nothing at all when the API is absent or
    older — no throw, no command, no warning beyond the section's own discoverability one.
    The shape follows the bridge's own `VERSION` and is decided BEFORE anything is
-   registered: one line over `bash`, `grep`, `find`, `ls`, `read`, `write` and `edit` on `0.6.0` and
-   later (one `Card tags` row), with `write` and `edit` claimed through a scope limited to skill
-   and ODD paths from `0.9.0` on, and the single `tool: "bash"` design on anything older (one
+   registered: one line over `bash`, `grep`, `find`, `ls`, `read` and `write` on `0.6.0` and
+   later (one `Card tags` row), gaining `edit`, and the scope on `write` and `edit` limited to skill
+   and ODD paths, from `0.9.0` on — six tools there, seven here — and the single `tool: "bash"` design on anything older (one
    `Card bash` row) or on a release it cannot read — never a grouped registration an older
    bridge would refuse. A second design (`lib/diff-design.js`, id `odd-worktree.diff`, label
    `color`) registers on its own `Card diff` line over `write` and `edit`, on `0.9.0` and later
    only, and draws nothing for a skill or an ODD path because those rows are the file card's. The bridge owns Pi's one tool-renderer resolver, builds the host's
-   own card, reads that line (`default` | `activity`, stored as `native` | the design id) on
-   every render pass and persists the choice in its own store. This package writes exactly two
-   things to that store. One is the first-run seed: `seedBashDesignSelection` selects `activity`
+   own card, reads the line it is painting (`default` | `activity`, or `default` | `color` on
+   `diff`, stored as `native` | the design id) on
+   every render pass and persists each choice in its own store. This package writes exactly three
+   things to that store. The first is the first-run `activity` seed: `seedBashDesignSelection` selects `activity`
    once, for `bash`, only when the bridge holds no `bash` choice, and it does so BEFORE the
    registration, because a `0.6.0` bridge carries that choice over to its line's value at
    registration time; it records `bashActivitySeeded` in its own `odd-worktree` store so a
-   later `native` is never undone. The other is the one-time line-key carry-over, which moves a
+   later `native` is never undone. The second is the one-time line-key carry-over, which moves a
    value stored at `selections.$lines.tools` — the line's row was `Card tools` before the rename —
    to `selections.$lines.tags`, ONLY when `tags` is absent, and BEFORE the registration, so the
    bridge's own migration finds the key taken and copies nothing over it; a store that is absent,
-   unreadable, of another shape or that throws carries nothing over and throws nothing. A stored
-   choice is never overwritten, the reserved line
+   unreadable, of another shape or that throws carries nothing over and throws nothing. The third
+   is the `diff` line's own first-run seed: `seedDiffDesignSelection` selects `color` on `diff`
+   once, only when the bridge holds no `diff` choice, and — because there is no legacy per-tool
+   value for that line to inherit — it runs AFTER the registration the bridge accepted, so a
+   refused registration never leaves a value naming a design nobody registered; its
+   `diffDesignSeeded` marker lives in that same `odd-worktree` store. A stored
+   choice is never overwritten, a reserved line
    key is never written by the seed, a failure seeds nothing. It reads no other file, has no
    `/card:bash` command and depends on no extension load order.
    The design is pure: `apply(lines, ctx)` swaps the host's `$` on the heading

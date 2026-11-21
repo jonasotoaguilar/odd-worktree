@@ -44,7 +44,17 @@ first (`assertToolsAreFree`), because coverage was per tool name — gentle-shel
   fields (`args.path`), never a body Pi rewrites while the call streams: the args object
   arrives by reference and is re-read on every pass.
 
-- **S6** — every bridge member stays OPTIONAL and defensive, as today. A bridge older than
+- **S6** — a RELEASE COMPARISON, one rule everywhere: an advertised release meets a cutoff by
+  semver ordering — numeric components first, and a prerelease or build suffix only loses when the
+  numbers are EQUAL. So `0.9.0-rc.1` and `0.9.0+build` do NOT meet `0.9.0` (unscoped `Card tags`,
+  no `Card diff`), while `0.9.1-rc.1` and `0.10.0+local.2` DO, because they are newer than the
+  release that introduced the feature. The same rule at the `0.6.0` cutoff means `0.6.0-rc.1` no
+  longer receives the grouped line and falls back to the single `tool: "bash"` design, where the
+  base commit accepted the grouped shape: a behaviour change, deliberate and more conservative,
+  and it must be stated rather than discovered. (This replaces the earlier wording, which read as
+  "any suffix fails any cutoff" and would wrongly deny `0.9.1-rc.1` a feature it has.)
+
+- **S6b** — every bridge member stays OPTIONAL and defensive, as today. A bridge older than
   0.9.0 accepts no `scopes` and refuses a scoped registration WHOLE, so on that bridge the
   grouped line registers WITHOUT scopes (the file card keeps its pre-0.9.0 behaviour) and
   the `diff` line is not registered at all — an unregistered row is better than losing the
@@ -53,6 +63,11 @@ first (`assertToolsAreFree`), because coverage was per tool name — gentle-shel
 - **S7** — `default` on `Card diff` gives the host's own card back for every `write` and
   `edit`, and an absent, `native`, `missing` or `not-covered` answer keeps today's drawing.
   Nothing about the `activity` line's own behaviour changes.
+
+- **S8b** — applying the design to a row it already painted must answer that row BYTE-IDENTICAL,
+  with real SGR and not markup: `docs/reference.md` says so and the module's own comment does, so
+  a second application may not add an escape or a reset. A test using fake role tags cannot prove
+  this, because the parser skips real SGR escapes and sees markup tags as text.
 
 - **S8** — tests: the scoped claim reaches the file card on a skill or ODD path and only
   there; the gate passes the args through; the diff design's rows are theme roles and the
@@ -97,6 +112,10 @@ first (`assertToolsAreFree`), because coverage was per tool name — gentle-shel
   on length, S6 a prerelease read as the cutoff, S10 an invalid stored id carried over, S11 the
   doc set), plus the misleading extension comment. Route: writer. Commit: folded into the unit it
   belongs to, or its own `fix(cards):` commit.
+- T7: the second verification round. The ANSI idempotence defect (S8b), the release rule pinned to
+  semver by test (S6), the 0.6.0-rc.1 consequence stated, and the docs that contradict the code
+  (S11). Route: writer. Commit: `fix(cards): repaint an edit row byte-identically` plus a docs
+  commit.
 
 ## Log
 
@@ -154,3 +173,14 @@ first (`assertToolsAreFree`), because coverage was per tool name — gentle-shel
   a comment in the entry point that promises no seam work when \`registerToolDesign\` is absent while
   the code queues the seam first. T6 fixes all six, and the verification has to be re-run on a
   plain single-root checkout — a clone of the branch — before anything is claimed as verified.
+- L10: the re-verification ran (a scratch clone, the real 0.9.0 bridge, 2449 tests: 2432 pass, 17
+  skipped for the absent \`@earendil-works/pi-tui\`, one of them in tools/file-card.test.js:1116,
+  0 fail). Its differential of the shared tools was CLEAN: 16 cases, 32 call and result arrays,
+  zero differences for read/bash/grep/find/ls across active and native selection, a recognized and
+  an unrecognized command, and ordinary, skill and ODD read paths. Three findings stand: (a) a real
+  defect — recolouring an edit row twice duplicates the escapes, so the design is not idempotent
+  although it and the reference say it is, and the test missed it because it used markup tags
+  instead of SGR; (b) S6 read as "any suffix fails" would deny \`0.9.1-rc.1\` a feature it has, so the
+  spec is corrected to semver ordering and the \`0.6.0-rc.1\` consequence is stated as deliberate;
+  (c) docs that still contradict the code. One skipped test sits in a file this change touches and
+  passes in the worktree, where the peer dependency resolves.

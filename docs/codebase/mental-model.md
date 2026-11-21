@@ -50,8 +50,9 @@ never added — every other surface keeps working.
   draw, the reminders only advise, the guards read command text (invariants 20, 21,
   22, 23).
 - Every other customize surface, plugin-tools toggle and companion-app
-  integration: the bash activity is a design on the bridge, the cards come from
-  the second one, the file cards read that same line, and this package owns no
+  integration: the bash activity is a design on the bridge, the diff card is the
+  second one, the file cards read the `activity` design's line and never the
+  `color` one, and this package owns no
   preference at all (invariants 2, 3, 23).
 - Any child process through a shell string: fixed argv, always (invariant 9).
 

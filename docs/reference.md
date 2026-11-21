@@ -865,7 +865,10 @@ claim (gentle-shell-bridge `0.9.0` and later): the line claims those two tools' 
 question and never a row of this design's own. A bridge older than `0.9.0` takes the same line
 without the scope and without `edit`, exactly as it did before, because a scoped registration there
 is refused WHOLE and would cost the `activity` design altogether; a release string that cannot be
-read is read as that older shape for the same reason. Which shape is sent is decided from the
+read is read as that older shape for the same reason. `0.6.0` itself is compared by that same semver
+order, so a `0.6.0-rc.1` bridge falls back to the single `tool: "bash"` design — where an earlier
+release of this package still accepted the grouped shape, a deliberate narrowing because a
+prerelease is BELOW its own release. Which shape is sent is decided from the
 bridge's own `VERSION` before anything is registered, because a grouped registration on an
 older one is refused and reported in `/bridge-status`. A release string that cannot be read
 is not guessed: the bridge is asked once, with a throwaway design nobody selects and a line
@@ -1118,8 +1121,13 @@ every other surface exactly as it was.
 The line needs gentle-shell-bridge `0.9.0`, the release that introduced the per-`(line, tool)`
 claim: on an older bridge, or one whose release string cannot be read, NOTHING is registered
 and `Card diff` never appears, because a registration that release would refuse costs the
-whole design. An absent `registerToolDesign`, a refused registration or a bridge that cannot
-store the choice is likewise no design and never a throw.
+whole design. Releases are compared by semver order at both of this package's cutoffs, so a
+release whose own numbers equal `0.9.0` but carry a prerelease or a build suffix
+(`0.9.0-rc.1`, `0.9.0+build.7`) is BELOW it and registers nothing either, while `0.9.1-rc.1`
+and `0.10.0+local.2` are newer and register. An absent `registerToolDesign` or a refused
+registration is no design and never a throw; a bridge that cannot store the choice still gets
+the row — `Card diff` IS registered and only the first-run seed writes nothing, so the line
+opens on the host's own card (`default`) until a choice is made.
 
 ## The list
 
@@ -1420,13 +1428,14 @@ classifier's `codegraph` identity.
 ## Deliberately absent
 
 This package is the worktree / ODD / files / issues surface only: two agent
-tools, four panels, one optional rail section and one tool design on the bridge,
+tools, four panels, one optional rail section and two tool designs on the bridge,
 no preference of its own, no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. Its
-customize-side contribution is the `activity` value of the bridge's `Card tags` line
-(or its `Card bash` line, on a bridge older than 0.6.0) — which the skill/ODD file
-cards obey as well. It adds no command, tool or row of its own, and the file
+customize-side contribution is the two values of the bridge's `Cards` page — `activity` on
+the `Card tags` line (or its `Card bash` line, on a bridge older than 0.6.0) and `color` on
+the `Card diff` line — which the skill/ODD file cards obey as well. It adds no command, tool
+or row of its own, and the file
 picker's `alt+p` and the issues panel's `alt+i` are bound on the host directly
 rather than contributed to any shell surface. There is
 nothing to configure here, and `/warp`, `/odd`, `/files` and `/issues` are always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,

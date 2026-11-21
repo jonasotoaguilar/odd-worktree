@@ -24,7 +24,7 @@ primary checkout on the default branch with a one-line reminder. Nothing else ch
   sesión … cualquier uso de codegraph reinicia la cuenta … sacar el ", if it applies"».
   Guard 2 reminds on the first search, then again after 8 searches in a row without a
   CodeGraph use, at most 3 reminders per session; any CodeGraph use resets the count; the
-  sentence no longer ends in ", if it applies". It stays advice: it never blocks. Guard 1
+  sentence no longer ends in ", if it applies". A compaction or a new session forgets the row and the cap (the guards forget everything then, as invariant 21 says). It stays advice: it never blocks. Guard 1
   and every other behaviour are unchanged.
 - **S4** — «Guard de `write`/`edit`: si el archivo está en el checkout principal y ese
   checkout está en `main`, lo frena con una sola línea: "`<path>` is in the primary
@@ -48,10 +48,12 @@ primary checkout on the default branch with a one-line reminder. Nothing else ch
 
 ## Tasks
 
-- T1: texts for S1, S2 and their test pins (S1, S2).
-- T2: the CodeGraph reminder repeats, with tests (S3).
-- T3: the `edit`/`write` guard and the child block, with tests (S4, S5).
-- T4: invariants and reference follow (S6).
+- [x] T1: texts for S1, S2 and their test pins (S1, S2). Commit 1147d2c.
+- [x] T2: the CodeGraph reminder repeats, with tests (S3). Commit f90ca1a.
+- [x] T3: the `edit`/`write` guard and the child block, with tests (S4, S5). Commit 8001db1; verifier fixes (`@` prefix, live owner read, temp-portable suite) in the closing commit.
+- [x] T4: invariants and reference follow (S6). Commit e250099 and the closing commit.
+
+Slice boundary: ~1.3k changed lines across four commits, each one reviewable alone (texts; reminder; guard; docs).
 
 ## Log
 

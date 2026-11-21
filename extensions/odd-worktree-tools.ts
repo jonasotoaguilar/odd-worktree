@@ -3128,6 +3128,9 @@ function guardWorktreeWriteCall(event, ctx) {
       paths,
       cwd: oddEventCwd(event, ctx),
       repoIdentity: (cwd) => cachedRepoIdentity(git, cwd),
+      // The owner of a written path's directory is read live (only for a path already
+      // inside the principal), because a nested worktree can appear during the session.
+      ownerIdentity: (dir) => git.repoIdentity(String(dir)),
       defaultBranch: (root) => cachedDefaultBranch(git, root),
       currentBranch: (root) => readCurrentBranch(git, root),
     });

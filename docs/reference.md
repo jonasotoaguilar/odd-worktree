@@ -1269,6 +1269,11 @@ sentence that is a reminder and not a copy of the rule:
   directory (so a new file is judged by its directory and a symlink spelling neither
   dodges nor false-trips it). `bash` redirects such as `sed -i` or `tee` are not
   `edit`/`write` calls and are not judged.
+- **The path the tool will touch is the one judged.** A leading `@`, which Pi strips
+  before it opens the file, is stripped here too, and a spelling under a temp directory
+  that is a symlink into the principal is judged by where it really points. Who owns the
+  path's directory is read live, never remembered, so a nested worktree created during
+  the session is seen.
 - The same `ODD_WORKTREE_GUARD=0` turns it off.
 
 ## The `## ODD worktrees` block in the system prompt
@@ -1291,8 +1296,7 @@ It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other
 extension) put there is preserved verbatim and our text lands after it. There is
 one text for the primary session, read from `lib/odd-prompt/odd-worktrees.md` at load.
-A child that writes — `gentle-ai-worker`, `jd-fix-agent` and a child whose agent name
-cannot be read — gets one short line instead (`lib/odd-prompt/odd-worktrees-child.md`):
+A child that writes — `gentle-ai-worker`, `jd-fix-agent` and any other child, whose agent name is unknown or cannot be read — gets one short line instead (`lib/odd-prompt/odd-worktrees-child.md`):
 work only under your workspace root's worktree, and stop and report if it is the primary
 checkout on the default branch. Explore, verify, the judges, every `review-*` and named
 agents get nothing, because their own instructions are already the bounded task they

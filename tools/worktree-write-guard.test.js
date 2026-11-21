@@ -43,6 +43,15 @@ function refusal(file, branch = 'main') {
 // A real checkout that is NOT under an OS temp directory: the one this suite runs in.
 // Only directories are realpath'd; nothing is written there.
 const PRINCIPAL = fs.realpathSync(path.resolve(__dirname, '..'));
+// The guard exempts every temp path by rule (L2), so a suite that itself runs from a temp
+// directory cannot use its own checkout as a refused fixture: those cases skip there, and
+// the virtual-principal cases at the bottom of this file still cover the refusal.
+const UNDER_TEMP = [...new Set(['/tmp', '/var/tmp', os.tmpdir(), process.env.TMPDIR].filter(Boolean).flatMap((dir) => {
+  const spellings = [path.resolve(dir)];
+  try { spellings.push(fs.realpathSync(dir)); } catch { /* an absent temp dir contributes its spelling only */ }
+  return spellings;
+}))].some((root) => PRINCIPAL === root || PRINCIPAL.startsWith(`${root}${path.sep}`));
+const NEEDS_NON_TEMP = UNDER_TEMP ? 'the suite checkout lives under a temp directory, which the guard exempts' : false;
 const PRINCIPAL_FILE = path.join(PRINCIPAL, 'lib', 'not-yet-there.js');
 // The one directory the fake identities spell as the shared git dir of PRINCIPAL.
 const PRINCIPAL_COMMON = path.join(PRINCIPAL, '.git');
@@ -101,12 +110,12 @@ function harness(options = {}) {
 // ---- S4: the refusal itself ----
 
 describe('the refusal is one sentence (S4)', () => {
-  test('a path inside the primary checkout on the default branch is refused with the exact sentence', () => {
+  test('a path inside the primary checkout on the default branch is refused with the exact sentence', { skip: NEEDS_NON_TEMP }, () => {
     const { run } = harness();
     assert.deepEqual(run([PRINCIPAL_FILE]), { block: true, reason: refusal(PRINCIPAL_FILE) });
   });
 
-  test('the sentence carries the real path and the real default branch, and nothing else', () => {
+  test('the sentence carries the real path and the real default branch, and nothing else', { skip: NEEDS_NON_TEMP }, () => {
     const { run } = harness({ defaultBranch: 'trunk', currentBranch: 'trunk' });
     const decision = run([PRINCIPAL_FILE]);
     assert.equal(decision.reason, refusal(PRINCIPAL_FILE, 'trunk'));
@@ -120,7 +129,7 @@ describe('the refusal is one sentence (S4)', () => {
     }
   });
 
-  test('both writing tools are guarded, and a `write` of a new file is judged by its directory', () => {
+  test('both writing tools are guarded, and a `write` of a new file is judged by its directory', { skip: NEEDS_NON_TEMP }, () => {
     // A nested path whose own directory exists and whose file does not: nothing is
     // created, and the directory is still what places it.
     const nested = path.join(PRINCIPAL, 'lib', 'odd-prompt', 'child-probe.md');
@@ -130,12 +139,12 @@ describe('the refusal is one sentence (S4)', () => {
     }
   });
 
-  test('a relative path is resolved against the session cwd and reported absolute', () => {
+  test('a relative path is resolved against the session cwd and reported absolute', { skip: NEEDS_NON_TEMP }, () => {
     const { run } = harness();
     assert.deepEqual(run(['lib/not-yet-there.js']), { block: true, reason: refusal(PRINCIPAL_FILE) });
   });
 
-  test('one path inside the checkout refuses the call even when another passes', () => {
+  test('one path inside the checkout refuses the call even when another passes', { skip: NEEDS_NON_TEMP }, () => {
     const loose = scratch('loose');
     const { run } = harness();
     assert.deepEqual(run([path.join(loose, 'a.txt'), PRINCIPAL_FILE]), { block: true, reason: refusal(PRINCIPAL_FILE) });
@@ -155,7 +164,7 @@ describe('L2: a path the guard cannot place in the session\'s repository passes'
       'a path a checkout cannot own is settled before any git answer is asked for');
   });
 
-  test('a path under the OS temp directory passes even when a scratch repository lives there', () => {
+  test('a path under the OS temp directory passes even when a scratch repository lives there', { skip: NEEDS_NON_TEMP }, () => {
     const repo = scratch('scratch-repo');
     fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
     const identity = { root: repo, commonDir: path.join(repo, '.git') };
@@ -209,7 +218,7 @@ describe('L2: a path the guard cannot place in the session\'s repository passes'
     assert.deepEqual(run([path.join(linked, 'odd', 'tasks', 'plan.md')], { cwd: linked }), { block: false });
   });
 
-  test('a linked worktree or a nested repository that lives INSIDE the principal directory passes: the path\'s own checkout decides', () => {
+  test('a linked worktree or a nested repository that lives INSIDE the principal directory passes: the path\'s own checkout decides', { skip: NEEDS_NON_TEMP }, () => {
     const nested = path.join(PRINCIPAL, 'lib');
     const identity = (cwd) => (cwd === nested
       ? { root: nested, commonDir: PRINCIPAL_COMMON }
@@ -256,7 +265,7 @@ describe('L2: a path the guard cannot place in the session\'s repository passes'
     assert.deepEqual(run([absent]), { block: false });
   });
 
-  test('a symlink into the primary checkout is judged by the real directory, and one out of it too', () => {
+  test('a symlink into the primary checkout is judged by the real directory, and one out of it too', { skip: NEEDS_NON_TEMP }, () => {
     const links = scratch('links');
     fs.symlinkSync(path.join(PRINCIPAL, 'lib'), path.join(links, 'into-lib'), 'dir');
     const tempRepo = scratch('linked-target');
@@ -327,7 +336,7 @@ describe('S8: an unreadable repository fails open, and nothing throws', () => {
     assert.deepEqual(reads, { identity: 0, defaultBranch: 0, currentBranch: 0 }, 'nothing is read');
   });
 
-  test('a block reads the session identity, the owner of the path and each branch once, and only after a path was placed', () => {
+  test('a block reads the session identity, the owner of the path and each branch once, and only after a path was placed', { skip: NEEDS_NON_TEMP }, () => {
     const { run, reads } = harness();
     assert.deepEqual(run([PRINCIPAL_FILE, path.join(PRINCIPAL, 'README.md')]), { block: true, reason: refusal(PRINCIPAL_FILE) });
     assert.deepEqual(reads, { identity: 2, defaultBranch: 1, currentBranch: 1 });
@@ -400,7 +409,7 @@ describe('the tool_call handler the extension registers (S4)', () => {
     if (git && savedRunArgv !== undefined) git.runArgv = savedRunArgv;
   });
 
-  test('an edit and a write into the primary checkout on main are refused with the sentence', async () => {
+  test('an edit and a write into the primary checkout on main are refused with the sentence', { skip: NEEDS_NON_TEMP }, async () => {
     principalBranch = 'main';
     const target = path.join(PRINCIPAL, 'lib', 'wiring-probe.js');
     const second = path.join(PRINCIPAL, 'lib', 'wiring-probe-2.js');
@@ -415,7 +424,7 @@ describe('the tool_call handler the extension registers (S4)', () => {
     assert.equal(await callTool(write(path.join(linked, 'other.md')), linked), undefined);
   });
 
-  test('a primary checkout on another branch passes, and the branch is read fresh', async () => {
+  test('a primary checkout on another branch passes, and the branch is read fresh', { skip: NEEDS_NON_TEMP }, async () => {
     const target = path.join(PRINCIPAL, 'lib', 'wiring-probe.js');
     principalBranch = 'feat/elsewhere';
     assert.equal(await callTool(edit(target), PRINCIPAL), undefined);
@@ -437,7 +446,7 @@ describe('the tool_call handler the extension registers (S4)', () => {
     assert.equal(await callTool(bash('git status'), PRINCIPAL), undefined);
   });
 
-  test('ODD_WORKTREE_GUARD=0 turns the write guard off, and only that value', async () => {
+  test('ODD_WORKTREE_GUARD=0 turns the write guard off, and only that value', { skip: NEEDS_NON_TEMP }, async () => {
     const previous = process.env.ODD_WORKTREE_GUARD;
     principalBranch = 'main';
     const target = path.join(PRINCIPAL, 'lib', 'wiring-probe.js');
@@ -455,4 +464,53 @@ describe('the tool_call handler the extension registers (S4)', () => {
       else process.env.ODD_WORKTREE_GUARD = previous;
     }
   });
+});
+
+// ---- S4: two defects the independent verification found, pinned where they cannot hide ----
+
+// A virtual principal checkout that is NOT under a temp directory and does not exist on
+// disk: `fs.realpathSync` is mocked for its two directories only, and the extension's git
+// answers are faked, so these cases run from any checkout location (a temp one included).
+async function virtualPrimary(t) {
+  const { hooks } = await loadExtension({});
+  const git = require('../lib/worktree-git.js');
+  const root = path.join(path.parse(process.cwd()).root, '__odd_virtual_primary__');
+  const dir = path.join(root, 'nested');
+  const file = path.join(dir, 'note.md');
+  const commonDir = path.join(root, '.git');
+  const realpath = fs.realpathSync;
+  let nested = false;
+  t.mock.method(fs, 'realpathSync', (p, ...args) => (p === root || p === dir ? p : realpath(p, ...args)));
+  t.mock.method(git, 'repoIdentity', (p) => ({ root: nested && path.resolve(String(p)) === dir ? dir : root, commonDir }));
+  t.mock.method(git, 'runArgv', (_bin, args) => {
+    const command = args.join(' ');
+    if (command === 'symbolic-ref --quiet --short HEAD') return { status: 0, stdout: 'main\n' };
+    if (command === 'rev-parse --verify --quiet refs/heads/main') return { status: 0, stdout: 'abc\n' };
+    return { status: 1, stdout: '' };
+  });
+  return {
+    file,
+    makeNested: () => { nested = true; },
+    async call(raw) {
+      for (const [name, hook] of hooks) {
+        if (name !== 'tool_call') continue;
+        const result = await hook(edit(raw), { cwd: root });
+        if (result !== undefined) return result;
+      }
+      return undefined;
+    },
+  };
+}
+
+test('S4: the `@` prefix Pi strips from a path does not change the guard decision', async (t) => {
+  const { call, file } = await virtualPrimary(t);
+  assert.deepEqual(await call(`@${file}`), { block: true, reason: refusal(file) });
+  assert.deepEqual(await call(file), { block: true, reason: refusal(file) });
+});
+
+test('S4: who owns the path\'s directory is asked again, never remembered, after a nested worktree appears', async (t) => {
+  const { call, file, makeNested } = await virtualPrimary(t);
+  assert.deepEqual(await call(file), { block: true, reason: refusal(file) });
+  makeNested();
+  assert.equal(await call(file), undefined);
 });

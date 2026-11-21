@@ -249,7 +249,7 @@ The question this page answers: which rules must every change preserve, and what
     text is removed. The primary session gets one text
     (`lib/odd-prompt/odd-worktrees.md`); a child gets the one-line
     `lib/odd-prompt/odd-worktrees-child.md` only when it writes — `gentle-ai-worker`,
-    `jd-fix-agent` and a child whose agent name cannot be read — and explore, verify,
+    `jd-fix-agent` and any other child (an agent name that is unknown or cannot be read) — and explore, verify,
     the judges and every `review-*` get none. Both are idempotent by content and
     `ODD_WORKTREE_PROMPT=0` suppresses them.
 15. **A warp waits for this session's own tools, agent tasks AND background

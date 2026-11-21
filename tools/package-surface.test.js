@@ -23,7 +23,7 @@ const { test, describe, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { LIB_DIR, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
+const { BRIDGE_SLOT, LIB_DIR, defaultBridge, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -129,13 +129,31 @@ describe('registration', () => {
   test('the bash design is wired through exactly one registration and adds no name', async () => {
     const source = stubbedSource();
     assert.equal(source.split('design.registerBashDesign(').length - 1, 1, 'one registration call');
-    assert.equal(source.split('design.registerDiffDesign(').length - 1, 1, 'the Card diff line registers once too');
-    assert.equal(source.split('registerDiffDesignRows(').length - 1, 2, 'the one call and its definition');
     assert.equal(source.includes('registerBashCard'), false, 'no resolver of ours draws bash');
     const { commands, tools } = await loadExtension({});
     for (const gone of ['bash-card', 'card-bash', 'bash']) {
       assert.equal(commands.has(gone), false, `the design adds no /${gone} command`);
       assert.equal(tools.has(gone), false, `the design adds no ${gone} tool`);
+    }
+  });
+
+  test('both Card rows are registered once each, observed through the bridge\'s own object', async () => {
+    // S2/S6: what a caller observes is the REGISTRATION, not a spelling in the source. A bridge
+    // that publishes the release both lines need sees one design per line, each with its own id and
+    // label, and nothing else — so a second registration, a renamed id or a third row fails here.
+    const bridge = defaultBridge();
+    bridge.api.VERSION = '0.9.0';
+    const previous = globalThis[BRIDGE_SLOT];
+    globalThis[BRIDGE_SLOT] = bridge.api;
+    try {
+      await loadExtension({});
+      assert.deepEqual(
+        bridge.designs.map((design) => [design.line, design.id, design.label]),
+        [['tags', 'odd-worktree.bash-activity', 'activity'], ['diff', 'odd-worktree.diff', 'color']],
+        'one design per line, once each',
+      );
+    } finally {
+      globalThis[BRIDGE_SLOT] = previous;
     }
   });
 

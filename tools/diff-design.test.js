@@ -7,7 +7,6 @@ const {
   DIFF_DESIGN_ID,
   DIFF_DESIGN_LABEL,
   DIFF_DESIGN_PREVIEW,
-  applyDiffCard,
   applyDiffDesign,
   bridgeSupportsDiffLine,
   diffColorDesign,
@@ -368,7 +367,7 @@ describe('a repaint reads the theme and the content of THIS pass (S1/S5)', () =>
     // The host's highlighter resolves the ACTIVE theme on every call, so the escapes it hands back
     // are theme-dependent: a drawing cached on the text alone answers a switched theme with the
     // colours of the old one, which is exactly what this card exists to avoid.
-    const live = { palette: 36, fg(role, text) { return `\u001b[${this.palette}m${text}\u001b[39m`; } };
+    const live = { palette: 36, fg(_role, text) { return `\u001b[${this.palette}m${text}\u001b[39m`; } };
     const seam = {
       highlight: (code) => code.split('\n').map((line) => (line === '' ? '' : live.fg('syntaxKeyword', line))),
       languageForPath: () => 'javascript',
@@ -476,7 +475,6 @@ describe('the edit diff, recoloured (S1)', () => {
       highlight: (code) => code.split('\n').map((line) => HIGHLIGHT(line)),
       languageForPath: (path) => { heard.push(path); return 'javascript'; },
     };
-    // Its own rows, so the module's per-frame memo cannot answer this call from an earlier test.
     const rows = [...editCard(), '   (its own frame)'];
     const out = diffColorDesign(seam).apply(rows, { tool: 'edit', part: 'call', width: WIDTH, theme, render: { args: { path: 'lib/app.js' } } });
     assert.deepEqual(heard, ['lib/app.js']);
@@ -507,6 +505,57 @@ describe('the edit diff, recoloured (S1)', () => {
       render: { args: { path: 'lib/app.js' } },
     });
     assert.deepEqual(out, rows);
+  });
+});
+
+// S8b: a row already wearing this paint comes back BYTE-IDENTICAL. The markup theme above states
+// the role's NAME (`<toolDiffAdded>`), which the parser reads as the row's own text, so it can
+// never show an escape added twice; only a real theme, whose `fg` answers SGR codes, can.
+describe('repainting a row it already painted is a byte-identical no-op (S8b)', () => {
+  const SGR_ROLE = { toolDiffAdded: '92', toolDiffRemoved: '91', muted: '90', text: '39' };
+  const sgr = (role, text) => `\u001b[${SGR_ROLE[role] ?? '39'}m${text}\u001b[39m`;
+  const sgrTheme = { fg: (role, text) => sgr(role, text) };
+  // The host's own edit body row: the frame cells painted, the marker and the code its own colour.
+  const FRAME = '\u001b[32m│\u001b[39m';
+  const hostRow = (text) => `${FRAME} ${text} ${FRAME}`;
+  const hostPainted = [
+    hostRow('@@ -1,4 +1,4 @@'),
+    hostRow('\u001b[91m-4 const stale = 3;\u001b[39m'),
+    hostRow('\u001b[92m+4 const fresh = 4;\u001b[39m'),
+    hostRow(' 4 const kept = 2;'),
+  ];
+  const escapes = (row) => row.match(/\u001b\[[0-9;]*m/gu) ?? [];
+
+  for (const [name, seam] of [['no highlighter', undefined], ['a real highlighter', seamFor().seam]]) {
+    test(`${name}: a second pass over its own rows adds no escape and no reset`, () => {
+      const design = diffColorDesign(seam);
+      const ctx = { tool: 'edit', part: 'call', width: WIDTH, theme: sgrTheme, render: { args: { path: 'lib/app.js' } } };
+      const once = design.apply(hostPainted, ctx);
+      const twice = design.apply(once, ctx);
+      assert.deepEqual(twice, once, 'the second application is a byte-identical no-op');
+      for (const [index, row] of twice.entries()) {
+        assert.equal(unpaint(row), unpaint(hostPainted[index]), `row ${index} states the same text`);
+        assert.equal(cols(row), cols(hostPainted[index]), `row ${index} keeps its width`);
+        assert.deepEqual(escapes(row), escapes(once[index]), `row ${index} gains no escape`);
+      }
+      // The defect this pins: the added row's opening code used to survive in the prefix and be
+      // issued again, so the second pass read `\u001b[92m\u001b[92m`. No escape is ever issued twice
+      // in a row here — the marker's paint is rebuilt, never stacked on the paint already there.
+      assert.doesNotMatch(once[2], /\u001b\[([0-9;]*)m\u001b\[\1m/u, once[2]);
+      assert.doesNotMatch(once[1], /\u001b\[([0-9;]*)m\u001b\[\1m/u, once[1]);
+      // The host's own frame cells keep their paint, on both passes.
+      assert.ok(once[2].startsWith(`${FRAME} `), once[2]);
+      assert.ok(once[2].endsWith(` ${FRAME}`), once[2]);
+    });
+  }
+
+  test('the plainest host row is a no-op too: a real theme never doubles the marker paint', () => {
+    const design = diffColorDesign(undefined);
+    const ctx = { tool: 'edit', part: 'call', width: WIDTH, theme: sgrTheme, render: { args: { path: 'lib/app.js' } } };
+    const rows = ['│ +4 const fresh = 4; │'];
+    const once = design.apply(rows, ctx);
+    assert.equal(once[0], `│ ${sgr('toolDiffAdded', '+4 ')}${sgr('toolDiffAdded', 'const fresh = 4;')} │`);
+    assert.deepEqual(design.apply(once, ctx), once);
   });
 });
 

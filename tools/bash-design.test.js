@@ -12,6 +12,9 @@ const {
   seedBashDesignSelection,
   toolsActivityDesign,
 } = require('../lib/bash-design.js');
+// The second line this package registers. Its own suite owns its drawing; the release rule below is
+// here because one `VERSION` decides both lines at once.
+const { registerDiffDesign } = require('../lib/diff-design.js');
 
 const CALL = { tool: 'bash', part: 'call', width: 90 };
 const strip = (row) => row.replace(/\u001b\[[0-9;]*m/g, '');
@@ -1301,5 +1304,87 @@ describe('the scoped claim', () => {
     const design = calls.at(-1);
     assert.equal(design.scopes, undefined, 'an unreadable release never takes a scoped registration');
     assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write']);
+  });
+});
+
+// S6: ONE rule for every cutoff this package reads — an advertised release meets a cutoff by semver
+// order, numbers first, and a prerelease or build suffix loses ONLY when the numbers are equal. Both
+// of this package's lines sit at the same `0.9.0` cutoff, so each version is read through both
+// registrations at once: a release that is below it keeps the unscoped `Card tags` line and gets no
+// `Card diff` row, and a newer one gets both the scope and the diff line.
+describe('the release rule is semver order, on both lines at once (S6)', () => {
+  const registerBoth = (version) => {
+    const seen = [];
+    const api = { VERSION: version, registerToolDesign: (design) => { seen.push(design); return () => {}; } };
+    const disposeTags = registerBashDesign(api);
+    const disposeDiff = registerDiffDesign(api);
+    const dispose = () => {
+      if (typeof disposeTags === 'function') disposeTags();
+      if (typeof disposeDiff === 'function') disposeDiff();
+    };
+    return { seen, dispose, tags: seen.find((design) => design.line === 'tags'), diff: seen.find((design) => design.line === 'diff') };
+  };
+
+  test('a prerelease or a build suffix of 0.9.0 is BELOW it: unscoped `Card tags`, no `Card diff`', () => {
+    for (const version of ['0.9.0-rc.1', '0.9.0-beta.1+build', '0.9.0+workstation']) {
+      const registration = registerBoth(version);
+      try {
+        assert.deepEqual(registration.seen.map((design) => design.line), ['tags'], `${version}: the grouped line, and no diff line`);
+        assert.equal(registration.tags.scopes, undefined, `${version}: below 0.9.0, so no scope`);
+        assert.deepEqual([...registration.tags.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write'], `${version}: six tools, no edit`);
+        assert.equal(registration.diff, undefined, `${version}: nothing is offered for a row the bridge would refuse`);
+      } finally {
+        registration.dispose();
+      }
+    }
+  });
+
+  test('a NEWER release carrying a suffix is ABOVE 0.9.0: the scoped `Card tags` line AND `Card diff`', () => {
+    for (const version of ['0.9.1-rc.1', '0.10.0+local.2']) {
+      const registration = registerBoth(version);
+      try {
+        assert.deepEqual(registration.seen.map((design) => design.line), ['tags', 'diff'], `${version}: both lines`);
+        assert.equal(registration.tags.scopes.write, registration.tags.scopes.edit, `${version}: the scope is on the line`);
+        assert.deepEqual([...registration.tags.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'edit'], `${version}: seven tools`);
+        assert.equal(registration.diff.id, 'odd-worktree.diff', version);
+        assert.equal(registration.diff.label, 'color', version);
+        assert.deepEqual([...registration.diff.tools], ['write', 'edit'], version);
+      } finally {
+        registration.dispose();
+      }
+    }
+  });
+
+  test('0.6.0-rc.1 is BELOW 0.6.0, so it falls back to the single `tool: "bash"` design', () => {
+    // Deliberate and more conservative than the base commit, which accepted the grouped shape here:
+    // semver puts `0.6.0-rc.1` below `0.6.0`, and this package reads one rule at every cutoff. That
+    // is the `Card bash` row over bash alone — never a grouped registration a 0.6.0 bridge would
+    // accept but its own release ordering says came first.
+    const registration = registerBoth('0.6.0-rc.1');
+    try {
+      assert.equal(registration.seen.length, 1, 'a readable release is never probed');
+      const [design] = registration.seen;
+      assert.equal(design.tool, 'bash', 'the single-tool shape');
+      assert.equal(Object.hasOwn(design, 'tools'), false, 'never both shapes');
+      assert.equal(Object.hasOwn(design, 'line'), false, 'the older bridge names the row itself, `Card bash`');
+      assert.equal(design.id, 'odd-worktree.bash-activity');
+      assert.equal(design.label, 'activity');
+      assert.equal(registration.diff, undefined, 'and the diff line is not offered either');
+    } finally {
+      registration.dispose();
+    }
+  });
+
+  test('the ordinary releases still read as they always did', () => {
+    // 0.6.0 itself, and anything above it, is the grouped line; 0.5.0 is the single one.
+    for (const [version, shape] of [['0.5.0', 'bash'], ['0.6.0', 'tags'], ['0.9.0', 'tags']]) {
+      const registration = registerBoth(version);
+      try {
+        assert.equal(registration.tags === undefined, shape === 'bash', version);
+        assert.equal(registration.diff === undefined, version !== '0.9.0', version);
+      } finally {
+        registration.dispose();
+      }
+    }
   });
 });

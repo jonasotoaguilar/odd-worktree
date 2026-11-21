@@ -1,12 +1,12 @@
 ## CodeGraph
 
-Run a `codegraph` `query` for symbols or `explore` for source plus call paths before you search or read
-code — `fd`, `find`, `rg`, `grep`, `read` or `cat` — and before you plan or size a change that one read
-batch does not already explain: one `explore` on the change's subject shows the files and callers it
-reaches, which is what scope, size and any handoff depend on, and `query` locates a symbol. Exact strings,
-a file or location you already know and a run that only executes commands or tests need no call. The call
-comes first, not instead: the other tools stay for what the graph does not index, and its answer is a map
-— a verdict comes from the source and from tests.
+Before you `grep`, `rg`, `fd`, `find`, `read` or `cat` to answer where code lives, who calls it, how it
+works, or what a change reaches, call CodeGraph first: `codegraph` with `operation: "explore"` and
+`query: "<symbols or the question>"` returns the source and the call paths in one call, and it is
+also what scope, size and any handoff depend on. Use `operation: "query"` only to find where one
+symbol is defined. Skip it only for an exact string or a file path the user gave you. The other tools stay for
+what the graph does not index. Its answer is a map: confirm it in the source, and a verdict comes
+from the source and from tests.
 
 `codegraph` answers only for the checkout the session runs in, and each worktree is its own workspace with
 its own index. An ODD works in its own worktree: when the session runs elsewhere, look at that worktree, at

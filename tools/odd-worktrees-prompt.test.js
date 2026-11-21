@@ -166,20 +166,21 @@ describe('the section states the worktree policy', () => {
 
   test('the work happens in the ODD\'s worktree, never in the primary checkout or on the default branch', () => {
     const text = prose();
-    assert.match(text, /An ODD writes only in its own worktree, never in the primary checkout or on the default branch; the feature branch lives there/, text);
+    assert.match(text, /Every write goes in a worktree, whatever the size of the task, a one-line fix included\. Never write in the primary checkout or on the default branch/, text);
+    assert.doesNotMatch(text, /An ODD writes/, 'no task size decides whether the rule applies');
     assert.match(text, /Reading anywhere is fine, and a request that stays read-only needs no worktree/, text);
     // The rule is the premise: it opens the section, before the worktree is described.
-    assert.ok(text.indexOf('never in the primary checkout') < text.indexOf('A worktree lives at'), text);
+    assert.ok(text.indexOf('Never write in the primary checkout') < text.indexOf('A worktree lives at'), text);
   });
 
   test('a worktree is the ODD: find the assignment, resume it, create it, carry pending work', () => {
     const text = prose();
     assert.match(text, /A worktree lives at `/, text);
     assert.match(text, /directory IS the ODD/, text);
-    assert.match(text, /Before the ODD's first write, call `worktree_list`/, text);
-    assert.match(text, /if it already has a worktree, work there/, text);
-    assert.match(text, /if not, create it with `worktree_create`/, text);
-    assert.match(text, /use `copy_changes: true` if the pending changes of the current checkout belong to that work/, text);
+    assert.match(text, /Before your first `edit` or `write`: 1\. Run `worktree_list`\./, text);
+    assert.match(text, /2\. If the ODD has a worktree, work there\./, text);
+    assert.match(text, /3\. If not, run `worktree_create`/, text);
+    assert.match(text, /`copy_changes: true` if the pending changes of the current checkout belong to that work/, text);
   });
 
   test('one ODD, one worktree', () => {

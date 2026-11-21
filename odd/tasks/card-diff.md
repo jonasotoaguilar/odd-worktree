@@ -184,3 +184,16 @@ first (`assertToolsAreFree`), because coverage was per tool name — gentle-shel
   spec is corrected to semver ordering and the \`0.6.0-rc.1\` consequence is stated as deliberate;
   (c) docs that still contradict the code. One skipped test sits in a file this change touches and
   passes in the worktree, where the peer dependency resolves.
+- L11: closing evidence. Commits on `feat/card-diff` (base `4a93f56`): `726778c` scope the file card
+  and rename the line to `tags` (T1, T5), `defe2e0` the diff card (T2, T2b, T6), `4940c94` docs
+  (T3), `e6104da` repaint an edit row byte-identically (T7, S8b, S6 pins), `591b212` docs corrected
+  against the code (T7, S11). Verification: `npm test` 2457/2457 in the worktree, and 2457 with 17
+  skips (the absent `@earendil-works/pi-tui` peer, none of them in a file whose behaviour changed
+  here) in a fresh single-root clone; the independent verifier's differential for
+  read/bash/grep/find/ls was 16 cases / 32 arrays / 0 differences against `4a93f56`; and the seven
+  probes that failed in the second round (semver rule at 0.9.0 and 0.6.0, ANSI idempotence over four
+  passes, equal-length write panes, invalid and valid carry-over) were re-run by the parent in a
+  clean clone and all pass. NOT verified: a live Pi terminal with a real theme. Slice boundary: 2516
+  authored changed lines in five commits, well past ~400, so delivery must be a chained PR, not
+  one.
+

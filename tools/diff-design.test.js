@@ -443,7 +443,7 @@ describe('a host that draws no frame gets the whole pane (S1)', () => {
 });
 
 describe('the edit diff, recoloured (S1)', () => {
-  test('additions, deletions, hunk headers and context wear their roles, text untouched', () => {
+  test('a deletion and an addition wear their whole role, a hunk header and context their own', () => {
     const { seam } = seamFor();
     const rows = diffColorDesign(seam).apply(editCard(), {
       tool: 'edit',
@@ -455,13 +455,14 @@ describe('the edit diff, recoloured (S1)', () => {
     assert.equal(rows.length, 6, 'every row of the host card is still there');
     assert.equal(unpaint(rows[1]).includes('@@ -12,2 +12,2 @@'), true);
     assert.match(rows[1], /<muted>@@ -12,2 \+12,2 @@<\/muted>/u, 'a hunk header is muted');
-    assert.match(rows[2], /<toolDiffRemoved>-12 <\/toolDiffRemoved>/u, 'a deletion is toolDiffRemoved');
-    assert.match(rows[3], /<toolDiffAdded>\+12 <\/toolDiffAdded>/u, 'an addition is toolDiffAdded');
-    // The code of a row is the host's highlighter, with the language the path names.
-    assert.ok(rows[2].includes(HIGHLIGHT('const total = 1')), rows[2]);
-    assert.ok(rows[3].includes(HIGHLIGHT('const total = 2')), rows[3]);
-    // Context is the theme's plain text.
-    assert.match(rows[4], /<muted>13 <\/muted>/u);
+    // S13: the whole row — marker, number, divider and code — is the ONE role, as `git diff` paints it.
+    assert.match(rows[2], /<toolDiffRemoved>-12 │ const total = 1<\/toolDiffRemoved>/u, 'a deletion is toolDiffRemoved whole');
+    assert.match(rows[3], /<toolDiffAdded>\+12 │ const total = 2<\/toolDiffAdded>/u, 'an addition is toolDiffAdded whole');
+    // A changed row carries no syntax colour of its own: the role's colour is the whole point.
+    assert.equal(rows[2].includes(HIGHLIGHT('const total = 1')), false, rows[2]);
+    assert.equal(rows[3].includes(HIGHLIGHT('const total = 2')), false, rows[3]);
+    // Context keeps today's drawing: the gutter, the divider and the host's own highlighting.
+    assert.match(rows[4], /<muted>13<\/muted> <dim>│<\/dim> /u);
     assert.ok(rows[4].includes(HIGHLIGHT('return total')), rows[4]);
     // The frame and the row widths are the host's, byte for byte.
     assert.equal(rows[0], editCard()[0]);
@@ -479,7 +480,9 @@ describe('the edit diff, recoloured (S1)', () => {
     const out = diffColorDesign(seam).apply(rows, { tool: 'edit', part: 'call', width: WIDTH, theme, render: { args: { path: 'lib/app.js' } } });
     assert.deepEqual(heard, ['lib/app.js']);
     assert.equal(out.length, rows.length);
-    assert.ok(out[2].includes(HIGHLIGHT('const total = 1')));
+    // The highlighter is what a CONTEXT row's code is drawn with; a changed row is its role alone.
+    assert.ok(out[4].includes(HIGHLIGHT('return total')), out[4]);
+    assert.equal(out[2].includes(HIGHLIGHT('const total = 1')), false, out[2]);
   });
 
   test('a row already wearing this paint comes back identical: never painted twice', () => {
@@ -508,53 +511,173 @@ describe('the edit diff, recoloured (S1)', () => {
   });
 });
 
+describe('the edit row carries the write pane\'s gutter divider (S12)', () => {
+  const ctx = () => ({ tool: 'edit', part: 'call', width: WIDTH, theme, render: { args: { path: 'lib/app.js' } } });
+
+  test('the divider is the write pane\'s own, in the theme role that pane paints it', () => {
+    const write = diffColorDesign(seamFor().seam).apply(writeHalves().result, resultCtx({ render: { args: WRITE_ARGS } }));
+    assert.ok(write[0].includes('<muted> 1</muted> <dim>│</dim> '), `the write pane divides its gutter with the dim role: ${write[0]}`);
+    const rows = diffColorDesign(seamFor().seam).apply(editCard(), ctx());
+    assert.ok(rows[4].includes('<muted>13</muted> <dim>│</dim> '), `the edit draws the same one: ${rows[4]}`);
+    assert.match(unpaint(rows[4]), /^│ +13 │ return total +│$/u, unpaint(rows[4]));
+    // A changed row is divided too, and its divider is part of the row's ONE role, not its own paint.
+    assert.ok(rows[2].includes('<toolDiffRemoved>-12 │ const total = 1</toolDiffRemoved>'), rows[2]);
+    assert.equal(rows[2].includes('<dim>'), false, 'a changed row has no colour of its own but its role');
+  });
+
+  test('the divider is measured as PLAIN text, so the row keeps the width the host gave it', () => {
+    // A row whose code already fills it: the two columns the divider needs come out of the CODE.
+    const code = 'for (const item of items) sum += item.price;';
+    const tight = `│ -12 ${code} │`;
+    const rows = diffColorDesign(seamFor().seam).apply([tight], ctx());
+    assert.equal(cols(rows[0]), cols(tight), 'the row keeps the width the host gave it');
+    const plain = unpaint(rows[0]);
+    assert.equal((plain.match(/│/gu) ?? []).length, 3, `two frame cells and ONE divider: ${plain}`);
+    assert.ok(plain.startsWith('│ -12 │ for (const item of items) sum += item.pric'), plain);
+    assert.ok(plain.includes('…'), 'the code was clipped to what the divider left');
+    assert.equal(plain.includes('item.price;'), false, 'what did not fit is clipped, never wrapped or pushed out');
+  });
+
+  test('a clipped context row is drawn plain, never cut out of a painted row', () => {
+    const { seam, asked } = seamFor();
+    const row = `│  12 const value = ${'x'.repeat(44)} │`;
+    const rows = diffColorDesign(seam).apply([row], ctx());
+    assert.equal(cols(rows[0]), cols(row), 'the row keeps the width the host gave it');
+    assert.ok(unpaint(rows[0]).includes('…'), 'the row ends in the ellipsis the clip wrote');
+    assert.equal(rows[0].includes('\u001b[36m'), false, 'a clipped line is drawn plain, never cut out of a paint');
+    assert.equal(rows[0].includes('<text>'), true, rows[0]);
+    assert.equal(asked.length, 0, 'no painted line was measured or clipped');
+  });
+
+  test('a row too narrow to hold the gutter keeps the host\'s drawing whole', () => {
+    const row = '│ -4 x │';
+    const out = diffColorDesign(seamFor().seam).apply([row], ctx());
+    assert.deepEqual(out, [row], 'the divider is never added by overflowing the row');
+  });
+
+  test('a hunk header and a skip marker state no line, so neither is divided', () => {
+    const hunk = '│ @@ -1,4 +1,4 @@                     │';
+    const skip = '│    ...                                │';
+    const [outHunk, outSkip] = diffColorDesign(seamFor().seam).apply([hunk, skip], ctx());
+    assert.equal(outSkip, skip, 'a skip marker is not a diff row and is left as drawn');
+    assert.equal(unpaint(outHunk), unpaint(hunk), 'a hunk header states the same text');
+    assert.match(outHunk, /<muted>@@ -1,4 \+1,4 @@<\/muted>/u);
+  });
+});
+
+describe('a changed row is painted whole, as `git diff` paints it (S13)', () => {
+  const ctx = () => ({ tool: 'edit', part: 'call', width: WIDTH, theme, render: { args: { path: 'lib/app.js' } } });
+  const card = [
+    '│ -12 const total = 1                   │',
+    '│ +12 const total = 2                   │',
+  ];
+
+  test('a removed row is ENTIRELY the removed role: marker, number, divider and code', () => {
+    const [removed] = diffColorDesign(seamFor().seam).apply(card, ctx());
+    assert.equal(removed, `│ <toolDiffRemoved>-12 │ const total = 1</toolDiffRemoved>${' '.repeat(17)}│`);
+  });
+
+  test('an added row is ENTIRELY the added role', () => {
+    const added = diffColorDesign(seamFor().seam).apply(card, ctx())[1];
+    assert.equal(added, `│ <toolDiffAdded>+12 │ const total = 2</toolDiffAdded>${' '.repeat(17)}│`);
+  });
+
+  test('the highlighter is never asked for a changed row\'s code', () => {
+    const { seam, asked } = seamFor();
+    diffColorDesign(seam).apply([...card, '│  13 return total                      │'], ctx());
+    assert.deepEqual(asked.map(([code]) => code), ['return total'], 'only the context row is the highlighter\'s');
+  });
+
+  test('the host\'s intra-line emphasis is replaced by the role, so the row reads as one colour', () => {
+    // `renderDiff` puts `theme.inverse(...)` runs around the words that changed, INSIDE the role's
+    // paint. A whole-row role has no span to emphasise, and keeping them would make a second pass
+    // (which rebuilds the row from its plain text) differ from the first.
+    const emphasised = '│ -12 const \u001b[7mtotal\u001b[27m = 1   │';
+    const [row] = diffColorDesign(undefined).apply([emphasised], { ...ctx(), theme: { fg: (role, text) => `<${role}>${text}</${role}>` } });
+    assert.equal(row.includes('\u001b[7m'), false, 'no inverse run survives: the role is the whole row');
+    assert.equal(unpaint(row).includes('const total = 1'), true, 'the text itself is kept');
+  });
+
+  test('a context row keeps today\'s drawing, so the change is the changed rows alone', () => {
+    const { seam, asked } = seamFor();
+    const [row] = diffColorDesign(seam).apply(['│  13 return total                      │'], ctx());
+    assert.deepEqual(asked.map(([code]) => code), ['return total']);
+    assert.ok(row.includes(`<muted>13</muted> <dim>│</dim> ${HIGHLIGHT('return total')}`), row);
+  });
+});
+
 // S8b: a row already wearing this paint comes back BYTE-IDENTICAL. The markup theme above states
 // the role's NAME (`<toolDiffAdded>`), which the parser reads as the row's own text, so it can
 // never show an escape added twice; only a real theme, whose `fg` answers SGR codes, can.
-describe('repainting a row it already painted is a byte-identical no-op (S8b)', () => {
-  const SGR_ROLE = { toolDiffAdded: '92', toolDiffRemoved: '91', muted: '90', text: '39' };
+describe('repainting a row it already painted is a byte-identical no-op (S8b/S14)', () => {
+  const SGR_ROLE = { toolDiffAdded: '92', toolDiffRemoved: '91', muted: '90', dim: '2', text: '39' };
   const sgr = (role, text) => `\u001b[${SGR_ROLE[role] ?? '39'}m${text}\u001b[39m`;
   const sgrTheme = { fg: (role, text) => sgr(role, text) };
-  // The host's own edit body row: the frame cells painted, the marker and the code its own colour.
+  // The host's own edit body rows, at the layout its `renderDiff` draws them
+  // (`dist/core/tools/edit-diff.js:356,362,377`: `${marker}${padded number} ${code}`), between the
+  // card's own painted frame cells and padded out to the card's width.
   const FRAME = '\u001b[32m│\u001b[39m';
-  const hostRow = (text) => `${FRAME} ${text} ${FRAME}`;
+  const hostRow = (text, pad = 8) => `${FRAME} ${text}${' '.repeat(pad)} ${FRAME}`;
   const hostPainted = [
     hostRow('@@ -1,4 +1,4 @@'),
-    hostRow('\u001b[91m-4 const stale = 3;\u001b[39m'),
-    hostRow('\u001b[92m+4 const fresh = 4;\u001b[39m'),
-    hostRow(' 4 const kept = 2;'),
+    hostRow('\u001b[91m- 4 const stale = 3;\u001b[39m'),
+    hostRow('\u001b[92m+ 4 const fresh = 4;\u001b[39m'),
+    hostRow('  4 const kept = 2;'),
   ];
+  // A row's own text with its frame and padding removed: the divider is then the only difference a
+  // pass may make to what a row says.
+  const interior = (row) => unpaint(row).replace(/^│ +/u, '').replace(/ *│$/u, '');
+  const DIVIDED = ['@@ -1,4 +1,4 @@', '- 4 │ const stale = 3;', '+ 4 │ const fresh = 4;', '4 │ const kept = 2;'];
   const escapes = (row) => row.match(/\u001b\[[0-9;]*m/gu) ?? [];
 
   for (const [name, seam] of [['no highlighter', undefined], ['a real highlighter', seamFor().seam]]) {
-    test(`${name}: a second pass over its own rows adds no escape and no reset`, () => {
+    test(`${name}: four passes over its own rows add no escape, no reset and no second divider`, () => {
       const design = diffColorDesign(seam);
       const ctx = { tool: 'edit', part: 'call', width: WIDTH, theme: sgrTheme, render: { args: { path: 'lib/app.js' } } };
-      const once = design.apply(hostPainted, ctx);
-      const twice = design.apply(once, ctx);
-      assert.deepEqual(twice, once, 'the second application is a byte-identical no-op');
-      for (const [index, row] of twice.entries()) {
-        assert.equal(unpaint(row), unpaint(hostPainted[index]), `row ${index} states the same text`);
-        assert.equal(cols(row), cols(hostPainted[index]), `row ${index} keeps its width`);
-        assert.deepEqual(escapes(row), escapes(once[index]), `row ${index} gains no escape`);
+      const passes = [];
+      let rows = hostPainted;
+      for (let pass = 0; pass < 4; pass += 1) {
+        rows = design.apply(rows, ctx);
+        passes.push(rows);
       }
+      for (const [pass, seen] of passes.entries()) {
+        assert.deepEqual(seen, passes[0], `pass ${pass + 1} is a byte-identical no-op`);
+        for (const [index, row] of seen.entries()) {
+          assert.equal(cols(row), cols(hostPainted[index]), `row ${index} keeps its width`);
+          assert.deepEqual(escapes(row), escapes(passes[0][index]), `row ${index} gains no escape`);
+        }
+      }
+      assert.deepEqual(passes[0].map(interior), DIVIDED, 'one divider per row, never two');
       // The defect this pins: the added row's opening code used to survive in the prefix and be
-      // issued again, so the second pass read `\u001b[92m\u001b[92m`. No escape is ever issued twice
-      // in a row here — the marker's paint is rebuilt, never stacked on the paint already there.
-      assert.doesNotMatch(once[2], /\u001b\[([0-9;]*)m\u001b\[\1m/u, once[2]);
-      assert.doesNotMatch(once[1], /\u001b\[([0-9;]*)m\u001b\[\1m/u, once[1]);
-      // The host's own frame cells keep their paint, on both passes.
-      assert.ok(once[2].startsWith(`${FRAME} `), once[2]);
-      assert.ok(once[2].endsWith(` ${FRAME}`), once[2]);
+      // issued again, so a second pass read `\u001b[92m\u001b[92m`. No escape is ever issued twice
+      // in a row here — the row is rebuilt from its plain text, never stacked on the paint already
+      // there.
+      assert.doesNotMatch(passes[0][2], /\u001b\[([0-9;]*)m\u001b\[\1m/u, passes[0][2]);
+      assert.doesNotMatch(passes[0][1], /\u001b\[([0-9;]*)m\u001b\[\1m/u, passes[0][1]);
+      // The host's own frame cells keep their paint, on every pass.
+      assert.ok(passes[0][2].startsWith(`${FRAME} `), passes[0][2]);
+      assert.ok(passes[0][2].endsWith(` ${FRAME}`), passes[0][2]);
     });
   }
+
+  test('a row with no padding gives up code, never the frame, and only once', () => {
+    const design = diffColorDesign(undefined);
+    const ctx = { tool: 'edit', part: 'call', width: WIDTH, theme: sgrTheme, render: { args: { path: 'lib/app.js' } } };
+    // The card's width is already spent: the two columns the divider needs come out of the code.
+    const full = `${FRAME} -12 for (const item of items) sum += item.price; ${FRAME}`;
+    const once = design.apply([full], ctx);
+    assert.equal(cols(once[0]), cols(full), 'the frame is not pushed out');
+    assert.match(interior(once[0]), /^-12 │ for \(const item of items\) sum \+= item\.pric…$/u, interior(once[0]));
+    assert.ok(interior(once[0]).endsWith('…'), 'what did not fit is clipped');
+    assert.deepEqual(design.apply(once, ctx), once, 'the clip fills the row, so the next pass is a no-op');
+  });
 
   test('the plainest host row is a no-op too: a real theme never doubles the marker paint', () => {
     const design = diffColorDesign(undefined);
     const ctx = { tool: 'edit', part: 'call', width: WIDTH, theme: sgrTheme, render: { args: { path: 'lib/app.js' } } };
-    const rows = ['│ +4 const fresh = 4; │'];
+    const rows = ['│ +4 const fresh = 4;     │'];
     const once = design.apply(rows, ctx);
-    assert.equal(once[0], `│ ${sgr('toolDiffAdded', '+4 ')}${sgr('toolDiffAdded', 'const fresh = 4;')} │`);
+    assert.equal(once[0], `│ ${sgr('toolDiffAdded', '+4 │ const fresh = 4;')}   │`);
     assert.deepEqual(design.apply(once, ctx), once);
   });
 });
@@ -595,7 +718,7 @@ describe('a missing or broken highlighter degrades to plain rows', () => {
     assert.doesNotThrow(() => { rows = diffColorDesign(seam).apply(result(), resultCtx({ render: { args: { path: 'lib/app.js', content } } })); });
     assert.ok(rows[0].includes('<text>const x = 1</text>'), rows[0]);
     const edit = diffColorDesign(seam).apply(editCard(), { tool: 'edit', part: 'call', width: WIDTH, theme, render: { args: { path: 'a.js' } } });
-    assert.match(edit[2], /<toolDiffRemoved>const total = 1<\/toolDiffRemoved>/u, 'the diff role carries the code');
+    assert.match(edit[2], /<toolDiffRemoved>-12 │ const total = 1<\/toolDiffRemoved>/u, 'the diff role carries the code');
   });
 
   test('a highlighter whose paint changes the text is not a paint', () => {

@@ -7766,7 +7766,14 @@ async function issuesBrowserRepoIdentity(gh, checkoutRoot, fresh) {
   }
   if (!reported || reported.ok !== true
     || typeof reported.nameWithOwner !== "string" || reported.nameWithOwner.length === 0) {
-    return { ok: false, error: (reported && reported.error) || "cannot resolve this checkout's repository" };
+    return {
+      ok: false,
+      error: (reported && reported.error) || "cannot resolve this checkout's repository",
+      // gh's own verdict when the checkout has no remote at all: nothing to
+      // resolve FROM. The rail draws that as a state; every other caller keeps
+      // the failure sentence it has always shown.
+      ...(reported && reported.noRemote === true ? { noRemote: true } : {}),
+    };
   }
   const normalized = gh.normalizeScopeIdentity(reported.nameWithOwner, process.env);
   if (!normalized || normalized.ok !== true) {
@@ -8730,6 +8737,13 @@ async function loadIssuesSidebar() {
     resolved = { ok: false, error: issuesSidebarError(err, "cannot resolve this checkout's own repository") };
   }
   if (!resolved || resolved.ok !== true) {
+    // S12 (T11) parity: a checkout with no remote at all is not a broken read
+    // either — there is no GitHub repository to read from. Its one line is short
+    // and gray, like the non-repository one, and the settled state keeps no
+    // retry timer.
+    if (resolved && resolved.noRemote === true) {
+      return { ok: false, error: ISSUES_SIDEBAR_NOT_GITHUB, errorTone: "dim" };
+    }
     return { ok: false, error: (resolved && resolved.error) || "cannot resolve this checkout's own repository" };
   }
   const identity = resolved.identity;
@@ -8840,6 +8854,9 @@ async function loadIssuesSidebar() {
 // `pi.sendUserMessage` returns void by contract, so this reports that the command
 // was dispatched, never that a panel opened. Never throws.
 const ISSUES_SIDEBAR_NOT_REPOSITORY = "not a git repository";
+// The same short-line state one step further in: the checkout IS a repository,
+// but it has no remote, so there is no GitHub repository to read issues from.
+const ISSUES_SIDEBAR_NOT_GITHUB = "not a GitHub repository";
 const ISSUES_PANEL_REFUSAL_ENTRY = "odd-worktree-issues-refusal";
 const ISSUES_PANEL_DISPATCH_FAILED = "the host cannot dispatch the /issues command here";
 

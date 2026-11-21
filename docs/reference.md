@@ -539,7 +539,11 @@ ones.
   `/issues` reads it, and no `gh` call is made without a proven identity. A cwd
   that is not inside a repository is not that error: the section's one line is
   exactly `not a git repository`, in the `dim` gray role and with no path, while
-  `/warp` and `/issues` keep their own, fuller sentence. A missing `gh` CLI never
+  `/warp` and `/issues` keep their own, fuller sentence. Neither is a checkout that
+  IS a repository but has no remote: there is no GitHub repository to read from, so
+  its one line is exactly `not a GitHub repository`, in the same `dim` gray role.
+  gh's own `no git remotes` answer becomes that state — no read, no timer, and never
+  its long failure sentence in the error tone; `/issues` keeps its own wording. A missing `gh` CLI never
   reaches this section at all — without the CLI the extension never adds it to the
   rail, so there is no line to draw — and the one `dim` `gh CLI not installed` line
   is the fail-closed answer for a `gh` that disappeared after the extension loaded,

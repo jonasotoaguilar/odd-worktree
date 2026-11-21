@@ -70,9 +70,10 @@ test('every activity wears its own mark and a theme role', () => {
 		checking: { glyph: '✓', titleRole: 'mdHeading' },
 		formatting: { glyph: '≋', titleRole: 'syntaxFunction' },
 		// U+2692 is painted two cells wide by an emoji-fallback font while the host
-		// counts it as one, so its mark ends in the one space that keeps a column of
-		// its own: the heading's counted width must match what the terminal paints.
-		preparing: { glyph: '⚒ ', titleRole: 'syntaxFunction' },
+		// counts it as one, and that font eats the space right after it: two gaps are
+		// what leaves one VISIBLE column (`⚒  preparing`) while the counted width still
+		// matches what the terminal paints.
+		preparing: { glyph: '⚒  ', titleRole: 'syntaxFunction' },
 		publishing: { glyph: '↑', titleRole: 'success' },
 		versioning: { glyph: '⎇', titleRole: 'warning' },
 		// The native tool's own mark, so the shell call and the tool read as one card.
@@ -98,7 +99,7 @@ test('every activity wears its own mark and a theme role', () => {
 test('a mark costs one counted column, plus preparing\'s declared gap', () => {
 	for (const activity of SHELL_ACTIVITIES) {
 		const { glyph } = SHELL_ACTIVITY_IDENTITY[activity];
-		assert.equal([...glyph].length, activity === 'preparing' ? 2 : 1, `${activity}: one mark, plus its own gap`);
+		assert.equal([...glyph].length, activity === 'preparing' ? 3 : 1, `${activity}: one mark, plus its own gaps`);
 		assert.equal(glyph.trimStart(), glyph, `${activity}: a mark never starts with its gap`);
 	}
 });
@@ -106,7 +107,7 @@ test('a mark costs one counted column, plus preparing\'s declared gap', () => {
 test('the host measures every mark at the width the heading assumes', { skip: visibleWidth ? false : 'requires @earendil-works/pi-tui' }, () => {
 	for (const activity of SHELL_ACTIVITIES) {
 		const { glyph } = SHELL_ACTIVITY_IDENTITY[activity];
-		assert.equal(visibleWidth(glyph), activity === 'preparing' ? 2 : 1, `${activity}: one counted column plus its own gap`);
+		assert.equal(visibleWidth(glyph), activity === 'preparing' ? 3 : 1, `${activity}: one counted column plus its own gaps`);
 	}
 });
 

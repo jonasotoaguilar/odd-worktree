@@ -37,7 +37,9 @@ describe('the heading', () => {
   });
 
   test('the other families get their own mark and word', () => {
-    const cases = [['node --test tools/*.test.js', '✓ checking'], ['rm -rf build', '⚠ destructive'], ['git commit -m wip', '⎇ versioning']];
+    // `preparing` keeps TWO gaps after U+2692: an emoji-fallback font paints the
+    // glyph two cells wide and eats the first space, so one gap would read `⚒preparing`.
+    const cases = [['node --test tools/*.test.js', '✓ checking'], ['rm -rf build', '⚠ destructive'], ['git commit -m wip', '⎇ versioning'], ['pnpm install', '⚒  preparing']];
     for (const [command, heading] of cases) {
       const [out] = applyBashActivityHeading([neon(command)], CALL);
       assert.ok(strip(out).includes(heading), `${command} -> ${heading}`);

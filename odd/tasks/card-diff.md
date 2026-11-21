@@ -94,6 +94,24 @@ first (`assertToolsAreFree`), because coverage was per tool name — gentle-shel
   `docs/codebase/code-map.md`) together with the one-time carry-over, so a reader of the release
   is not surprised that `Card tools` became `Card tags`.
 
+- **S12** — «si te fijas write tiene una linea divisoria entre codigo y numeracion ver si se puede
+  poner en edit igual». Therefore an `edit` row carries the same divider the `write` pane draws
+  between the line-number gutter and the code, in the same theme role, so the two cards read as one
+  design. The row keeps the width the host gave it: the divider is measured as PLAIN text and the
+  code is clipped or wrapped to what remains, never overflowing the frame.
+
+- **S13** — «en edit se ve bien los colores pero ver si se puede poner tipo git diff, que la linea
+  quitada sea toda roja no solo la numeracion y la agregada toda verde. No esos colores, siguen el
+  tema es el color rol que ya usas». Therefore a removed row is painted ENTIRELY in the theme's
+  `toolDiffRemoved` role and an added row ENTIRELY in `toolDiffAdded` — marker, number, divider and
+  code — not only the marker and the number; context rows keep today's drawing. The colours are the
+  theme roles the design already uses, never a hex value. A changed row therefore carries no syntax
+  colour of its own: the role's colour is the whole point, as in `git diff`.
+
+- **S14** — the S8b guarantee is unchanged by S12 and S13: applying the design to a row it already
+  painted answers that row BYTE-IDENTICAL (real SGR, several passes), so the divider is never added
+  twice, and a skill or an ODD path still comes back byte-identical on both halves.
+
 ## Tasks
 
 - T1: `lib/bash-design.js`, `lib/file-card-resolver.js`, `lib/file-card.js` — the scoped
@@ -116,6 +134,10 @@ first (`assertToolsAreFree`), because coverage was per tool name — gentle-shel
   semver by test (S6), the 0.6.0-rc.1 consequence stated, and the docs that contradict the code
   (S11). Route: writer. Commit: `fix(cards): repaint an edit row byte-identically` plus a docs
   commit.
+
+- T8: the two refinements the human asked for after trying the shipped card: the divider (S12) and
+  the whole-row `toolDiffAdded` / `toolDiffRemoved` colouring (S13), keeping S14. Route: writer.
+  Commit: `feat(cards): draw an edit like git diff, with the gutter divider`.
 
 ## Log
 
@@ -196,4 +218,14 @@ first (`assertToolsAreFree`), because coverage was per tool name — gentle-shel
   clean clone and all pass. NOT verified: a live Pi terminal with a real theme. Slice boundary: 2516
   authored changed lines in five commits, well past ~400, so delivery must be a chained PR, not
   one.
+- L12: follow-up from the human after trying 3.1.0 in a live Pi session with their own theme (a
+  screenshot of a `write` and an `edit` card; the first live rendering this feature had had).
+  Verbatim: «funciona perfecto pero 2 detalles, primero si te fijas write tiene una linea
+  divisoria entre codigo y numeracion ver si se puede poner en edit igual. Y lo otro, en edit se ve
+  bien lo colores pero ver si se puede poner tipo git diff, que la linea quitada sea toda roja no
+  solo la numeracion y la agregada toda verde. No esos colores, siguen el tema es el color rol que
+  ya usas, es para que me entiendas». What the screenshot shows: the write pane draws
+  `N │ code`; the edit card draws `- 5 for (…)` with only the marker and the number in the diff
+  role, the code keeping its syntax colours and no divider. This is also the first evidence that
+  the card renders as intended in a real terminal, which the 3.1.0 notes had listed as unverified.
 

@@ -14,10 +14,10 @@
 //
 // The bash heading is not a preference of this package either: it contributes one DESIGN
 // (`activity`) to gentle-shell-bridge's `/gentle:customize` → `Cards` page, on its
-// `Card tools` line when the bridge can group tools (`default` | `activity`) and on
+// `Card tags` line when the bridge can group tools (`default` | `activity`) and on
 // the per-tool `bash` line on anything older, which the bridge owns, persists and
 // repaints (lib/bash-design.js). The skill/ODD file card owns no preference at all: it
-// is painted while that same `Card tools` line answers with this design, asked of the
+// is painted while that same `Card tags` line answers with this design, asked of the
 // bridge per paint (lib/file-card-resolver.js), and the host draws its own row for any
 // other value. Nothing of that is registered here.
 //
@@ -9133,6 +9133,70 @@ function registerBashDesignRows(api) {
   }
 }
 
+// T2 (S1/S2): the `Card diff` design paints `write` and `edit` as an IDE pane in the
+// active theme's own roles. Its syntax highlighting is the SAME seam `/files` opens
+// (`filesAgentSeam`, Pi's own `highlightCode` and `getLanguageFromPath`), resolved
+// behind a stable facade because the seam is an async import while a design is
+// registered synchronously: the facade hands whatever has resolved by the frame that
+// asks, and answers `undefined` before it does, so the pane is drawn plain rather
+// than not at all. Nothing here imports the host theme or names a colour.
+const diffDesignSeam = { current: {} };
+
+function diffDesignSeamFacade() {
+  const read = (name) => {
+    const seam = diffDesignSeam.current;
+    const member = seam && typeof seam === "object" ? seam[name] : undefined;
+    return typeof member === "function" ? member : undefined;
+  };
+  return {
+    highlight: (code, language) => {
+      const highlight = read("highlight");
+      if (highlight === undefined) return undefined;
+      try {
+        return highlight(code, language);
+      } catch {
+        return undefined;
+      }
+    },
+    languageForPath: (path) => {
+      const languageForPath = read("languageForPath");
+      if (languageForPath === undefined) return undefined;
+      try {
+        return languageForPath(path);
+      } catch {
+        return undefined;
+      }
+    },
+  };
+}
+
+// S6: a bridge without `registerToolDesign`, or one older than the release whose
+// per-(`line`, `tool`) claim lets a second line name `write` and `edit`, gets NO
+// registration and no seam work at all: the seam is warmed only AFTER a registration
+// the bridge accepted, so nothing is offered for a row the bridge would refuse, no
+// import is started for it, and the host keeps drawing its own card.
+function registerDiffDesignRows(api) {
+  try {
+    const design = libRequire("diff-design.js");
+    if (!design || typeof design.registerDiffDesign !== "function") return;
+    if (api === null || typeof api !== "object" || typeof api.registerToolDesign !== "function") return;
+    if (design.bridgeSupportsDiffLine(api) !== true) return;
+    const registered = design.registerDiffDesign(api, diffDesignSeamFacade());
+    if (registered === null) return;
+    // Warm the seam once, at registration (a session start), so the first card that
+    // paints already has it. The design paints whatever has resolved by its frame, so
+    // a failed import leaves every frame plain.
+    Promise.resolve()
+      .then(() => filesAgentSeam())
+      .then((seam) => {
+        diffDesignSeam.current = seam && typeof seam === "object" ? seam : {};
+      })
+      .catch(() => {});
+  } catch {
+    // The design is cosmetic; the host keeps drawing its own write and edit cards.
+  }
+}
+
 // S2 (issues-sidebar): the section reaches the rail ONLY through the bridge's
 // published object. A host without it is subscribed to the ready announcement
 // ONCE and nothing else happens: no notify, no throw, no other surface touched.
@@ -9150,6 +9214,7 @@ function registerIssuesSidebar(pi) {
       // with `mountIssuesSidebar` tearing the old section down first.
       if (api !== issuesSidebarApi) {
         registerBashDesignRows(api);
+        registerDiffDesignRows(api);
         issuesSidebarApi = api;
       } else if (issuesSidebarHandle !== null) {
         return;
@@ -9823,7 +9888,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // CodeGraph is best effort.
   }
   // S1 (T2): the file cards, through the same host hook. A `read`/`edit`/`write` call whose
-  // path names a skill or an ODD artifact heads as that file while the bridge's `Card tools`
+  // path names a skill or an ODD artifact heads as that file while the bridge's `Card tags`
   // line answers with this package's activity design; every other call keeps the host's own
   // boxed row, which the card reproduces because the hook decides per tool name and never
   // sees the arguments. No preference of ours is registered: the gate is the bridge's own

@@ -13,7 +13,7 @@
 // worktree↔issue association.
 //
 // The bash activity is not a preference here: it is a design on gentle-shell-bridge's
-// own `Card tools` line, so the shipped surface is exactly four commands, two tools, one
+// own `Card tags` line, so the shipped surface is exactly four commands, two tools, one
 // sidebar section, one tools design and the one `Cards` row group the two file-card
 // switches carry.
 //
@@ -72,8 +72,8 @@ describe('manifest', () => {
     // classifier and the one design registered on the bridge. The file cards add
     // their own four modules — a classifier, the card, its resolver and the document
     // body Pi's Markdown draws — and own no preference at all (S1): they are gated by
-    // the bridge's `Card tools` line, which is the bridge's, not ours.
-    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-design.js', 'bash-frame.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js']) {
+    // the bridge's `Card tags` line, which is the bridge's, not ours.
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-design.js', 'bash-frame.js', 'diff-design.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
     for (const gone of ['card-files-mode.js', 'cards-customize.js']) {
@@ -106,7 +106,7 @@ describe('registration', () => {
     }
 
     // S1: the two file-card switches and their document are gone, and the extension
-    // names neither. The file card is gated by the bridge's own `Card tools` line.
+    // names neither. The file card is gated by the bridge's own `Card tags` line.
     assert.equal(source.includes('registerCardsCustomize'), false, 'no row provider is registered for a switch');
     assert.equal(source.includes('card-files'), false, 'the extension never names their document');
     const modules = fs.readdirSync(lib).filter((entry) => entry.endsWith('.js'));
@@ -129,6 +129,8 @@ describe('registration', () => {
   test('the bash design is wired through exactly one registration and adds no name', async () => {
     const source = stubbedSource();
     assert.equal(source.split('design.registerBashDesign(').length - 1, 1, 'one registration call');
+    assert.equal(source.split('design.registerDiffDesign(').length - 1, 1, 'the Card diff line registers once too');
+    assert.equal(source.split('registerDiffDesignRows(').length - 1, 2, 'the one call and its definition');
     assert.equal(source.includes('registerBashCard'), false, 'no resolver of ours draws bash');
     const { commands, tools } = await loadExtension({});
     for (const gone of ['bash-card', 'card-bash', 'bash']) {

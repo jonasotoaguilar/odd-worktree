@@ -3099,6 +3099,48 @@ function guardWorktreeBashCall(event, ctx) {
   }
 }
 
+// S4 (T3): the WRITE guard's `tool_call` handler, a sibling of the bash one on the same
+// hook. An `edit` or `write` whose path lies inside the primary checkout, while that
+// checkout is on the repository's default branch, is refused with one sentence (L1:
+// the human chose a block, not a warning). Every other tool, and every path outside the
+// session's own repository — tmp, another repository, a linked worktree (L2) — passes,
+// and the same `ODD_WORKTREE_GUARD=0` switch turns it off with the bash guards.
+//
+// It reads the touched paths the naming handler already reads (`oddTouchedPaths` over
+// the call's own arguments) and its cwd the same way (`oddEventCwd`), and hands the
+// guard the SAME memoized identity/default-branch seams, so the two guards can never
+// disagree about which checkout the session stands in. The current branch is read
+// fresh for every judgement: the checkout's own answer, never a remembered one.
+const WRITE_GUARD_TOOLS = new Set(["edit", "write"]);
+
+function guardWorktreeWriteCall(event, ctx) {
+  try {
+    if (process.env.ODD_WORKTREE_GUARD === "0") return undefined;
+    const toolName = oddToolNameOf(event);
+    if (!WRITE_GUARD_TOOLS.has(toolName)) return undefined;
+    const paths = oddTouchedPaths(oddArgsOf(event));
+    if (paths.length === 0) return undefined;
+    const guard = libRequire("worktree-guard.js");
+    if (!guard || typeof guard.decideWriteGuard !== "function") return undefined;
+    const git = libRequire("worktree-git.js");
+    const decision = guard.decideWriteGuard({
+      toolName,
+      paths,
+      cwd: oddEventCwd(event, ctx),
+      repoIdentity: (cwd) => cachedRepoIdentity(git, cwd),
+      defaultBranch: (root) => cachedDefaultBranch(git, root),
+      currentBranch: (root) => readCurrentBranch(git, root),
+    });
+    if (decision && decision.block === true && typeof decision.reason === "string") {
+      return { block: true, reason: decision.reason };
+    }
+    return undefined;
+  } catch {
+    // S8: the guard never throws into the host, and a call it cannot judge passes.
+    return undefined;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // `/warp <name>` (S23): move the SESSION to another
 // checkout by NAME.
@@ -9781,6 +9823,11 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // the only handler that returns a `block` answer; every other tool call is left
   // exactly as the host proposed it. Nothing about it is callable by the agent (S7).
   pi.on("tool_call", (event, ctx) => guardWorktreeBashCall(event, ctx));
+  // S4 (T3): the write guard, a second `tool_call` observation that refuses an `edit`
+  // or `write` into the primary checkout while it sits on the default branch. It is a
+  // sibling of the bash guard, not a part of it: the two read different inputs, and a
+  // `bash` call and a file write are refused for different reasons.
+  pi.on("tool_call", (event, ctx) => guardWorktreeWriteCall(event, ctx));
   pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
   // S10 (T9): ONE `tool_result` observation for the rail's forced refresh. It
   // answers the `bash` tool only — every other tool returns before the classifier

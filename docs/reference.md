@@ -1278,8 +1278,8 @@ A session that already holds a CodeGraph tool (the native `codegraph` tool or
 `mcp__codegraph__codegraph_explore`) gets a short section on how to use it: call
 the graph before searching or reading code, treat its answer as a map and not as
 proof, and keep the other tools for what it does not index. The orchestrator's text also
-sizes a change with the graph only when one read batch does not already explain it (a
-known file or location needs no call), and points its look at the ODD's own worktree
+names one literal call (`codegraph` with `operation: "explore"`) and one exemption (an exact
+string or a file path the user gave), and points its look at the ODD's own worktree
 through `projectPath` when the session runs elsewhere; the explorer's text gives its
 second look a stop. Each role gets its
 own text, read from `lib/codegraph-prompt/<role>.md`: the primary session the
@@ -1324,21 +1324,23 @@ child. It stays silent, using up no slot, for a checkout this session already ex
 `projectPath` since the last compaction.
 
 **Guard 2, the session's own checkout.** The primary session and every child except the `review-*`
-agents, once per the checkout the session is in:
+agents. It fires on the first search of the checkout the session is in, while CodeGraph is unused:
 
 ```text
-Follow the CodeGraph rule: run `codegraph` `query` or `explore` first, if it applies.
+Follow the CodeGraph rule: run `codegraph` `query` or `explore` first.
 ```
 
 for the primary session and the explore agent (the native wording only when that role holds the
 native tool), and
 
 ```text
-Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first, if it applies.
+Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first.
 ```
 
-for every other role. It is keyed by the checkout, so a `/warp` re-arms it, and it stays silent once
-the session used `codegraph` or the MCP tool.
+for every other role. It comes back after 8 searches in a row without a use of `codegraph` or the MCP
+tool, at most 3 times per session (the cap is shared across checkouts), and any use of either tool
+restarts the row. The first reminder is keyed by the checkout, so a `/warp` re-arms it, and it stays
+silent while the session has used CodeGraph and the row is short.
 
 **What is "another checkout".** A different git toplevel (`git -C <dir> rev-parse --show-toplevel`),
 read once per directory and cached for the session. It comes from a tool's own path, or from a `cd`

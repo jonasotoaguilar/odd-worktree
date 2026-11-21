@@ -457,14 +457,17 @@ The question this page answers: which rules must every change preserve, and what
     `<path>` the checkout's real git toplevel. It stays silent, using up no slot, for
     a checkout this session already explored with that tool's `projectPath` since the
     last compaction.
-    **Guard 2** is the primary session's and every child's except a `review-*` agent,
-    fires once per the session's own checkout, and is keyed by the checkout so a
-    `/warp` re-arms it: the primary session and the explore agent get `Follow the
-    CodeGraph rule: run codegraph query or explore first, if it applies.` (`codegraph`,
-    `query` and `explore` in backticks, the native wording only for a role that holds
-    the native tool), every other role `Follow the CodeGraph rule: call
-    mcp__codegraph__codegraph_explore first, if it applies.` (`mcp__codegraph__codegraph_explore`
-    in backticks). It stays silent once the session used `codegraph` or the MCP tool.
+    **Guard 2** is the primary session's and every child's except a `review-*` agent.
+    It fires on the first search of the session's own checkout while CodeGraph is
+    unused (keyed by the checkout, so a `/warp` re-arms it), and again after 8
+    qualifying searches in a row without a use of `codegraph` or the MCP tool, at most
+    3 times per session across checkouts; any use of either restarts the row, and a
+    compaction or a new session forgets the row and the cap. The primary session and
+    the explore agent get `Follow the CodeGraph rule: run codegraph query or explore
+    first.` (`codegraph`, `query` and `explore` in backticks, the native wording only
+    for a role that holds the native tool), every other role `Follow the CodeGraph
+    rule: call mcp__codegraph__codegraph_explore first.`
+    (`mcp__codegraph__codegraph_explore` in backticks). It is advice: it never blocks.
 
     **A call that failed is no subject at all**: the model got no result to read, so
     no reminder rides an error result, no once-per-key slot is spent, and a failed

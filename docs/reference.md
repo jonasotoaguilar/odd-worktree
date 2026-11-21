@@ -1106,11 +1106,19 @@ The host's folded budget and its `… +N lines` fold row are kept, and `ctx.rend
 shows all of it. A host whose rows carry no frame gets the whole pane on the call half, with
 the host's own hint row kept after the fold row — and never a hint the host did not draw. An
 error result, and a body the host draws empty, stay the host's rows.
-* An `edit` is drawn from the diff the host already carries: an addition wears `toolDiffAdded`,
-a deletion `toolDiffRemoved`, a hunk header `muted`, and the code inside a row is painted with
-the syntax roles of the language `args.path` names. The row text and the row width are the
-host's, unchanged; a row that is not a diff row — a heading, a blank line, a fold notice — is
-left exactly as drawn, and repainting a row that already wears this paint answers it identically.
+* An `edit` is drawn from the diff the host already carries, like `git diff` in the theme's own
+roles: a row the call DELETED is painted whole in `toolDiffRemoved` and a row it ADDED whole in
+`toolDiffAdded` — marker, line number, divider and code — so a changed row carries no syntax colour
+of its own, and a context row is `muted`/`text` with the code in the syntax roles of the language
+`args.path` names. An `edit` row states its line behind the same `N │ code` gutter the `write` pane
+draws, with the rule in the same `dim` role; a hunk header and a skip marker state no line, so they
+keep the role they have. The divider is measured as PLAIN text, and the two columns it costs come out
+of the row's own padding — a row with none loses the tail of its code to an ellipsis (measured as
+plain text too, invariant 17) — so the row keeps the width the host gave it and the frame is never
+pushed out. The row text and every cell of the host's frame are the host's; a row that is not a diff
+row — a heading, a blank line, a fold notice, a line the host wrapped onto a continuation row — is
+left exactly as drawn, and repainting a row that already wears this drawing answers it identically,
+divider and colour included.
 
 A call whose `args.path` is a skill or an ODD artifact comes back byte-identical, on both
 halves and for both tools: those rows belong to the file card, and the `Card tags` line claims

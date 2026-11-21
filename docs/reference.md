@@ -855,10 +855,17 @@ tool-renderer resolver, builds the host's own card (whatever `Card style` and
 `Card content` are chosen), reads its line in `/gentle:customize` → `Cards`
 (`default` | `activity`; the bridge stores `default` as `native`) on every render pass, and hands the design the rows the host
 drew. On a bridge that can put several tools on one line (`0.6.0` and later) that is ONE
-`Card tools` row covering `bash`, the three read-only shell tools `grep`, `find`, `ls`, and
-`read` and `write`; on an older bridge the same design is registered for `bash` alone, the row is
-`Card bash` and those five are drawn by the host (or, for a read or a write on a skill or an ODD
-artifact, by the file card). Which shape is sent is decided from the
+`Card tags` row covering `bash`, the three read-only shell tools `grep`, `find`, `ls`, and
+`read`, `write` and `edit`; on an older bridge the same design is registered for `bash` alone, the row is
+`Card bash` and those six are drawn by the host (or, for a read, a write or an edit on a skill or an ODD
+artifact, by the file card). `write` and `edit` are on that line through a SCOPE rather than a bare
+claim (gentle-shell-bridge `0.9.0` and later): the line claims those two tools' calls only when
+`args.path` is a skill or an ODD artifact, which is the file card's own rule (`fileCardIdentity`,
+`lib/skill-odd-card.js`), so the design being asked about a write or an edit is the file card's
+question and never a row of this design's own. A bridge older than `0.9.0` takes the same line
+without the scope and without `edit`, exactly as it did before, because a scoped registration there
+is refused WHOLE and would cost the `activity` design altogether; a release string that cannot be
+read is read as that older shape for the same reason. Which shape is sent is decided from the
 bridge's own `VERSION` before anything is registered, because a grouped registration on an
 older one is refused and reported in `/bridge-status`. A release string that cannot be read
 is not guessed: the bridge is asked once, with a throwaway design nobody selects and a line
@@ -890,7 +897,7 @@ render context (`ctx.render`: the arguments, `isPartial`, `isError`, `durationMs
 classify the REAL command, so a heading the host truncated, folded or wrapped is still
 named; for a read-only shell tool that render context is only the proof that the heading is not
 the whole evidence, since the word never depends on what it reads. That context is the
-bridge's, and it is handed on BOTH registration shapes — the grouped `Card tools` line and
+bridge's, and it is handed on BOTH registration shapes — the grouped `Card tags` line and
 the historical per-tool one — with the call's own `args` by reference, exactly as Pi passes
 them (`ToolRenderContext.args`); `ctx.render.args.command` is therefore the bash contract.
 A reproduction that nests that object one level deeper (`{ args: { args: { command } } }`)
@@ -902,8 +909,8 @@ after it but the host's fill and hint. Either way, a bash command the classifier
 name keeps the generic heading, now drawn `$ bash` (in the host's `bashMode` role) instead
 of a bare `$`, so a card never claims an activity it cannot prove; a read-only heading
 that cannot be proved stays exactly as the host drew it, because those three have no
-generic word of their own. A tool the line does not cover (`edit`, every MCP tool) is
-returned untouched, and so are `read` and `write`, which the line declares for the file
+generic word of their own. A tool the line does not cover (every MCP tool) is
+returned untouched, and so are `read`, `write` and `edit`, which the line declares for the file
 card's question alone and this design draws nothing for.
 
 Colour is a theme role, never a palette (`ctx.theme`): the label wears its family's role
@@ -926,6 +933,18 @@ tool's per-tool choice over to its line's value at registration time, so a choic
 afterwards would be missed, and the line would open on `default`. A choice already stored
 (`default` included) is never overwritten, a later switch to `native` is never undone, and
 a failed write leaves no marker so the next load tries again.
+
+The row's own name is the bridge's: it is `Card ` + the line's key, a line carrying no label
+of its own, so `Card tools` became `Card tags` when this package renamed its line, and the bridge
+has no rename or alias path. That rename is carried over by this package and never left to the
+bridge's registration-time migration: that migration runs only while the line has no value of its
+own, and what it then copies is the legacy per-tool `bash` value — the `activity` this seed
+stores — so a user who chose `default` would be handed `activity` back. Before it registers, this
+package reads the same `bridge-tool-designs` document and, only when `selections.$lines` holds
+`tools` and no `tags`, writes `tags` with the value it found and drops `tools`; the bridge then
+finds the key taken and does nothing. A store that is absent, unreadable, of another shape, or a
+`createStore` that throws, is no carry-over at all: nothing is written, nothing is thrown, and the
+line still registers.
 
 The room the longer label needs comes from the host's fill first and, when a long heading has
 none left, from the tail of the text after the mark, which then ends in `…` (or keeps the
@@ -1015,13 +1034,16 @@ never a document**: its rows are the diff the host carries (`details.diff`) — 
 own text when it carries none — and expanding it shows the whole diff.
 
 **The switch is the bridge's.** The card owns no preference of its own. It is
-painted while the bridge's `Card tools` line answers that this package's activity
+painted while the bridge's `Card tags` line answers that this package's activity
 design (`odd-worktree.bash-activity`) draws the tool being painted, and only then.
 
-- **The question** is `api.resolveToolDesignSelection(tool)` on the bridge's
-  published object (gentle-shell-bridge@0.7.0), reached exactly like the design's
-  registration — the `gentle-shell-bridge/api/v1` slot, behind its schema and major
-  version gate — never an import.
+- **The question** is `api.resolveToolDesignSelection(tool, args)` on the bridge's
+  published object (gentle-shell-bridge@0.7.0; the call's own `args` travel with it from
+  `0.9.0`), reached exactly like the design's registration — the `gentle-shell-bridge/api/v1`
+  slot, behind its schema and major version gate — never an import. The `args` are the CALL's,
+  taken from the render context this card already holds, and they are what lets a scoped claim
+  answer per call: a question asked without them cannot see a scope at all, and the row would be
+  painted twice.
 - **The answer** decides: `{ kind: "design", design }` with
   `design.id === "odd-worktree.bash-activity"` paints the card; `native`, `missing`,
   `not-covered` and every other design give the row back to the host, box and hint
@@ -1055,6 +1077,49 @@ whose own shell is the default (`read`, `write`), and untouched, with no box, no
 padding and no background, for one that frames itself (Pi's `edit`). A path that
 names neither identity is that same forwarded row, so an ordinary file call looks
 exactly as it did before the card existed.
+
+## The diff card
+
+A second design, `lib/diff-design.js`, registers on the line `diff` through the same
+`registerToolDesign` API, so `/gentle:customize` → `Cards` grows the row `Card diff` over
+`write` and `edit` with the host's own card as `default` (stored `native`) and this package's
+`color` beside it. `color` is selected once, on the first load that finds no choice — the same
+first-run seed the `activity` design does — and a later `default` is never undone. The choice
+is read on every paint, so a mid-session switch repaints cards already on screen.
+
+What `color` draws is the same highlighter `/files` previews with, and never a palette:
+`agent.highlightCode(code, language)` answers one string per line with the ACTIVE theme's own
+syntax roles already applied, and `agent.getLanguageFromPath(path)` names the language. The
+seam is resolved once at registration and handed to the design, so the design itself imports
+no host package and writes no colour of its own.
+
+* A `write` is drawn as an IDE pane: the call's own `content`, behind a line-number gutter, in
+the theme's syntax roles, painted INSIDE the host's own frame. The bridge hands the call half
+and the result half separately, so the call half — the frame's top rule, which is where the
+host states `ctrl+o to expand` — comes back byte for byte, and the pane replaces the body rows
+on the result half, reusing the host's own frame bytes and its inner width. Rows are measured
+and clipped as PLAIN text and painted afterwards (invariant 17), so a painted row is never cut.
+The host's folded budget and its `… +N lines` fold row are kept, and `ctx.render.expanded`
+shows all of it. A host whose rows carry no frame gets the whole pane on the call half, with
+the host's own hint row kept after the fold row — and never a hint the host did not draw. An
+error result, and a body the host draws empty, stay the host's rows.
+* An `edit` is drawn from the diff the host already carries: an addition wears `toolDiffAdded`,
+a deletion `toolDiffRemoved`, a hunk header `muted`, and the code inside a row is painted with
+the syntax roles of the language `args.path` names. The row text and the row width are the
+host's, unchanged; a row that is not a diff row — a heading, a blank line, a fold notice — is
+left exactly as drawn, and repainting a row that already wears this paint answers it identically.
+
+A call whose `args.path` is a skill or an ODD artifact comes back byte-identical, on both
+halves and for both tools: those rows belong to the file card, and the `Card tags` line claims
+exactly those calls through its scope, so the specific claim wins and the two designs can never
+paint the same call. Choosing `default` keeps the host's own card for both tools and leaves
+every other surface exactly as it was.
+
+The line needs gentle-shell-bridge `0.9.0`, the release that introduced the per-`(line, tool)`
+claim: on an older bridge, or one whose release string cannot be read, NOTHING is registered
+and `Card diff` never appears, because a registration that release would refuse costs the
+whole design. An absent `registerToolDesign`, a refused registration or a bridge that cannot
+store the choice is likewise no design and never a throw.
 
 ## The list
 
@@ -1106,7 +1171,7 @@ and a write it cannot commit is silence rather than an error ([the rail
 section](#the-github-rail-section)).
 
 This package writes no preference document of its own: the file cards obey the
-bridge's `Card tools` choice, which belongs to the bridge and lives in its own
+bridge's `Card tags` choice, which belongs to the bridge and lives in its own
 store ([the cards](#the-cards-the-activity-design-paints)), and
 [the file cards](#the-file-cards) own no switch, no document and no customize
 row. Nothing else in user configuration is written by this package, except — with
@@ -1359,7 +1424,7 @@ tools, four panels, one optional rail section and one tool design on the bridge,
 no preference of its own, no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. Its
-customize-side contribution is the `activity` value of the bridge's `Card tools` line
+customize-side contribution is the `activity` value of the bridge's `Card tags` line
 (or its `Card bash` line, on a bridge older than 0.6.0) — which the skill/ODD file
 cards obey as well. It adds no command, tool or row of its own, and the file
 picker's `alt+p` and the issues panel's `alt+i` are bound on the host directly

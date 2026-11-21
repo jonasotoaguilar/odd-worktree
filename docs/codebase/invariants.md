@@ -10,7 +10,7 @@ The question this page answers: which rules must every change preserve, and what
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
    `herdr-gentle:` command name. This package owns NO preference of its own: its
    only customize-side contribution is a tools DESIGN (the `activity` value) on
-   gentle-shell-bridge's own `Card tools` line, or its `Card bash` line on a
+   gentle-shell-bridge's own `Card tags` line, or its `Card bash` line on a
    bridge older than 0.6.0 (invariant 3). The skill/ODD file cards obey that same
    line (invariant 23) and contribute no row of their own; the design is not a
    preference here, because the bridge owns that choice and its store. It registers no command, no page, no setting, no
@@ -23,13 +23,16 @@ The question this page answers: which rules must every change preserve, and what
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
 3. **The shipped surface is exactly four commands, two tools, one sidebar
-   section and one tools design.** `/warp`, `/odd`,
+   section and two tool designs.** `/warp`, `/odd`,
    `/files`, `/issues`; `worktree_create`, `worktree_list`; the one fourth kind of
    surface, a sidebar section (`lib/issues-section.js`) that is neither a command nor a tool and
-   registers no name the host or the agent can call; the one design
-   (`lib/bash-design.js`), one `Card tools` line over `bash`, `read`, `write` and the three
+   registers no name the host or the agent can call; the two designs
+   (`lib/bash-design.js`, `lib/diff-design.js`) on the two lines the bridge owns, one
+   `Card tags` line over `bash`, `read`, `write`, `edit` and the three
    read-only shell tools `grep`, `find`, `ls` (the single `tool: "bash"` design on a bridge older
-   than 0.6.0), which is
+   than 0.6.0) and one `Card diff` line over `write` and `edit`, the first claiming `write` and
+   `edit` through a scope limited to skill and ODD paths so the file card's question is
+   answered per call and the second claiming every other call of those two, which is
    neither a command nor a tool either and adds no name to either registry; and
    no `Cards` row of its own at all (the file cards add none either — see below).
    Neither moving the session nor
@@ -55,7 +58,7 @@ The question this page answers: which rules must every change preserve, and what
    which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the bridge, not by this package (invariant 2 keeps every customize
    surface out of it except the one tools-design row this package puts on the bridge's
-   own `Card tools` line), and the section declares NO
+   own `Card tags` line), and the section declares NO
    preview: every `Sections` row draws the host's one shared list of active sections
    and the bridge adds this section's `rowLabel` to it itself, shown or left out
    with the row's own hypothetical (`registerSection` has no `preview` field — do
@@ -98,18 +101,26 @@ The question this page answers: which rules must every change preserve, and what
    process, with an idempotent disposer, and does nothing at all when the API is absent or
    older — no throw, no command, no warning beyond the section's own discoverability one.
    The shape follows the bridge's own `VERSION` and is decided BEFORE anything is
-   registered: one line over `bash`, `grep`, `find`, `ls`, `read` and `write` on `0.6.0` and later
-   (one `Card tools` row), and the single `tool: "bash"` design on anything older (one
+   registered: one line over `bash`, `grep`, `find`, `ls`, `read`, `write` and `edit` on `0.6.0` and
+   later (one `Card tags` row), with `write` and `edit` claimed through a scope limited to skill
+   and ODD paths from `0.9.0` on, and the single `tool: "bash"` design on anything older (one
    `Card bash` row) or on a release it cannot read — never a grouped registration an older
-   bridge would refuse. The bridge owns Pi's one tool-renderer resolver, builds the host's
+   bridge would refuse. A second design (`lib/diff-design.js`, id `odd-worktree.diff`, label
+   `color`) registers on its own `Card diff` line over `write` and `edit`, on `0.9.0` and later
+   only, and draws nothing for a skill or an ODD path because those rows are the file card's. The bridge owns Pi's one tool-renderer resolver, builds the host's
    own card, reads that line (`default` | `activity`, stored as `native` | the design id) on
-   every render pass and persists the choice in its own store. The only thing this package
-   writes is the first-run seed: `seedBashDesignSelection` selects `activity` once, for
-   `bash`, only when the bridge holds no `bash` choice, and it does so BEFORE the
+   every render pass and persists the choice in its own store. This package writes exactly two
+   things to that store. One is the first-run seed: `seedBashDesignSelection` selects `activity`
+   once, for `bash`, only when the bridge holds no `bash` choice, and it does so BEFORE the
    registration, because a `0.6.0` bridge carries that choice over to its line's value at
    registration time; it records `bashActivitySeeded` in its own `odd-worktree` store so a
-   later `native` is never undone. A stored choice is never overwritten, the reserved line
-   key is never written here, a failure seeds nothing. It reads no other file, has no
+   later `native` is never undone. The other is the one-time line-key carry-over, which moves a
+   value stored at `selections.$lines.tools` — the line's row was `Card tools` before the rename —
+   to `selections.$lines.tags`, ONLY when `tags` is absent, and BEFORE the registration, so the
+   bridge's own migration finds the key taken and copies nothing over it; a store that is absent,
+   unreadable, of another shape or that throws carries nothing over and throws nothing. A stored
+   choice is never overwritten, the reserved line
+   key is never written by the seed, a failure seeds nothing. It reads no other file, has no
    `/card:bash` command and depends on no extension load order.
    The design is pure: `apply(lines, ctx)` swaps the host's `$` on the heading
    row of a `call` part for the family `lib/bash-activity.js` names (or `$ bash`
@@ -146,7 +157,7 @@ The question this page answers: which rules must every change preserve, and what
    the generation and the normalization.
 
    **The file cards add no surface and own no switch.** They obey the bridge's own
-   `Card tools` line: the card is painted while that line answers with this
+   `Card tags` line: the card is painted while that line answers with this
    package's activity design (`odd-worktree.bash-activity`), so the file cards
    contribute no `Cards` row, no preference and no document of their own, and they
    are read through the same published object the design registers through. The

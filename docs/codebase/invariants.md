@@ -246,9 +246,12 @@ The question this page answers: which rules must every change preserve, and what
 14. **The prompt block is append-only.** The `## ODD worktrees` section reaches
     the model only through `systemPromptOptions.appendSystemPrompt`; no handler
     returns a replacement `systemPrompt` (the bridge drops it) and no existing
-    text is removed. It is one text (`lib/odd-prompt/odd-worktrees.md`) with no
-    variant selection, idempotent by content, primary sessions only, and
-    `ODD_WORKTREE_PROMPT=0` suppresses it.
+    text is removed. The primary session gets one text
+    (`lib/odd-prompt/odd-worktrees.md`); a child gets the one-line
+    `lib/odd-prompt/odd-worktrees-child.md` only when it writes — `gentle-ai-worker`,
+    `jd-fix-agent` and a child whose agent name cannot be read — and explore, verify,
+    the judges and every `review-*` get none. Both are idempotent by content and
+    `ODD_WORKTREE_PROMPT=0` suppresses them.
 15. **A warp waits for this session's own tools, agent tasks AND background
     jobs, and it is queued, never thrown away.** While
     `lib/worktree-warp-busy.js` reports a tool still executing, a running or
@@ -487,24 +490,42 @@ The question this page answers: which rules must every change preserve, and what
     process (`session_start` new, resume or fork; not `/reload`). The reminder is
     advice, so no test may assert it blocks, refuses or notifies.
 
-22. **The `bash` guards read text, fail open and add no surface.** The extension's
-    `tool_call` handler refuses a `bash` call whose command contains `git … worktree
-    add` or `git … worktree list` in any cwd, and, only when the command runs in the
-    principal checkout (its root is the parent of the git common dir) AND that checkout
-    is on the repository's default branch, a switch that leaves that branch. The decision
-    lives in `lib/worktree-guard.js`, a pure function over the command string and the
-    injected `repoIdentity`, `defaultBranch`, `currentBranch` and `pathExists` seams. Detection is text
-    only: no script, alias or file is read, and a command it cannot judge passes. It
-    never throws (a throwing `tool_call` handler blocks the tool), an unreadable
-    repository leaves only the worktree refusals active, and the default branch is
-    resolved lazily and memoized per checkout. `ODD_WORKTREE_GUARD=0` is the one way
-    to turn it off, like `ODD_WORKTREE_PROMPT=0` for the prompt blocks; no other
-    value, option or config file does, and it registers no command or tool name
-    (invariant 3). Each refusal names the one tool that replaces the blocked command
-    — `worktree_create` for a worktree creation, `worktree_list` for a listing, the
-    ODD's checkout for a switch that leaves the principal — and the prompt block
-    (invariant 14) is what keeps the agent from reaching them, so a change to one is
-    read against the other.
+22. **The tool guards read text and paths, fail open and add no surface.** The
+    extension's `tool_call` handlers decide only two things, both in
+    `lib/worktree-guard.js` as pure functions over injected seams, and a call they
+    cannot judge passes.
+
+    **`bash`** (`decideBashGuard`): a call whose command contains `git … worktree
+    add` or `git … worktree list` in any cwd is refused, and, only when the command
+    runs in the principal checkout (its root is the parent of the git common dir) AND
+    that checkout is on the repository's default branch, so is a switch that leaves
+    that branch. Detection is text only: no script, alias or file is read. Seams:
+    `repoIdentity`, `defaultBranch`, `currentBranch`, `pathExists`.
+
+    **`edit` and `write`** (`decideWriteGuard`): a call whose `path` lies inside the
+    principal checkout of the SAME repository as the session's cwd, while that
+    checkout's current branch (read fresh, never cached) is the repository's default
+    branch, is refused with one sentence: `<path> is in the primary checkout on
+    \`<default>\`. Work in a worktree (\`worktree_list\` / \`worktree_create\`).` The
+    path is judged by its existing parent directory, realpath-resolved (the only disk
+    read: no file content), and by the checkout that owns that directory, so a linked
+    worktree or nested repository inside the principal directory passes. Everything
+    it cannot place passes: a path outside every repository, **a path under the OS
+    temp directories (`os.tmpdir()`, `TMPDIR`, `/tmp`, `/var/tmp`) even when a
+    scratch repository lives there**, a path in another repository, a path in a linked
+    worktree, a session cwd outside version control, an unreadable identity, a detached
+    HEAD, another branch, an unresolvable default branch and a bare or separate git
+    dir. A temp path is settled before any git read.
+
+    Neither guard ever throws (a throwing `tool_call` handler blocks the tool), an
+    unreadable repository leaves only the `bash` worktree refusals active, and the
+    default branch is resolved lazily and memoized per checkout.
+    `ODD_WORKTREE_GUARD=0` is the one way to turn both off, like
+    `ODD_WORKTREE_PROMPT=0` for the prompt blocks; no other value, option or config
+    file does, and they register no command or tool name (invariant 3). Each refusal
+    names the tool that replaces the blocked action, and the prompt block (invariant
+    14) is what keeps the agent from reaching them, so a change to one is read
+    against the other.
 
 23. **The file card only draws, and it claims exactly three tools.** `read`, `edit`
     and `write`, and no fourth: `lib/file-card-resolver.js` registers one resolver

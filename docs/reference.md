@@ -1245,15 +1245,41 @@ reaching them.
 - `ODD_WORKTREE_GUARD=0` turns them off for the process, like `ODD_WORKTREE_PROMPT=0`
   for the prompt blocks. No other value does, and nothing else configures them.
 
+### The `edit` and `write` guard
+
+The same extension refuses an `edit` or a `write` into the principal checkout while that
+checkout is on the repository's default branch, before the file is touched, with one
+sentence that is a reminder and not a copy of the rule:
+
+```text
+<path> is in the primary checkout on `main`. Work in a worktree (`worktree_list` / `worktree_create`).
+```
+
+- **Only the session's own repository is judged.** The path must lie inside the
+  principal checkout of the same repository as the session's cwd, and the checkout that
+  owns the path's directory must be that principal, so a linked worktree or a nested
+  repository inside it passes. The branch the checkout is on is read fresh each time
+  and must be the default branch (resolved as above).
+- **What never blocks.** A path outside every git repository; a path under the OS temp
+  directories (`os.tmpdir()`, `TMPDIR`, `/tmp`, `/var/tmp`) even when a scratch
+  repository lives there; a path in another repository; a path in a linked worktree; a
+  session cwd outside version control; an unreadable identity; a detached HEAD; another
+  branch; a default branch that does not resolve. Anything it cannot place passes.
+- **No file content is read.** The guard only resolves a path's existing parent
+  directory (so a new file is judged by its directory and a symlink spelling neither
+  dodges nor false-trips it). `bash` redirects such as `sed -i` or `tee` are not
+  `edit`/`write` calls and are not judged.
+- The same `ODD_WORKTREE_GUARD=0` turns it off.
+
 ## The `## ODD worktrees` block in the system prompt
 
 The primary session's system prompt gains a short section that opens with the rule the
-rest hangs from: an ODD writes only in its own worktree, never in the primary checkout or
-on the default branch, and the feature branch lives there (reading anywhere is fine, and a
+rest hangs from: every write goes in a worktree, whatever the size of the task, and never
+in the primary checkout or on the default branch (reading anywhere is fine, and a
 request that stays read-only needs no worktree). It then tells the agent where a worktree
-lives and that the directory is the ODD it serves, to call `worktree_list` before the ODD's
-first write (work in the ODD's worktree when it has one, `worktree_create` it when it has
-none), to carry the current checkout's pending changes that belong to that work with
+lives and that the directory is the ODD it serves, to call `worktree_list` before its
+first `edit` or `write` (work in the ODD's worktree when it has one, `worktree_create` it
+when it has none), to carry the current checkout's pending changes that belong to that work with
 `copy_changes`, that an ODD is one request and its follow-ups, big or small, with one
 worktree (an unrelated request is another ODD), to delegate the ODD's independent units of
 behavior to agents in parallel, each with the `workspace_root` of that ODD's worktree and
@@ -1264,9 +1290,13 @@ session stands in it. Moving the session stays the human's.
 It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other
 extension) put there is preserved verbatim and our text lands after it. There is
-one text, read from `lib/odd-prompt/odd-worktrees.md` at load. Child and
-named-agent sessions get nothing, because their own instructions are already the
-bounded task they received. `ODD_WORKTREE_PROMPT=0` suppresses the block.
+one text for the primary session, read from `lib/odd-prompt/odd-worktrees.md` at load.
+A child that writes — `gentle-ai-worker`, `jd-fix-agent` and a child whose agent name
+cannot be read — gets one short line instead (`lib/odd-prompt/odd-worktrees-child.md`):
+work only under your workspace root's worktree, and stop and report if it is the primary
+checkout on the default branch. Explore, verify, the judges, every `review-*` and named
+agents get nothing, because their own instructions are already the bounded task they
+received. `ODD_WORKTREE_PROMPT=0` suppresses both.
 
 One limit, stated plainly: a string has no "must be last" flag, so the block's
 position follows extension load order. It can sit before a later extension's

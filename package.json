@@ -1,6 +1,6 @@
 {
   "name": "pi-odd-worktree",
-  "version": "3.8.1",
+  "version": "3.9.0",
   "description": "Pi package for odd-worktree: the Git worktree tools a Pi session uses (create and list the checkouts the agent works in), the /warp worktree panel, the /odd ODD viewer, and the /issues GitHub issue reader. Needs only Pi and git: no companion app, no extra service.",
   "keywords": [
     "pi-package",

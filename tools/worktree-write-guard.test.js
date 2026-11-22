@@ -107,6 +107,41 @@ function harness(options = {}) {
   return { run, reads };
 }
 
+// ---- S1/S3 (odd-write-exempt): an `odd/` path is always writable ----
+
+describe('an ODD artifact is never refused, whatever branch the checkout is on', () => {
+  const oddFile = (name = 'tasks/probe.md') => path.join(PRINCIPAL, 'odd', name);
+
+  test('a write under `odd/` in the primary checkout on the default branch passes', { skip: NEEDS_NON_TEMP }, () => {
+    for (const toolName of ['edit', 'write']) {
+      const { run, reads } = harness();
+      assert.deepEqual(run([oddFile()], { toolName }), { block: false }, toolName);
+      assert.deepEqual(reads, { identity: 0, defaultBranch: 0, currentBranch: 0 }, `${toolName}: no git is read`);
+    }
+  });
+
+  test('the folder decides, wherever it sits, and a FILE named `odd` is not inside one', { skip: NEEDS_NON_TEMP }, () => {
+    const { run } = harness();
+    assert.deepEqual(run([path.join(PRINCIPAL, 'odd', 'tasks', 'a.md')]), { block: false });
+    assert.deepEqual(run([path.join(PRINCIPAL, 'sub', 'odd', 'b.md')]), { block: false }, 'a nested odd folder is one too');
+    // A file whose own name is `odd`, or a folder that only starts with those letters, is not exempt.
+    assert.equal(run([path.join(PRINCIPAL, 'lib', 'odd')]).block, true, 'a file named odd is a file');
+    assert.equal(run([path.join(PRINCIPAL, 'docs', 'a.md')]).block, true, 'a sibling folder is not odd/');
+  });
+
+  test('the exemption is per path: a refused path beside an ODD one still refuses, and names itself', { skip: NEEDS_NON_TEMP }, () => {
+    const { run } = harness();
+    assert.deepEqual(run([oddFile(), PRINCIPAL_FILE]), { block: true, reason: refusal(PRINCIPAL_FILE) });
+    assert.deepEqual(run([PRINCIPAL_FILE, oddFile()]), { block: true, reason: refusal(PRINCIPAL_FILE) });
+  });
+
+  test('every other exemption is untouched: another branch still passes, a temp path still passes', { skip: NEEDS_NON_TEMP }, () => {
+    const { run } = harness({ currentBranch: 'feat/x' });
+    assert.deepEqual(run([PRINCIPAL_FILE]), { block: false });
+    assert.deepEqual(harness().run([path.join(scratch('odd-exempt'), 'a.txt')]), { block: false });
+  });
+});
+
 // ---- S4: the refusal itself ----
 
 describe('the refusal is one sentence (S4)', () => {

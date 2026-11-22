@@ -120,7 +120,7 @@ const SCOPE = { root: '/home/dev/repo-worktrees/files-picker', kind: 'worktree',
 // The listing T1 answers: changed first and newest first, then clean by path.
 const FILES = [
   { path: 'brand-new.ts', state: 'new', mtimeMs: NOW - 5_000, age: '5s' },
-  { path: 'src/cursor.ts', state: 'updated', mtimeMs: NOW - 2 * HOUR, age: '2h' },
+  { path: 'src/cursor.ts', state: 'modified', mtimeMs: NOW - 2 * HOUR, age: '2h' },
   { path: 'README.md', state: 'clean' },
   { path: 'src/lib/util.ts', state: 'clean' },
 ];
@@ -541,10 +541,25 @@ describe('the list rows (S6, S15)', () => {
     assert.ok(!bodyText(rows).includes('new '), 'the word badge is never painted');
   });
 
+  test('a file the branch added paints A, and the three letters are the whole vocabulary', async () => {
+    const entries = [
+      { path: 'arrived.ts', state: 'added' },
+      { path: 'edited.ts', state: 'modified' },
+      { path: 'brand-new.ts', state: 'new' },
+      { path: 'plain.ts', state: 'clean' },
+    ];
+    const { view } = await open({ entries, now: NOW });
+    const rows = rowsOf(view);
+    assert.match(listCell(rows, 'arrived.ts'), /A$/, 'a committed addition reads A, never M');
+    assert.match(listCell(rows, 'edited.ts'), /M$/);
+    assert.match(listCell(rows, 'brand-new.ts'), /U$/);
+    assert.match(listCell(rows, 'plain.ts'), /^\s+plain\.ts *$/, 'a clean row still paints no badge');
+  });
+
   test('a changed row without an age keeps its letter and falls back to its mtime once', async () => {
     const entries = [
       { path: 'brand-new.ts', state: 'new' },
-      { path: 'edited.ts', state: 'updated', mtimeMs: NOW - 3 * HOUR },
+      { path: 'edited.ts', state: 'modified', mtimeMs: NOW - 3 * HOUR },
       { path: 'plain.ts', state: 'clean' },
     ];
     const { view } = await open({ entries, now: NOW });

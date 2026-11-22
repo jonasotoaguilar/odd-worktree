@@ -10072,6 +10072,19 @@ function registerOddWorktreeSurfaceEntries(pi) {
   } catch {
     // The card is cosmetic.
   }
+  // The CodeGraph card, through the same host hook and OUTSIDE both module switches: it paints a
+  // call, it does not run CodeGraph, so what decides it is the bridge's `Card tags` line — the
+  // `activity` value the file cards, the jobs card and the two message cards already follow —
+  // asked on every paint. `Codegraph+` turns the CodeGraph wiring off and leaves this card alone;
+  // `native` leaves every one of these rows exactly as the chain drew it.
+  try {
+    libRequire("codegraph-card.js").registerCodegraphCard(pi, {
+      metrics: () => resolveWorktreeToolCardMetrics(),
+      cwd: () => toolCwd(issuesSidebarCtx),
+    });
+  } catch {
+    // The card is cosmetic.
+  }
   // The two ODD advisory MESSAGES, on the bridge's message-design surface: `gentle-pi.exploration-budget`
   // and `gentle-pi.verifier-settle-reminder` are custom messages no extension renders, so Pi draws its
   // default box. Each design FOLLOWS the `Card tags` line above, so the `activity` value that already

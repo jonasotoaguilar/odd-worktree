@@ -1016,8 +1016,8 @@ The roles come from the theme, so the colours are the theme's. In `TokyoNight`, 
 so `exploring`, `formatting` and `preparing` read alike there; a theme that separates those roles
 separates the cards.
 
-The CodeGraph card is separate: with the `codegraph` CLI installed it still claims
-`codegraph …` bash rows through its own resolver (invariant 19).
+The CodeGraph card is separate: with the `codegraph` CLI installed and the `Card tags` line on
+`activity`, it still claims `codegraph …` bash rows through its own resolver (invariant 19).
 
 ## The file cards
 
@@ -1304,7 +1304,7 @@ card, the skill-read guard) is transversal and has no switch.
 
 | Switch | Off leaves out |
 | --- | --- |
-| `Codegraph+` | the `## CodeGraph` prompt text for every role, the two CodeGraph reminders and the whole CodeGraph session wiring (index, daemon, MCP entry, edit sync, card) |
+| `Codegraph+` | the `## CodeGraph` prompt text for every role, the two CodeGraph reminders and the whole CodeGraph session wiring (index, daemon, MCP entry, edit sync). The CodeGraph CARD is not here: it is a design, so it follows `Card tags` → `activity` |
 | `Worktrees+` | the `## ODD worktrees` prompt text, the tools `worktree_create` and `worktree_list`, `/warp` with its card, queue and bookkeeping, the bash and write guards and the ODD session naming |
 
 The choice is one document in the bridge's own store (`odd-worktree` → `modules`), read once when the
@@ -1619,6 +1619,12 @@ package never stops a daemon it did not start.
 
 ## The CodeGraph card
 
+**Its switch is the `Card tags` line, not `Codegraph+`.** The card paints a call; it never runs
+CodeGraph, so it belongs with the other cards of the `activity` design: with `activity` selected it
+paints, and with `native` (or a line that no longer covers these tools) every row is handed back to
+the chain exactly as it resolved. `Codegraph+` off removes the CodeGraph wiring and its prompt text
+and leaves this card alone, and a bridge with no such reader at all paints nothing of it.
+
 With the CLI installed the package also draws CodeGraph's tool rows as a card on the same card
 substrate as the worktree tools: the native `codegraph` tool, the MCP `codegraph_explore` tool
 (bare or `mcp__codegraph__codegraph_explore`) and a `bash` call that runs CodeGraph: any
@@ -1647,9 +1653,10 @@ level (`minimal`) hides the result body while a failure still says why — excep
 init's one outcome row (`→ initialized` / `→ already initialized`), which is what
 the call did rather than its body and is drawn at BOTH levels; a minimized init
 keeps that row alone and its index facts wait for the expansion. A `codegraph …`
-`bash` call is that card's only while the CLI is installed; without it the host draws
-it, and [the design](#the-cards-the-activity-design-paints) may head it with the
-classifier's `codegraph` identity.
+`bash` call is that card's only while the CLI is installed and the `Card tags` line answers
+`activity`; without either, the host draws it, and
+[the design](#the-cards-the-activity-design-paints) may head it with the classifier's
+`codegraph` identity.
 
 ## Deliberately absent
 

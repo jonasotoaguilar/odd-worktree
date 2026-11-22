@@ -48,8 +48,9 @@ The question this page answers: which rules must every change preserve, and what
    `Codegraph+` and `Worktrees+` Off/On lines. They are read once, when the surface
    registers, from the package's own store; `Worktrees+` Off leaves out `/warp`, its
    card, the two tools, the worktree guards and prompt text, and `Codegraph+` Off leaves
-   out the CodeGraph wiring and prompt text. A change lands on the next load, so each
-   one says so. Neither adds a command or a tool name.
+   out the CodeGraph wiring, prompt text and reminders. The CodeGraph CARD is not one of
+   these: it is a design of the `Card tags` line and follows that switch. A change lands on
+   the next load, so each one says so. Neither adds a command or a tool name.
 
    **The section reaches the host only through gentle-shell-bridge.** It is
    published through that package's sidebar-section API alone: the object read from
@@ -451,7 +452,8 @@ The question this page answers: which rules must every change preserve, and what
     other case, a row with no fill to pay for the word included, keeps the host's `$`
     or its own `<glyph> <tool>` exactly as drawn, and a tool the design does not cover
     is returned untouched. The design never throws and never mutates its input. The
-    CodeGraph card (invariant 19) keeps its own resolver for `codegraph …` rows;
+    CodeGraph card (invariant 19) keeps its own resolver for `codegraph …` rows and follows
+    this same line, never a module switch;
     this package registers no other tool-renderer resolver for `bash`.
 
 21. **The two CodeGraph reminders advise; they never block and never add a surface.**

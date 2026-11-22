@@ -17,7 +17,7 @@ afterEach(() => {
 
 // A bridge whose own-store `modules` document is the one handed in; everything else the
 // default bridge does stays as it is.
-async function load(modules) {
+async function load(modules, { selection, host } = {}) {
   const bridge = defaultBridge();
   const document = modules === undefined ? undefined : { ...modules };
   bridge.api.createStore = () => ({
@@ -25,10 +25,15 @@ async function load(modules) {
     set: () => {},
     delete: () => {},
   });
+  // S11: the `Card tags` reader the CodeGraph card follows, when a case needs one.
+  if (typeof selection === 'function') bridge.api.resolveToolDesignSelection = selection;
   globalThis[BRIDGE_SLOT] = bridge.api;
-  const loaded = await loadExtension({});
+  const loaded = await loadExtension(host || {});
   return { ...loaded, bridge };
 }
+
+/** The activity design, as the bridge answers it while `Card tags` is on `activity`. */
+const ACTIVITY = () => ({ kind: 'design', design: { id: 'odd-worktree.bash-activity' } });
 
 const toolCallHandlers = (loaded) => loaded.hooks.filter(([name]) => name === 'tool_call').length;
 
@@ -96,6 +101,25 @@ describe('Codegraph+', () => {
     assert.match(prompt, /## ODD worktrees/);
     assert.ok(off.tools.has('worktree_create'));
     assert.ok(off.commands.has('warp'));
+  });
+});
+
+describe('the CodeGraph card', () => {
+  const cardResolvers = async (modules, selection) => {
+    const resolvers = [];
+    await load(modules, { selection, host: { registerToolRenderer: (resolver) => resolvers.push(resolver) } });
+    return resolvers.filter((resolver) => resolver('codegraph', () => undefined) !== undefined).length;
+  };
+
+  test('is a design of the `Card tags` line: activity on paints it, and Codegraph+ off keeps it', async () => {
+    assert.equal(await cardResolvers(undefined, ACTIVITY), 1, 'activity on, both modules on');
+    assert.equal(await cardResolvers({ codegraph: false }, ACTIVITY), 1, 'Codegraph+ off does not take the card away');
+  });
+
+  test('is not a module surface: native leaves every row to the chain', async () => {
+    assert.equal(await cardResolvers(undefined, () => ({ kind: 'native' })), 0);
+    assert.equal(await cardResolvers({ codegraph: false }, () => ({ kind: 'native' })), 0);
+    assert.equal(await cardResolvers(undefined, undefined), 0, 'no reader, no switch, no card');
   });
 });
 

@@ -29,6 +29,8 @@ veces lo usa para revisar tras borrar, esta demas creo."
 S7. `worktree_list` rows read `path · branch`: "el listado deberia ser path · rama. Actualmente me muestra el path acotado, solo el nombre ... pero deberia
 ver el path diria."
 
+S8. The CodeGraph card is a DESIGN, not a module surface: "eso no es tool, es diseno, su switch va junto a card tags, se activa con activity encedido, no con codegraph+".
+
 ## Tasks
 
 - [x] T1 (S4, S5, S6, S7) cleanups: child prompt deleted, explore.md reworded, the list guard removed, `worktree_list` rows as `path · branch`; tests and docs alongside. inline.

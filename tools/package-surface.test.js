@@ -229,13 +229,18 @@ describe('removed surface', () => {
 
   test('CodeGraph is wired through one registration and adds no command or tool (S2)', async () => {
     const source = stubbedSource();
-    // The extension mentions CodeGraph only to require the prompt section and the one registration;
-    // the `Codegraph+` switch's own lines (`oddModules`) are the gate in front of them.
+    // The extension mentions CodeGraph to require the prompt section, the one registration and the
+    // CARD — which is a design of the `Card tags` line, registered outside the module switch; the
+    // `Codegraph+` switch's own lines (`oddModules`) are the gate in front of the first two.
     const mentions = source.split('\n').filter((line) => !/oddModules/.test(line) && /codegraph/i.test(line.replace(/\/\/.*$/, '')));
     assert.deepEqual(
       mentions.map((line) => line.trim()),
-      ['libRequire("codegraph-rules.js").appendCodegraphSection(event);', 'libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });'],
-      'the only CodeGraph references in the extension are the prompt section and the one registration',
+      [
+        'libRequire("codegraph-rules.js").appendCodegraphSection(event);',
+        'libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });',
+        'libRequire("codegraph-card.js").registerCodegraphCard(pi, {',
+      ],
+      'the CodeGraph references in the extension are the prompt section, the one registration and the card',
     );
     const { commands, tools } = await loadExtension({});
     for (const gone of ['codegraph-hook', 'codegraph-init', 'codegraph-sync', 'codegraph']) {

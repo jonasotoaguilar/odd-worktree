@@ -13,7 +13,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createOddView } = require('../lib/odd-view.js');
+const { createOddView, RELOAD_SUPERSEDED } = require('../lib/odd-view.js');
 const layout = require('../lib/view-layout.js');
 
 function strip(value) {
@@ -2137,6 +2137,31 @@ describe('createOddView shortcut round (S8,S9,S10)', () => {
     const lines = view.render(80);
     assert.match(bodyOf(lines), /alpha/, 'the documents stay listed');
     assert.match(footerOf(lines), /(^|· )r failed( ·|$)/, `the failure is named in the footer: ${footerOf(lines)}`);
+  });
+
+  // D2 (T6): a reload seam may answer RELOAD_SUPERSEDED for a request a later one
+  // has already replaced. That answer must be INERT — the frame, the reading
+  // position and the footer token stay exactly as the reader left them — and it is
+  // never a failure, because nothing was read: the answer belongs to a request the
+  // panel is no longer showing.
+  test('D2: a superseded reload answer changes nothing at all', async () => {
+    let answer = () => ({ ok: true, docs: [doc('alpha'), doc('beta')] });
+    const view = build({ reloadDocs: () => answer() });
+    await tick();
+    view.handleInput('end');
+    const before = view.render(80);
+    const scroll = view.state.scroll;
+    assert.ok(scroll > 0, 'the premise: the reading position is scrolled');
+    assert.match(footerOf(before), /(^|· )r( ·|$)/, 'the premise: the footer still offers the plain r');
+
+    answer = () => RELOAD_SUPERSEDED;
+    view.handleInput('r');
+    await tick();
+
+    const after = view.render(80);
+    assert.equal(view.state.scroll, scroll, 'the reading position does not move');
+    assert.deepEqual(after, before, 'the frame is byte-identical');
+    assert.equal(footerOf(after), footerOf(before), 'not even the reload token changes');
   });
 
   // S9 at the reported width: the reader who saw `r` in the compact legend and

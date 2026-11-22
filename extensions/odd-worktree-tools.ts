@@ -6851,22 +6851,37 @@ function oddTaskDocument(target) {
 
 // S10/S13 (T4): the grouped model the panel draws and `a` toggles. `roots` is the
 // session's REGISTERED worktrees: an array groups exactly those, absent groups
-// every owned worktree. The read is awaited off the same git seam the rest of
-// this file uses, and a model that cannot be read is `null`, which leaves the
-// flat listing the caller already holds standing.
-async function oddGroupsFor(repoRoot, roots) {
+// every owned worktree. S11 (T6): `all` is the panel's ALL-worktrees mode — every
+// worktree Git lists, registered or not — and it wins over `roots`, so the two are
+// never combined. The read is awaited off the same git seam the rest of this file
+// uses, and a model that cannot be read is `null`, which leaves the flat listing
+// the caller already holds standing.
+async function oddGroupsFor(repoRoot, roots, all = false) {
   try {
     const git = libRequire("worktree-git.js");
+    const scope = {};
+    if (all === true) scope.all = true;
+    else if (Array.isArray(roots)) scope.roots = roots;
     const grouped = await libRequire("odd-group.js").groupOddDocs({
       repoRoot,
       runAsync: libRunner(git),
-      ...(Array.isArray(roots) ? { roots } : {}),
+      ...scope,
     });
     if (Array.isArray(grouped)) return grouped;
   } catch {
     // A missing or broken lib never opens a grouped panel.
   }
   return null;
+}
+
+// D2 (T6): the sentinel `lib/odd-view.js` exports for "this answer was SUPERSEDED,
+// do nothing". Resolving it is how a reload reports that it lost the race without
+// touching the frame, the preview scroll or the footer's reload state — the view
+// owns that reading, this file only names it. `Symbol.for` keeps one identity even
+// across this package's lib require-cache purge, so no second copy of the string
+// lives here.
+function oddReloadSuperseded() {
+  return libRequire("odd-view.js").RELOAD_SUPERSEDED;
 }
 
 // S21 (T4): the listing that ranks ONE checkout's own documents belongs to main's
@@ -6983,6 +6998,11 @@ async function executeOdd(rawArgs, ctx) {
   // switch (corrected S7).
   const registeredRoots = filesSessionWorktreeRoots(ctx);
   const groups = await oddGroupsFor(checkoutRoot, registeredRoots);
+  // S13 (T6): the mount-time read above answers the FIRST frame only. Every reload
+  // reads the register AT RELOAD TIME — `r`, and `a` back to the session's mode —
+  // so a worktree the rail registered after this panel opened appears on the next
+  // reload instead of waiting for the panel to be reopened.
+  const registeredRootsNow = () => filesSessionWorktreeRoots(ctx);
   // S9/S6 (T10): the empty answer is the LOADED MODEL's, never the session
   // checkout's alone. Inside a linked worktree whose own `odd/tasks` is empty,
   // main's documents are still there to read — so the muted line is said only
@@ -7029,10 +7049,9 @@ async function executeOdd(rawArgs, ctx) {
   // mode the reader is in.
   let liveView = null;
   let liveGroups = Array.isArray(groups) ? groups : null;
+  // S11: the reader's current mode. `false` is the session's registered set, read
+  // from the register each time a reload needs it (S13).
   let showAll = false;
-  // The flat listing that is still current, so a SUPERSEDED reload answers with it
-  // instead of its own stale documents.
-  let liveFlat = listing;
   // S11/S13 (T10): every reload is NUMBERED when it starts and may apply its answer
   // only while it is still the latest request. Two `a` presses faster than the disk
   // answers them otherwise let the OLDER result land on top of the newer one, and
@@ -7087,14 +7106,19 @@ async function executeOdd(rawArgs, ctx) {
             loadDoc: (doc) => libRequire("odd-docs.js").readOddDoc(doc),
             // S11 (T4): `a` flips the mode in the view and reports the new value
             // once; the reload happens here, awaited off the key handler, and
-            // lands back through `applyGroups`. `true` means EVERY owned
-            // worktree (no `roots` at all), `false` the session's registered set.
+            // lands back through `applyGroups`. `true` means EVERY worktree Git
+            // lists — `all: true`, no ownership filter (S11) — and `false` the
+            // session's registered set, read at THIS moment (S13).
             // A reload that fails keeps the groups already on screen and never
             // throws into the host.
             onToggleAll: (all) => {
               showAll = all === true;
               const sequence = beginReload();
-              return Promise.resolve(oddGroupsFor(checkoutRoot, showAll ? undefined : registeredRoots))
+              return Promise.resolve(oddGroupsFor(
+                checkoutRoot,
+                showAll ? undefined : registeredRootsNow(),
+                showAll,
+              ))
                 .then((next) => applyOddGroupsIfLatest(sequence, next))
                 .catch(() => {});
             },
@@ -7105,16 +7129,25 @@ async function executeOdd(rawArgs, ctx) {
             // listing nobody sees and leave the drawn one stale.
             reloadDocs: async () => {
               const sequence = beginReload();
-              const next = await oddGroupsFor(checkoutRoot, showAll ? undefined : registeredRoots);
+              // S11/S13 (T6): the model is reloaded in the reader's own mode —
+              // `all: true` in the all-worktrees mode, the session's registered
+              // set (read NOW) otherwise.
+              const next = await oddGroupsFor(
+                checkoutRoot,
+                showAll ? undefined : registeredRootsNow(),
+                showAll,
+              );
+              // D2 (T6): a reload the sequence has already superseded answers with
+              // the documented sentinel, so it is INERT — the view ignores it and
+              // nothing of it lands: not the listing, not the preview scroll, not
+              // the footer's reload state. (Its groups are already dropped by
+              // `applyOddGroupsIfLatest`, and no further read is spent on it.)
+              if (sequence !== reloadSequence) return oddReloadSuperseded();
               // S10/S12 (T10): the ranked listing ranks MAIN's documents, so it is
               // read from main's own root — never from the session's checkout.
               const flat = await oddDocsFor(oddMainRoot(next, oddMainRoot(liveGroups, checkoutRoot)));
-              // S11/S13 (T10): a reload the sequence has already superseded is
-              // dropped — never applied, and never an error — so the listing that
-              // is still current answers in its place.
-              if (sequence !== reloadSequence) return liveFlat;
+              if (sequence !== reloadSequence) return oddReloadSuperseded();
               if (flat && flat.ok === true) {
-                liveFlat = flat;
                 applyOddGroupsIfLatest(sequence, oddGroupsWithRankedMain(next, flat.docs));
               }
               return flat;

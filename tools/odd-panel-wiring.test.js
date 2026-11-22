@@ -705,6 +705,108 @@ describe('`r` still re-lists and re-reads (S9, preserved)', () => {
   });
 });
 
+// T6 (independent verification, HEAD 614da6e): three defects reproduced with
+// real Git through the registered command. Each one is a rule S11/S13/D2 states
+// and the wiring did not keep.
+//
+//   * S11: `a` means EVERY worktree of the clone, registered or not. A worktree
+//     made with `git worktree add <anywhere>` is not under `<repo>-worktrees`,
+//     so the owned-checkout default silently omitted it from the all mode.
+//   * S13: every reload reads the session's registered worktrees AT RELOAD TIME;
+//     the mount-time read may only answer the first frame, so a worktree
+//     registered after the panel opened appears on the next `r`.
+//   * D2: a superseded reload is INERT. Its groups were already dropped, but its
+//     flat listing was still applied by the view, which reset the preview scroll.
+
+describe('T6 verifier regressions (S11, S13, D2)', () => {
+  test('T6 verifier: all mode includes an outside-canonical Git worktree (S11)', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    const linked = addWorktree(repo, 'wt-t6-local');
+    const witness = addWorktree(repo, 'wt-t6-witness');
+    writeTask(witness, 't6-witness-odd', '# Owned unregistered worktree\n');
+    const outside = path.join(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-t6-'))), 'wt-t6-outside');
+    git(repo, ['worktree', 'add', '-b', 'feat/t6-outside', outside, 'main']);
+    writeTask(outside, 't6-outside-odd', '# External worktree\n');
+    const host = mountHost();
+    const pending = loaded.commands.get('odd').handler('', ctxFor(linked, host, [linked]));
+    try {
+      await waitFor(() => host.mounts.length === 1, 'mount');
+      const view = host.mounts[0].component;
+      assert.doesNotMatch(frameText(view), /t6-outside-odd/);
+      view.handleInput('a');
+      // An owned worktree's delta is a witness that this was not just the pre-reload frame.
+      await waitFor(() => frameText(view).includes('t6-witness-odd'), 'all-mode reload');
+      assert.match(frameText(view), /t6-outside-odd/);
+    } finally {
+      await closePanel(host, pending);
+    }
+  });
+
+  test('T6 verifier: a superseded r cannot reset preview scroll (S11/D2)', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    const linked = addWorktree(repo, 'wt-t6-scroll');
+    const target = writeTask(linked, 't6-long', '# Long document\n\n'
+      + Array.from({ length: 160 }, (_, i) => `Paragraph ${i}\n\n`).join(''));
+    const host = mountHost();
+    const observed = observeGit(loaded.mod);
+    const deferred = deferGroups(loaded.mod);
+    const pending = loaded.commands.get('odd').handler(target, ctxFor(linked, host, [linked]));
+    try {
+      await waitFor(() => host.mounts.length === 1, 'mount');
+      await waitForRankedListing(observed, [repo]);
+      const view = host.mounts[0].component;
+      deferred.arm();
+      view.handleInput('r');
+      const old = await deferred.real(deferred.pending[0].input);
+      view.handleInput('r');
+      const fresh = await deferred.real(deferred.pending[1].input);
+      observed.clear();
+      deferred.pending[1].resolve(fresh);
+      await waitForRankedListing(observed, [repo]);
+      view.handleInput('end');
+      const scroll = view.state.scroll;
+      const frame = frameText(view);
+      assert.ok(scroll > 0);
+      deferred.pending[0].resolve(old);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      assert.equal(view.state.scroll, scroll);
+      assert.equal(frameText(view), frame);
+    } finally {
+      deferred.restore();
+      observed.restore();
+      await closePanel(host, pending);
+    }
+  });
+
+  test('T6 verifier: r reads worktrees registered after the panel opened (S13)', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    const linked = addWorktree(repo, 'wt-t6-new-registration');
+    writeTask(linked, 'new-t6-odd', '# Newly registered worktree\n');
+    const host = mountHost();
+    const roots = [];
+    const ctx = ctxFor(linked, host, roots);
+    const observed = observeGit(loaded.mod);
+    const pending = loaded.commands.get('odd').handler('', ctx);
+    try {
+      await waitFor(() => host.mounts.length === 1, 'mount');
+      await waitForRankedListing(observed, [repo]);
+      const view = host.mounts[0].component;
+      assert.doesNotMatch(frameText(view), /new-t6-odd/);
+      roots.push(linked);
+      observed.clear();
+      view.handleInput('r');
+      await waitForRankedListing(observed, [repo]);
+      assert.match(frameText(view), /new-t6-odd/);
+    } finally {
+      observed.restore();
+      await closePanel(host, pending);
+    }
+  });
+});
+
 describe('the ODD panel is not gated by Worktrees+ (corrected S7)', () => {
   test('with the module OFF the command, its grouping, `a` and a target all still work', async () => {
     const loaded = await load({ worktrees: false });

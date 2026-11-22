@@ -583,6 +583,103 @@ describe('S13: `roots` scopes the scan to the worktrees a session registered', (
   });
 });
 
+// S11: `a` in the panel means EVERY worktree of this clone, "registered or not".
+// The default enumeration above is the owned-checkout rule, which is the right
+// default for every existing caller; `all: true` is the explicit, ADDITIVE
+// switch that drops that filter and groups every worktree Git lists except main.
+// It wins over `roots` when a caller passes both, and it changes nothing about
+// failure: an unreadable checkout still contributes no document and never throws.
+describe('S11: `all` groups every worktree Git lists, not just the owned ones', () => {
+  test('`all: true` groups a worktree outside <repo>-worktrees, which the default excludes', async () => {
+    const box = machine('all-outside');
+    const outside = box.outside('elsewhere');
+    writeDoc(box.mainRoot, 'main-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(outside, 'foreign-doc', { at: '2020-02-01T00:00:00.000Z' });
+
+    // The premise: the unchanged default really omits it, and asks it nothing.
+    const byDefault = fakeGit({ paths: [box.mainRoot, outside] });
+    byDefault.delta(outside, [['A', 'odd/tasks/foreign-doc.md']]);
+    const scoped = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: byDefault.runAsync });
+    assert.deepEqual(scoped.map((group) => group.checkoutName), ['main']);
+    assert.deepEqual(byDefault.verbs().filter((call) => call.cwd === outside), [],
+      'the owned-checkout rule never asks a foreign worktree anything');
+
+    const git = fakeGit({ paths: [box.mainRoot, outside] });
+    git.delta(outside, [['A', 'odd/tasks/foreign-doc.md']]);
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync, all: true });
+
+    assert.deepEqual(groups.map((group) => [group.checkoutName, group.isMain]), [
+      ['main', true],
+      ['elsewhere', false],
+    ]);
+    assert.deepEqual(contract(groups[1]).docs, [{ name: 'foreign-doc', status: 'added' }]);
+    assert.deepEqual(groups[0].docs.map((doc) => doc.name), ['main-doc'], 'main stays first and whole');
+  });
+
+  test('`all` wins over `roots` when a caller passes both', async () => {
+    const box = machine('all-wins');
+    const owned = box.worktree('odd-rail');
+    const outside = box.outside('elsewhere');
+    writeDoc(box.mainRoot, 'main-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(owned, 'owned-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(outside, 'foreign-doc', { at: '2020-02-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, owned, outside] });
+    git.delta(owned, [['A', 'odd/tasks/owned-doc.md']]);
+    git.delta(outside, [['A', 'odd/tasks/foreign-doc.md']]);
+
+    const groups = await groupOddDocs({
+      repoRoot: box.mainRoot,
+      runAsync: git.runAsync,
+      roots: [owned],
+      all: true,
+    });
+
+    assert.deepEqual(groups.map((group) => group.checkoutName), ['main', 'elsewhere', 'odd-rail']);
+    assert.deepEqual(contract(groups[1]).docs, [{ name: 'foreign-doc', status: 'added' }]);
+    assert.deepEqual(contract(groups[2]).docs, [{ name: 'owned-doc', status: 'added' }]);
+  });
+
+  test('a stale worktree Git still lists is skipped under `all` and never throws', async () => {
+    const box = machine('all-stale');
+    const gone = box.outside('gone');
+    const live = box.outside('live');
+    writeDoc(box.mainRoot, 'main-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(live, 'live-doc', { at: '2020-02-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, gone, live] });
+    git.delta(live, [['A', 'odd/tasks/live-doc.md']]);
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync, all: true });
+
+    assert.deepEqual(groups.map((group) => group.checkoutName), ['main', 'gone', 'live']);
+    assert.deepEqual(groups[1].docs, [], 'an unreadable checkout contributes no document');
+    assert.deepEqual(contract(groups[2]).docs, [{ name: 'live-doc', status: 'added' }]);
+    assert.deepEqual(git.verbs().filter((call) => call.cwd === gone), [],
+      'and it is never asked a git question');
+  });
+
+  test('`roots` absent and `all` absent is exactly today’s owned-worktree enumeration', async () => {
+    const box = machine('all-absent');
+    const owned = box.worktree('odd-rail');
+    const outside = box.outside('elsewhere');
+    writeDoc(box.mainRoot, 'main-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(owned, 'owned-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(outside, 'foreign-doc', { at: '2020-02-01T00:00:00.000Z' });
+    const shapes = [undefined, false];
+    for (const all of shapes) {
+      const git = fakeGit({ paths: [box.mainRoot, owned, outside] });
+      git.delta(owned, [['A', 'odd/tasks/owned-doc.md']]);
+      git.delta(outside, [['A', 'odd/tasks/foreign-doc.md']]);
+
+      const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync, all });
+
+      assert.deepEqual(groups.map((group) => group.checkoutName), ['main', 'odd-rail'],
+        `all: ${all} keeps the default scope`);
+      assert.deepEqual(git.verbs().filter((call) => call.cwd === outside), [],
+        'the foreign worktree is still never read');
+    }
+  });
+});
+
 describe('fail closed, never throw', () => {
   test('an empty delta keeps the group with no documents: the caller decides not to draw it', async () => {
     const box = machine('empty-delta');

@@ -668,7 +668,11 @@ footer sits the focused scope's detail line: the last commit subject, then
 `↑n main` when the checkout has commits the comparison does not, `↓n main` only
 when it has none — the `main` row compares with `origin/main`, every other
 checkout with the branch the principal checkout has (`main`, or `master` in a
-`master` repository) — and a field that is zero or absent is not painted at all.
+`master` repository). That branch is the SAME ref the picker's badges were read
+against, resolved once per scope and handed to both reads, so the distance the
+step paints and the marks the picker paints can never describe two different
+branches — a `main` the principal checkout is not on is never the comparison — and
+a field that is zero or absent is not painted at all.
 Both arrows never appear together: a worktree is almost always behind its
 principal branch, so `↑1 · ↓310` reads as a contradiction even though both counts
 are true. The `a` list costs

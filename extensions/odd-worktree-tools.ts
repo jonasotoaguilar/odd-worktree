@@ -7019,17 +7019,20 @@ function filesAllWorktrees(checkouts) {
  * S9: the two numbers a scope row and its detail line show. The uncommitted set
  * is the picker's own listing (`state !== "clean"`) and its newest mtime is "the
  * age of the last modification"; the line above the footer is
- * `lib/files-scope-detail.js` with `origin/main` for the principal row and the
- * local `main` for every worktree. A read that failed leaves its fields absent, so
- * the step paints less instead of claiming a zero nobody measured.
+ * `lib/files-scope-detail.js`, measured against the SAME ref the scope's badges
+ * came from (`filesComparison`): the principal checkout's own branch for every
+ * worktree, and the remote branch the principal checkout tracks for the `main`
+ * row. A read that failed leaves its fields absent, so the step paints less
+ * instead of claiming a zero nobody measured.
  */
 /**
- * S1/S2: how a scope's change badges are read. The principal checkout answers
- * from its own `git status`, so a commit there clears the badge; a worktree
- * answers from the commits it has ahead of the principal branch, so a commit is
- * what MARKS the file. The comparison is the same one the `±`/`↑`/`↓` line uses
- * (`lib/files-scope-detail.js`), so the scope row and the picker's rows can never
- * disagree about what the branch changed.
+ * S1/S2/S9: the ONE ref a worktree's committed work is measured against — the
+ * branch the PRINCIPAL checkout has, whatever it is called (`master` in a
+ * `master` repository), so a worktree is never diffed against a `main` that is
+ * not the comparison. Both the badges and the scope's `↑`/`↓` line read this
+ * value, so the count the step paints and the marks the picker paints can never
+ * name two branches. `undefined` means "this scope reads no commits": the
+ * principal checkout's badges are its own uncommitted work.
  */
 function filesComparison(detailLib, scope) {
   if (!scope || scope.kind !== 'worktree') return undefined;
@@ -7041,10 +7044,13 @@ function filesComparison(detailLib, scope) {
 async function filesScopeFacts(index, detailLib, run, scope) {
   const facts = {};
   try {
+    // ONE comparison for this scope, resolved once and handed to BOTH reads: the
+    // badges below and the detail line after them describe the same branch.
+    const comparison = filesComparison(detailLib, scope);
     const listing = await index.listRepositoryEntries({
       run,
       cwd: scope.root,
-      comparison: filesComparison(detailLib, scope),
+      comparison,
     });
     if (listing && listing.ok === true && Array.isArray(listing.entries)) {
       let changed = 0;
@@ -7061,7 +7067,10 @@ async function filesScopeFacts(index, detailLib, run, scope) {
     const loaded = await detailLib.loadScopeDetail({
       run,
       cwd: scope.root,
-      comparison: scope.kind === 'main' ? detailLib.REMOTE_MAIN : detailLib.LOCAL_MAIN,
+      // A worktree measures against the very ref its badges came from; the
+      // principal checkout, whose badges are its uncommitted work, measures
+      // against the remote branch it tracks (S9).
+      comparison: comparison === undefined ? detailLib.REMOTE_MAIN : comparison,
     });
     // The view paints the count and the age out of `detail`, and orders the rows
     // by the scope's own `lastModifiedMs`, so both carry the same numbers.

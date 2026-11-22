@@ -190,6 +190,15 @@ const scopeRowCount = (component, label) => scopeLabels(component)
   .filter((row) => row === label
     || (row.startsWith(`${label} ±`) && /^±\d+ files?$/.test(row.slice(label.length + 1)))).length;
 
+// The focused scope's detail line: the one body row directly above the footer, so a
+// test can read what the step says about the row its cursor is on.
+const detailLine = (component) => {
+  const rows = rowsOf(component);
+  const at = rows.findIndex((row) => row.includes('\u2191/\u2193 move'));
+  if (at <= 0) return '';
+  return rows[at - 1].replace(/^\u2502\s*/, '').replace(/\s*\u2502$/, '').trim();
+};
+
 // The ANSI-aware helpers the panel measures with; key matching falls back to the
 // view's own spelled sequences, which is what a host without `matchesKey` has.
 function visibleWidthOf(value) {
@@ -610,6 +619,9 @@ describe('the badges of a scope (S1-S4)', () => {
     const step = host.mounts[0].component;
     await waitFor(() => textOf(step).includes('on-master · feat/on-master'), 'the worktree row');
     step.handleInput('\u001b[B');
+    // S9: the row measures against the branch the badges are measured with — the
+    // principal checkout's own — so the two never name different branches.
+    assert.match(detailLine(step), /\u2191\d+ master$/, 'the row names the branch the badges use');
     step.handleInput('\r');
 
     await waitFor(() => host.mounts.length >= 2, 'the picker over the worktree');
@@ -618,6 +630,54 @@ describe('the badges of a scope (S1-S4)', () => {
     const text = textOf(picker);
     assert.equal(badgeOf(text, 'x.js'), 'A', 'the committed file is marked against `master`');
     assert.equal(badgeOf(text, 'a.js'), null);
+    assert.match(text, /^\u256d\u2500 \u273f Files \u00b7 .*on-master \u00b7 \u21911 master /m,
+      'and the picker\u2019s title carries the same branch and the same distance');
+
+    picker.handleInput('\u001b');
+    await running;
+  });
+
+  test('a worktree the principal branch already holds is measured against that branch, never a `main` it lacks', async () => {
+    // The reported defect: the principal checkout is on `master`, Git still holds a
+    // `main` this worktree is four commits ahead of, and `master` already CONTAINS
+    // those four commits. Read against that `main` the step claims `\u21914 main` while
+    // the badges — read against `master` — mark nothing, so the panel's two numbers
+    // describe two different branches. Both must be the principal checkout's own.
+    const repo = makeRepo({ branch: 'master' });
+    git(repo, ['branch', 'main', 'master']);
+    const worktree = addOwnedWorktree(repo, 'held', 'feat/held', 'main');
+    git(worktree, ['add', 'x.js']);
+    git(worktree, ['commit', '-m', 'commit x.js']);
+    fs.writeFileSync(path.join(worktree, 'two.js'), 'const two = 2;\n');
+    git(worktree, ['add', 'two.js']);
+    git(worktree, ['commit', '-m', 'add two.js']);
+    fs.writeFileSync(path.join(worktree, 'a.js'), 'const x = 3;\n');
+    git(worktree, ['commit', '-am', 'touch a.js']);
+    fs.appendFileSync(path.join(worktree, 'README.md'), 'more\n');
+    git(worktree, ['commit', '-am', 'touch README']);
+    git(repo, ['merge', '--no-ff', '-m', 'merge feat/held', 'feat/held']);
+
+    const { mod, commands } = await loadFilesExtension();
+    mod.setFilesTuiLoader(async () => helpers);
+    const host = mountHost();
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui, { registeredRoots: [worktree] }));
+
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    const step = host.mounts[0].component;
+    await waitFor(() => textOf(step).includes('held \u00b7 feat/held'), 'the worktree row');
+    step.handleInput('\u001b[B');
+    const detail = detailLine(step);
+    assert.match(detail, /\u2193\d+ master$/, 'the row measures against the branch the principal checkout has');
+    assert.equal(/\bmain\b/.test(detail), false, 'a `main` the badges never compared with is never named');
+    step.handleInput('\r');
+
+    await waitFor(() => host.mounts.length >= 2, 'the picker over the worktree');
+    const picker = host.mounts[1].component;
+    await waitFor(() => textOf(picker).includes('two.js'), 'the worktree listing');
+    const text = textOf(picker);
+    assert.equal(badgeOf(text, 'two.js'), null, 'nothing the principal branch already holds is marked');
+    assert.equal(badgeOf(text, 'a.js'), null, 'nor is a file it holds a newer state of');
+    assert.equal(/\u2191\d+/.test(text), false, 'the title claims no distance the badges do not share');
 
     picker.handleInput('\u001b');
     await running;

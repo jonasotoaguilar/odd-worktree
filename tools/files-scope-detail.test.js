@@ -96,16 +96,19 @@ describe('countCell (S9)', () => {
 });
 
 describe('scopeDetailLine (S9)', () => {
-  test('the last commit subject leads, then the count, the age and the distances', () => {
+  test('the last commit subject leads, then the count, the age and ONE distance', () => {
     const line = scopeDetailLine({
       lastCommitSubject: 'add the scope step',
       changedFiles: 3,
       lastModifiedMs: NOW - 5 * MINUTE,
       ahead: 2,
-      behind: 1,
+      behind: 310,
       comparison: 'main',
     }, NOW);
-    assert.equal(line, 'add the scope step · ±3 files · 5m ago · ↑2 main · ↓1 main');
+    // A worktree is almost always behind its principal branch, so `↓` beside `↑`
+    // is noise that reads as a contradiction (S44): ahead wins when there is any,
+    // and behind is painted only when the checkout is merely stale.
+    assert.equal(line, 'add the scope step · ±3 files · 5m ago · ↑2 main');
   });
 
   test('the main row names the remote ref it is measured against', () => {

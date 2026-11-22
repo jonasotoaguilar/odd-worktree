@@ -59,6 +59,23 @@ Tech: Node CJS `lib/*.js` + `tools/*.test.js`, Pi extension `extensions/odd-work
   and `docs/codebase/code-map.md` name the two sources and the three badges, and the
   focused tests pin both the new worktree states and the unchanged main-scope ones.
 
+- S8: **The title names the distance ahead, and only ahead.** The picker's title paints
+  `Files · <checkout path> · ↑n <base>` whenever the browsed checkout has commits its
+  comparison does not, and nothing at all when it is level, when the base was never
+  measured or when the scope carries no detail. The field is never elided: the path gives
+  way first, and when no path worth painting is left the field keeps the row alone. User,
+  verbatim: "me falto mencionar que arriba en el titulo salga si esta adelante a main, sea
+  \"FIles · <worktree name> ·↑3 main\" (eso de flecha main solo si esta adelantedo claro,
+  la cantidad de commits por delante)".
+
+- S9: **One distance on the scope line, never two.** The detail line above the scope step's
+  footer paints `↑n <comparison>` when the checkout has commits the comparison does not, and
+  `↓n <comparison>` only when it has none. `↑1 main · ↓310 main` is what the line painted
+  for a worktree one commit ahead of a `main` that had moved 310 commits on: both counts
+  are true Git facts and the pair reads as a contradiction. User, verbatim: "igual revisa un
+  bug que sale ahi adelante 1 y atraso 310 y no tiene sentido que este adelante y atrasado a
+  la vez, es imposibel".
+
 ## Tasks
 
 | ID | Specs | Route | Status |
@@ -68,6 +85,7 @@ Tech: Node CJS `lib/*.js` + `tools/*.test.js`, Pi extension `extensions/odd-work
 | T3 | S1, S2 | `extensions/odd-worktree-tools.ts`: the scope's `kind` decides the comparison, and a worktree scope carries the principal checkout's own branch in `base` (`filesComparison()`) | done — `tools/files-command.test.js` drives the real command over real repos: `A`/`M`/`U` in a worktree after committing, none in `main`, and `A` in a `master` repository |
 | T4 | S7 | `docs/reference.md`, `docs/codebase/code-map.md` | done — both name the two sources and the three badge letters |
 | T5 | S6, S7 | full suite, independent verification, the work-unit commit | landed at `793deea`; independent verification (Risk item 3) found 3 defects (F1-F3 in L8), each fixed and pinned; suite on the committed tree: `node --test tools/*.test.js` 2559 tests, 2559 pass, 0 fail, 0 skipped |
+| T6 | S8, S9 | `lib/files-picker-view.js` (the title's ahead field) and `lib/files-scope-detail.js` (one distance); `tools/files-picker-view.test.js`, `tools/files-scope-detail.test.js`, `tools/files-command.test.js`, `docs/reference.md` | done — RED observed for both (`↑2 main · ↓310 main` and the title without a field), then GREEN |
 
 ## Log
 
@@ -140,3 +158,14 @@ Tech: Node CJS `lib/*.js` + `tools/*.test.js`, Pi extension `extensions/odd-work
   commit read are one contract) and the tests are what make the 2559-test suite prove it.
   The delivery shape is therefore ONE pull request; if a reviewer wants it smaller, the
   split that keeps every commit green is tests-plus-docs on top of the two lib reads.
+- L11 (user, verbatim): "igual revisa un bug que sale ahi adelante 1 y atraso 310 y no tiene
+  sentido que este adelante y atrasado a la vez, es imposibel". The parent reproduced it in
+  this repository: `git rev-list --left-right --count main...fix/warp-space-dash-input`
+  answers `310 1` — the branch holds one commit `main` never got (`f0f6804`), and `main`
+  moved 310 commits on since that branch was cut. Both numbers are real, so the defect is
+  the PAIR, not the arithmetic: S9 makes the line paint one distance.
+- L12 (user, verbatim): "me falto mencionar que arriba en el titulo salga si esta adelante a
+  main, sea \"FIles · <worktree name> ·↑3 main\" (eso de flecha main solo si esta
+  adelantedo claro, la cantidad de commits por delante)". S8 is written from it; the title
+  keeps the path S37 already paints and appends the field, and the field comes from the
+  scope's own `detail` (`filesScopeFacts`), so the title costs no extra Git read.

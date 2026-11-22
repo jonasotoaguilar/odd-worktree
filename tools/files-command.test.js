@@ -574,6 +574,11 @@ describe('the badges of a scope (S1-S4)', () => {
     const picker = host.mounts[1].component;
     await waitFor(() => textOf(picker).includes('committed.js'), 'the worktree listing');
     const text = textOf(picker);
+    // S44: the title names the distance ahead, and only ahead — the two commits are
+    // what the badges are measured against.
+    assert.match(text, /^╭─ ✿ Files · .*with-commits · ↑2 main /m,
+      'the title carries the commits ahead of the principal branch');
+    assert.ok(!/↓\d+ /.test(text), 'behind is never painted beside ahead');
     assert.equal(badgeOf(text, 'committed.js'), 'A', 'a file the branch added reads A');
     assert.equal(badgeOf(text, 'a.js'), 'M', 'a file the branch modified reads M');
     assert.equal(badgeOf(text, 'x.js'), 'U', 'uncommitted work is still marked');

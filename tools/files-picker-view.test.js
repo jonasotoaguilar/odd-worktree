@@ -335,6 +335,44 @@ describe('the card chrome (S1, S15)', () => {
     assert.match(afterPath, /^ ─+ esc ╮$/, `only the rule and esc follow the path: ${JSON.stringify(afterPath)}`);
   });
 
+  test('the commits ahead of the base ride the title, and only ahead is named (S44)', async () => {
+    const ahead = {
+      ...SCOPE,
+      detail: { comparison: 'main', ahead: 3, behind: 310, lastCommitSubject: 'fix(warp): the dash' },
+    };
+    const { view } = await open({ scope: ahead });
+    const title = rowsOf(view)[0];
+    assert.ok(title.startsWith(`╭─ ✿ Files · ${SCOPE.root} · ↑3 main `),
+      `the ahead field is the title's tail, never beside a behind count: ${title}`);
+    assert.ok(!title.includes('↓'), 'behind is not painted next to ahead');
+    assert.equal(helpers.visibleWidth(title), WIDTH);
+
+    // Already on top of the base, or never measured: no field at all.
+    const level = await open({ scope: { ...SCOPE, detail: { comparison: 'main', ahead: 0, behind: 4 } } });
+    assert.ok(rowsOf(level.view)[0].startsWith(`╭─ ✿ Files · ${SCOPE.root} `), 'no ahead, no field');
+    const unmeasured = await open({ scope: { ...SCOPE, detail: {} } });
+    assert.ok(rowsOf(unmeasured.view)[0].startsWith(`╭─ ✿ Files · ${SCOPE.root} `), 'no detail, no field');
+  });
+
+  test('a narrow title keeps the ahead field and gives way with the path (S44)', async () => {
+    const { view } = await open({
+      scope: { ...SCOPE, detail: { comparison: 'main', ahead: 12, behind: 310 } },
+    });
+    // 52 columns: 30 for the detail, of which the field takes 9, so the path keeps
+    // 21 and still shows the identifying tail.
+    const narrow = view.render(52).map(strip)[0];
+    assert.equal(narrow, '╭─ ✿ Files · …rktrees/files-picker · ↑12 main  esc ╮',
+      'the field is never elided; the path gives way to it');
+    // Too narrow for a path worth painting: the field keeps the row alone.
+    const tiniest = view.render(34).map(strip)[0];
+    assert.ok(tiniest.includes('↑12 main'), tiniest);
+    assert.ok(!tiniest.includes('…'), `no elided path beside the field at the smallest width: ${tiniest}`);
+    assert.ok(!tiniest.includes('files-picker'), 'the path is gone, not truncated into the field');
+    for (const width of [52, 34]) {
+      assert.equal(helpers.visibleWidth(view.render(width).map(strip)[0]), width, `the row fills ${width}`);
+    }
+  });
+
   test('a narrow card elides the path from its left, so the tail that identifies the checkout survives (S37)', async () => {
     const { view } = await open();
     // 50 columns: the title keeps 30 for the path (50 - 7 for `✿ Files` - 3 for

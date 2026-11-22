@@ -22,7 +22,11 @@ Never carry the request out. Do not edit files or start work; you only read and 
 
 ## Return
 
-Reply in the language of the request, in at most ~2k tokens, with exactly these headings, in this order, each alone on its line. The heading names stay in English whatever the language of the request.
+Reply in the language of the request, in at most ~2k tokens. Start with this line, unchanged:
+
+**/depth handoff: read-only exploration, nothing was implemented.**
+
+Then give exactly these headings, in this order, each alone on its line. Copy each heading character for character: the names stay in English whatever the language of the request, and translating one is an error. Do not drop a section; a section with nothing to say says `none`. The last section, `## For the parent`, is required: without it the main session may start implementing.
 
 ## Original request
 The text under `## Request`, copied unchanged.

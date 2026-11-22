@@ -4,7 +4,7 @@
 // person's words, and it comes back first in the handoff (S8, L8).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { buildDepthTask, depthLabel, DEPTH_RETURN_HEADINGS } = require('../lib/depth-task.js');
+const { buildDepthTask, depthLabel, DEPTH_RETURN_HEADINGS, DEPTH_BANNER, DEPTH_FOR_PARENT } = require('../lib/depth-task.js');
 
 const REQUEST = 'make the error messages clearer\n\n- keep «exactly» this: `/x failed:`\n- no retries';
 
@@ -58,4 +58,19 @@ test('the label is one short line that starts with the command', () => {
   assert.ok(long.length <= 60, `short enough, got ${long.length}`);
   assert.equal(depthLabel('first\nsecond'), 'depth: first');
   for (const blank of ['', '  ', undefined, 5]) assert.equal(depthLabel(blank), 'depth');
+});
+
+test('the parent is guarded at both ends: an opening line and the closing paragraph, in the shipped file and in the fallback', () => {
+  // The parent wakes on the handoff alone and may start implementing, so the instruction not to must not depend on one
+  // section a cheap model can drop (a real run dropped `## For the parent` and translated the headings).
+  assert.equal(typeof DEPTH_BANNER, 'string');
+  assert.equal(typeof DEPTH_FOR_PARENT, 'string');
+  assert.match(DEPTH_BANNER, /nothing was implemented/);
+  assert.match(DEPTH_FOR_PARENT, /^Do not implement this request\./);
+  for (const read of [undefined, () => '']) {
+    const task = buildDepthTask('x', read === undefined ? {} : { read });
+    assert.ok(task.includes(DEPTH_BANNER), 'the opening line is asked for');
+    assert.ok(task.includes(DEPTH_FOR_PARENT), 'the closing paragraph is given');
+    assert.match(task, /character for character/);
+  }
 });

@@ -47,7 +47,7 @@ never added — every other surface keeps working.
 - CodeGraph itself: no `/codegraph-*` command and no tool named `codegraph`; it
   wires the index, the prompt text and the two reminders (invariants 19, 21).
 - Tool execution, permissions and blocks: the two tool designs and the file cards only
-  draw, the reminders only advise, the guards read command text (invariants 20, 21,
+  draw, the reminders only advise, the guards read command text and paths (invariants 20, 21,
   22, 23).
 - Every other customize surface, plugin-tools toggle and companion-app
   integration: the bash activity is a design on the bridge, the diff card is the
@@ -125,7 +125,7 @@ for each is in [`invariants.md`](invariants.md).
 | [19](invariants.md) | CodeGraph runs only with its CLI, in the background, and writes one config entry. |
 | [20](invariants.md) | The tool designs only draw, and the `activity` one draws what the classifier names (the three read-only shell tools `grep`, `find`, `ls` are always `exploring`; `read`, `write` and `edit` are declared for the file card's question — `write` and `edit` through a scope limited to skill and ODD paths — and it draws nothing for any of the three). |
 | [21](invariants.md) | The two CodeGraph reminders advise; they never block and never add a surface. |
-| [22](invariants.md) | The `bash` guards read text, fail open and add no surface. |
+| [22](invariants.md) | The tool guards (`bash`, `edit`/`write`) read text and paths, fail open and add no surface. |
 | [23](invariants.md) | The file card only draws, and it claims exactly three tools. |
 | [24](invariants.md) | No session path waits on `gh`, and every `gh` reach is deferred. |
 | [25](invariants.md) | A persisted cache entry never defeats the count invariant or the full-read TTL. |

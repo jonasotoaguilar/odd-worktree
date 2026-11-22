@@ -1245,15 +1245,46 @@ reaching them.
 - `ODD_WORKTREE_GUARD=0` turns them off for the process, like `ODD_WORKTREE_PROMPT=0`
   for the prompt blocks. No other value does, and nothing else configures them.
 
+### The `edit` and `write` guard
+
+The same extension refuses an `edit` or a `write` into the principal checkout while that
+checkout is on the repository's default branch, before the file is touched, with one
+sentence that is a reminder and not a copy of the rule:
+
+```text
+<path> is in the primary checkout on `main`. Work in a worktree (`worktree_list` / `worktree_create`).
+```
+
+- **Only the session's own repository is judged.** The path must lie inside the
+  principal checkout of the same repository as the session's cwd, and the checkout that
+  owns the path's directory must be that principal, so a linked worktree or a nested
+  repository inside it passes. The branch the checkout is on is read fresh each time
+  and must be the default branch (resolved as above).
+- **What never blocks.** A path outside every git repository; a path under the OS temp
+  directories (`os.tmpdir()`, `TMPDIR`, `/tmp`, `/var/tmp`) even when a scratch
+  repository lives there; a path in another repository; a path in a linked worktree; a
+  session cwd outside version control; an unreadable identity; a detached HEAD; another
+  branch; a default branch that does not resolve. Anything it cannot place passes.
+- **No file content is read.** The guard only resolves a path's existing parent
+  directory (so a new file is judged by its directory and a symlink spelling neither
+  dodges nor false-trips it). `bash` redirects such as `sed -i` or `tee` are not
+  `edit`/`write` calls and are not judged.
+- **The path the tool will touch is the one judged.** A leading `@`, which Pi strips
+  before it opens the file, is stripped here too, and a spelling under a temp directory
+  that is a symlink into the principal is judged by where it really points. Who owns the
+  path's directory is read live, never remembered, so a nested worktree created during
+  the session is seen.
+- The same `ODD_WORKTREE_GUARD=0` turns it off.
+
 ## The `## ODD worktrees` block in the system prompt
 
 The primary session's system prompt gains a short section that opens with the rule the
-rest hangs from: an ODD writes only in its own worktree, never in the primary checkout or
-on the default branch, and the feature branch lives there (reading anywhere is fine, and a
+rest hangs from: every write goes in a worktree, whatever the size of the task, and never
+in the primary checkout or on the default branch (reading anywhere is fine, and a
 request that stays read-only needs no worktree). It then tells the agent where a worktree
-lives and that the directory is the ODD it serves, to call `worktree_list` before the ODD's
-first write (work in the ODD's worktree when it has one, `worktree_create` it when it has
-none), to carry the current checkout's pending changes that belong to that work with
+lives and that the directory is the ODD it serves, to call `worktree_list` before its
+first `edit` or `write` (work in the ODD's worktree when it has one, `worktree_create` it
+when it has none), to carry the current checkout's pending changes that belong to that work with
 `copy_changes`, that an ODD is one request and its follow-ups, big or small, with one
 worktree (an unrelated request is another ODD), to delegate the ODD's independent units of
 behavior to agents in parallel, each with the `workspace_root` of that ODD's worktree and
@@ -1264,9 +1295,12 @@ session stands in it. Moving the session stays the human's.
 It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other
 extension) put there is preserved verbatim and our text lands after it. There is
-one text, read from `lib/odd-prompt/odd-worktrees.md` at load. Child and
-named-agent sessions get nothing, because their own instructions are already the
-bounded task they received. `ODD_WORKTREE_PROMPT=0` suppresses the block.
+one text for the primary session, read from `lib/odd-prompt/odd-worktrees.md` at load.
+A child that writes — `gentle-ai-worker`, `jd-fix-agent` and any other child, whose agent name is unknown or cannot be read — gets one short line instead (`lib/odd-prompt/odd-worktrees-child.md`):
+work only under your workspace root's worktree, and stop and report if it is the primary
+checkout on the default branch. Explore, verify, the judges, every `review-*` and named
+agents get nothing, because their own instructions are already the bounded task they
+received. `ODD_WORKTREE_PROMPT=0` suppresses both.
 
 One limit, stated plainly: a string has no "must be last" flag, so the block's
 position follows extension load order. It can sit before a later extension's
@@ -1278,8 +1312,8 @@ A session that already holds a CodeGraph tool (the native `codegraph` tool or
 `mcp__codegraph__codegraph_explore`) gets a short section on how to use it: call
 the graph before searching or reading code, treat its answer as a map and not as
 proof, and keep the other tools for what it does not index. The orchestrator's text also
-sizes a change with the graph only when one read batch does not already explain it (a
-known file or location needs no call), and points its look at the ODD's own worktree
+names one literal call (`codegraph` with `operation: "explore"`) and one exemption (an exact
+string or a file path the user gave), and points its look at the ODD's own worktree
 through `projectPath` when the session runs elsewhere; the explorer's text gives its
 second look a stop. Each role gets its
 own text, read from `lib/codegraph-prompt/<role>.md`: the primary session the
@@ -1324,21 +1358,25 @@ child. It stays silent, using up no slot, for a checkout this session already ex
 `projectPath` since the last compaction.
 
 **Guard 2, the session's own checkout.** The primary session and every child except the `review-*`
-agents, once per the checkout the session is in:
+agents. It fires on the first search of the checkout the session is in, while CodeGraph is unused:
 
 ```text
-Follow the CodeGraph rule: run `codegraph` `query` or `explore` first, if it applies.
+Follow the CodeGraph rule: run `codegraph` `query` or `explore` first.
 ```
 
 for the primary session and the explore agent (the native wording only when that role holds the
 native tool), and
 
 ```text
-Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first, if it applies.
+Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first.
 ```
 
-for every other role. It is keyed by the checkout, so a `/warp` re-arms it, and it stays silent once
-the session used `codegraph` or the MCP tool.
+for every other role. It fires once per checkout per request, on that checkout's first search while the
+graph is unused: no later search of the same request repeats it, and using `codegraph` or the MCP tool
+after it changes nothing. Its first-search slot and its "already used" flag are per request: every new
+request re-arms guard 2 with both, while guard 1's slots and the explored checkouts stay per session,
+and a compaction or a new session still forgets everything. The reminder is keyed by the checkout, so a
+`/warp` re-arms it, and it stays silent while CodeGraph has been used in that request.
 
 **What is "another checkout".** A different git toplevel (`git -C <dir> rev-parse --show-toplevel`),
 read once per directory and cached for the session. It comes from a tool's own path, or from a `cd`

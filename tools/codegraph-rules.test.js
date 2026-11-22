@@ -32,7 +32,7 @@ describe('the seven texts on disk', () => {
     for (const variant of rules.VARIANTS) {
       const text = file(variant).replace(/\s+/g, ' ');
       assert.ok(text.startsWith('## CodeGraph'), variant);
-      assert.match(text, /before you search or read code/, `${variant} gates searching and reading code`);
+      assert.match(text, /before you (search or read code|`grep`, `rg`, `fd`, `find`, `read` or `cat`)/i, `${variant} gates searching and reading code`);
       for (const binary of ['fd', 'find', 'rg', 'grep', 'read', 'cat']) {
         assert.ok(text.includes(`\`${binary}\``), `${variant} names ${binary}`);
       }
@@ -47,9 +47,8 @@ describe('the seven texts on disk', () => {
   });
 
   test('only the roles holding the native tool name its operations; the MCP tool is named in full', () => {
-    for (const variant of ['orchestrator', 'explore']) {
-      assert.match(file(variant), /`codegraph` `query`/, variant);
-    }
+    assert.match(file('explore'), /`codegraph` `query`/, 'explore');
+    assert.match(file('orchestrator'), /`codegraph` with `operation: "explore"`[\s\S]*`operation: "query"`/, 'orchestrator');
     for (const variant of ['verify', 'worker', 'fix', 'judge']) {
       const text = file(variant);
       assert.ok(text.includes(`\`${MCP}\``), variant);
@@ -80,11 +79,12 @@ describe('the seven texts on disk', () => {
 describe('the orchestrator and explore texts stay inside their role', () => {
   const prose = (variant) => file(variant).replace(/\s+/g, ' ');
 
-  test('the orchestrator sizes with the graph only when one read batch does not already explain the change', () => {
+  test('the orchestrator calls the graph first for a where/who/how/what-reaches question, with one exemption and one literal call', () => {
     const text = prose('orchestrator');
-    assert.match(text, /before you plan or size a change that one read batch does not already explain/, text);
-    assert.match(text, /a file or location you already know/, 'a known location needs no call, not only a known file');
-    assert.match(text, /which is what scope, size and any handoff depend on/, 'the small path has no handoff');
+    assert.match(text, /to answer where code lives, who calls it, how it works, or what a change reaches, call CodeGraph first/, text);
+    assert.match(text, /`codegraph` with `operation: "explore"` and `query: "<symbols or the question>"`/, 'the literal call');
+    assert.match(text, /Skip it only for an exact string or a file path the user gave you/, 'one exemption');
+    assert.match(text, /what scope, size and any handoff depend on/, 'the sizing use is kept');
   });
 
   test('the orchestrator looks at the ODD\'s own worktree through projectPath when the session runs elsewhere', () => {

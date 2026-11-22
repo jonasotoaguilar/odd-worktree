@@ -20,12 +20,12 @@ primary checkout on the default branch with a one-line reminder. Nothing else ch
   file path the user gave you.» `lib/codegraph-prompt/orchestrator.md` has one exemption
   and one literal call; its worktree/checkout paragraph is unchanged. `generic.md` drops
   to one exemption. `worker`, `fix`, `verify`, `judge`, `explore` are unchanged.
-- **S3** — «Vuelve cada 8 búsquedas seguidas sin usar codegraph … máximo 3 veces por
-  sesión … cualquier uso de codegraph reinicia la cuenta … sacar el ", if it applies"».
-  Guard 2 reminds on the first search, then again after 8 searches in a row without a
-  CodeGraph use, at most 3 reminders per session; any CodeGraph use resets the count; the
-  sentence no longer ends in ", if it applies". A compaction or a new session forgets the row and the cap (the guards forget everything then, as invariant 21 says). It stays advice: it never blocks. Guard 1
-  and every other behaviour are unchanged.
+- **S3** — «sólo el recordatorio de la primera búsqueda de cada mensaje» (the 8-search
+  repeat and the cap of 3 are dropped, L4; they were «vuelve cada 8 búsquedas seguidas
+  sin usar codegraph … máximo 3 veces»). Guard 2 reminds on the first search of a checkout
+  while CodeGraph is unused, once, exactly as before the repeat was added; the sentence no
+  longer ends in ", if it applies". It stays advice: it never blocks. Guard 1 and every
+  other behaviour are unchanged.
 - **S4** — «Guard de `write`/`edit`: si el archivo está en el checkout principal y ese
   checkout está en `main`, lo frena con una sola línea: "`<path>` is in the primary
   checkout on `main`. Work in a worktree (`worktree_list` / `worktree_create`)."» An
@@ -45,14 +45,13 @@ primary checkout on the default branch with a one-line reminder. Nothing else ch
 - **S6** — «Hay que enmendar la invariante 21 … y la 22» `docs/codebase/invariants.md`
   (21, 22, 14) and `docs/reference.md` describe the new behaviour; the suites pin the old
   texts and are updated, and `npm test` passes.
-- **S7** — «de eso solo B parece bien» (B: «Reinicio por request. Hoy el tope de 3 dura
-  toda la sesión, y una sesión larga queda muda. Con el reinicio en `before_agent_start`,
-  cada prompt nuevo vuelve a tener recordatorio»). Each new request (`before_agent_start`)
-  forgets guard 2's row of searches, its cap of 3, its first-search slots (`own`) and its
-  `used` flag, so the first search of every request, while the graph is unused in it,
-  earns a reminder again. Guard 1's slots and the explored checkouts stay per session;
-  a compaction or a new session still forgets everything; nothing else changes and it
-  stays advice. A, C, D and E from the review of gentle-shell are NOT part of this.
+- **S7** — «de eso solo B parece bien» (B: «Reinicio por request … cada prompt nuevo vuelve
+  a tener recordatorio»). Each new request (`before_agent_start`) forgets guard 2's
+  first-search slots (`own`) and its `used` flag, so the first search of every request,
+  while the graph is unused in it, earns a reminder again. Guard 1's slots and the explored
+  checkouts stay per session; a compaction or a new session still forgets everything;
+  nothing else changes and it stays advice. A, C, D and E from the review of gentle-shell
+  are NOT part of this.
 
 ## Tasks
 
@@ -61,6 +60,7 @@ primary checkout on the default branch with a one-line reminder. Nothing else ch
 - [x] T3: the `edit`/`write` guard and the child block, with tests (S4, S5). Commit 8001db1; verifier fixes (`@` prefix, live owner read, temp-portable suite) in the closing commit.
 - [x] T4: invariants and reference follow (S6). Commit e250099 and the closing commit.
 - [x] T5: guard 2 forgets its row, cap, slots and `used` flag at each new request, with tests, invariant 21 and the reference (S7). Commit: the closing commit of this ODD.
+- [ ] T6: drop the 8-search repeat and the cap of 3: guard 2 reminds once per checkout per request, with tests, invariant 21, the reference and the README (S3, S7).
 
 Slice boundary: ~1.3k changed lines across four commits, each one reviewable alone (texts; reminder; guard; docs).
 
@@ -76,3 +76,7 @@ Slice boundary: ~1.3k changed lines across four commits, each one reviewable alo
   session's own repository.
 - **L3** — «de eso solo B parece bien» after the review of gentle-shell's
   `exploration-budget` (steer notice per request). Only B (per-request reset) is authorized.
+- **L4** — «que consideras, tampoco queremos saturar el contexto con el mismo mensaje de
+  recordatorio» … «bien, adelante» (after the recommendation: drop the repeat, keep only
+  the first search of each message, with the per-request reset). S3 is rewritten, S7 loses
+  its row and cap, T3 of the reminder (T2/T5) is reopened as T6.

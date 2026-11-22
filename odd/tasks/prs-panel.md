@@ -26,7 +26,10 @@ Feature: a `/prs` panel cloned from `/issues` for pull requests, joined to the G
 | T8a | S2, S6 | writer, view + client defects D1-D7 below | done, `105bb8e` |
 | T8b | S4, S5 | writer, rail + extension defects D8-D10 below | done, `1e2ee7d` |
 | T6 | all | docs | done, `343dbf0` |
-| T9 | all | second independent verification of the final state | pending |
+| T9 | all | second independent verification of the final state | FAIL on S2, S4 (new D11-D17); D4, D7, D9 partly open |
+| T10a | S2 | writer, view + client D4, D11-D15 | pending |
+| T10b | S4 | writer, rail D9, D16-D17 | pending |
+| T11 | all | third verification, scoped to D4, D9, D11-D17 and a regression sweep | pending |
 
 ## Contract (fixed before T1-T4 start; the four units are parallel and share no file)
 
@@ -74,6 +77,18 @@ Durable RED tests from the verifier: `/tmp/gpEJ5rnt/ga0XS4eS/tmp.oW3V5SKa6E/work
 - **D8 (S4)** `extensions/odd-worktree-tools.ts:8554-8559`, `lib/issues-section.js:555-563`: the exact counts are dropped: `issueCount=51` with 50 nodes and an empty review gives `2 issues · 50 pr`. `M` = distinct fetched numbers + the unfetched remainder of each total (they cannot be deduped), never less than what is known.
 - **D9 (S4 cold start)** `extensions/odd-worktree-tools.ts:8533-8552`: the persisted `prs-rail.json` count is used only after a live failure; a cold start must paint `2 issues · 1 pr` from the store at once (hydrated from the async loader) and the live read then replaces it.
 - **D10 (S2)** the remote-moved refusal for `/prs` says to reopen `/issues`; it must say `/prs`.
+
+### T9 verdict: defects to fix (T10)
+
+Decision recorded first (parent): **comments stay available in every PR state**, merged and closed ones included (as for issues and on GitHub), gated nowhere beyond the viewer being able to comment; and **close/labels/assign on a PR of someone else are legitimate with the repository WRITE role** (`viewerPermission`). A non-open PR loses editor, close and merge keys, and keeps `comment`. Read-only means "no merge, no close, no label/assignee/linked-issue edit", never "no comment". This amends the Contract's "no write action on a non-open PR".
+
+- **D4 again** `lib/gh-prs.js:915-935`: fence tracking must follow CommonMark: the closing fence uses the same character and at least as many as the opening one; a four-backtick fence holding three backticks and `Closes #19` is code, and removing #19 must delete only the real closing line outside it.
+- **D11 (wrong-target comment)** `lib/prs-view.js:1812-1826,2580-2588`: open the composer on #42 during a held `r`, let the reload put #43 under the cursor, save: the seam gets `commentPullRequest(43, …)`. The composer captures its number like the confirms do.
+- **D12 (merge confirmation)** `lib/prs-view.js:1489-1502,1909-1916,2356-2367`: during the merge step the frame highlights another row than the one that will merge, beside an unnumbered `Confirm merge`; it must show `Confirm merge #N` for the captured number and highlight it. With `rebase` the subject and description fields are not offered at all (they are silently dropped today).
+- **D13 (client-only pin)** `lib/gh-prs.js:1030-1039,1282-1288,1454-1462`: `closePullRequest(42, {cwd})` with no explicit pin authorizes against one resolved repository and writes under another when the remote moves between the role read and the write. The role read and the write must share ONE resolved scope: pass the scope the role read proved to the write (same for the labels, assignees, linked-issue and merge writes).
+- **D14 (label creation)** `lib/gh-prs.js:691-702,870-875`, `lib/prs-view.js:1303,1737-1750`: real PR metadata never carries `canCreateLabels`, so the picker never offers creation; add it to `pullRequestPermissions` (WRITE and up, literal true) and have the save re-check it at write time like the other editors.
+- **D9 repaint** `lib/issues-section.js:581-599,665-694`: neither the hydration nor the live settlement of the PR read asks for a repaint, so the header keeps the old count until some other event; both must call the section's refresh notifier (`onRefreshed`) like the issues read does.
+- **D15 (restart shrinks the count)** `extensions/odd-worktree-tools.ts:8593-8608`, `lib/prs-rail-store.js`: 50 returned rows with a total of 52 paints `2 issues · 52 pr` live but `· 50 pr` from the store. The store keeps the per-bucket TOTAL beside the rows (still no stored header count: the number is derived from rows plus totals on load, and a total below its rows is ignored), so a cold start paints the same number the live read did.
 
 ## Log
 

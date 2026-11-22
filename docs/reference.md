@@ -1275,9 +1275,20 @@ keep the role they have. The divider is measured as PLAIN text, and the two colu
 of the row's own padding — a row with none loses the tail of its code to an ellipsis (measured as
 plain text too, invariant 17) — so the row keeps the width the host gave it and the frame is never
 pushed out. The row text and every cell of the host's frame are the host's; a row that is not a diff
-row — a heading, a blank line, a fold notice, a line the host wrapped onto a continuation row — is
-left exactly as drawn, and repainting a row that already wears this drawing answers it identically,
-divider and colour included.
+row — a heading, a blank line, a fold notice — is left exactly as drawn, and repainting a row that
+already wears this drawing answers it identically, divider and colour included.
+
+A long diff line is ONE row, like a long `write` line: the host wraps it onto rows that state no
+number, so the design puts the line back together, drops those rows and ends the numbered one in
+`…`, which keeps the divider, the gutter indent and the frame on every row. A line that fits is
+never marked.
+
+The heading states what the call changed, the way the `write` heading states its lines: after
+the path, in the `muted` role, `(+3 · -1)` — the lines the call added and the lines it removed,
+counted from the call's own `edits` (a line that is the same before and after is neither). A count
+of zero is not written, so a pure addition is `(+3)`, and a call that changes no line writes
+nothing. The columns come out of the rule that follows the path, so the heading keeps its width; a
+heading with no room for it, and a failed call, stay the host's.
 
 A call whose `args.path` is a skill or an ODD artifact comes back byte-identical, on both
 halves and for both tools: those rows belong to the file card, and the `Card tags` line claims

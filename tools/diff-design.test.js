@@ -99,10 +99,9 @@ describe('the Card diff line (S2)', () => {
     assert.equal(typeof design.preview, 'function');
   });
 
-  test('the preview is ONE row, titled after the value', () => {
+  test('the preview is ONE row, titled after the LINE so both options read as one line', () => {
     const preview = diffColorDesign(seamFor().seam).preview();
-    assert.equal(preview.title, `Cards · ${DIFF_DESIGN_LABEL}`);
-    assert.equal(preview.title, 'Cards · color');
+    assert.equal(preview.title, 'Cards · Card diff', 'the same title the `default` value shows');
     assert.equal(preview.sample.split('\n').length, 1, 'one row, like every Cards value');
     assert.deepEqual(preview, DIFF_DESIGN_PREVIEW);
   });

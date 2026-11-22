@@ -14,10 +14,10 @@
 //
 // The bash heading is not a preference of this package either: it contributes one DESIGN
 // (`activity`) to gentle-shell-bridge's `/gentle:customize` → `Cards` page, on its
-// `Card tags` line when the bridge can group tools (`default` | `activity`) and on
+// `Card activity` line when the bridge can group tools (`default` | `activity`) and on
 // the per-tool `bash` line on anything older, which the bridge owns, persists and
 // repaints (lib/bash-design.js). The skill/ODD file card owns no preference at all: it
-// is painted while that same `Card tags` line answers with this design, asked of the
+// is painted while that same `Card activity` line answers with this design, asked of the
 // bridge per paint (lib/file-card-resolver.js), and the host draws its own row for any
 // other value. Nothing of that is registered here.
 //
@@ -10051,7 +10051,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
     }
   }
   // S1 (T2): the file cards, through the same host hook. A `read`/`edit`/`write` call whose
-  // path names a skill or an ODD artifact heads as that file while the bridge's `Card tags`
+  // path names a skill or an ODD artifact heads as that file while the bridge's `Card activity`
   // line answers with this package's activity design; every other call keeps the host's own
   // boxed row, which the card reproduces because the hook decides per tool name and never
   // sees the arguments. No preference of ours is registered: the gate is the bridge's own
@@ -10064,7 +10064,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
   }
   // The jobs card, through the same host hook: `bash_background`, `monitor`, `job_stop` and
   // `job_list` have no renderer of their own, so Pi draws a plain box and the conversation's
-  // card style never reaches them. While the bridge's `Card tags` line answers with this
+  // card style never reaches them. While the bridge's `Card activity` line answers with this
   // package's activity design for the tool, they are drawn on the card substrate in the
   // shell's own style; any other answer leaves Pi's drawing exactly as it was.
   try {
@@ -10073,7 +10073,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // The card is cosmetic.
   }
   // The CodeGraph card, through the same host hook and OUTSIDE both module switches: it paints a
-  // call, it does not run CodeGraph, so what decides it is the bridge's `Card tags` line — the
+  // call, it does not run CodeGraph, so what decides it is the bridge's `Card activity` line — the
   // `activity` value the file cards, the jobs card and the two message cards already follow —
   // asked on every paint. `Codegraph+` turns the CodeGraph wiring off and leaves this card alone;
   // `native` leaves every one of these rows exactly as the chain drew it.
@@ -10087,7 +10087,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
   }
   // The two ODD advisory MESSAGES, on the bridge's message-design surface: `gentle-pi.exploration-budget`
   // and `gentle-pi.verifier-settle-reminder` are custom messages no extension renders, so Pi draws its
-  // default box. Each design FOLLOWS the `Card tags` line above, so the `activity` value that already
+  // default box. Each design FOLLOWS the `Card activity` line above, so the `activity` value that already
   // paints the jobs card paints both alerts too: no second switch, no row added to `Cards`, and the
   // follow is resolved on every pass, so a flip repaints — and turns off — what is already on screen.
   // A bridge that cannot express a follow registers nothing at all: an older one would create a

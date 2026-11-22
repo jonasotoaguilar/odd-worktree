@@ -1,7 +1,7 @@
 'use strict';
 // The jobs card: `bash_background`, `monitor`, `job_stop` and `job_list` are registered by
 // Gentle Shell with no renderer of their own, so Pi draws its plain default box and the
-// conversation's card style never reaches them. While the bridge's `Card tags` line answers
+// conversation's card style never reaches them. While the bridge's `Card activity` line answers
 // `activity` for the tool being drawn, this package draws them on its own card substrate
 // (`lib/shell-card.js`), in whichever style the shell has chosen. Any other answer — and the
 // absence of an answer — leaves Pi's own drawing exactly as it was.
@@ -117,7 +117,7 @@ function assertFramed(rows, width) {
 
 // ---- the one switch ----
 
-test('the card is drawn only while the Card tags line answers activity; every other answer leaves Pi\'s own drawing', () => {
+test('the card is drawn only while the Card activity line answers activity; every other answer leaves Pi\'s own drawing', () => {
   const answers = [
     ['no bridge published', undefined],
     ['the bridge\'s native answer', { kind: 'native' }],
@@ -295,7 +295,7 @@ test('registerJobsCard hands one resolver to the host hook and reports a host th
   assert.deepEqual(registerJobsCard({}, { metrics }), { registered: false, resolver: undefined });
 });
 
-test('the Card tags line covers the four job tools, so the bridge can answer for them', () => {
+test('the Card activity line covers the four job tools, so the bridge can answer for them', () => {
   for (const scopes of [true, false]) {
     const design = toolsActivityDesign({ scopes });
     for (const tool of JOB_TOOLS) assert.ok(design.tools.includes(tool), `${tool} (scopes: ${scopes})`);

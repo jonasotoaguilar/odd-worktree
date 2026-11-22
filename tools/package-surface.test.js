@@ -13,7 +13,7 @@
 // worktree↔issue association.
 //
 // The bash activity is not a preference here: it is a design on gentle-shell-bridge's
-// own `Card tags` line, so the shipped surface is exactly four commands, two tools, one
+// own `Card activity` line, so the shipped surface is exactly four commands, two tools, one
 // sidebar section, one tools design and the one `Cards` row group the two file-card
 // switches carry.
 //
@@ -72,7 +72,7 @@ describe('manifest', () => {
     // classifier and the one design registered on the bridge. The file cards add
     // their own four modules — a classifier, the card, its resolver and the document
     // body Pi's Markdown draws — and own no preference at all (S1): they are gated by
-    // the bridge's `Card tags` line, which is the bridge's, not ours.
+    // the bridge's `Card activity` line, which is the bridge's, not ours.
     for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'skill-read-guard.js', 'bash-activity.js', 'bash-inline-script.js', 'bash-design.js', 'bash-frame.js', 'diff-design.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
@@ -106,7 +106,7 @@ describe('registration', () => {
     }
 
     // S1: the two file-card switches and their document are gone, and the extension
-    // names neither. The file card is gated by the bridge's own `Card tags` line.
+    // names neither. The file card is gated by the bridge's own `Card activity` line.
     assert.equal(source.includes('registerCardsCustomize'), false, 'no row provider is registered for a switch');
     assert.equal(source.includes('card-files'), false, 'the extension never names their document');
     const modules = fs.readdirSync(lib).filter((entry) => entry.endsWith('.js'));
@@ -163,7 +163,7 @@ describe('registration', () => {
       await loadExtension({});
       assert.deepEqual(
         bridge.designs.map((design) => [design.line, design.id, design.label]),
-        [['tags', 'odd-worktree.bash-activity', 'activity'], ['diff', 'odd-worktree.diff', 'color']],
+        [['activity', 'odd-worktree.bash-activity', 'activity'], ['diff', 'odd-worktree.diff', 'color']],
         'one design per line, once each',
       );
     } finally {
@@ -230,7 +230,7 @@ describe('removed surface', () => {
   test('CodeGraph is wired through one registration and adds no command or tool (S2)', async () => {
     const source = stubbedSource();
     // The extension mentions CodeGraph to require the prompt section, the one registration and the
-    // CARD — which is a design of the `Card tags` line, registered outside the module switch; the
+    // CARD — which is a design of the `Card activity` line, registered outside the module switch; the
     // `Codegraph+` switch's own lines (`oddModules`) are the gate in front of the first two.
     const mentions = source.split('\n').filter((line) => !/oddModules/.test(line) && /codegraph/i.test(line.replace(/\/\/.*$/, '')));
     assert.deepEqual(

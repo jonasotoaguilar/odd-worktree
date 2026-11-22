@@ -25,14 +25,14 @@ async function load(modules, { selection, host } = {}) {
     set: () => {},
     delete: () => {},
   });
-  // S11: the `Card tags` reader the CodeGraph card follows, when a case needs one.
+  // S11: the `Card activity` reader the CodeGraph card follows, when a case needs one.
   if (typeof selection === 'function') bridge.api.resolveToolDesignSelection = selection;
   globalThis[BRIDGE_SLOT] = bridge.api;
   const loaded = await loadExtension(host || {});
   return { ...loaded, bridge };
 }
 
-/** The activity design, as the bridge answers it while `Card tags` is on `activity`. */
+/** The activity design, as the bridge answers it while `Card activity` is on `activity`. */
 const ACTIVITY = () => ({ kind: 'design', design: { id: 'odd-worktree.bash-activity' } });
 
 const toolCallHandlers = (loaded) => loaded.hooks.filter(([name]) => name === 'tool_call').length;
@@ -111,7 +111,7 @@ describe('the CodeGraph card', () => {
     return resolvers.filter((resolver) => resolver('codegraph', () => undefined) !== undefined).length;
   };
 
-  test('is a design of the `Card tags` line: activity on paints it, and Codegraph+ off keeps it', async () => {
+  test('is a design of the `Card activity` line: activity on paints it, and Codegraph+ off keeps it', async () => {
     assert.equal(await cardResolvers(undefined, ACTIVITY), 1, 'activity on, both modules on');
     assert.equal(await cardResolvers({ codegraph: false }, ACTIVITY), 1, 'Codegraph+ off does not take the card away');
   });

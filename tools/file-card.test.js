@@ -25,7 +25,7 @@ const {
   fileResultRows,
 } = require('../lib/file-card.js');
 const { createFileCardResolver, registerFileCard } = require('../lib/file-card-resolver.js');
-// The design this package registers on the bridge's `Card tags` line: the card's one
+// The design this package registers on the bridge's `Card activity` line: the card's one
 // switch is that line's answer for the tool being drawn, so the card is only painted
 // for a tool the line actually covers.
 const { toolsActivityDesign } = require('../lib/bash-design.js');
@@ -564,7 +564,7 @@ test('a foreign, hostile or unreadable bridge never hides the card', () => {
   assert.match(draw(), /📑 odd/u, 'an unknown kind keeps the card');
 });
 
-test('S1: a write is covered by the Card tags line, so its file card paints and `default` restores the host row', () => {
+test('S1: a write is covered by the Card activity line, so its file card paints and `default` restores the host row', () => {
   // A bridge answers from the design's own `tools` list, exactly as it resolves
   // coverage: a tool the line does not name is `not-covered`, which is the host's own
   // card. `write` is declared on that line so the file card can be asked about it.
@@ -573,7 +573,7 @@ test('S1: a write is covered by the Card tags line, so its file card paints and 
   publishBridge((tool) => (design.tools.includes(tool) ? { kind: 'design', design } : { kind: 'not-covered' }), asked);
   const resolver = fileResolver();
   for (const tool of ['read', 'write']) {
-    assert.equal(design.tools.includes(tool), true, `${tool} is covered by the Card tags line`);
+    assert.equal(design.tools.includes(tool), true, `${tool} is covered by the Card activity line`);
     const row = callRow(resolver, tool, { path: ODD, content: '# x\n' }, plainTheme);
     assert.match(unpaint(row), /📑 odd/u, `${tool}: the file card paints its heading`);
     assert.match(unpaint(row), new RegExp(`${tool} cards-skill-odd\\.md`, 'u'), `${tool}: and names the call`);

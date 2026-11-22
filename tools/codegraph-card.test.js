@@ -181,9 +181,9 @@ function withContent(content, run) {
   }
 }
 
-// ---- the switch: the bridge's `Card tags` line (S11) ----
+// ---- the switch: the bridge's `Card activity` line (S11) ----
 
-// S11 (modular-tools): the card is a DESIGN, so it paints only while the bridge's `Card tags` line
+// S11 (modular-tools): the card is a DESIGN, so it paints only while the bridge's `Card activity` line
 // answers with this package's activity design. The slot is published here exactly as the host
 // publishes it; `selection` is an answer or a function of the tool being drawn, and `asked`
 // collects every question.
@@ -956,7 +956,7 @@ test('an unreadable call or output draws nothing instead of throwing', () => {
   assert.deepEqual(codegraphShape('read', { command: 'codegraph init' }), undefined);
 });
 
-// ---- S11: the switch is the bridge's `Card tags` line ----
+// ---- S11: the switch is the bridge's `Card activity` line ----
 //
 // The card paints a CALL; it does not run CodeGraph. So no module switch decides it: the line
 // the activity design owns does, asked on every paint. `activity` selected claims it, and every
@@ -1077,7 +1077,7 @@ async function loadComposedExtension() {
     await withCodegraphCli(() => {
       // S18 (T14): the extension registers nothing without gentle-shell-bridge, so
       // this file's own host publishes the shared fixture's bridge before the factory
-      // runs. This load's bridge also answers the `Card tags` reader with the activity
+      // runs. This load's bridge also answers the `Card activity` reader with the activity
       // design (S11), which is the switch the CodeGraph card follows.
       const previous = globalThis[BRIDGE_API_SLOT];
       globalThis[BRIDGE_API_SLOT] = { ...defaultBridge().api, resolveToolDesignSelection: ACTIVITY_ON };

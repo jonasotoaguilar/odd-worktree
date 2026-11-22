@@ -2420,3 +2420,220 @@ describe('createOddView positional open (S6)', () => {
     assert.deepEqual(empty.view.render(80), lines, 'an empty request paints the very same frame');
   });
 });
+
+// ---------------------------------------------------------------------------
+// T9 (S10,S11,S13): the panel groups its documents by checkout, like the
+// gentle-shell CHANGES panel. The loader hands it `groups` — one entry per
+// checkout, each carrying the documents that checkout owns — and the view
+// paints a header row per checkout followed by its documents. The main group is
+// always drawn; a worktree group is drawn ONLY when it has documents, and when
+// every worktree group is empty the panel is the ordinary main-only flat listing
+// with no header at all (S13: never an empty worktree group, never group chrome
+// that says nothing). A header is focusable: Enter toggles it. `a` flips the
+// listing between the session's checkouts and every worktree, and the CALLER
+// reloads the groups when it does.
+// ---------------------------------------------------------------------------
+describe('createOddView grouped listing (T9: S10,S11,S13)', () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  // The grouped model names a document's absolute location `docPath`
+  // (lib/odd-group.js); the older `path` spelling keeps working.
+  const groupDoc = (name, root = '/wt/main') => ({ name, docPath: `${root}/odd/tasks/${name}.md`, mtimeMs: 1 });
+  const checkout = (checkoutName, checkoutRoot, isMain, docs) => ({ checkoutName, checkoutRoot, isMain, docs });
+  const MAIN = checkout('main', '/wt/main', true, [groupDoc('alpha'), groupDoc('bravo')]);
+  const RAIL = checkout('odd-rail', '/wt/odd-rail', false, [groupDoc('delta', '/wt/odd-rail')]);
+  const listCells = (lines) => lines.slice(2, -2).map((line) => strip(line).split('│')[1] || '');
+  // The rows the list pane paints, with the focus cursor removed so a row reads
+  // the same whether the cursor is on it or not.
+  const rowsOf = (lines) => listCells(lines)
+    .map((cell) => cell.trim().replace(/^▸\s*/, ''))
+    .filter((cell) => cell !== '');
+  const focusedRow = (lines) => {
+    const cell = listCells(lines).map((value) => value.trim()).find((value) => value.startsWith('▸'));
+    return cell === undefined ? null : cell.replace(/^▸\s*/, '');
+  };
+  const bodyOf = (lines) => strip(lines.join('\n'));
+  const footerOf = (lines) => strip(lines[lines.length - 2]);
+
+  function build({ groups, docs, initialDoc, onToggleAll, rows = 14, load } = {}) {
+    const options = {
+      loadDoc: load || ((entry) => ({ ok: true, text: `# ${entry.name}\n\nbody of ${entry.name}\n` })),
+      helpers,
+      theme: plainTheme,
+      rowsAvailable: () => rows,
+      requestRender: () => {},
+      done: () => {},
+    };
+    if (docs !== undefined) options.docs = docs;
+    if (groups !== undefined) options.groups = groups;
+    if (initialDoc !== undefined) options.initialDoc = initialDoc;
+    if (onToggleAll !== undefined) options.onToggleAll = onToggleAll;
+    return createOddView(options);
+  }
+
+  // The pinned contract: with NO `groups` the panel is exactly the viewer of
+  // before this unit — one flat list from `docs`, the same order, the same keys
+  // and the same first frame. The literal below was captured from the viewer
+  // BEFORE grouping existed, so it proves the flat path did not move.
+  const FLAT_FRAME = [
+    '╭─ ✎ Odd · 2 documents ────────────────────────────────────────────────────────────────────────────╮',
+    '│ › Search                                                                                     3/3 │',
+    '│ ▸ alpha                       │ ▌ alpha                                                          │',
+    '│   beta                        │                                                                  │',
+    '│                               │ body of alpha                                                    │',
+    '│                               │                                                                  │',
+    '│                               │                                                                  │',
+    '│                               │                                                                  │',
+    '│                               │                                                                  │',
+    '│                               │                                                                  │',
+    '│                               │                                                                  │',
+    '│                               │                                                                  │',
+    '│ ↑↓ select · ctrl+j/k scroll · s sort: recent · t search · r reload · o open · esc close          │',
+    '╰──────────────────────────────────────────────────────────────────────────────────────────────────╯',
+  ];
+
+  test('no groups still paints today\'s exact flat frame', async () => {
+    const view = build({ docs: [doc('alpha'), doc('beta')] });
+    await tick();
+    assert.deepEqual(view.render(100), FLAT_FRAME, 'the flat listing is byte-identical to the pre-grouping frame');
+  });
+
+  test('S13: every worktree group empty keeps the ordinary main-only listing, with no header at all', async () => {
+    const flat = build({ docs: [doc('alpha'), doc('beta')] });
+    const grouped = build({
+      groups: [
+        checkout('main', '/wt/main', true, [groupDoc('alpha'), groupDoc('beta')]),
+        checkout('odd-fix', '/wt/odd-fix', false, []),
+      ],
+    });
+    await tick();
+    const flatFrame = flat.render(100);
+    const groupedFrame = grouped.render(100);
+    assert.deepEqual(groupedFrame, flatFrame, 'the very same frame: no header, no group chrome');
+    assert.ok(!bodyOf(groupedFrame).includes('odd-fix'), 'an empty worktree is never named');
+    assert.ok(!bodyOf(groupedFrame).includes('▾'), 'and no header is painted');
+  });
+
+  test('S10: a header row per checkout, in order, each followed by its own documents', async () => {
+    const view = build({ groups: [MAIN, RAIL] });
+    await tick();
+    const lines = view.render(100);
+    assert.deepEqual(rowsOf(lines), ['▾ main', 'alpha', 'bravo', '▾ odd-rail', 'delta'],
+      'the main group, its documents, then the worktree group and its documents');
+    assert.equal(focusedRow(lines), 'alpha', 'the first DOCUMENT is focused, not the header');
+    assert.match(bodyOf(lines), /body of alpha/, 'and its document is the one painted');
+    assert.match(bodyOf(lines), /✎ Odd · 3 documents/, 'the title counts the listed documents');
+  });
+
+  test('S13: a worktree group with no documents of its own is dropped', async () => {
+    const view = build({ groups: [MAIN, RAIL, checkout('odd-fix', '/wt/odd-fix', false, [])] });
+    await tick();
+    const lines = view.render(100);
+    assert.deepEqual(rowsOf(lines), ['▾ main', 'alpha', 'bravo', '▾ odd-rail', 'delta'],
+      'the empty worktree contributes neither header nor rows');
+    assert.ok(!bodyOf(lines).includes('odd-fix'), 'and it is never named');
+  });
+
+  test('S10: Enter on a header collapses the group, hides its documents and keeps the focus on it', async () => {
+    const view = build({ groups: [MAIN, RAIL] });
+    await tick();
+    // Rows: [header main, alpha, bravo, header odd-rail, delta]; the mount
+    // focuses alpha (index 1), so two steps reach the worktree header.
+    for (let step = 0; step < 2; step += 1) view.handleInput('down');
+    assert.equal(focusedRow(view.render(100)), '▾ odd-rail', 'the premise: the header is focused');
+    view.handleInput('enter');
+    const collapsed = view.render(100);
+    assert.deepEqual(rowsOf(collapsed), ['▾ main', 'alpha', 'bravo', '▸ odd-rail'],
+      'the header stays and its documents are gone');
+    assert.equal(focusedRow(collapsed), '▸ odd-rail', 'the focus stays on the header');
+    assert.equal(view.state.index, 3, 'and so does its row');
+    assert.ok(!bodyOf(collapsed).includes('delta'), 'the collapsed documents are hidden');
+    view.handleInput('enter');
+    assert.deepEqual(rowsOf(view.render(100)), ['▾ main', 'alpha', 'bravo', '▾ odd-rail', 'delta'],
+      'Enter again reopens it');
+  });
+
+  test('Enter on a document keeps today\'s no-op: nothing folds and nothing moves', async () => {
+    const view = build({ groups: [MAIN, RAIL] });
+    await tick();
+    view.handleInput('down');
+    const before = view.render(100);
+    assert.equal(focusedRow(before), 'bravo', 'the premise: a document is focused');
+    view.handleInput('enter');
+    const after = view.render(100);
+    assert.deepEqual(rowsOf(after), rowsOf(before), 'no group folded around the focused document');
+    assert.equal(view.state.index, 2, 'and the selection did not move');
+  });
+
+  test('S11: a flips the mode, tells the caller once with the new value and the hint names the mode', async () => {
+    const calls = [];
+    const view = build({ groups: [MAIN, RAIL], onToggleAll: (all) => calls.push(all) });
+    await tick();
+    const sessionFooter = footerOf(view.render(200));
+    assert.match(sessionFooter, /a all worktrees/, `the session mode offers every worktree: ${sessionFooter}`);
+    view.handleInput('a');
+    assert.deepEqual(calls, [true], 'the caller is told once, with the new value');
+    const allFooter = footerOf(view.render(200));
+    assert.match(allFooter, /a session only/, `the all-worktrees mode offers the session back: ${allFooter}`);
+    assert.notEqual(allFooter, sessionFooter, 'the hint changes with the mode');
+    view.handleInput('a');
+    assert.deepEqual(calls, [true, false], 'a again returns to the session checkouts');
+    assert.match(footerOf(view.render(200)), /a all worktrees/, 'and the hint comes back');
+  });
+
+  test('S11: without onToggleAll the key does nothing and its hint is never listed', async () => {
+    const view = build({ groups: [MAIN, RAIL] });
+    await tick();
+    const before = view.render(100);
+    assert.ok(!bodyOf(before).includes('worktrees'), `no hint for a key that cannot work: ${footerOf(before)}`);
+    view.handleInput('a');
+    assert.deepEqual(view.render(100), before, 'the key changes nothing at all');
+  });
+
+  test('S11: the reloaded grouping re-applies the selection when the document is still there', async () => {
+    const view = build({ groups: [MAIN, RAIL], onToggleAll: () => {} });
+    await tick();
+    for (let step = 0; step < 3; step += 1) view.handleInput('down');
+    assert.equal(focusedRow(view.render(100)), 'delta', 'the premise: delta is the document being read');
+    // The caller answered the `a` toggle with every worktree: delta is still
+    // there, in a different place of a longer listing.
+    view.applyGroups([
+      MAIN,
+      checkout('odd-rail', '/wt/odd-rail', false, [
+        groupDoc('zulu', '/wt/odd-rail'),
+        groupDoc('delta', '/wt/odd-rail'),
+      ]),
+    ]);
+    await tick();
+    const lines = view.render(100);
+    assert.deepEqual(rowsOf(lines), ['▾ main', 'alpha', 'bravo', '▾ odd-rail', 'zulu', 'delta']);
+    assert.equal(focusedRow(lines), 'delta', 'the reader keeps the SAME document');
+    assert.match(bodyOf(lines), /body of delta/, 'and its pane is still the one being read');
+  });
+
+  test('S6/S10: initialDoc finds its document inside a group, before any key press', async () => {
+    const reads = [];
+    const view = createOddView({
+      groups: [
+        checkout('main', '/wt/main', true, [{ name: 'alpha', path: '/wt/main/odd/tasks/alpha.md', mtimeMs: 2 }]),
+        RAIL,
+      ],
+      initialDoc: '/wt/odd-rail/odd/tasks/delta.md',
+      loadDoc: (entry) => {
+        reads.push(entry.docPath || entry.path || entry.name);
+        return { ok: true, text: `# ${entry.name}\n\nbody of ${entry.name}\n` };
+      },
+      helpers,
+      theme: plainTheme,
+      rowsAvailable: () => 14,
+      requestRender: () => {},
+      done: () => {},
+    });
+    assert.deepEqual(reads, ['/wt/odd-rail/odd/tasks/delta.md'], 'the requested document is read on mount');
+    await tick();
+    const lines = view.render(100);
+    assert.equal(focusedRow(lines), 'delta', 'the highlight is on the requested document row');
+    assert.equal(view.state.index, 3, 'across the group it lives in');
+    assert.match(bodyOf(lines), /body of delta/, 'the right pane starts on the requested document');
+    assert.equal(view.state.scroll, 0, 'and at the top of it');
+  });
+});

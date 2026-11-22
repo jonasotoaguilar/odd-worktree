@@ -1143,7 +1143,7 @@ substrate (`lib/shell-card.js`) through the host's `registerToolRenderer` hook, 
 
 | Part | What it draws |
 | --- | --- |
-| Call | the tool's mark and word (`⧗ background`, `◉ monitor`, `■ stop`, `≡ jobs`) and what names the call: a job's label, else the first line of its command; a stop its job id; a listing "this session". Expanded, the whole command, every line |
+| Call | the tool's mark and word (`⧗ bash background`, `⧗ bash monitor`, `■ stop`, `≡ jobs`) and what names the call: a job's label, else the first line of its command; a stop its job id; a listing "this session". Expanded, the whole command, every line |
 | Result | the job's own answer: the first rows collapsed, everything expanded, closing the frame with the call's duration |
 
 - **The switch** is the bridge's `Card tags` line, read through its published reader `resolveToolDesignSelection`. The line
@@ -1154,6 +1154,10 @@ substrate (`lib/shell-card.js`) through the host's `registerToolRenderer` hook, 
   paint. These four tools have no renderer to forward to, so the answer is read when the card is built: a switch made
   mid-session reaches the next job card, not the one already on screen.
 - **Content level.** Under `minimal` a collapsed card is the call alone; a failed result still says why.
+- **One family, two voices.** `bash_background` and `monitor` wear the same mark and the same role
+  (`⧗`, `bashMode`), because they are the same tool with two timeouts; their words say which TOOL ran —
+  `bash background` or `bash monitor`. The report card Gentle Shell draws afterwards keeps its own
+  heading (`Background job`, `Monitor`), so a call is never mistaken for its report.
 - **Nothing else is claimed.** Any other tool is returned exactly as the chain resolved it. The tools are never
   registered, executed or shadowed here: the arguments are only read, and every model-written string is drawn without
   terminal sequences.

@@ -128,7 +128,9 @@ async function loadExtension(pi, options = {}) {
   });
 }
 
-function installBridge() {
+// `onRepaint` observes the bridge's own repaint request: S4 (D9) needs to see
+// that a settled rail read ASKS for the frame the new count is painted by.
+function installBridge(onRepaint = null) {
   const registered = [];
   globalThis[BRIDGE_SLOT] = {
     schema: 'gentle-shell-bridge/api',
@@ -137,7 +139,9 @@ function installBridge() {
     registerSection: (section) => { registered.push(section); return () => {}; },
     registerToolDesign: () => () => {},
     createStore: () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
-    requestRepaint: () => {},
+    requestRepaint: () => {
+      if (typeof onRepaint === 'function') onRepaint();
+    },
   };
   return { registered };
 }
@@ -903,7 +907,7 @@ describe('S4/S5: the one section counts and routes pull requests', () => {
     const docPath = path.join(process.env.XDG_CACHE_HOME, 'odd-worktree', 'prs-rail.json');
     await waitFor(() => fs.existsSync(docPath));
     const doc = JSON.parse(fs.readFileSync(docPath, 'utf8'));
-    assert.equal(doc.version, 1);
+    assert.equal(doc.version, 2, 'the document carries the bucket totals beside the rows (T10b)');
     const entry = doc.identities.find((candidate) => candidate.identity === 'github.com/myfork/project');
     assert.ok(entry, 'the read is stored under the identity it was read from');
     assert.deepEqual(entry.mine.map((row) => row.number), [69]);
@@ -1051,11 +1055,12 @@ describe('T8b: the exact count, the cold-start paint and the /prs refusal', () =
     const docPath = path.join(process.env.XDG_CACHE_HOME, 'odd-worktree', 'prs-rail.json');
     fs.mkdirSync(path.dirname(docPath), { recursive: true });
     fs.writeFileSync(docPath, JSON.stringify({
-      version: 1,
+      version: 2,
       identities: [{
         identity: 'github.com/myfork/project',
         mine: [{ number: 69, linkedIssues: [1] }],
         review: [],
+        counts: { mine: 1, review: 0 },
         syncedAt: Date.now(),
       }],
     }));
@@ -1089,11 +1094,12 @@ describe('T8b: the exact count, the cold-start paint and the /prs refusal', () =
     const docPath = path.join(process.env.XDG_CACHE_HOME, 'odd-worktree', 'prs-rail.json');
     fs.mkdirSync(path.dirname(docPath), { recursive: true });
     fs.writeFileSync(docPath, JSON.stringify({
-      version: 1,
+      version: 2,
       identities: [{
         identity: 'github.com/myfork/project',
         mine: [{ number: 69, linkedIssues: [1] }],
         review: [],
+        counts: { mine: 1, review: 0 },
         syncedAt: Date.now(),
       }],
     }));
@@ -1150,5 +1156,111 @@ describe('T8b: the exact count, the cold-start paint and the /prs refusal', () =
     const mutations = b.gh.calls.slice(before)
       .filter((call) => call.argv[0] === 'pr' && ['close', 'merge', 'edit', 'comment'].includes(call.argv[1]));
     assert.deepEqual(mutations, [], 'no mutating gh command ran after the drift');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T10b (S4): D9 and D15, at the wiring level.
+//
+// D9 — the rail's pull-request read is a SECOND state of the one section, so its
+// settlement must ask the bridge to repaint exactly like the issues read does;
+// without it the header keeps the old `pr` count until an unrelated frame.
+//
+// D15 — the store keeps each bucket's TOTAL beside its rows, so a restart paints
+// the number the live read painted: 50 returned rows with a total of 52 is
+// `52 pr` on both sides of the restart, never `50 pr`.
+// ---------------------------------------------------------------------------
+
+describe('T10b: the rail read repaints the header and its totals survive a restart', () => {
+  const fiftyRows = () => Array.from({ length: 50 }, (_, index) => ({ number: index + 1, linkedIssues: [] }));
+
+  test('S4 (D9): the settled rail read asks the bridge to repaint the header it changed', async () => {
+    installBridge();
+    const b = await boot({ railMine: [{ number: 69 }], railReview: [{ number: 70 }] });
+    let repaints = 0;
+    const { registered } = installBridge(() => { repaints += 1; });
+    const root = makeCheckout();
+    await warmGate(b.loaded);
+    const ctx = sessionCtx(root);
+    // The rail read is HELD, so the header exists without a `pr` segment and the
+    // repaint count measured below is the one the settlement is responsible for.
+    let release = null;
+    b.gh.state.railGate = new Promise((resolve) => { release = resolve; });
+    await fireSessionStart(b.loaded.hooks, ctx);
+    const section = registered[0];
+    await drawSection(section, ctx);
+    await waitFor(() => b.gh.state.railReads >= 1);
+    await new Promise((resolve) => realSetTimeout(resolve, 60));
+    const settled = repaints;
+    assert.equal(section.meta(ctx), '2 issues', 'a read still in flight paints no `pr` count yet');
+
+    b.gh.state.railGate = null;
+    release();
+    await waitFor(() => String(section.meta(ctx)).includes(' pr'));
+    assert.ok(repaints > settled,
+      'the settled rail read asked the bridge for the frame the new count is painted by');
+  });
+
+  test('S4 (D15): the loader writes each bucket total beside its rows', async () => {
+    installBridge();
+    const rows = fiftyRows();
+    const b = await boot({ railMine: rows, railMineTotal: 52, railReview: [] });
+    const { registered } = installBridge();
+    const root = makeCheckout();
+    await warmGate(b.loaded);
+    const ctx = sessionCtx(root);
+    await fireSessionStart(b.loaded.hooks, ctx);
+    const section = registered[0];
+    await drawSection(section, ctx);
+    await waitFor(() => String(section.meta(ctx)).includes(' pr'));
+    assert.equal(section.meta(ctx), '2 issues · 52 pr', 'the live read counts the two rows its window cut');
+
+    const docPath = path.join(process.env.XDG_CACHE_HOME, 'odd-worktree', 'prs-rail.json');
+    await waitFor(() => fs.existsSync(docPath));
+    const doc = JSON.parse(fs.readFileSync(docPath, 'utf8'));
+    const entry = doc.identities.find((candidate) => candidate.identity === 'github.com/myfork/project');
+    assert.ok(entry, 'the read is stored under the identity it was read from');
+    assert.deepEqual(entry.counts, { mine: 52, review: 0 },
+      'the totals that produced the live count sleep beside the rows');
+    assert.equal(doc.version, 2, 'and the document that carries them is the version this module writes');
+  });
+
+  test('S4 (D15): a cold start paints the stored total, so 50 rows with a total of 52 is 52 pr', async () => {
+    installBridge();
+    // The entry a previous process left behind: 50 rows and the total they came
+    // with, under the identity this checkout proves.
+    const rows = fiftyRows();
+    const docPath = path.join(process.env.XDG_CACHE_HOME, 'odd-worktree', 'prs-rail.json');
+    fs.mkdirSync(path.dirname(docPath), { recursive: true });
+    fs.writeFileSync(docPath, JSON.stringify({
+      version: 2,
+      identities: [{
+        identity: 'github.com/myfork/project',
+        mine: rows,
+        review: [],
+        counts: { mine: 52, review: 0 },
+        syncedAt: Date.now(),
+      }],
+    }));
+    const b = await boot({ railMine: rows, railMineTotal: 52, railReview: [] });
+    const { registered } = installBridge();
+    const root = makeCheckout();
+    await warmGate(b.loaded);
+    const ctx = sessionCtx(root);
+    let release = null;
+    b.gh.state.railGate = new Promise((resolve) => { release = resolve; });
+    await fireSessionStart(b.loaded.hooks, ctx);
+    const section = registered[0];
+    await drawSection(section, ctx);
+
+    await waitFor(() => String(section.meta(ctx)).includes(' pr'), 3000);
+    assert.equal(section.meta(ctx), '2 issues · 52 pr',
+      'the cold start paints the number the live read painted, not the rows the window carried');
+
+    b.gh.state.railGate = null;
+    release();
+    await waitFor(() => b.gh.state.railReads >= 1);
+    await new Promise((resolve) => realSetTimeout(resolve, 60));
+    assert.equal(section.meta(ctx), '2 issues · 52 pr', 'and the live answer paints the same number');
   });
 });

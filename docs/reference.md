@@ -840,16 +840,22 @@ a pull request in both buckets counts once.
   persisted the same way and by its own module (`lib/prs-rail-store.js`): one
   versioned document, `prs-rail.json` under the same cache directory, one entry per
   repository identity, bounded to the eight most recent and written through a temp
-  file and a rename. It stores the two bucket rows and the moment they were read —
-  never a count, because the header's number is derived from the rows — so a
-  stored entry can never contradict what is painted. The extension's async loader
-  is the only reader and the only writer: a cold start paints the stored rows at
-  once (`2 issues · 1 pr`) while the live read is held, with the entry's own
+  file and a rename. It stores the two bucket rows, each bucket's total and the
+  moment they were read — never a count, because the header's number is derived
+  from those rows plus those totals — so a stored entry can never contradict what
+  is painted, and a total below the rows it came with (or one that is not a count)
+  is ignored, leaving the rows as the floor. That is why the number is the same on
+  both sides of a restart: 50 rows with a total of 52 paints `52 pr` while the live
+  read answers and again from the store, never `50 pr`. The extension's async
+  loader is the only reader and the only writer: a cold start paints the stored
+  rows at once (`2 issues · 1 pr`) while the live read is held, with the entry's own
   `syncedAt` as its age so it never passes for a fresh read and never defeats the
   TTL; the live answer then replaces it, the entry is also the fallback for a read
   that failed, and it is written only from a successful read in the generation
-  that asked. A mutation made in `/prs` marks
-  the identity so the stored rows are not offered back as if nothing had changed.
+  that asked. Both of those paints ask the section for the repaint the new count
+  needs. A document of an older version is a cold cache (silence, never an error),
+  and a mutation made in `/prs` marks the identity so the stored rows are not
+  offered back as if nothing had changed.
 - **The scope is this checkout's repository, and nothing else moves.** It is the one
   repository both readers are pinned to, not every issue or pull request across
   every repository you touch. `/issues` keeps its own four tabs, its own repository

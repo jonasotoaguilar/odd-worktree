@@ -696,21 +696,32 @@ The question this page answers: which rules must every change preserve, and what
     cache survives a session_shutdown/start pair, so the next read is a delta".
 
     **The rail's pull-request entry cannot fake a number either.**
-    `lib/prs-rail-store.js` persists the two bucket ROWS and when they were read,
-    never the count: the header's `M` is derived from those rows, so a stored entry
-    can never contradict what is painted. The extension hydrates the stored entry
-    from the section's async loader so a cold start paints it at once, under its own
-    `syncedAt` (it never passes for a fresh read and never defeats the TTL) and
-    never for a settled state; the live read then replaces it, it is also the
-    fallback for a read that failed, and the extension writes an
+    `lib/prs-rail-store.js` persists the two bucket ROWS, each bucket's TOTAL and
+    when they were read, never the count: the header's `M` is the distinct numbers
+    in mine ∪ review plus the remainder of each total, DERIVED on load from what the
+    document holds (the count itself is never written), so a stored entry can never
+    contradict what is painted. A total below the rows it came with, or one that is
+    not a count, is ignored and the rows stay the floor — exactly the rule the live
+    read obeys — so 50 rows with a total of 52 is `52 pr` before a restart and after
+    it. The document is versioned (the totals moved it to version 2, and a document
+    of an older version is SILENCE, a cold cache, never an error). The extension
+    hydrates the stored entry from the section's async loader so a cold start paints
+    it at once, under its own `syncedAt` (it never passes for a fresh read and never
+    defeats the TTL) and never for a settled state; the live read then replaces it,
+    it is also the fallback for a read that failed, and the extension writes an
     entry only from a successful read in the generation that asked, and drops the
     entry's identity (so it is never hydrated back) after a mutation made in
-    `/prs`. Keyed exactly as the rail keys its own reads (`<host>/<owner>/<repo>`),
+    `/prs`. Both settlements of that read — the stored one and the live one — ask
+    the section's own notifier (`onRefreshed`) for the frame the new count is
+    painted by, exactly like the issues read, so the header never keeps an old
+    number until some unrelated event produces a frame; a frame itself never asks.
+    Keyed exactly as the rail keys its own reads (`<host>/<owner>/<repo>`),
     bounded to the eight most recent identities, written as a temp file plus a
     rename, and read only from the async loader. `tools/prs-rail-store.test.js`
-    pins the document and its silence;
-    `tools/prs-command.test.js` pins the fallback paint, the invalidation after a
-    mutation and that no temp file is left behind.
+    pins the document, the totals it derives from and its silence;
+    `tools/prs-command.test.js` pins the fallback paint, the totals that survive a
+    restart, the invalidation after a mutation, the repaint the settled read asks
+    for and that no temp file is left behind.
 
 26. **The rail's timed refresh exists only while the section is drawn.** With a
     floor named, `lib/issues-section.js` keeps ONE self-scheduled, unref'd timer at

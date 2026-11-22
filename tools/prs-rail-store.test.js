@@ -89,7 +89,7 @@ test('S4: an entry round-trips through ONE small versioned document', async () =
 
   assert.deepEqual(fs.readdirSync(dir), [FILE], 'exactly one document, no stray file');
   const doc = documentAt(dir);
-  assert.equal(doc.version, 1, 'the document is versioned');
+  assert.equal(doc.version, 2, 'the document is versioned');
   assert.equal(doc.identities.length, 1);
   assert.equal(doc.identities[0].identity, IDENTITY, 'the entry is keyed by the repository identity');
 });
@@ -173,7 +173,7 @@ test('S4: a wrong version is silence, and the next save writes the current one',
   const cache = store(dir);
   assert.equal(await cache.load(IDENTITY), null, 'a version this module does not know is never read');
   assert.equal(await cache.save(IDENTITY, snapshot()), true);
-  assert.equal(documentAt(dir).version, 1);
+  assert.equal(documentAt(dir).version, 2);
 });
 
 test('S4: a hostile entry is dropped and every other identity still answers', async () => {
@@ -270,4 +270,74 @@ test('S4: an identity this module cannot key is never read or written', async ()
   assert.equal(await cache.save('', snapshot()), false);
   assert.equal(await cache.save(IDENTITY, null), false, 'a snapshot that is not one is not written');
   assert.deepEqual(fs.readdirSync(dir), [], 'nothing was written at all');
+});
+
+// ---------------------------------------------------------------------------
+// T10b (S4): D15 — the per-bucket TOTAL is stored beside the rows.
+//
+// A live read carries a window of rows plus an exact `issueCount` per bucket
+// (D8): 50 rows with a total of 52 paints `52 pr`. The document used to keep the
+// rows alone, so a restart painted `50 pr` — a different number for the same
+// repository. The total now sleeps beside its rows, and the count is still
+// DERIVED on load (rows plus the remainder of each total), never stored as a
+// header count: a total below the rows it came with, or one that is not a count,
+// is ignored and the rows stay the floor.
+// ---------------------------------------------------------------------------
+
+test('S4 (T10b, D15): a bucket total round-trips beside its rows, and the derived count keeps its remainder', async () => {
+  const dir = tempDir('store-totals');
+  const cache = store(dir);
+  const rows = Array.from({ length: 50 }, (_, index) => row(index + 1));
+  assert.equal(await cache.save(IDENTITY, {
+    mine: rows,
+    review: [],
+    counts: { mine: 52, review: 0 },
+    syncedAt: 1000,
+  }), true);
+
+  const entry = await cache.load(IDENTITY);
+  assert.deepEqual(entry.counts, { mine: 52, review: 0 }, 'each total is stored beside the rows it counts');
+  assert.equal(entry.count, 52,
+    'the count the header paints is derived on load: the 50 rows plus the 2 the window cut');
+  assert.equal(entry.mine.length, 50, 'and the rows are still exactly what the read carried');
+  assert.deepEqual(Object.keys(documentAt(dir).identities[0]).includes('count'), false,
+    'no header count is written: the document keeps rows and totals only');
+});
+
+test('S4 (T10b, D15): a total below its row count is ignored, and the rows stay the floor', async () => {
+  const dir = tempDir('store-totals-floor');
+  const cache = store(dir);
+  const rows = Array.from({ length: 50 }, (_, index) => row(index + 1));
+  await cache.save(IDENTITY, {
+    mine: rows,
+    review: [row(69)],
+    counts: { mine: 3, review: 'many' },
+    syncedAt: 1000,
+  });
+
+  const entry = await cache.load(IDENTITY);
+  assert.equal(entry.counts.mine, null, 'a total below the rows it came with proves nothing');
+  assert.equal(entry.counts.review, null, 'and neither does one that is not a count');
+  assert.equal(entry.count, 51, 'the distinct numbers the rows prove stay the floor');
+
+  // A document that carries the unproven totals itself is read the same way.
+  const doc = documentAt(dir);
+  doc.identities[0].counts = { mine: 2, review: 0 };
+  fs.writeFileSync(path.join(dir, FILE), JSON.stringify(doc));
+  assert.equal((await cache.load(IDENTITY)).count, 51, 'a hostile document cannot shrink the count either');
+});
+
+test('S4 (T10b, D15): a document of the previous version is silence, never an error', async () => {
+  const dir = tempDir('store-previous-version');
+  fs.writeFileSync(path.join(dir, FILE), JSON.stringify({
+    version: 1,
+    identities: [{ identity: IDENTITY, mine: [row(69)], review: [], syncedAt: 1 }],
+  }));
+  const cache = store(dir);
+  assert.equal(await cache.load(IDENTITY), null,
+    'the version that never carried the totals is not read as if it had');
+
+  assert.equal(await cache.save(IDENTITY, snapshot()), true);
+  assert.equal(documentAt(dir).version, 2, 'and the next write is the current format');
+  assert.ok(await cache.load(IDENTITY));
 });

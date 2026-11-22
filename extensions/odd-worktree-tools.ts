@@ -8346,12 +8346,14 @@ function clearPrsRailStoredEntry(identity) {
   prsRailStoredEntry = null;
 }
 
-// The stored entry for ONE identity: `{ mine, review, syncedAt }`, or `null` for
-// an identity a panel write invalidated, a document that is missing, malformed or
-// unreadable, and a host with no store at all. It is read at most once per
-// identity (a `null` is remembered too, so a machine with no cache file never
-// asks the disk again), which is the same cost the loader paid before the cold
-// start needed it: no flight reads this file twice.
+// The stored entry for ONE identity: `{ mine, review, counts, syncedAt }`, or
+// `null` for an identity a panel write invalidated, a document that is missing,
+// malformed, of a previous version or unreadable, and a host with no store at
+// all. The `counts` are the bucket totals that slept beside the rows (T10b, S4,
+// D15), already normalized by the store: a total it could not prove is `null`. It
+// is read at most once per identity (a `null` is remembered too, so a machine with
+// no cache file never asks the disk again), which is the same cost the loader
+// paid before the cold start needed it: no flight reads this file twice.
 async function loadStoredRailPullRequests(identity) {
   if (typeof identity !== "string" || identity.length === 0) return null;
   if (prsRailStaleIdentities.has(identity)) return null;
@@ -8370,6 +8372,20 @@ async function loadStoredRailPullRequests(identity) {
   prsRailStoredIdentity = identity;
   prsRailStoredEntry = stored && Array.isArray(stored.mine) && Array.isArray(stored.review) ? stored : null;
   return prsRailStoredEntry;
+}
+
+// T10b (S4, D15): the bucket totals a stored entry carries, or `null` when it
+// carries none. The store already dropped every total it could not prove (one
+// below its own rows, one that is not a count), so what arrives here is exactly
+// what the section's own count may add to the rows it paints.
+function storedRailCounts(stored) {
+  if (!stored || typeof stored !== "object") return null;
+  const counts = stored.counts;
+  if (!counts || typeof counts !== "object" || Array.isArray(counts)) return null;
+  return {
+    mine: counts.mine === undefined ? null : counts.mine,
+    review: counts.review === undefined ? null : counts.review,
+  };
 }
 
 function prsClient() {
@@ -8594,13 +8610,31 @@ async function loadIssuesRailPullRequests() {
     // A failed live read paints the last SUCCESSFUL one when the disk has it, so
     // a cold start is not blank; nothing else is written from a failure.
     if (stored && Array.isArray(stored.mine) && Array.isArray(stored.review)) {
-      return { ok: true, identity, mine: stored.mine, review: stored.review, cached: true };
+      // T10b (S4, D15): the fallback carries the bucket totals too, so the number
+      // the last read painted survives the failure as well as the rows do.
+      return {
+        ok: true,
+        identity,
+        mine: stored.mine,
+        review: stored.review,
+        counts: storedRailCounts(stored),
+        cached: true,
+      };
     }
     return { ok: false, error: (read && read.error) || "GitHub query failed" };
   }
   prsRailStaleIdentities.delete(identity);
+  // D8 (S4): the buckets' EXACT totals travel with their rows — the section
+  // counts what the window cut as well as the numbers it carried. T10b (S4, D15):
+  // they are also what the entry keeps, so a restart paints the same number.
+  const counts = read.counts && typeof read.counts === "object" ? read.counts : null;
   if (store !== null && issuesSidebarCacheGeneration === generation) {
-    const snapshot = { mine: read.mine, review: read.review, syncedAt: Date.now() };
+    const snapshot = {
+      mine: read.mine,
+      review: read.review,
+      ...(counts === null ? {} : { counts }),
+      syncedAt: Date.now(),
+    };
     // The live answer IS what the entry now holds, so a later cold start paints
     // it without another read of the file.
     prsRailStoredIdentity = identity;
@@ -8609,9 +8643,6 @@ async function loadIssuesRailPullRequests() {
     // hold the rail's next read.
     Promise.resolve().then(() => store.save(identity, snapshot)).catch(() => {});
   }
-  // D8 (S4): the buckets' EXACT totals travel with their rows — the section
-  // counts what the window cut as well as the numbers it carried.
-  const counts = read.counts && typeof read.counts === "object" ? read.counts : null;
   return { ok: true, identity, mine: read.mine, review: read.review, ...(counts === null ? {} : { counts }) };
 }
 
@@ -8631,7 +8662,7 @@ async function hydrateIssuesRailPullRequests(identity) {
   if (prsRailStaleIdentities.has(identity)) return null;
   const stored = await loadStoredRailPullRequests(identity);
   if (!stored) return null;
-  return { mine: stored.mine, review: stored.review, syncedAt: stored.syncedAt };
+  return { mine: stored.mine, review: stored.review, counts: storedRailCounts(stored), syncedAt: stored.syncedAt };
 }
 
 function registerPrsCommand(pi) {

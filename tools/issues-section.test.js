@@ -4767,3 +4767,76 @@ test('S4 (T8b, D9): a settled state reads no stored entry at all', async () => {
   assert.equal(liveReads, 0, 'and reads no pull requests');
   assert.equal(handle.section.meta({}), undefined, 'nor paints a count it was never given');
 });
+
+// ---------------------------------------------------------------------------
+// T10b (S4): D9 — both settlements of the pull-request read repaint the header.
+//
+// The issues read already asks the section's own notifier for a repaint when it
+// lands (`replace()` reads `onRefreshed`). The `pr` count is painted from a
+// SECOND state, so its two settlements — the stored entry from the disk and the
+// live answer — must ask for the same repaint, or the header keeps its old count
+// until some unrelated event produces a frame. A frame asks for none: the
+// notifier is reached from a landed read alone (invariants 24-28 keep every
+// session path and every frame free of the read), and a disposed or superseded
+// section still repaints nothing.
+// ---------------------------------------------------------------------------
+
+test('S4 (T10b, D9): the live pull-request settlement asks for one repaint, and a frame asks for none', async () => {
+  const pending = [];
+  let repaints = 0;
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    loadPullRequests: () => new Promise((resolve) => pending.push(resolve)),
+    open: () => {},
+    openAll: () => {},
+    onRefreshed: () => { repaints += 1; },
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+  assert.equal(handle.section.meta({}), '2 issues', 'the issues read painted its own header, with no `pr` count yet');
+  const painted = repaints;
+
+  // The two drawing calls are frames over the in-process snapshot: neither is a
+  // reason to repaint anything.
+  handle.section.lines({});
+  handle.section.meta({});
+  await settleFrames();
+  assert.equal(repaints, painted, 'a frame never asks for a repaint');
+
+  pending.shift()(railBuckets({ mine: [69] }));
+  await settleFrames();
+  assert.equal(repaints, painted + 1, 'the settled pull-request read repaints the header it changed');
+  assert.equal(handle.section.meta({}), '2 issues · 1 pr', 'and the repaint is what the new count is painted by');
+});
+
+test('S4 (T10b, D9): the hydration asks for one repaint when the stored count paints', async () => {
+  let settleStored = null;
+  let repaints = 0;
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    hydratePullRequests: () => new Promise((resolve) => { settleStored = resolve; }),
+    loadPullRequests: () => new Promise(() => {}),
+    open: () => {},
+    openAll: () => {},
+    onRefreshed: () => { repaints += 1; },
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+  assert.equal(typeof settleStored, 'function', 'the dispatched read asked the disk for the stored entry');
+  assert.equal(handle.section.meta({}), '2 issues', 'nothing was painted from the disk yet');
+  const painted = repaints;
+
+  settleStored({ mine: [{ number: 69, linkedIssues: [] }], review: [], syncedAt: 1 });
+  await settleFrames();
+  assert.equal(repaints, painted + 1, 'the hydration repaints the header it just painted from the disk');
+  assert.equal(handle.section.meta({}), '2 issues · 1 pr');
+
+  // A state that keeps its count (`stale`) repaints nothing on top of a refusal
+  // that has nothing to paint: the settled section is not a reason to paint.
+  handle.dispose();
+  const afterDispose = repaints;
+  await settleFrames();
+  assert.equal(repaints, afterDispose, 'a disposed section repaints nothing');
+});

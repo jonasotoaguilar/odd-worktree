@@ -292,37 +292,43 @@ test('a bridge that cannot express the follow gets NO registration, never a Mess
   }
 });
 
-test('a release that cannot be read is probed, and a bridge that ignores follows still gets nothing', () => {
-  for (const [name, version] of [['no release member', undefined], ['a release that cannot be read', 'v0.12']]) {
-    const bridge = publishBridge({ version, toolLine: ACTIVITY, validatesFollows: false });
-    assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined }, name);
-    assert.equal(bridge.calls.length, 1, `${name}: the capability probe, and nothing else`);
-    assert.equal(bridge.calls[0].length, 1);
-    assert.match(bridge.calls[0][0].customType, /capability-probe/u, 'the throwaway registration');
-    assert.equal(validFollow(bridge.calls[0][0].follows), false, 'with a follow only a validating bridge refuses');
-    assert.equal(bridge.disposed, 1, 'withdrawn in the same call');
-    assert.deepEqual(bridge.designs, [], 'so it can never take a value, appear on a menu or paint a message');
+test('a release that cannot be read registers nothing at all: no probe, no api call, no store read', () => {
+  for (const [name, version] of [['no release member', undefined], ['a release that cannot be read', 'v0.12'], ['a prerelease of the floor', '0.12.0-rc.1'], ['a build suffix on the floor', '0.12.0+build.7']]) {
+    for (const validatesFollows of [false, true]) {
+      const bridge = publishBridge({ version, toolLine: ACTIVITY, validatesFollows });
+      assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined }, name);
+      // The api is never asked: a probe cannot tell a refused follow from an unrelated refusal, and a
+      // bridge that ignores the field would take the real designs as a `Message <type>` switch.
+      assert.equal(bridge.calls.length, 0, `${name}: nothing reaches the bridge`);
+      assert.deepEqual(bridge.designs, [], `${name}: nothing of ours can become a switch`);
+    }
   }
 });
 
-test('a release that cannot be read is asked, and a bridge that validates follows is used', () => {
-  const wire = registered({ version: undefined, toolLine: ACTIVITY, validatesFollows: true });
-  assert.equal(wire.registered, true);
-  assert.equal(wire.bridge.calls.length, 2, 'the refused probe, then the real registration');
-  assert.equal(wire.bridge.calls[1].length, 2);
-  assert.deepEqual(wire.bridge.calls[1].map((design) => design.follows), [{ line: TOOLS_LINE, id: BASH_DESIGN_ID }, { line: TOOLS_LINE, id: BASH_DESIGN_ID }]);
+test('a width too narrow for one body row hands the rows straight back', () => {
+  const outcome = registered();
+  for (const customType of MESSAGE_TYPES) {
+    const design = designFor(outcome, customType);
+    const lines = plainBody(customType, 'Exploration budget: 3 tracked lookups.');
+    for (const width of [1, 4, 5]) {
+      const context = { width, customType, theme: plainTheme, render: { expanded: false, outputPad: 1, message: {} } };
+      assert.deepEqual(design.apply(lines, context), lines, `${customType} at width ${width}`);
+    }
+    const painted = design.apply(lines, { width: 40, customType, theme: plainTheme, render: { expanded: false, outputPad: 1, message: {} } });
+    assert.notDeepEqual(painted, lines, `${customType}: a usable width still paints`);
+  }
 });
 
 test('a later release registers, and a bridge with no message-design surface registers nothing', () => {
   for (const version of ['0.12.0', '0.12.1', '0.13.0', '1.0.0']) {
     assert.equal(registered({ version }).registered, true, version);
   }
-  // The capability itself, asked of two bridges: the release decides, and an unreadable one is
-  // probed with a registration only a validating bridge refuses.
+  // The capability itself, asked of two bridges: the release string decides, and nothing is asked of
+  // the bridge when it cannot be read as at least 0.12.0 (fail closed, never a probe).
   assert.equal(bridgeTakesFollows({ VERSION: '0.12.0' }), true);
   assert.equal(bridgeTakesFollows({ VERSION: '0.11.9' }), false);
   assert.equal(bridgeTakesFollows({ VERSION: '0.12.0-rc.1' }), false);
-  assert.equal(bridgeTakesFollows({}), false, 'an unreadable release whose probe is accepted');
+  assert.equal(bridgeTakesFollows({}), false, 'an unreadable release is not asked and not used');
   const bare = publishBridge({ version: '0.12.0' });
   delete globalThis[BRIDGE_API_SLOT].registerMessageDesign;
   assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined });

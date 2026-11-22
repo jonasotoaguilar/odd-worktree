@@ -40,11 +40,15 @@ palette, no raw escape sequence, no second card grammar.
 
 | ID | Spec | Route | Risk | Commit |
 | --- | --- | --- | --- | --- |
-| T1 | S1, S2, S5 | worker (`gentle-ai-worker`) | none (new module, no shared code) | pending |
-| T2 | S1, S3, S4 | inline (parent) | item 3 (`extensions/odd-worktree-tools.ts` is a host registration surface other extensions load) | pending |
+| T1 | S1, S2, S5 | worker (`gentle-ai-worker`) | none (new module, no shared code) | `3b8a515` ✅ — `lib/message-card.js` (26 tests), `lib/bash-design.js` `TOOLS_LINE` export (+3), docs. Slice boundary: 1004 authored lines, one unit (drawing + tests + docs) |
+| T2 | S1, S3, S4 | inline (parent) | item 3 (`extensions/odd-worktree-tools.ts` is a host registration surface other extensions load) | `8ca153a` ✅ — the registration beside the jobs card, same bridge-ready path and measurement seam |
 
 T1 builds `lib/message-card.js` + `tools/message-card.test.js` + the docs. T2 wires the registration in
-`extensions/odd-worktree-tools.ts` and commits both slices.
+`extensions/odd-worktree-tools.ts` and commits both slices. Suite after T2: 2623 pass, 0 fail.
+
+Bridge versions: the surface is `gentle-shell-bridge@0.11.0` (message designs) and `0.12.0` (`follows`,
+which is what S1 needs). On 0.11.0 this package registers NOTHING — an ungrouped design there would create
+its own `Message <type>` switch, the parallel switch S1 forbids.
 
 ## Log
 

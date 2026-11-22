@@ -1208,19 +1208,23 @@ headed by its name alone — no invented detail, no empty separator.
 - **It needs gentle-shell-bridge `0.12.0`, and an older bridge gets nothing.** `follows` is a field a
   pre-`0.12.0` bridge ignores while accepting the registration, which would silently mint the very
   `Message <type>` switch this card must not have, so the designs are registered only where the bridge can
-  express the follow. Detection is this package's usual discipline (the one `lib/bash-design.js` applies to
-  a grouped line, and `lib/diff-design.js` to its own line): the published release string is read first —
-  `0.12.0` or later registers, and a prerelease or build suffix of the cutoff (`0.12.0-rc.1`,
-  `0.12.0+build.7`) does NOT meet it, because semver puts those below the release — and when that string
-  cannot be read at all the bridge itself is asked with ONE throwaway registration whose follow is
-  malformed: only `0.12.0` validates `follows`, so only it refuses it. The probe is withdrawn in the same
-  call, can never take a value, appear on a menu or paint a message, and an ACCEPTED probe means nothing of
-  ours is registered.
-- **Fail-open.** No bridge, a bridge without the message-design member, a release below `0.12.0` and a
-  registration the bridge refuses are all "register nothing": Pi's own box stays byte-identical and no pass
-  pays for the surface. A message or a context the design cannot measure through (no helpers, no positive
-  width) throws instead of answering rows Pi would have to refuse, and the bridge's documented fallback
-  draws Pi's own box; the rows the design is handed are never mutated, and every row it answers is a string.
+  express the follow. The published release string is the ONLY answer accepted: `0.12.0` or later registers;
+  a release below the cutoff, a prerelease or build suffix of it (`0.12.0-rc.1`, `0.12.0+build.7`) and a
+  string that cannot be read at all register **nothing**. Excluding the suffixed forms is this package's
+  fail-closed policy, not a SemVer ranking — anything not readable as at least `0.12.0` loses the card. There
+  is deliberately **no capability probe**: a probe cannot tell a bridge that refuses it for an unrelated
+  reason (`0.11.0` refuses a competing type claim long before it ever looks at `follows`) from one that
+  validates the field, and an accepted-then-withdrawn probe can leave the bridge's row provider installed.
+  The trade is the safe side of it — an unreadable release keeps Pi's own box, never a parallel switch.
+- **Fail-open, and what an inactive claim still costs.** No bridge, a bridge without the message-design
+  member, a release below `0.12.0` and a registration the bridge refuses are all "register nothing": Pi's
+  own output stays byte-identical. Once registered, a pass where `Card tags` answers something else spends
+  **one selection resolution** — the bridge reads the message document, and the tool document when the
+  followed line exists — and paints nothing; the card itself does no work at all. A message or a context the
+  design cannot measure through (no helpers, no positive width) throws instead of answering rows Pi would
+  have to refuse, and the bridge's documented fallback draws Pi's own box; a width too narrow for one body
+  row (below 6 columns) hands the bridge's own rows straight back instead of painting a heading over
+  nothing. The rows the design is handed are never mutated, and every row it answers is a string.
 - **Tests.** `tools/message-card.test.js` drives the public surface — the registration on a fake bridge, the
   follow it carries, the two designs and the rows `apply` answers for a width — and asserts the exact heading
   bytes of both cards, the whole body at `minimal`, the style flip repainting, the live `Card tags` flip on

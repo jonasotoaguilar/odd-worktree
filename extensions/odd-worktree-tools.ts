@@ -3064,6 +3064,30 @@ function readCurrentBranch(git, root) {
   return readGitTextSync(git, root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
 }
 
+// invariant 22: the skill-read guard, the second `tool_call` observation that REFUSES a
+// `bash` call — a reader (`cat`, `sed -n`, `head`, …) pointed at a skill file, which the
+// `read` tool is for. The decision is `lib/skill-read-guard.js`'s: text-only, over the
+// command string, and only for the `bash` tool. Nothing is registered here either — no
+// command, no tool, no option and no setting — and `ODD_WORKTREE_GUARD=0`, the worktree
+// guard's own switch, turns this guard off the same way, read per call.
+function guardSkillReadBashCall(event) {
+  try {
+    if (process.env.ODD_WORKTREE_GUARD === "0") return undefined;
+    if (!event || event.toolName !== "bash") return undefined;
+    const guard = libRequire("skill-read-guard.js");
+    if (!guard || typeof guard.decideSkillReadGuard !== "function") return undefined;
+    const input = event.input || {};
+    const decision = guard.decideSkillReadGuard(input.command);
+    if (decision && decision.block === true && typeof decision.reason === "string") {
+      return { block: true, reason: decision.reason };
+    }
+    return undefined;
+  } catch {
+    // invariant 22: the guard never throws into the host, and a command it cannot judge passes.
+    return undefined;
+  }
+}
+
 // The registered `tool_call` handler: the guard's one host surface. A non-`bash` call
 // returns before any module is read, and the git answers ride in as the guard's seams:
 // the identity and the default branch memoized per checkout, the current branch read
@@ -9821,16 +9845,22 @@ function registerOddWorktreeSurfaceEntries(pi) {
     startupEpoch += 1;
   });
   pi.on("tool_call", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi));
-  // S1/S3/S4/S9: the worktree guard, the ONE `tool_call` observation that refuses a
+  // S1/S3/S4/S9: the worktree guard, the first `tool_call` observation that refuses a
   // `bash` command instead of observing it. It sits beside the naming handler and is
-  // the only handler that returns a `block` answer; every other tool call is left
-  // exactly as the host proposed it. Nothing about it is callable by the agent (S7).
+  // one of the two handlers that return a `block` answer — the skill-read guard, below,
+  // is the other; every other tool call is left exactly as the host proposed it. Nothing
+  // about it is callable by the agent (S7).
   pi.on("tool_call", (event, ctx) => guardWorktreeBashCall(event, ctx));
   // S4 (T3): the write guard, a second `tool_call` observation that refuses an `edit`
   // or `write` into the primary checkout while it sits on the default branch. It is a
   // sibling of the bash guard, not a part of it: the two read different inputs, and a
   // `bash` call and a file write are refused for different reasons.
   pi.on("tool_call", (event, ctx) => guardWorktreeWriteCall(event, ctx));
+  // invariant 22: the skill-read guard, the second refusal and the guard registered LAST
+  // of the two, so a call that would break both shows the worktree refusal. It reads the
+  // command text only, shares the same `ODD_WORKTREE_GUARD=0` switch, and adds no
+  // command, tool, option or setting of its own.
+  pi.on("tool_call", (event) => guardSkillReadBashCall(event));
   pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
   // S10 (T9): ONE `tool_result` observation for the rail's forced refresh. It
   // answers the `bash` tool only — every other tool returns before the classifier

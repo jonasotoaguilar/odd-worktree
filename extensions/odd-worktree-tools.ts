@@ -3070,6 +3070,24 @@ function readCurrentBranch(git, root) {
 // command string, and only for the `bash` tool. Nothing is registered here either — no
 // command, no tool, no option and no setting — and `ODD_WORKTREE_GUARD=0`, the worktree
 // guard's own switch, turns this guard off the same way, read per call.
+// S1 (skill-read-full): a skill's or an ODD's Markdown is read WHOLE. The host's `read` takes `offset`
+// and `limit`, so a caller paging through a skill cuts it in half — and a half-read skill
+// states an incomplete procedure. This observation DROPS those two fields from the call the
+// host executes (`event.input` is the host's mutable seam; no re-validation follows), so the
+// read delivers the file from its first line to its last. It blocks nothing, answers nothing
+// and adds no tool: a call that is not a skill's Markdown is left byte-identical, and the
+// decision itself is `lib/skill-read-full.js`'s, which reads the file card's own identity.
+function keepSkillReadWholeCall(event) {
+  try {
+    if (!event || event.toolName !== "read") return undefined;
+    libRequire("artifact-read-full.js").keepArtifactReadWhole("read", event.input);
+    return undefined;
+  } catch {
+    // A read is never failed by a rule that only meant to complete it.
+    return undefined;
+  }
+}
+
 function guardSkillReadBashCall(event) {
   try {
     if (process.env.ODD_WORKTREE_GUARD === "0") return undefined;
@@ -9934,7 +9952,14 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // of the two, so a call that would break both shows the worktree refusal. It reads the
   // command text only, shares the same `ODD_WORKTREE_GUARD=0` switch, and adds no
   // command, tool, option or setting of its own.
-  pi.on("tool_call", (event) => guardSkillReadBashCall(event));
+  // invariant 22 (S5 of skill-read-full): the skill-read guard is the second refusal — a
+  // `bash` reader pointed at a skill file — and it follows the `Worktrees+` module, like every
+  // other guard here: with that module off, neither refusal nor the read rule below exists.
+  if (oddModules.worktrees) pi.on("tool_call", (event) => guardSkillReadBashCall(event));
+  // S1/S2/S5 (skill-read-full): the other half of the same rule — a skill's or an ODD's
+  // Markdown is read whole, so a `read` that pages through one has its range dropped before
+  // the host runs it. Same switch: with `Worktrees+` off, a read is left as the host proposed it.
+  if (oddModules.worktrees) pi.on("tool_call", (event) => keepSkillReadWholeCall(event));
   if (oddModules.worktrees) pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
   // S10 (T9): ONE `tool_result` observation for the rail's forced refresh. It
   // answers the `bash` tool only — every other tool returns before the classifier

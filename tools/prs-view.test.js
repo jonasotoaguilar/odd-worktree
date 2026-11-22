@@ -703,6 +703,94 @@ describe('prs view merge mode (S2)', () => {
     assert.match(bodyOf(view, 150), /pull requests cannot be merged: this repository permission is missing/);
   });
 
+  test('the confirmed number is the one the step names and the row it highlights', async () => {
+    const merged = [];
+    const rows = [pullRequest(87), pullRequest(88)];
+    const pending = deferred();
+    let reads = 0;
+    const loadPullRequestPage = () => {
+      reads += 1;
+      return reads === 1 ? { ok: true, rows } : pending.promise;
+    };
+    const { view } = makeView({
+      loadPullRequestPage,
+      loadPullRequest: (number) => ({
+        ok: true,
+        pullRequest: pullRequest(number, {
+          permissions: EDITABLE,
+          mergeDefaults: { merge: { subject: `subject ${number}`, body: `body ${number}` } },
+        }),
+        comments: [],
+      }),
+      actions: { merge: (number, options) => { merged.push({ number, options }); return { ok: true }; } },
+    });
+    await tick();
+    view.handleInput('r');
+    view.handleInput('m');
+    pending.resolve({ ok: true, rows: [rows[1], rows[0]] });
+    await tick();
+    assert.match(rightOf(view, 150), /Confirm merge #87/, 'the confirmation names the number it will merge');
+    const left = leftOf(view, 150);
+    assert.match(left, /▸ pull request 87/, 'the row that will merge carries the cursor');
+    assert.doesNotMatch(left, /▸ pull request 88/, 'no other row is highlighted by the merge step');
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.deepEqual(merged, [{ number: 87, options: { method: 'merge', subject: 'subject 87', body: 'body 87' } }]);
+  });
+
+  test('a rebase merge offers neither a commit message nor a description', async () => {
+    const merged = [];
+    const source = pageSource({ mine: [pullRequest(1)], review: [], involved: [] });
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({
+        ok: true,
+        pullRequest: pullRequest(number, {
+          permissions: EDITABLE,
+          mergeMethods: { rebase: true },
+          mergeDefaults: { rebase: {} },
+        }),
+        comments: [],
+      }),
+      actions: { merge: (number, options) => { merged.push({ number, options }); return { ok: true }; } },
+    });
+    await tick();
+    view.handleInput('m');
+    const pane = rightOf(view, 150);
+    assert.match(pane, /Type: rebase/);
+    assert.doesNotMatch(pane, /Commit message|Description/, 'a rebase merge takes neither field, so neither is offered');
+    view.handleInput('down');
+    assert.equal(view.state.mergeField, 3, 'down reaches the confirm row without passing a hidden field');
+    view.handleInput('enter');
+    await tick();
+    assert.deepEqual(merged, [{ number: 1, options: { method: 'rebase' } }]);
+  });
+
+  test('the merge fields stay reachable up and down without landing on a hidden one', async () => {
+    const source = pageSource({ mine: [pullRequest(1)], review: [], involved: [] });
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({
+        ok: true,
+        pullRequest: pullRequest(number, {
+          permissions: EDITABLE,
+          mergeMethods: { rebase: true },
+          mergeDefaults: { rebase: {} },
+        }),
+        comments: [],
+      }),
+    });
+    await tick();
+    view.handleInput('m');
+    const visited = new Set();
+    for (let at = 0; at < 5; at += 1) {
+      visited.add(view.state.mergeField);
+      view.handleInput('down');
+    }
+    assert.deepEqual([...visited].sort((left, right) => left - right), [0, 3, 4],
+      'only the type, the confirm and the cancel rows hold the focus');
+  });
+
   test('a refused merge keeps the confirmation on screen and names the error', async () => {
     const source = pageSource({ mine: [pullRequest(1)], review: [], involved: [] });
     const { view } = makeView({
@@ -774,6 +862,55 @@ describe('prs view writes (S2)', () => {
     assert.match(bodyOf(view, 150), /comment refused/);
   });
 
+  test('the comment editor posts the number it opened on, whatever a reload did', async () => {
+    const posted = [];
+    let reads = 0;
+    let finish = () => {};
+    const rows = [pullRequest(42), pullRequest(43)];
+    const { view } = makeView({
+      loadPullRequestPage: () => {
+        reads += 1;
+        return reads === 1 ? { ok: true, rows } : new Promise((resolve) => { finish = resolve; });
+      },
+      actions: { postComment: (number, body) => { posted.push({ number, body }); return { ok: true }; } },
+    });
+    await tick();
+    view.handleInput('r');
+    view.handleInput('c');
+    view.handleInput('h');
+    view.handleInput('i');
+    // The reload lands with the OTHER pull request under the cursor, then drops
+    // the row the composer named altogether.
+    finish({ ok: true, rows: [rows[1]] });
+    await tick();
+    assert.equal(view.state.index, 0);
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.deepEqual(posted, [{ number: 42, body: 'hi' }], 'the composer posted to the pull request it named');
+  });
+
+  test('a refused comment keeps both the draft and the number it was opened on', async () => {
+    const posted = [];
+    let answer = { ok: false, error: 'comment refused' };
+    const source = pageSource({ mine: [pullRequest(7), pullRequest(8)], review: [], involved: [] });
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      actions: { postComment: (number, body) => { posted.push({ number, body }); return answer; } },
+    });
+    await tick();
+    view.handleInput('c');
+    view.handleInput('h');
+    view.handleInput('i');
+    view.handleInput('ctrl+s');
+    await tick();
+    await tick();
+    answer = { ok: true };
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.deepEqual(posted, [{ number: 7, body: 'hi' }, { number: 7, body: 'hi' }],
+      'a retry posts to the same pull request the composer named');
+  });
+
   test('l applies label add/remove deltas and can create a label the repository allows', async () => {
     const applied = [];
     const source = pageSource({ mine: [pullRequest(3)], review: [], involved: [] });
@@ -804,6 +941,34 @@ describe('prs view writes (S2)', () => {
     assert.deepEqual(applied[0].remove, ['bug']);
     assert.deepEqual(applied[0].created, ['u']);
     assert.equal(view.state.mode, 'list');
+  });
+
+  test('a repository that may label but not create never offers creation', async () => {
+    const applied = [];
+    const source = pageSource({ mine: [pullRequest(3)], review: [], involved: [] });
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({
+        ok: true,
+        pullRequest: pullRequest(number, { permissions: { canEditLabels: true, canCreateLabels: false } }),
+        comments: [],
+      }),
+      loadLabels: () => ({ ok: true, labels: [{ name: 'bug' }, { name: 'docs' }] }),
+      actions: { editLabels: (number, add, remove, created) => { applied.push({ number, add, remove, created }); return { ok: true }; } },
+    });
+    await tick();
+    view.handleInput('l');
+    await tick();
+    const pane = rightOf(view, 150);
+    assert.match(pane, /\[x\] bug/);
+    assert.doesNotMatch(pane, /create new/, 'the picker offers no creation without the capability');
+    view.handleInput('n');
+    await tick();
+    assert.doesNotMatch(rightOf(view, 150), /new:/, 'n opens no creation row without the capability');
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.deepEqual(applied, [{ number: 3, add: [], remove: [], created: [] }],
+      'the draft was applied with no created label');
   });
 
   test('a toggled assignee sends the delta that assigns and unassigns the viewer', async () => {

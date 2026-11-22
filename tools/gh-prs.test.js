@@ -113,6 +113,7 @@ function argvStartingWith(calls, first, second) {
 
 const NO_CAPABILITIES = {
   canEditLabels: false,
+  canCreateLabels: false,
   canEditAssignees: false,
   canClosePullRequests: false,
   canMerge: false,
@@ -393,11 +394,14 @@ describe('getPullRequest: detail and metadata', () => {
     });
     assert.deepEqual(pr.permissions, {
       canEditLabels: true,
+      canCreateLabels: true,
       canEditAssignees: true,
       canClosePullRequests: true,
       canMerge: true,
       canEditLinkedIssues: true,
     });
+    assert.equal(pr.permissions.canCreateLabels, true,
+      'the metadata carries the label-creation capability the picker needs');
     assert.equal(pr.metadataError, null);
     assert.deepEqual(pr.unavailable, []);
 
@@ -536,6 +540,7 @@ describe('pullRequestPermissions fails closed', () => {
 
     assert.deepEqual(ghPrs.pullRequestPermissions('WRITE', nonDraft), {
       canEditLabels: true,
+      canCreateLabels: true,
       canEditAssignees: true,
       canClosePullRequests: true,
       canMerge: true,
@@ -545,15 +550,26 @@ describe('pullRequestPermissions fails closed', () => {
       assert.equal(ghPrs.pullRequestPermissions(role, nonDraft).canMerge, true, `${role} may merge`);
     }
 
-    // TRIAGE may manage labels and assignees; it may not close, merge or
-    // rewrite the body of somebody else's pull request.
+    // TRIAGE may manage labels and assignees; it may not close, merge, create a
+    // repository label or rewrite the body of somebody else's pull request.
     assert.deepEqual(ghPrs.pullRequestPermissions('TRIAGE', nonDraft), {
       canEditLabels: true,
+      canCreateLabels: false,
       canEditAssignees: true,
       canClosePullRequests: false,
       canMerge: false,
       canEditLinkedIssues: false,
     });
+  });
+
+  test('label creation is write-level, confirmed at WRITE and up alone', () => {
+    for (const role of ['WRITE', 'MAINTAIN', 'ADMIN']) {
+      assert.equal(ghPrs.pullRequestPermissions(role).canCreateLabels, true, `${role} may create a label`);
+    }
+    for (const role of ['TRIAGE', 'READ', 'NONE', 'write', null, undefined, true, {}]) {
+      assert.equal(ghPrs.pullRequestPermissions(role).canCreateLabels, false,
+        `${JSON.stringify(role)} confirms no label creation`);
+    }
   });
 
   test('read access, an unknown role and a missing role all confirm nothing', () => {
@@ -822,6 +838,112 @@ describe('every write re-reads the repository role before it runs', () => {
     assert.equal(res.ok, true, res.error);
     assert.deepEqual(calls.map((call) => call.argv), [['pr', 'comment', '87', '--body', 'hi']],
       'no role read and no gate stands in front of a comment');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2 (D13): a write and the role read that authorizes it share ONE resolved
+// repository scope. The checkout is resolved once, and every child of the write
+// — the role read included — runs under the identity it proved, so a remote
+// that moves between the two children cannot authorize one repository and write
+// under another.
+// ---------------------------------------------------------------------------
+describe('a write shares one resolved scope with its role read', () => {
+  const CALLS = [
+    ['closePullRequest', (client, opts) => client.closePullRequest(87, opts),
+      (argv) => argv[0] === 'pr' && argv[1] === 'close'],
+    ['editLabels', (client, opts) => client.editLabels(87, { add: ['bug'] }, opts),
+      (argv) => argv[0] === 'pr' && argv[1] === 'edit' && argv.includes('--add-label')],
+    ['editAssignees', (client, opts) => client.editAssignees(87, { add: ['octocat'] }, opts),
+      (argv) => argv[0] === 'pr' && argv[1] === 'edit' && argv.includes('--add-assignee')],
+    ['editLinkedIssues', (client, opts) => client.editLinkedIssues(87, { add: [99] }, opts),
+      (argv) => argv[0] === 'pr' && argv[1] === 'edit' && argv.includes('--body')],
+    ['mergePullRequest', (client, opts) => client.mergePullRequest(87, { method: 'merge' }, opts),
+      (argv) => argv[0] === 'pr' && argv[1] === 'merge'],
+  ];
+
+  // A checkout whose remote MOVES: every resolution hands back a new repository,
+  // so a child that resolves on its own writes somewhere the role read never saw.
+  function movingCheckout() {
+    const resolved = [];
+    const children = [];
+    const checkoutRepoScope = async () => {
+      resolved.push(`github.com/octo/repo-${resolved.length + 1}`);
+      return { ok: true, identity: resolved.at(-1), nameWithOwner: `octo/repo-${resolved.length}` };
+    };
+    const runGh = async (argv, opts = {}) => {
+      let identity = null;
+      if (opts.scope !== undefined) {
+        identity = opts.scope === null || opts.scope === '' ? null : String(opts.scope);
+      } else if (typeof opts.cwd === 'string' && opts.cwd !== '') {
+        const scope = await checkoutRepoScope({ ...opts, fresh: opts.freshScope === true });
+        if (scope.ok !== true) return { status: null, stdout: '', stderr: '', error: scope.error };
+        identity = scope.identity;
+      }
+      children.push({ argv: argv.slice(), identity });
+      if (argv[0] === 'repo') return okJson(JSON.stringify({ nameWithOwner: 'octo/base' }));
+      if (argv[0] === 'api' && queryOf({ argv }).includes('viewer { login }')) {
+        return okJson(JSON.stringify({
+          data: { repository: { viewerPermission: 'WRITE' }, viewer: { login: 'octocat' } },
+        }));
+      }
+      if (argv[0] === 'api') {
+        return okJson(JSON.stringify({
+          data: {
+            repository: {
+              viewerPermission: 'WRITE',
+              mergeCommitAllowed: true,
+              squashMergeAllowed: false,
+              rebaseMergeAllowed: false,
+              pullRequest: {
+                isDraft: false,
+                state: 'OPEN',
+                closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } },
+              },
+            },
+          },
+        }));
+      }
+      if (argv[0] === 'pr' && argv[1] === 'view') return okJson(JSON.stringify({ body: 'Closes #12' }));
+      return okJson('');
+    };
+    return { runGh, checkoutRepoScope, children, resolved };
+  }
+
+  for (const [name, call, isWrite] of CALLS) {
+    test(`${name} authorizes and writes in the same resolved repository`, async () => {
+      const checkout = movingCheckout();
+      const client = ghPrsModule.createPrsClient({ issues: checkout });
+
+      const res = await call(client, { cwd: '/checkout' });
+
+      assert.equal(res.ok, true, res.error);
+      assert.equal(checkout.resolved.length, 1, 'the checkout is resolved once for the whole write');
+      const writes = checkout.children.filter((child) => isWrite(child.argv));
+      assert.equal(writes.length, 1, `${name} spawns exactly one write child`);
+      assert.equal(writes[0].identity, 'github.com/octo/repo-1',
+        `${name} wrote under the repository the role read proved`);
+      for (const child of checkout.children.filter((entry) => entry.argv[0] !== 'repo')) {
+        assert.equal(child.identity, writes[0].identity,
+          `${child.argv.slice(0, 2).join(' ')} ran under ${child.identity}, not the write's identity`);
+      }
+    });
+  }
+
+  test('an unprovable checkout refuses before the role read or the write runs', async () => {
+    const children = [];
+    const client = ghPrsModule.createPrsClient({
+      issues: {
+        runGh: async (argv) => { children.push(argv.slice()); return okJson(''); },
+        checkoutRepoScope: async () => ({ ok: false, error: 'cannot resolve the repository' }),
+      },
+    });
+
+    const res = await client.closePullRequest(87, { cwd: '/checkout' });
+
+    assert.equal(res.ok, false);
+    assert.match(String(res.error), /cannot resolve the repository/);
+    assert.deepEqual(children, [], 'nothing runs against a repository it could not prove');
   });
 });
 

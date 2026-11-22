@@ -1067,8 +1067,8 @@ host's `expanded` flag (`ctrl+o`) decides what is drawn.
 drawn — a document previews from its top, unlike a command's output, whose summary
 is written last — and expanded it is the whole document. A call that failed says
 why at either level and wears the `error` role. Markdown is the shape a document is
-written in, not a property of where it lives: a `read` of any `.md` file, and a
-`write` to one, are drawn by Pi's OWN renderer (`Markdown` from
+written in, not a property of where it lives: a `read` of any `.md` file, a
+`write` to one, and an `edit` of one, are drawn by Pi's OWN renderer (`Markdown` from
 `@earendil-works/pi-tui`, `lib/file-card-markdown.js`) with a theme table that
 gives every Markdown element a theme role — `heading`→`mdHeading`,
 `listBullet`→`mdListBullet`, `code`→`mdCode`, `codeBlock`→`mdCodeBlock`,
@@ -1078,11 +1078,17 @@ strikethrough from the theme's own handlers. Those rows arrive already painted: 
 card PLACES them, measuring them with the host's ANSI-aware width and never
 painting a body role over them, while the frame, the background and the padding
 stay the card's. A write draws the content its call carries, which the result does
-not echo. A host with no TUI package, a renderer that throws and a document that
-draws no row all fall back to the wrapped plain source, unstyled. A failed call
-keeps its error rows, every non-Markdown file keeps its rows, and **an edit is
-never a document**: its rows are the diff the host carries (`details.diff`) — its
-own text when it carries none — and expanding it shows the whole diff.
+not echo. An edit draws the fragment it leaves behind — its `edits[].newText` in the
+call's own order, joined with one newline, or the legacy top-level `newText` when the
+call states no array — so the card shows what the edit produced and never the change
+it made: no hunk header, no line-number gutter, no `+`/`-` marker, and no line the
+edit removed. A host with no TUI package, a renderer that throws and a document that
+draws no row all fall back to the wrapped plain source, unstyled — for an edit, that
+same fragment, never the diff. A failed call
+keeps its error rows, every non-Markdown file keeps its rows, and an edit that leaves
+no non-whitespace text at all (a pure deletion) is no document either: it keeps the
+rows it has, the diff the host carries (`details.diff`) — its own text when it carries
+none — and expanding it shows the whole diff.
 
 **The switch is the bridge's.** The card owns no preference of its own. It is
 painted while the bridge's `Card tags` line answers that this package's activity

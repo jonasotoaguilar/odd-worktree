@@ -13,7 +13,7 @@ When working on this project, load the relevant skill(s) BEFORE doing the work t
 
 | Document | Use when | Path |
 | --- | --- | --- |
-| Codebase mental model | You need the package's boundaries, its 30 invariants in one line each, or where to start tracing a change. | [`docs/codebase/mental-model.md`](docs/codebase/mental-model.md) |
+| Codebase mental model | You need the package's boundaries, its 29 invariants in one line each, or where to start tracing a change. | [`docs/codebase/mental-model.md`](docs/codebase/mental-model.md) |
 | Code map | You need to know which file owns a responsibility before opening code. | [`docs/codebase/code-map.md`](docs/codebase/code-map.md) |
 | Invariants | You are about to change the package and must know which rule a change may not break, or you are following an `invariant N` citation. | [`docs/codebase/invariants.md`](docs/codebase/invariants.md) |
 | Reference | You need a panel key, a refusal sentence, the test rules, or how one surface behaves in detail. | [`docs/reference.md`](docs/reference.md) |

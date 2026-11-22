@@ -53,24 +53,27 @@ in the main session as a message. Nothing in gentle-shell is modified.
   it), `## How it would be verified` (only externally executable oracles, cited),
   `## Uncertainty`, and `## For the parent`: do not implement, ask the `Questions` first,
   show `Not requested` to the human, wait. `/depth` with no request is refused (the
-  explorer never sees the chat). Refined by L8, headings by L9.
+  explorer never sees the chat). Refined by L8, headings by L9, the opening line by L10.
 
 ## Tasks
 
 - [x] **T0** · S7 · research · web explorer (task `mwrbl1jk-2-u08f`) + inline synthesis
   (L8) · commit: — (no code)
-- [ ] **T1** · S1, S2, S3, S8 · `lib/depth-prompt/depth.md` + `lib/depth-task.js` with
-  tests (RED first) · inline · commit: —
-- [ ] **T2** · S4, S5, S8 · `lib/depth-launch.js` (injected `executeTool`/`tools`;
-  refusals: empty request, no `subagent_run`, not interactive) with tests · inline ·
-  commit: —
-- [ ] **T3** · S3, S6 · register `/depth` in the gate, one `registerCommand`, and
-  `tools/package-surface.test.js` · inline · commit: —
-- [ ] **T4** · S3, S6 · docs: invariant 3 (four → five commands), `code-map.md`,
-  `mental-model.md`, `reference.md`, `README.md` · inline · commit: —
-- [ ] **T5** · S4, S5 · run `/depth` for real on 3-4 requests: does `executeTool` work
-  from a command's ctx, does the handoff arrive, does the parent obey the closing line
-  · inline · commit: — (evidence only)
+- [x] **T1** · S1, S2, S3, S8 · `lib/depth-prompt/depth.md` + `lib/depth-task.js` with
+  tests (RED first) · inline · commit: 519ede4
+- [x] **T2** · S4, S5, S8 · `lib/depth-launch.js` (injected `executeTool`/`tools`;
+  refusals: empty request, no `subagent_run`, the host tool's own refusal) with tests ·
+  inline · commit: 519ede4
+- [x] **T3** · S3, S6 · register `/depth` in the gate, one `registerCommand`, and the
+  three closed-list tests · inline · commit: bc08b3b
+- [x] **T4** · S3, S6 · docs: invariant 3 (four → five commands) and 29, `code-map.md`,
+  `mental-model.md`, `reference.md`, `README.md`, `AGENTS.md` · inline · commit: the
+  commit that closes this feature (`docs(depth)`)
+- [x] **T5a** · S8 · real explorer runs on the exact task `buildDepthTask` builds (L10);
+  contract hardened · inline · commit: 8e9a631
+- [ ] **T5b** · S4, S5 · run `/depth` once in a live interactive session: does
+  `executeTool` work from a command's ctx, does the handoff arrive as a message, does
+  the parent obey the closing line · needs the human · commit: — (evidence only)
 
 ## Log
 
@@ -138,3 +141,17 @@ in the main session as a message. Nothing in gentle-shell is modified.
   the eight headings in order. A new invariant, 29, records that `/depth` only launches;
   invariant 3 goes from four commands to five. Three closed-list tests
   (`package-surface`, `files-bridge`, `files-command`) now expect `depth`.
+- **L10** — Evidence, not a user decision. T5a: the real `gentle-ai-explore` ran the exact
+  task `buildDepthTask` builds on two Spanish requests. One run translated every heading
+  and dropped `## For the parent`, the only barrier against the woken parent
+  implementing. Fix (8e9a631): a fixed opening line, "copy each heading character for
+  character", and the closing paragraph also in the built-in fallback, held in step by a
+  test. Rerun on three requests (two Spanish, one English), checked mechanically:
+  opening line first, eight headings in order, none translated, `For the parent` present,
+  all three. Content was substantive (it found that a `--dry-run` would make invariant
+  29 stale and that the host-tool check is irrelevant when nothing launches) but the
+  economical model leaves noise: a self-referential question in `## Questions` and
+  repeated, garbled commands in `## How it would be verified`. Read those two sections
+  with care. Not covered: `executeTool` from a command's ctx (T5b); `/depth` as
+  invoked by the host. Slice boundary: commit 1 was 512 authored lines (tests, the
+  feature document and the libs) and commits 1-2 together 617, past the ~400 guide.

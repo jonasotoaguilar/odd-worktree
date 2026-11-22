@@ -484,6 +484,17 @@ async function boot(options = {}) {
   ghPrs.setGhRunner(gh.runner);
   restores.push(() => { ghPrs.setGhRunner(null); });
   loaded.mod.setIssuesTuiLoader(async () => stubTui);
+  // A test's extension must not outlive it: a rail read still in flight when the
+  // test ends would otherwise persist its answer under the NEXT test's cache home
+  // (the store reads `XDG_CACHE_HOME` when it writes), and that stale document
+  // would be hydrated into the next test's header. `session_shutdown` is the
+  // production path that drops a late answer by its generation.
+  restores.push(() => {
+    for (const [name, handler] of loaded.hooks) {
+      if (name !== 'session_shutdown') continue;
+      try { handler({}, { cwd: process.cwd(), ui: { notify() {} } }); } catch {}
+    }
+  });
   return { loaded, sent, gh, ghPrs };
 }
 
@@ -843,7 +854,7 @@ describe('S4/S5: the one section counts and routes pull requests', () => {
     await drawSection(section, ctx);
     // The count is the second read; the header grows its `· N pr` segment when
     // that answer lands, so the assertion waits for it instead of the first frame.
-    await waitFor(() => String(section.meta(ctx)).includes(' pr'));
+    await waitFor(() => section.meta(ctx) === '2 issues · 2 pr');
     assert.equal(section.meta(ctx), '2 issues · 2 pr', 'the distinct union of mine and review counts once');
     assert.equal(registered.length, 1, 'the count is not a second section');
   });
@@ -904,7 +915,7 @@ describe('S4/S5: the one section counts and routes pull requests', () => {
     await fireSessionStart(b.loaded.hooks, ctx);
     const section = registered[0];
     await drawSection(section, ctx);
-    await waitFor(() => String(section.meta(ctx)).includes(' pr'));
+    await waitFor(() => section.meta(ctx) === '2 issues · 2 pr');
     assert.match(String(section.meta(ctx)), /^2 issues · 2 pr$/);
 
     const docPath = path.join(process.env.XDG_CACHE_HOME, 'odd-worktree', 'prs-rail.json');
@@ -1046,7 +1057,7 @@ describe('T8b: the exact count, the cold-start paint and the /prs refusal', () =
     await fireSessionStart(b.loaded.hooks, ctx);
     const section = registered[0];
     await drawSection(section, ctx);
-    await waitFor(() => String(section.meta(ctx)).includes(' pr'));
+    await waitFor(() => section.meta(ctx) === '2 issues · 51 pr');
     assert.equal(section.meta(ctx), '2 issues · 51 pr',
       'the one node the window cut is counted, not dropped');
   });
@@ -1199,7 +1210,7 @@ describe('T10b: the rail read repaints the header and its totals survive a resta
 
     b.gh.state.railGate = null;
     release();
-    await waitFor(() => String(section.meta(ctx)).includes(' pr'));
+    await waitFor(() => section.meta(ctx) === '2 issues · 2 pr');
     assert.ok(repaints > settled,
       'the settled rail read asked the bridge for the frame the new count is painted by');
   });
@@ -1215,7 +1226,7 @@ describe('T10b: the rail read repaints the header and its totals survive a resta
     await fireSessionStart(b.loaded.hooks, ctx);
     const section = registered[0];
     await drawSection(section, ctx);
-    await waitFor(() => String(section.meta(ctx)).includes(' pr'));
+    await waitFor(() => section.meta(ctx) === '2 issues · 52 pr');
     assert.equal(section.meta(ctx), '2 issues · 52 pr', 'the live read counts the two rows its window cut');
 
     const docPath = path.join(process.env.XDG_CACHE_HOME, 'odd-worktree', 'prs-rail.json');
@@ -1256,7 +1267,7 @@ describe('T10b: the rail read repaints the header and its totals survive a resta
     const section = registered[0];
     await drawSection(section, ctx);
 
-    await waitFor(() => String(section.meta(ctx)).includes(' pr'), 3000);
+    await waitFor(() => section.meta(ctx) === '2 issues · 52 pr', 3000);
     assert.equal(section.meta(ctx), '2 issues · 52 pr',
       'the cold start paints the number the live read painted, not the rows the window carried');
 

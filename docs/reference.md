@@ -1453,11 +1453,17 @@ sentence that is a reminder and not a copy of the rule:
   owns the path's directory must be that principal, so a linked worktree or a nested
   repository inside it passes. The branch the checkout is on is read fresh each time
   and must be the default branch (resolved as above).
+- **An `odd/` path always passes.** A path below an `odd/` folder is never refused, on any
+  branch: that folder is where an ODD is written down, so the branch a checkout happens to
+  stand on cannot be a reason to block it. The folders decide, by the same identity the
+  file card uses, so a nested `odd/` is one and a file whose own name is `odd` is not. It is
+  settled before any git read, like a temp path.
 - **What never blocks.** A path outside every git repository; a path under the OS temp
   directories (`os.tmpdir()`, `TMPDIR`, `/tmp`, `/var/tmp`) even when a scratch
-  repository lives there; a path in another repository; a path in a linked worktree; a
-  session cwd outside version control; an unreadable identity; a detached HEAD; another
-  branch; a default branch that does not resolve. Anything it cannot place passes.
+  repository lives there; a path below an `odd/` folder; a path in another repository; a
+  path in a linked worktree; a session cwd outside version control; an unreadable
+  identity; a detached HEAD; another branch; a default branch that does not resolve.
+  Anything it cannot place passes.
 - **No file content is read.** The guard only resolves a path's existing parent
   directory (so a new file is judged by its directory and a symlink spelling neither
   dodges nor false-trips it). `bash` redirects such as `sed -i` or `tee` are not

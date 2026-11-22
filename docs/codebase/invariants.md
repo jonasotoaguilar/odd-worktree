@@ -533,7 +533,10 @@ The question this page answers: which rules must every change preserve, and what
     scratch repository lives there**, a path in another repository, a path in a linked
     worktree, a session cwd outside version control, an unreadable identity, a detached
     HEAD, another branch, an unresolvable default branch and a bare or separate git
-    dir. A temp path is settled before any git read.
+    dir. A temp path is settled before any git read, and so is an ODD artifact: **a path
+    below an `odd/` folder is never refused**, on any branch, because that is where an
+    ODD is written down — the folders decide, by the file card's own identity
+    (invariant 23), so a nested `odd/` is one and a file named `odd` is not.
 
     **A skill read** (`decideSkillReadGuard`, registered after the worktree guard's so that
     one decides first): a `bash` call whose reader (`cat`, `head`, `tail`, `less`, `more`,

@@ -635,11 +635,23 @@ Typing filters immediately — there is no mode to enter and no "type to search"
 hint — so navigation and scrolling use modifier combinations, and a query that
 matches nothing paints `No files match "<query>"`. The list is Git's own
 (`git ls-files --cached --others --exclude-standard`), so tracked files and
-untracked-but-not-ignored files appear and `.gitignore` is respected. A file
-changed in the working tree sorts above the unchanged ones, wears this package's
-own badge — `M` for a tracked file with an uncommitted change, `U` for an
-untracked one — and its age in `s`/`h`/`d` at the right; the ages are computed
-when the panel opens and never refreshed live.
+untracked-but-not-ignored files appear and `.gitignore` is respected. A changed
+file sorts above the unchanged ones, wears this package's own badge — `A` for a
+file the branch added, `M` for one it modified or that carries an uncommitted
+change, `U` for one Git does not track yet — and its age in `s`/`h`/`d` at the
+right; the ages are computed when the panel opens and never refreshed live. Its
+title carries the checkout's path and, when the checkout is ahead of its base,
+the distance: `Files · <path> · ↑3 main`, ahead only, never next to a behind
+count. Where
+the change state comes from depends on the scope: the `main` row reads the
+checkout's own `git status`, so a commit there clears the badge, while a worktree
+reads `git diff --name-status -z --no-renames refs/heads/<principal>...HEAD` —
+the net record of what its branch changed ahead of the branch the principal
+checkout has, one state per path, with its uncommitted work unioned in — so
+committing a worktree keeps its badges. `--no-renames` is what keeps that read
+read-only in a partial clone, and an undetected rename still reads as its new path
+being added. A file the branch deleted is not listed: the panel lists files that
+exist.
 
 **A scope step, always.** `/files` first asks which checkout to browse — `main`
 included, so an unregistered session chooses its own checkout instead of being
@@ -652,9 +664,14 @@ clone — the ODD ones and the ones created outside this package — and back, a
 footer names the list the key switches to (`a all`, then `a registered`); a
 checkout both lists carry keeps the cursor. Above that card's
 footer sits the focused scope's detail line: the last commit subject, then
-`±n files`, the age of the last modification as `33s ago`, and `↑n main` / `↓n main` — the
-`main` row compares with `origin/main`, every other checkout with the local
-`main` — and a field that is zero or absent is not painted at all. The `a` list costs
+`±n files`, the age of the last modification as `33s ago`, and ONE distance —
+`↑n main` when the checkout has commits the comparison does not, `↓n main` only
+when it has none — the `main` row compares with `origin/main`, every other
+checkout with the branch the principal checkout has (`main`, or `master` in a
+`master` repository) — and a field that is zero or absent is not painted at all.
+Both arrows never appear together: a worktree is almost always behind its
+principal branch, so `↑1 · ↓310` reads as a contradiction even though both counts
+are true. The `a` list costs
 two bounded Git reads per checkout before the step paints, which is why a clone
 with many worktrees opens it a moment slower than the session's list alone.
 

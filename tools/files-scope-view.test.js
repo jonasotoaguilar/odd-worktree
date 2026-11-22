@@ -269,7 +269,9 @@ describe('the focused detail line (S9)', () => {
     assert.ok(rowsOf(view)[HEIGHT - 3].includes('main subject'));
     view.handleInput('down');
     const moved = rowsOf(view);
-    assert.ok(moved[HEIGHT - 3].includes('add the scope step · ±3 files · 2m ago · ↑2 main · ↓1 main'), moved[HEIGHT - 3]);
+    // S44: one distance, never two — ahead wins when the checkout has any.
+    assert.ok(moved[HEIGHT - 3].includes('add the scope step · ±3 files · 2m ago · ↑2 main'), moved[HEIGHT - 3]);
+    assert.ok(!/↓\d+/.test(moved[HEIGHT - 3]), 'behind is not painted beside ahead');
   });
 
   test('an absent or empty detail keeps a blank row of the same geometry', () => {

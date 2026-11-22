@@ -6989,7 +6989,11 @@ async function filesCheckouts(cwd) {
   } catch {
     // Git's own spelling is all it answered.
   }
-  return { repo, mainRoot, entries };
+  // S2: the branch a worktree's badges are measured against is the branch the
+  // PRINCIPAL checkout has, whatever it is called — a repository on `master`
+  // must not end up comparing against a `main` that does not exist.
+  const mainBranch = main && typeof main.branch === 'string' && main.branch.length > 0 ? main.branch : null;
+  return { repo, mainRoot, mainBranch, entries };
 }
 
 // S9: the ODD directory IS a checkout's identity in this package (invariant 12),
@@ -7031,6 +7035,7 @@ function filesAllWorktrees(checkouts) {
       root: entry.path,
       kind: 'worktree',
       label: filesWorktreeLabel(entry.path, entry.branch),
+      base: checkouts.mainBranch,
     });
   }
   return others;
@@ -7044,10 +7049,29 @@ function filesAllWorktrees(checkouts) {
  * local `main` for every worktree. A read that failed leaves its fields absent, so
  * the step paints less instead of claiming a zero nobody measured.
  */
+/**
+ * S1/S2: how a scope's change badges are read. The principal checkout answers
+ * from its own `git status`, so a commit there clears the badge; a worktree
+ * answers from the commits it has ahead of the principal branch, so a commit is
+ * what MARKS the file. The comparison is the same one the `±`/`↑`/`↓` line uses
+ * (`lib/files-scope-detail.js`), so the scope row and the picker's rows can never
+ * disagree about what the branch changed.
+ */
+function filesComparison(detailLib, scope) {
+  if (!scope || scope.kind !== 'worktree') return undefined;
+  // The principal checkout's own branch when Git reported one, and the package's
+  // conventional `main` when the principal checkout is detached.
+  return typeof scope.base === 'string' && scope.base.length > 0 ? scope.base : detailLib.LOCAL_MAIN;
+}
+
 async function filesScopeFacts(index, detailLib, run, scope) {
   const facts = {};
   try {
-    const listing = await index.listRepositoryEntries({ run, cwd: scope.root });
+    const listing = await index.listRepositoryEntries({
+      run,
+      cwd: scope.root,
+      comparison: filesComparison(detailLib, scope),
+    });
     if (listing && listing.ok === true && Array.isArray(listing.entries)) {
       let changed = 0;
       let newest;
@@ -7145,6 +7169,7 @@ function filesSessionScopes(checkouts, cwd, registeredRoots) {
       root: entry.path,
       kind: 'worktree',
       label: filesWorktreeLabel(entry.path, entry.branch),
+      base: checkouts.mainBranch,
     });
   }
   return scopes;
@@ -7263,6 +7288,9 @@ async function mountFilesPicker(ctx, input) {
   const index = libRequire('files-index.js');
   const insertLib = libRequire('files-insert.js');
   const pickerView = libRequire('files-picker-view.js');
+  // The same module the scope step reads its comparison from, so the badges and
+  // the `↑n main` line are measured against one branch (S1, S2).
+  const scopeLib = libRequire('files-scope-detail.js');
   const run = filesRunner(libRequire('worktree-git.js'));
   const agent = await filesAgentSeam();
   const scope = input.scope;
@@ -7297,7 +7325,11 @@ async function mountFilesPicker(ctx, input) {
           cwd: input.cwd,
           // The listing and the preview are the T1 reader's own, read from the scope
           // root rather than the session cwd: the picker browses another checkout.
-          loadEntries: () => index.listRepositoryEntries({ run, cwd: scope.root }),
+          loadEntries: () => index.listRepositoryEntries({
+            run,
+            cwd: scope.root,
+            comparison: filesComparison(scopeLib, scope),
+          }),
           loadPreview: (relative) => index.readFilePreview(scope.root, relative),
           ...(agent.highlight === undefined ? {} : { highlight: agent.highlight }),
           ...(agent.languageForPath === undefined ? {} : { languageForPath: agent.languageForPath }),

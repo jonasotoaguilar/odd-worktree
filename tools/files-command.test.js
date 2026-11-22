@@ -42,9 +42,9 @@ function git(cwd, args) {
 }
 
 /** A real repository: `main`, one commit and one tracked file. */
-function makeRepo() {
+function makeRepo({ branch = 'main' } = {}) {
   const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-files-repo-')));
-  git(dir, ['init', '-b', 'main']);
+  git(dir, ['init', '-b', branch]);
   git(dir, ['config', 'user.email', 'test@example.test']);
   git(dir, ['config', 'user.name', 'Test']);
   fs.writeFileSync(path.join(dir, 'a.js'), 'const x = 1;\n');
@@ -55,10 +55,10 @@ function makeRepo() {
 }
 
 /** One checkout this package owns, at the canonical directory, one file short of committed. */
-function addOwnedWorktree(repo, odd, branch) {
+function addOwnedWorktree(repo, odd, branch, base = 'main') {
   const parent = path.dirname(repo);
   const target = path.join(parent, `${path.basename(repo)}-worktrees`, odd);
-  git(repo, ['worktree', 'add', '-b', branch, target, 'main']);
+  git(repo, ['worktree', 'add', '-b', branch, target, base]);
   fs.writeFileSync(path.join(target, 'x.js'), 'const y = 2;\n');
   return fs.realpathSync(target);
 }
@@ -534,6 +534,118 @@ describe('several checkouts: the scope step (S9)', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(host.mounts.length, 1, 'nothing else is mounted');
     assert.deepEqual(host.pasted, []);
+  });
+});
+
+describe('the badges of a scope (S1-S4)', () => {
+  // The row a `/files` list paints for one file: `<name> … <badge> <age> │`, the
+  // badge right-aligned against the pane's rule. Ages are `s`/`h`/`d`, so a badge
+  // is only ever a letter followed by one.
+  const badgeOf = (text, name) => {
+    const found = text.match(new RegExp(`${name.replace('.', '\\.')} +([AMU])(?: +\\d+[smhd])?(?= *│)`));
+    return found === null ? null : found[1];
+  };
+
+  test('a worktree reads its own commits, so committing keeps the badges', async () => {
+    const repo = makeRepo();
+    // One file added and one tracked file modified, both COMMITTED: the working
+    // tree no longer knows about them, which is exactly what used to erase the
+    // badges. `x.js` stays uncommitted, so the union with the status read is
+    // proved by the same browse.
+    const worktree = addOwnedWorktree(repo, 'with-commits', 'feat/commits');
+    fs.writeFileSync(path.join(worktree, 'committed.js'), 'const c = 1;\n');
+    git(worktree, ['add', 'committed.js']);
+    git(worktree, ['commit', '-m', 'add committed.js']);
+    fs.writeFileSync(path.join(worktree, 'a.js'), 'const x = 2;\n');
+    git(worktree, ['commit', '-am', 'touch a.js']);
+
+    const { mod, commands } = await loadFilesExtension();
+    mod.setFilesTuiLoader(async () => helpers);
+    const host = mountHost();
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui, { registeredRoots: [worktree] }));
+
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    const step = host.mounts[0].component;
+    await waitFor(() => textOf(step).includes('with-commits · feat/commits'), 'the worktree row');
+    step.handleInput('\u001b[B');
+    step.handleInput('\r');
+
+    await waitFor(() => host.mounts.length >= 2, 'the picker over the worktree');
+    const picker = host.mounts[1].component;
+    await waitFor(() => textOf(picker).includes('committed.js'), 'the worktree listing');
+    const text = textOf(picker);
+    // S44: the title names the distance ahead, and only ahead — the two commits are
+    // what the badges are measured against.
+    assert.match(text, /^╭─ ✿ Files · .*with-commits · ↑2 main /m,
+      'the title carries the commits ahead of the principal branch');
+    assert.ok(!/↓\d+ /.test(text), 'behind is never painted beside ahead');
+    assert.equal(badgeOf(text, 'committed.js'), 'A', 'a file the branch added reads A');
+    assert.equal(badgeOf(text, 'a.js'), 'M', 'a file the branch modified reads M');
+    assert.equal(badgeOf(text, 'x.js'), 'U', 'uncommitted work is still marked');
+    assert.equal(badgeOf(text, 'README.md'), null, 'a file the branch never touched reads nothing');
+
+    // The scope row above the picker counts the same set, so the number and the
+    // badges can never disagree.
+    assert.match(textOf(step), /with-commits · feat\/commits +±3 files/, 'the row counts the same set the badges mark');
+
+    picker.handleInput('\u001b');
+    await running;
+  });
+
+  test('a repository whose principal branch is not `main` still marks its worktrees', async () => {
+    // S2: the comparison is the branch the PRINCIPAL checkout has, not a constant,
+    // so a `master` repository does not end up diffing against a `main` that does
+    // not exist — which would fail the read and leave the picker with no listing.
+    const repo = makeRepo({ branch: 'master' });
+    const worktree = addOwnedWorktree(repo, 'on-master', 'feat/on-master', 'master');
+    git(worktree, ['add', 'x.js']);
+    git(worktree, ['commit', '-m', 'commit x.js']);
+
+    const { mod, commands } = await loadFilesExtension();
+    mod.setFilesTuiLoader(async () => helpers);
+    const host = mountHost();
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui, { registeredRoots: [worktree] }));
+
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    const step = host.mounts[0].component;
+    await waitFor(() => textOf(step).includes('on-master · feat/on-master'), 'the worktree row');
+    step.handleInput('\u001b[B');
+    step.handleInput('\r');
+
+    await waitFor(() => host.mounts.length >= 2, 'the picker over the worktree');
+    const picker = host.mounts[1].component;
+    await waitFor(() => textOf(picker).includes('x.js'), 'the worktree listing');
+    const text = textOf(picker);
+    assert.equal(badgeOf(text, 'x.js'), 'A', 'the committed file is marked against `master`');
+    assert.equal(badgeOf(text, 'a.js'), null);
+
+    picker.handleInput('\u001b');
+    await running;
+  });
+
+  test('the main scope still reads its own status: a commit there clears the badge', async () => {
+    const repo = makeRepo();
+    fs.writeFileSync(path.join(repo, 'a.js'), 'const x = 9;\n');
+    git(repo, ['commit', '-am', 'touch a.js']);
+    fs.appendFileSync(path.join(repo, 'README.md'), 'dirty\n');
+
+    const { mod, commands } = await loadFilesExtension();
+    mod.setFilesTuiLoader(async () => helpers);
+    const host = mountHost();
+    const running = commands.get('files').handler('', ctxFor(repo, host.ui));
+
+    await waitFor(() => host.mounts.length >= 1, 'the scope mount');
+    host.mounts[0].component.handleInput('\r');
+
+    await waitFor(() => host.mounts.length >= 2, 'the picker over main');
+    const picker = host.mounts[1].component;
+    await waitFor(() => textOf(picker).includes('a.js'), 'the main listing');
+    const text = textOf(picker);
+    assert.equal(badgeOf(text, 'a.js'), null, 'a committed change in the principal checkout paints nothing');
+    assert.equal(badgeOf(text, 'README.md'), 'M', 'its uncommitted change still reads M');
+
+    picker.handleInput('\u001b');
+    await running;
   });
 });
 

@@ -3,18 +3,22 @@
 // each file's change state with its age, and the bounded preview reader.
 //
 // The public surface only: the exact argv the injected runner receives, the
-// classification of untracked / dirty / clean (a .gitignore'd file never
-// appears because Git is asked for the standard exclude set), the recency order
-// and the age labels, and the preview's text / truncation / binary / error paths
-// against real temporary files. No child process is spawned and no network is
-// touched: every Git read goes through the fake runner below, and the temporary
-// directories live under os.tmpdir() and are removed in after().
+// classification of a changed file (a .gitignore'd file never appears because Git
+// is asked for the standard exclude set), the recency order and the age labels,
+// and the preview's text / truncation / binary / error paths against real
+// temporary files. Every Git read goes through the fake runner below, EXCEPT the
+// two tests under "against real Git": those spawn Git in a scratch repository,
+// because an ambiguous ref and a partial clone's lazy fetch are properties no
+// fake answer can express. No network is touched, and every temporary directory
+// lives under os.tmpdir() and is removed in after().
 
 const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const {
   listRepositoryEntries,
@@ -163,7 +167,7 @@ test('no runner at all is a sentence, not a throw', async () => {
 
 // --- entries: state, recency and age --------------------------------------
 
-test('changed files come first — untracked as new, dirty as updated, newest first — then the clean ones by path', async () => {
+test('changed files come first — untracked as new, dirty as modified, newest first — then the clean ones by path', async () => {
   const root = tempDir();
   const now = Date.parse('2024-05-01T12:00:00Z');
   const dirty = writeFile(root, 'src/a.ts', 'export const a = 1;\n');
@@ -183,7 +187,7 @@ test('changed files come first — untracked as new, dirty as updated, newest fi
 
   assert.deepEqual(pairs(result.entries), [
     ['notes.md', 'new'],
-    ['src/a.ts', 'updated'],
+    ['src/a.ts', 'modified'],
     ['src/b.js', 'clean'],
     ['src/clean.ts', 'clean'],
   ]);
@@ -243,15 +247,15 @@ test('an unreadable root or a file that is not on disk removes the age instead o
 
   const result = await listRepositoryEntries({ run, cwd: '/repo', now: Date.now() });
 
-  assert.deepEqual(pairs(result.entries), [['present.ts', 'updated'], ['gone.ts', 'updated']],
+  assert.deepEqual(pairs(result.entries), [['present.ts', 'modified'], ['gone.ts', 'modified']],
     'the timed change comes first, the untimed one after');
   assert.equal(typeof result.entries[0].mtimeMs, 'number');
-  assert.deepEqual(result.entries[1], { path: 'gone.ts', state: 'updated' }, 'no timestamp, no age');
+  assert.deepEqual(result.entries[1], { path: 'gone.ts', state: 'modified' }, 'no timestamp, no age');
 
   const noRoot = fakeRunner(gitAnswer({ listing: 'present.ts\0', status: ' M present.ts\0', root: undefined }));
   const withoutRoot = await listRepositoryEntries({ run: noRoot.run, cwd: '/repo', now: Date.now() });
-  assert.deepEqual(pairs(withoutRoot.entries), [['present.ts', 'updated']], 'a failed rev-parse is not a failed listing');
-  assert.deepEqual(withoutRoot.entries[0], { path: 'present.ts', state: 'updated' });
+  assert.deepEqual(pairs(withoutRoot.entries), [['present.ts', 'modified']], 'a failed rev-parse is not a failed listing');
+  assert.deepEqual(withoutRoot.entries[0], { path: 'present.ts', state: 'modified' });
 });
 
 test('a rename record skips its original path field', async () => {
@@ -262,7 +266,7 @@ test('a rename record skips its original path field', async () => {
   }));
 
   const result = await listRepositoryEntries({ run, cwd: '/repo', now: Date.now() });
-  assert.deepEqual(pairs(result.entries), [['src/new.ts', 'updated'], ['src/old.ts', 'clean']],
+  assert.deepEqual(pairs(result.entries), [['src/new.ts', 'modified'], ['src/old.ts', 'clean']],
     'the original path is not a record of its own, so it is not marked changed');
 });
 
@@ -313,6 +317,243 @@ test('every Git read is a fixed read-only argv: nothing stages, commits or check
     assert.ok(['ls-files', 'status', 'rev-parse'].includes(verb), `read-only read: ${verb}`);
   }
   assert.ok(calls[1].args.includes('--no-optional-locks'), 'status may not write the index back');
+});
+
+// --- a worktree scope: the branch's own commits (S2-S5) --------------------
+
+// The one read a worktree scope adds: the NET name-status record of what the
+// branch changed against the merge-base with the principal branch. Three dots,
+// so a `main` that moved on since the fork is not read as the branch's work.
+// A bare ref would be ambiguous the moment a tag shares its name, and a file
+// named `<ref>...HEAD` would break the read, so the branch is qualified and the
+// argument list is closed with `--`. `--no-renames` is what keeps the read
+// read-only in a partial clone.
+const COMMIT_ARGV = (comparison) => [
+  'diff',
+  '--name-status',
+  '-z',
+  '--no-renames',
+  `refs/heads/${comparison}...HEAD`,
+  '--',
+];
+
+function worktreeAnswer({ listing = '', commits = '', status = '', root } = {}) {
+  return (args) => {
+    if (args[0] === 'ls-files') return { status: 0, stdout: listing, stderr: '' };
+    if (args[0] === 'diff') return { status: 0, stdout: commits, stderr: '' };
+    if (args[0] === '--no-optional-locks') return { status: 0, stdout: status, stderr: '' };
+    if (args[0] === 'rev-parse') {
+      return { status: root === undefined ? 128 : 0, stdout: root === undefined ? '' : `${root}\n`, stderr: '' };
+    }
+    return { status: 1, stdout: '', stderr: 'unexpected argv' };
+  };
+}
+
+test('a worktree scope marks the branch\'s commits, one row per path, and keeps its uncommitted work', async () => {
+  const root = tempDir();
+  const now = Date.parse('2024-05-01T12:00:00Z');
+  setMtime(writeFile(root, 'a.txt', 'three\n'), now - 4 * HOUR);
+  setMtime(writeFile(root, 'added.txt', 'new\n'), now - 3 * HOUR);
+  setMtime(writeFile(root, 'src/moved.txt', 'deep\n'), now - 2 * HOUR);
+  setMtime(writeFile(root, 'u.txt', 'untracked\n'), now - HOUR);
+  writeFile(root, 'clean.ts', 'clean\n');
+
+  const { run, calls } = fakeRunner(worktreeAnswer({
+    listing: 'a.txt\0added.txt\0src/moved.txt\0clean.ts\0u.txt\0',
+    // The branch modified one file, added one, deleted one, renamed one.
+    commits: 'M\0a.txt\0A\0added.txt\0D\0b.txt\0R100\0src/deep.txt\0src/moved.txt\0',
+    // `a.txt` is dirty on top of its commit, and `u.txt` was never committed.
+    status: ' M a.txt\0?? u.txt\0',
+    root,
+  }));
+
+  const result = await listRepositoryEntries({ run, cwd: '/repo', now, comparison: 'main' });
+
+  assert.deepEqual(pairs(result.entries), [
+    ['u.txt', 'new'],
+    ['src/moved.txt', 'added'],
+    ['added.txt', 'added'],
+    ['a.txt', 'modified'],
+    ['clean.ts', 'clean'],
+  ]);
+  assert.deepEqual(calls.map((call) => call.args), [LIST_ARGV, COMMIT_ARGV('main'), STATUS_ARGV, ROOT_ARGV],
+    'the commit read sits between the listing and the status, one fixed argv each');
+  assert.ok(calls.every((call) => call.opts.cwd === '/repo'), 'every read runs in the browsed checkout');
+
+  assert.equal(result.entries.filter((entry) => entry.path === 'a.txt').length, 1,
+    'a path named by a commit and again by status is one row');
+  assert.equal(result.entries.find((entry) => entry.path === 'a.txt').state, 'modified',
+    'the commit state wins over the dirty one, and both read M');
+  assert.equal(result.entries.some((entry) => entry.path === 'b.txt'), false, 'a deleted file is never listed');
+  assert.equal(result.entries.some((entry) => entry.path === 'src/deep.txt'), false,
+    'a rename\'s original path is not a row of its own');
+  assert.equal(result.entries[1].age, formatAge(fs.statSync(path.join(root, 'src/moved.txt')).mtimeMs, now),
+    'a committed row keeps the same age label as any other');
+});
+
+test('the comparison is the caller\'s, carried verbatim into the one diff read', async () => {
+  const { run, calls } = fakeRunner(worktreeAnswer({ listing: 'a.ts\0', commits: 'A\0a.ts\0' }));
+
+  await listRepositoryEntries({ run, cwd: '/repo', now: 0, comparison: 'trunk' });
+
+  assert.deepEqual(calls[1].args, COMMIT_ARGV('trunk'),
+    'the principal branch is the caller\'s, whatever the repository calls it');
+});
+
+test('an empty comparison is the status read alone, exactly as the main scope reads', async () => {
+  const { run, calls } = fakeRunner(gitAnswer({
+    listing: 'a.ts\0b.ts\0',
+    status: '?? b.ts\0',
+    root: undefined,
+  }));
+
+  const result = await listRepositoryEntries({ run, cwd: '/repo', now: 0, comparison: '' });
+
+  assert.deepEqual(pairs(result.entries), [['b.ts', 'new'], ['a.ts', 'clean']]);
+  assert.deepEqual(calls.map((call) => call.args), [LIST_ARGV, STATUS_ARGV, ROOT_ARGV],
+    'no comparison asks Git nothing about commits');
+});
+
+test('a path the branch deleted and the working tree recreated is untracked, never a deleted row', async () => {
+  const { run } = fakeRunner(worktreeAnswer({
+    listing: 'gone.ts\0',
+    commits: 'D\0gone.ts\0',
+    status: '?? gone.ts\0',
+  }));
+
+  const result = await listRepositoryEntries({ run, cwd: '/repo', now: 0, comparison: 'main' });
+
+  assert.deepEqual(pairs(result.entries), [['gone.ts', 'new']],
+    'the file exists and Git does not track it, so the row is the honest one');
+});
+
+test('a copy record names its new path only', async () => {
+  const { run } = fakeRunner(worktreeAnswer({
+    listing: 'src/copy.ts\0src/orig.ts\0',
+    // Git writes the ORIGINAL path first and the path the record is about second
+    // (verified against `git diff --name-status -z -M -C --find-copies-harder`).
+    commits: 'C100\0src/orig.ts\0src/copy.ts\0M\0src/orig.ts\0',
+  }));
+
+  const result = await listRepositoryEntries({ run, cwd: '/repo', now: 0, comparison: 'main' });
+
+  assert.deepEqual(pairs(result.entries), [['src/copy.ts', 'added'], ['src/orig.ts', 'modified']],
+    'the copy is new at its own path; the original keeps the state its own record gives it');
+});
+
+test('a failed commit read is a sentence, never a half listing', async () => {
+  const { run, calls } = fakeRunner((args) => {
+    if (args[0] === 'ls-files') return { status: 0, stdout: 'a.ts\0', stderr: '' };
+    if (args[0] === 'diff') return { status: 128, stdout: '', stderr: "fatal: ambiguous argument 'main...HEAD'" };
+    return { status: 0, stdout: '', stderr: '' };
+  });
+
+  assert.deepEqual(await listRepositoryEntries({ run, cwd: '/repo', now: 0, comparison: 'main' }), {
+    ok: false,
+    message: "Cannot read the branch's commits: fatal: ambiguous argument 'main...HEAD'.",
+  });
+  assert.deepEqual(calls.map((call) => call.args[0]), ['ls-files', 'diff'],
+    'the status read never runs once the commit read failed');
+});
+
+// --- against real Git ------------------------------------------------------
+//
+// The only two properties a fake answer cannot express: an ambiguous ref, and a
+// read that must write nothing to the repository (a partial clone is where `-M`
+// used to fetch the missing merge-base blob and leave a pack behind).
+
+// A real Git runner with the injected runner's signature, over a scratch
+// repository whose configuration is this test's alone: no system config, no
+// global config, and a temporary HOME.
+function realGit(root) {
+  const home = tempDir();
+  const env = {
+    PATH: process.env.PATH,
+    HOME: home,
+    TMPDIR: home,
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: os.devNull,
+    GIT_ALLOW_PROTOCOL: 'file',
+  };
+  const run = (args, opts = {}, extra = {}) => spawnSync('git', args, {
+    cwd: opts.cwd === undefined ? root : opts.cwd,
+    timeout: opts.timeoutMs === undefined ? 15_000 : opts.timeoutMs,
+    encoding: 'utf8',
+    env: { ...env, ...extra },
+  });
+  const git = (...args) => {
+    const result = run(args);
+    assert.equal(result.status, 0, `git ${args.join(' ')}: ${String(result.stderr)}`);
+    return String(result.stdout).trim();
+  };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.name', 'Files Test');
+  git('config', 'user.email', 'files@example.invalid');
+  return { git, run };
+}
+
+test('S2: a tag or a file spelled like the revision cannot shadow the principal branch', async () => {
+  const root = tempDir();
+  const { git, run } = realGit(root);
+  git('commit', '-q', '--allow-empty', '-m', 'base');
+  git('checkout', '-qb', 'feature');
+  writeFile(root, 'added.txt', 'branch addition\n');
+  git('add', '.');
+  git('commit', '-qm', 'feature');
+
+  // A tag on the tip: a bare `main` would resolve to it and answer "no changes".
+  git('tag', 'main');
+  const tagged = await listRepositoryEntries({ run, cwd: root, now: 0, comparison: 'main' });
+  assert.equal(tagged.ok, true, tagged.message);
+  assert.equal(tagged.entries.find((entry) => entry.path === 'added.txt').state, 'added',
+    'the local branch is read, never the tag that shares its name');
+
+  // An ordinary file whose name spells the whole revision: Git would read it as a
+  // path and fail the entire read.
+  git('tag', '-d', 'main');
+  writeFile(root, 'main...HEAD', 'ordinary file\n');
+  const shadowed = await listRepositoryEntries({ run, cwd: root, now: 0, comparison: 'main' });
+  assert.equal(shadowed.ok, true, shadowed.message);
+  assert.equal(shadowed.entries.find((entry) => entry.path === 'added.txt').state, 'added');
+  assert.equal(shadowed.entries.find((entry) => entry.path === 'main...HEAD').state, 'new',
+    'the file is the untracked row it is, not a broken read');
+});
+
+test('S6: marking a partial clone fetches nothing and writes no pack', async () => {
+  const origin = tempDir();
+  const { git, run } = realGit(origin);
+  git('config', 'uploadpack.allowFilter', 'true');
+  git('config', 'uploadpack.allowAnySHA1InWant', 'true');
+  const body = Array.from({ length: 200 }, (_, index) => `source line ${index}\n`).join('');
+  writeFile(origin, 'source.txt', body);
+  git('add', '.');
+  git('commit', '-qm', 'base');
+  const blob = git('rev-parse', 'main:source.txt');
+  git('checkout', '-qb', 'feature');
+  git('mv', 'source.txt', 'dest.txt');
+  writeFile(origin, 'dest.txt', body.replace('line 199', 'line changed'));
+  git('commit', '-qam', 'rename with edit');
+
+  const clone = path.join(tempDir(), 'clone');
+  const linked = path.join(tempDir(), 'linked');
+  git('clone', '-q', '--filter=blob:none', '--no-checkout', pathToFileURL(origin).href, clone);
+  const inClone = (...args) => git('-C', clone, ...args);
+  inClone('branch', 'main', 'origin/main');
+  inClone('worktree', 'add', '-q', '--detach', linked, 'origin/feature');
+
+  const missing = () => run(['cat-file', '-e', blob],
+    { cwd: clone, timeoutMs: 15_000 }, { GIT_NO_LAZY_FETCH: '1' }).status;
+  const packs = () => fs.readdirSync(path.join(clone, '.git', 'objects', 'pack')).sort();
+  assert.equal(missing(), 1, 'the merge-base blob starts absent, which is what a partial clone is');
+  const before = packs();
+
+  const result = await listRepositoryEntries({ run, cwd: linked, now: 0, comparison: 'main' });
+
+  assert.equal(result.ok, true, result.message);
+  assert.equal(result.entries.find((entry) => entry.path === 'dest.txt').state, 'added',
+    'an undetected rename still reads as the new path being added');
+  assert.equal(missing(), 1, 'the read fetched nothing');
+  assert.deepEqual(packs(), before, 'and wrote no pack into the clone');
 });
 
 // --- formatAge -------------------------------------------------------------

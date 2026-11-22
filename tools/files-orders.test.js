@@ -39,12 +39,12 @@ function entry(path, state, mtimeMs) {
 // Deliberately NOT in the listing's own order: the builder owns the `files`
 // order, so it is asserted against an unsorted input.
 const ENTRIES = [
-  entry('lib/view-layout.js', 'updated', 3000),
+  entry('lib/view-layout.js', 'modified', 3000),
   entry('README.md', 'clean', 1500),
   entry('lib/files-orders.js', 'new', 5000),
   entry('AGENTS.md', 'clean', 1000),
   entry('lib/odd-prompt/odd-worktrees.md', 'clean', 2000),
-  entry('docs/reference.md', 'updated', 4000),
+  entry('docs/reference.md', 'modified', 4000),
   entry('tools/files-orders.test.js', 'new', 3500),
   entry('LICENSE', 'clean', 800),
 ];
@@ -124,9 +124,9 @@ describe('files: one flat file list (S10, S33)', () => {
   test('a changed file without an mtime sorts after the timed changes and before clean files', () => {
     const rows = buildRows([
       entry('b.md', 'clean'),
-      entry('x.js', 'updated'),
+      entry('x.js', 'modified'),
       entry('a.js', 'new', 100),
-      entry('y.js', 'updated', 200),
+      entry('y.js', 'modified', 200),
     ], { order: 'files' });
     assert.deepEqual(paths(rows), ['y.js', 'a.js', 'x.js', 'b.md']);
   });

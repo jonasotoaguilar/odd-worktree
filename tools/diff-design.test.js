@@ -755,3 +755,152 @@ describe('the shape of the contract (S5)', () => {
     assert.doesNotThrow(() => diffColorDesign(seamFor().seam).apply(rows, callCtx({ render: { args } })));
   });
 });
+
+describe('a diff line the host wrapped is ONE row ending in an ellipsis, as the write pane draws it (S15)', () => {
+  const ctx = () => ({ tool: 'edit', part: 'call', width: WIDTH, theme, render: { args: { path: 'lib/app.js' } } });
+  // The host's `Text` breaks a long diff line at the width: the first row states the number, every
+  // other row is the rest of the SAME line, at the row's own left column with no number.
+  const INNER = WIDTH - 4;
+  const hostWrap = (marker, number, code) => {
+    // Word wrap; a word longer than the row is broken through, which fills the row.
+    const rows = [];
+    let current = '';
+    for (let word of `${marker}${number} ${code}`.split(' ')) {
+      if (current !== '' && textLength(`${current} ${word}`) > INNER) {
+        rows.push(current);
+        current = '';
+      }
+      while (textLength(word) > INNER) {
+        if (current !== '') rows.push(current);
+        rows.push(word.slice(0, INNER));
+        current = '';
+        word = word.slice(INNER);
+      }
+      current = current === '' ? word : `${current} ${word}`;
+    }
+    rows.push(current);
+    return rows.map((row) => `│ ${row.padEnd(INNER)} │`);
+  };
+  const textLength = (text) => Array.from(text).length;
+  const LONG = 'const mentions = source.split(newline).filter((line) => !/oddModules/.test(line) && /codegraph/i.test(line))';
+
+  test('an added line: the rest rows are dropped and the one row keeps its width, divider and role', () => {
+    const wrapped = hostWrap('+', '233', LONG);
+    assert.ok(wrapped.length >= 2, 'the host did wrap this line');
+    const rows = diffColorDesign(seamFor().seam).apply(wrapped, ctx());
+    assert.equal(rows.length, 1, `the wrapped remainder is not drawn as stray rows: ${rows.map(unpaint).join('\n')}`);
+    assert.equal(cols(rows[0]), WIDTH, 'the row keeps the width the host gave it');
+    const plain = unpaint(rows[0]);
+    assert.match(plain, /^│ \+233 │ const mentions = .*…\s*│$/u, plain);
+    assert.match(rows[0], /<toolDiffAdded>\+233 │ .*…<\/toolDiffAdded>/u, 'the whole row still wears the role');
+    assert.equal((plain.match(/│/gu) ?? []).length, 3, `two frame cells and ONE divider: ${plain}`);
+  });
+
+  test('a removed and a context line behave the same, and the rows around them are untouched', () => {
+    const rows = diffColorDesign(seamFor().seam).apply([
+      `│ ${'@@ -230,3 +230,3 @@'.padEnd(INNER)} │`,
+      ...hostWrap('-', '232', LONG),
+      ...hostWrap(' ', '234', LONG),
+      `│ ${'+235 const next = 1;'.padEnd(INNER)} │`,
+    ], ctx());
+    const plain = rows.map(unpaint);
+    assert.equal(plain.length, 4, plain.join('\n'));
+    assert.match(plain[1], /^│ -232 │ const mentions = .*…\s*│$/u);
+    assert.match(plain[2], /^│ +234 │ const mentions = .*…\s*│$/u);
+    assert.match(plain[3], /^│ \+235 │ const next = 1;\s*│$/u, 'a line that fit is not marked');
+    for (const row of rows) assert.equal(cols(row), WIDTH);
+  });
+
+  test('a word longer than the width is cut the same way, and nothing wraps past the frame', () => {
+    const rows = diffColorDesign(seamFor().seam).apply(hostWrap('+', '9', 'x'.repeat(130)), ctx());
+    assert.equal(rows.length, 1);
+    assert.equal(cols(rows[0]), WIDTH);
+    assert.match(unpaint(rows[0]), /^│ \+9 │ x+…\s*│$/u);
+  });
+
+  test('painted twice is the same rows', () => {
+    const design = diffColorDesign(seamFor().seam);
+    const once = design.apply(hostWrap('+', '233', LONG), ctx());
+    assert.deepEqual(design.apply(once, ctx()), once);
+  });
+
+  test('only the rest of a line is dropped: a skip marker, the closing rule and a hint stay', () => {
+    const rows = [
+      ...hostWrap('+', '233', LONG),
+      '│    ...                                                   │',
+      '╰──────────────────────────────────────────────────────────╯',
+      'ctrl+o to expand',
+    ];
+    const plain = diffColorDesign(seamFor().seam).apply(rows, ctx()).map(unpaint);
+    assert.equal(plain.length, 4, plain.join('\n'));
+    assert.equal(plain[1], rows[hostWrap('+', '233', LONG).length]);
+    assert.equal(plain[2], rows.at(-2));
+    assert.equal(plain[3], 'ctrl+o to expand');
+  });
+});
+
+describe('the edit heading states what the call changed, as the write heading states its lines (S16)', () => {
+  const heading = '╭─ ✎ edit lib/app.js ─────────────────────────────────────╮';
+  const withHint = '╭─ ✎ edit lib/app.js ──────────────── ctrl+o to collapse ─╮';
+  const run = (rows, edits, extra = {}) => diffColorDesign(seamFor().seam).apply(rows, {
+    tool: 'edit',
+    part: 'call',
+    width: WIDTH,
+    theme,
+    render: { args: { path: 'lib/app.js', edits }, ...extra },
+  });
+  const edit = (oldText, newText) => ({ oldText, newText });
+
+  test('added and removed lines follow the path, muted, and the row keeps its width', () => {
+    const [row] = run([withHint], [edit('a\nb', 'a\nc\nd')]);
+    assert.equal(cols(row), cols(withHint), 'the rule gave the columns, the frame did not move');
+    assert.match(row, /edit lib\/app\.js <muted>\(\+2 · -1\)<\/muted> ─+ ctrl\+o to collapse ─╮$/u, row);
+  });
+
+  test('a count of zero is not written, and nothing changed writes nothing', () => {
+    assert.match(run([heading], [edit('a', 'a\nb\nc')])[0], /<muted>\(\+2\)<\/muted>/u);
+    assert.match(run([heading], [edit('a\nb', 'a')])[0], /<muted>\(-1\)<\/muted>/u);
+    assert.equal(run([heading], [edit('same', 'same')])[0], heading);
+  });
+
+  test('every edit of the call counts, and the legacy single oldText/newText call too', () => {
+    assert.match(run([heading], [edit('a', 'b'), edit('x\ny', 'x')])[0], /\(\+1 · -2\)/u);
+    const legacy = diffColorDesign(seamFor().seam).apply([heading], {
+      tool: 'edit', part: 'call', width: WIDTH, theme, render: { args: { path: 'lib/app.js', oldText: 'a', newText: 'b\nc' } },
+    });
+    assert.match(legacy[0], /\(\+2 · -1\)/u);
+  });
+
+  test('a line only counts when the call really changes it', () => {
+    const [row] = run([heading], [edit('keep\nold\nkeep too', 'keep\nnew\nkeep too')]);
+    assert.match(row, /\(\+1 · -1\)/u, row);
+  });
+
+  test('float and unframed headings carry the count too', () => {
+    const float = ' ▎ ✎ edit lib/app.js                      ctrl+o to expand   ';
+    assert.match(run([float], [edit('a', 'b')])[0], /edit lib\/app\.js <muted>\(\+1 · -1\)<\/muted> +ctrl\+o to expand/u);
+    assert.equal(cols(run([float], [edit('a', 'b')])[0]), cols(float));
+    const bare = `edit lib/app.js${' '.repeat(40)}`;
+    assert.match(run([bare], [edit('a', 'b')])[0], /^edit lib\/app\.js <muted>\(\+1 · -1\)<\/muted> +$/u);
+  });
+
+  test('no room, no args, a failed call or the body rows: the host\'s rows come back', () => {
+    const tight = '╭─ ✎ edit lib/app.js ─╮';
+    assert.deepEqual(run([tight], [edit('a', 'b')]), [tight]);
+    assert.deepEqual(run([heading], undefined), [heading]);
+    assert.deepEqual(run([heading], [edit('a', 'b')], { isError: true }), [heading]);
+    const body = ['│ -1 edit lib/app.js ──────────────────────────────────────  │'];
+    assert.equal(unpaint(run(body, [edit('a', 'b')])[0]).includes('(+1 · -1)'), false);
+  });
+
+  test('painted twice is the same row', () => {
+    const once = run([withHint], [edit('a', 'b')]);
+    assert.deepEqual(run(once, [edit('a', 'b')]), once);
+  });
+
+  test('the colour the heading was drawn in is picked up again after the count', () => {
+    const painted = `\u001b[34m${withHint}\u001b[39m`;
+    const [row] = run([painted], [edit('a', 'b')]);
+    assert.ok(row.includes('</muted>\u001b[34m'), row);
+  });
+});

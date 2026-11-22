@@ -294,7 +294,7 @@ test('a bridge that cannot express the follow gets NO registration, never a Mess
 });
 
 test('a release that cannot be read registers nothing at all: no probe, no api call, no store read', () => {
-  for (const [name, version] of [['no release member', undefined], ['a release that cannot be read', 'v0.12'], ['the release before the floor', '0.12.0'], ['a prerelease of the floor', '0.12.1-rc.1'], ['a build suffix on the floor', '0.12.1+build.7']]) {
+  for (const [name, version] of [['no release member', undefined], ['a release that cannot be read', 'v0.12'], ['the release before the floor', '0.12.0'], ['a prerelease of the floor', '0.12.1-rc.1'], ['a build suffix on the floor', '0.12.1+build.7'], ['a prerelease above the floor', '0.12.2-rc.1'], ['a build suffix above the floor', '0.12.2+build.7'], ['trailing text after the numbers', '0.12.2garbage'], ['four parts', '1.0.0.0'], ['empty', '']]) {
     for (const validatesFollows of [false, true]) {
       const bridge = publishBridge({ version, toolLine: ACTIVITY, validatesFollows });
       assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined }, name);
@@ -330,6 +330,10 @@ test('a later release registers, and a bridge with no message-design surface reg
   assert.equal(bridgeTakesFollows({ VERSION: '0.12.0' }), false, 'the follow exists there, but a stale message id could veto it');
   assert.equal(bridgeTakesFollows({ VERSION: '0.11.9' }), false);
   assert.equal(bridgeTakesFollows({ VERSION: '0.12.1-rc.1' }), false);
+  assert.equal(bridgeTakesFollows({ VERSION: '0.12.2-rc.1' }), false, 'a suffix above the floor is unreadable, not newer');
+  assert.equal(bridgeTakesFollows({ VERSION: '0.12.2garbage' }), false, 'trailing text is unreadable');
+  assert.equal(bridgeTakesFollows({ VERSION: '1.0.0.0' }), false, 'four parts are unreadable');
+  assert.equal(bridgeTakesFollows({ VERSION: '0.12' }), false, 'a two-part release below the floor is still below it');
   assert.equal(bridgeTakesFollows({}), false, 'an unreadable release is not asked and not used');
   const bare = publishBridge({ version: '0.12.1' });
   delete globalThis[BRIDGE_API_SLOT].registerMessageDesign;

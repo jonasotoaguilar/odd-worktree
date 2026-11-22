@@ -75,9 +75,9 @@ function graphqlRead(calls) {
 }
 
 // ---------------------------------------------------------------------------
-// D21 (S2): a fence this reader cannot read refuses the edit outright — add and
-// remove alike — and writes nothing. The body's loose fence total is odd: the
-// only run is the marker the rule refuses to guess at.
+// D21/D27 (S2): a body whose fence runs do not pair up refuses the edit
+// outright — add and remove alike — and writes nothing. The body's loose fence
+// total is odd: the only run is the one the rule refuses to guess at.
 // ---------------------------------------------------------------------------
 test('D21: an odd fence total this reader cannot resolve refuses the body edit', async (t) => {
   const body = '```js `x`\nCloses #915\n';
@@ -86,11 +86,11 @@ test('D21: an odd fence total this reader cannot resolve refuses the body edit',
   const removed = await client.editLinkedIssues(64, { remove: [915] }, { scope: GITHUB });
   assert.deepEqual(removed, {
     ok: false,
-    error: 'the pull request body has code fences this edit cannot read safely',
+    error: 'the pull request body ends inside an unclosed code fence or comment',
   });
   const added = await client.editLinkedIssues(64, { add: [916] }, { scope: GITHUB });
   assert.equal(added.ok, false);
-  assert.equal(added.error, 'the pull request body has code fences this edit cannot read safely');
+  assert.equal(added.error, 'the pull request body ends inside an unclosed code fence or comment');
   assert.deepEqual(writes, [], 'nothing is written for a body this reader cannot read');
 });
 
@@ -129,15 +129,18 @@ for (const [name, write] of GATED_WRITES) {
   });
 }
 
-test('D23: a github.com scope stays byte-identical (no --hostname, no GH_HOST)', async (t) => {
+test('D28: a github.com scope names github.com explicitly on every child', async (t) => {
+  // D28 replaced the "a github.com scope adds nothing" rule: gh's own default
+  // may itself be an Enterprise server, so the host is always named, github.com
+  // included, and it can never drift in either direction.
   const { client, calls, writes } = recorder(t, { body: 'Summary\n' });
 
   assert.equal((await client.closePullRequest(64, { scope: GITHUB })).ok, true);
 
   const lookup = graphqlRead(calls);
-  assert.equal(lookup.argv.includes('--hostname'), false);
-  assert.equal(lookup.host, undefined);
-  assert.equal(writes[0].host, undefined);
+  assert.equal(lookup.argv[lookup.argv.indexOf('--hostname') + 1], 'github.com');
+  assert.equal(lookup.host, 'github.com');
+  assert.equal(writes[0].host, 'github.com');
   assert.equal(writes[0].repo, GITHUB);
 });
 

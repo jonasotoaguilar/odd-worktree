@@ -50,12 +50,15 @@ const writesByKind={
   assignees:(c,o)=>c.editAssignees(N,{add:['lee']},o),
   create:(c,o)=>c.createLabel({name:'triage'},o),
 };
+// D27 replaced the fence parser: only a line this panel wrote — carrying its
+// marker — is ever removed, so the real declaration below carries one while the
+// code example does not. Both bodies pair their fence runs, so the edit is read.
 for(const [title,original] of [
   ['tilde CRLF',`Intro\r\n ~~~text\r\nCloses #${I}\r\n ~~~\r\n`],
   ['indent and nested list',`Intro\n\n- List\n  - Nested\n    ~~~text\n    Closes #${I}\n    ~~~\n`],
 ]) test(`D21 paired ${title}: preserve every byte except the real declaration`,async t=>{
   const eol=original.includes('\r\n')?'\r\n':'\n';
-  const {c,writes}=client(t,{body:`${original}${eol}Closes #${I}${eol}Tail${eol}`});
+  const {c,writes}=client(t,{body:`${original}${eol}Closes #${I} <!-- odd-worktree:linked -->${eol}Tail${eol}`});
   await c.editLinkedIssues(N,{remove:[I]},publicOpts);
   assert.deepEqual(writes.map(x=>x.argv),[['pr','edit',String(N),'--body',`${original}${eol}Tail${eol}`]]);
 });
@@ -63,7 +66,9 @@ test('D21 odd unclosed fence: never append a link inside it',async t=>{
   const {c,writes}=client(t,{body:`Intro\n\n ~~~text\nCloses #${I}\n`});
   const r=await c.editLinkedIssues(N,{add:[I+1]},publicOpts);
   assert.deepEqual(writes,[]); assert.equal(r.ok,false);
-  assert.match(r.error,/^the pull request body (has code fences this edit cannot read safely|ends inside an unclosed code fence)$/);
+  // D27's single refusal sentence: an unpaired fence run or an unbalanced
+  // comment means the body cannot be read, so nothing is added.
+  assert.equal(r.error,'the pull request body ends inside an unclosed code fence or comment');
 });
 test('D21/S2 body data: info string inside a backtick fence is not a closing fence',async t=>{
   const body='```text\n```not-a-closer\n'+`Closes #${I}\n`+'```\n\nUnrelated prose.\n';

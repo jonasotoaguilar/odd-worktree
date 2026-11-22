@@ -1618,8 +1618,10 @@ describe('listRelatedIssues: one combined read of the three scoped views', () =>
     assert.equal(/timelineItems\(first:/.test(query), false,
       'never the oldest window: the marker names the newest pull request (S3)');
     // T9 (S8): the marker is a NUMBER, so the cross-referenced source carries it.
-    assert.ok(query.includes('... on PullRequest { number }'),
-      'the pull-request source selection asks for its number');
+    // S6/D29: and the REPOSITORY it belongs to, because a linked pull request is
+    // identified by both — a same-numbered one elsewhere is not this marker.
+    assert.ok(query.includes('... on PullRequest { number repository { nameWithOwner } }'),
+      'the pull-request source selection asks for its number and its repository');
     // T10 (S9): the row the rail caches is the panel\'s seed, so it carries the
     // assignees the first frame shows.
     assert.ok(query.includes('assignees(first: 10) { nodes { login } }'),

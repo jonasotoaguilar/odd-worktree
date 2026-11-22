@@ -77,8 +77,13 @@ function pullRequestGraphql({
     if (argv[0] === 'api' && argv[1] === 'graphql') {
       const query = queryOf({ argv });
       if (query.includes('viewer { login }')) {
+        // S2/D31: the assignee read names the pull request too, so its state
+        // rides the same round trip.
         return okJson(JSON.stringify({
-          data: { repository: { viewerPermission: permission }, viewer: { login: viewer } },
+          data: {
+            repository: { viewerPermission: permission, pullRequest: { state: 'OPEN' } },
+            viewer: { login: viewer },
+          },
         }));
       }
       return okJson(JSON.stringify({
@@ -886,7 +891,10 @@ describe('a write shares one resolved scope with its role read', () => {
       if (argv[0] === 'repo') return okJson(JSON.stringify({ nameWithOwner: 'octo/base' }));
       if (argv[0] === 'api' && queryOf({ argv }).includes('viewer { login }')) {
         return okJson(JSON.stringify({
-          data: { repository: { viewerPermission: 'WRITE' }, viewer: { login: 'octocat' } },
+          data: {
+            repository: { viewerPermission: 'WRITE', pullRequest: { state: 'OPEN' } },
+            viewer: { login: 'octocat' },
+          },
         }));
       }
       if (argv[0] === 'api') {
@@ -955,8 +963,12 @@ describe('a write shares one resolved scope with its role read', () => {
 // the body preserved exactly.
 // ---------------------------------------------------------------------------
 describe('editLinkedIssues rewrites only the closing lines', () => {
-  test('adding a linked issue appends one Closes line and keeps the body byte for byte', async () => {
-    const { runner, calls } = makeRunner([okPermission(), okJson(fixture('gh-pr-view.json')), okJson('')]);
+  test('adding a linked issue appends one marked Closes line and keeps the body byte for byte', async () => {
+    // The body is read twice (prepare, then re-read before the write), so the
+    // fixture answers both reads and the edit is the last child.
+    const { runner, calls } = makeRunner([
+      okPermission(), okJson(fixture('gh-pr-view.json')), okJson(fixture('gh-pr-view.json')), okJson(''),
+    ]);
     ghPrs.setGhRunner(runner);
     const original = JSON.parse(fixture('gh-pr-view.json')).body;
 
@@ -965,18 +977,23 @@ describe('editLinkedIssues rewrites only the closing lines', () => {
     assert.equal(res.ok, true, res.error);
     assert.equal(res.changed, true);
     assert.match(queryOf(calls[0]), /viewerPermission/, 'the role is read before the body edit');
-    const argv = calls[2].argv;
+    // S2/D27: the body is read once to prepare the edit and once more right
+    // before the write, so the edit is the fourth child.
+    const argv = calls[3].argv;
     assert.deepEqual(argv.slice(0, 4), ['pr', 'edit', '87', '--body']);
     const body = argv[argv.indexOf('--body') + 1];
-    assert.equal(body, `${original}\nCloses #71\n`);
+    assert.equal(body, `${original}\n\nCloses #71 ${MARK}\n`);
     assert.ok(body.startsWith(original), 'the original body is untouched');
     assert.equal(res.body, body);
   });
 
-  test('removing a linked issue keeps CRLF endings and every other byte', async () => {
-    const original = 'Summary line\r\n\r\nfixes #14\r\nCloses #63\r\nTrailing words';
+  test('removing a marked linked issue keeps CRLF endings and every other byte', async () => {
+    // S2/D27: a removal only ever deletes a line this panel wrote, so the
+    // fixture carries its marker.
+    const original = `Summary line\r\n\r\nfixes #14 ${MARK}\r\nCloses #63\r\nTrailing words`;
     const { runner, calls } = makeRunner([
       okPermission(),
+      okJson(JSON.stringify({ body: original })),
       okJson(JSON.stringify({ body: original })),
       okJson(''),
     ]);
@@ -985,9 +1002,20 @@ describe('editLinkedIssues rewrites only the closing lines', () => {
     const res = await ghPrs.editLinkedIssues(87, { remove: [14] }, PINNED);
 
     assert.equal(res.ok, true, res.error);
-    const body = calls[2].argv[calls[2].argv.indexOf('--body') + 1];
+    const body = calls[3].argv[calls[3].argv.indexOf('--body') + 1];
     assert.equal(body, 'Summary line\r\n\r\nCloses #63\r\nTrailing words');
     assert.equal(res.changed, true);
+  });
+
+  test('a declaration this panel did not write is refused, never rewritten', async () => {
+    const original = 'Summary line\n\nCloses #63\n';
+    const { runner, calls } = makeRunner([okPermission(), okJson(JSON.stringify({ body: original }))]);
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.editLinkedIssues(87, { remove: [63] }, PINNED);
+
+    assert.deepEqual(res, { ok: false, error: 'that link was not added by this panel; remove it on GitHub' });
+    assert.equal(argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit'), undefined);
   });
 
   test('a number already declared changes nothing and runs no edit child', async () => {
@@ -1040,43 +1068,64 @@ describe('editLinkedIssues rewrites only the closing lines', () => {
 // message the reader cleared.
 // ---------------------------------------------------------------------------
 describe('merge and the body edit fail closed on missing facts', () => {
-  test('a fenced Closes example survives the removal of the real closing line', async () => {
-    const body = 'Intro\n```text\nCloses #12\n```\nCloses #12\nKeep me';
-    const { runner, calls } = makeRunner([okPermission(), okJson(JSON.stringify({ body })), okJson('')]);
+  test('a code example survives the removal of the panel\'s own marked line', async () => {
+    // S2/D27: the fenced example carries no marker, so it is never a candidate;
+    // only the marked declaration of the OTHER number is removed, and the
+    // example's bytes stay exactly as they were.
+    const body = `Intro\n\`\`\`text\nCloses #19\n\`\`\`\nCloses #12 ${MARK}\nKeep me`;
+    const { runner, calls } = makeRunner([
+      okPermission(), okJson(JSON.stringify({ body })), okJson(JSON.stringify({ body })), okJson(''),
+    ]);
     ghPrs.setGhRunner(runner);
 
     const res = await ghPrs.editLinkedIssues(87, { remove: [12] }, PINNED);
 
     assert.equal(res.ok, true, res.error);
     assert.equal(res.changed, true);
-    const written = calls[2].argv[calls[2].argv.indexOf('--body') + 1];
-    assert.equal(written, 'Intro\n```text\nCloses #12\n```\nKeep me',
-      'the example inside the fence is code, so it is untouched');
+    const written = calls[3].argv[calls[3].argv.indexOf('--body') + 1];
+    assert.equal(written, 'Intro\n```text\nCloses #19\n```\nKeep me',
+      'the example inside the fence is untouched');
   });
 
-  test('a fenced Closes line is not a declaration, so the same number is added for real', async () => {
+  test('a removal deletes only the panel\'s own line and leaves a human declaration alone', async () => {
+    // S2/D27: only a marked line is ever deleted. A declaration the human wrote
+    // stays exactly where it is, even for the same number.
+    const body = `Intro\nCloses #12\nCloses #12 ${MARK}\nKeep me\n`;
+    const { runner, calls } = makeRunner([
+      okPermission(), okJson(JSON.stringify({ body })), okJson(JSON.stringify({ body })), okJson(''),
+    ]);
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.editLinkedIssues(87, { remove: [12] }, PINNED);
+
+    assert.equal(res.ok, true, res.error);
+    const edit = argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit');
+    assert.equal(edit[edit.indexOf('--body') + 1], 'Intro\nCloses #12\nKeep me\n');
+  });
+
+  test('a column-0 declaration declares the number wherever it sits, so nothing is added', async () => {
+    // S2/D27: the rewrite no longer decides what is code — a column-0
+    // declaration declares its number, so the add changes nothing at all.
     const body = 'Example:\n~~~\nCloses #71\n~~~';
-    const { runner, calls } = makeRunner([okPermission(), okJson(JSON.stringify({ body })), okJson('')]);
+    const { runner, calls } = makeRunner([okPermission(), okJson(JSON.stringify({ body }))]);
     ghPrs.setGhRunner(runner);
 
     const res = await ghPrs.editLinkedIssues(87, { add: [71] }, PINNED);
 
     assert.equal(res.ok, true, res.error);
-    assert.equal(res.changed, true);
-    const written = calls[2].argv[calls[2].argv.indexOf('--body') + 1];
-    assert.equal(written, `${body}\nCloses #71\n`, 'the real declaration is appended after the fence');
+    assert.equal(res.changed, false);
+    assert.equal(argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit'), undefined);
   });
 
-  test('an unclosed fence keeps every later closing line untouched', async () => {
+  test('a body that ends inside an unclosed fence is refused, not appended to', async () => {
     const body = '```\nCloses #12\nmore code';
     const { runner, calls } = makeRunner([okPermission(), okJson(JSON.stringify({ body }))]);
     ghPrs.setGhRunner(runner);
 
     const res = await ghPrs.editLinkedIssues(87, { remove: [12] }, PINNED);
 
-    assert.equal(res.ok, true, res.error);
-    assert.equal(res.changed, false, 'nothing outside the fence declares #12');
-    assert.equal(calls.length, 2, 'no edit child runs for a body that changes nothing');
+    assert.deepEqual(res, { ok: false, error: 'the pull request body ends inside an unclosed code fence or comment' });
+    assert.equal(argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit'), undefined);
   });
 
   test('merge refuses a metadata read that never carried the draft state', async () => {
@@ -1431,7 +1480,8 @@ describe('createPrsClient over an injected issue module', () => {
     const res = await client.getPullRequestPage({ bucket: 'mine' }, { scope: null });
 
     assert.equal(res.ok, true, res.error);
-    assert.deepEqual(calls[0], ['repo', 'view', '--json', 'nameWithOwner']);
+    // S2/D28: the repository lookup also answers the URL its host comes from.
+    assert.deepEqual(calls[0], ['repo', 'view', '--json', 'nameWithOwner,url']);
     assert.equal(fieldOf({ argv: calls[1] }, 'search'),
       'repo:octo/repo is:pr is:open author:@me sort:updated-desc');
     client.setGhRunner(null);
@@ -1518,5 +1568,258 @@ describe('failure shapes: nothing throws', () => {
 
     assert.equal(res.ok, false);
     assert.match(String(res.error), /returned an unexpected shape/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2 (D27): the Development relation is this panel's own convention. It no
+// longer interprets Markdown: every line it writes carries a marker comment,
+// only a marked line is ever removed, an unreadable body refuses both edits, and
+// the body is read once more immediately before the write.
+// ---------------------------------------------------------------------------
+const MARK = '<!-- odd-worktree:linked -->';
+
+// A runner that answers by argv shape: the role read, the body read (from a
+// mutable holder, so a re-read can be made to differ) and every write.
+function bodyRunner(holder) {
+  return (call) => {
+    if (call.argv[0] === 'api' && call.argv[1] === 'graphql') return okPermission();
+    if (call.argv[0] === 'pr' && call.argv[1] === 'view') {
+      const body = typeof holder.body === 'function' ? holder.body() : holder.body;
+      return okJson(JSON.stringify({ body }));
+    }
+    return okJson('');
+  };
+}
+
+describe('D27: the linked-issue body edit is marker-based', () => {
+  test('adding a link appends a marked line on a line of its own', async () => {
+    const original = 'Summary line\n\nBody words';
+    const { runner, calls } = makeRunner([bodyRunner({ body: original })]);
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.editLinkedIssues(87, { add: [71] }, PINNED);
+
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.changed, true);
+    const edit = argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit');
+    assert.ok(edit, 'the body edit ran');
+    assert.equal(edit[edit.indexOf('--body') + 1], `${original}\n\nCloses #71 ${MARK}\n`);
+    assert.equal(res.body, `${original}\n\nCloses #71 ${MARK}\n`);
+  });
+
+  test('adding a link to a body that already ends with a blank line adds no second one', async () => {
+    const original = 'Summary line\n';
+    const { runner, calls } = makeRunner([bodyRunner({ body: original })]);
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.editLinkedIssues(87, { add: [71] }, PINNED);
+
+    assert.equal(res.ok, true, res.error);
+    const edit = argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit');
+    assert.equal(edit[edit.indexOf('--body') + 1], `Summary line\n\nCloses #71 ${MARK}\n`);
+  });
+
+  test('adding a link a column-0 declaration already names writes nothing', async () => {
+    const body = 'Summary\n\nfixes #71\n';
+    const { runner, calls } = makeRunner([bodyRunner({ body })]);
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.editLinkedIssues(87, { add: [71] }, PINNED);
+
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.changed, false, 'any closing keyword already declares it');
+    assert.equal(argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit'), undefined);
+  });
+
+  test('removing a link this panel did not add is refused, and nothing is written', async () => {
+    const body = 'Summary\n\nCloses #14\n';
+    const { runner, calls } = makeRunner([bodyRunner({ body })]);
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.editLinkedIssues(87, { remove: [14] }, PINNED);
+
+    assert.deepEqual(res, { ok: false, error: 'that link was not added by this panel; remove it on GitHub' });
+    assert.equal(argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit'), undefined);
+  });
+
+  test('removing a marked link deletes exactly that line and keeps every other byte', async () => {
+    const original = `Summary line\r\n\r\nCloses #14 ${MARK}\r\nTrailing words`;
+    const { runner, calls } = makeRunner([bodyRunner({ body: original })]);
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.editLinkedIssues(87, { remove: [14] }, PINNED);
+
+    assert.equal(res.ok, true, res.error);
+    const edit = argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit');
+    assert.equal(edit[edit.indexOf('--body') + 1], 'Summary line\r\n\r\nTrailing words');
+  });
+
+  test('unpaired fences and unbalanced comments refuse the edit for add and remove alike', async () => {
+    for (const body of ['Intro\n```\nCloses #14\n', 'Intro\n<!--\nCloses #14\n-->\n<!--\n']) {
+      for (const changes of [{ add: [71] }, { remove: [14] }]) {
+        const { runner, calls } = makeRunner([bodyRunner({ body })]);
+        ghPrs.setGhRunner(runner);
+
+        const res = await ghPrs.editLinkedIssues(87, changes, PINNED);
+
+        assert.deepEqual(res, { ok: false, error: 'the pull request body ends inside an unclosed code fence or comment' });
+        assert.equal(argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit'), undefined);
+      }
+    }
+  });
+
+  test('a body that changed while the edit was prepared is refused, never overwritten', async () => {
+    let read = 0;
+    const { runner, calls } = makeRunner([bodyRunner({
+      body: () => (++read === 1 ? 'Summary\n' : 'Summary\nAuthor added this meanwhile.\n'),
+    })]);
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.editLinkedIssues(87, { add: [71] }, PINNED);
+
+    assert.deepEqual(res, { ok: false, error: 'the pull request body changed while it was being edited' });
+    assert.equal(argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit'), undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2 (D28): every `api` child names its host explicitly — github.com included —
+// and the ambient fallback takes the host from the repository lookup itself.
+// ---------------------------------------------------------------------------
+describe('D28: the host travels with every child', () => {
+  test('a github.com scope names github.com on its api children and GH_HOST', async () => {
+    const { runner, calls } = makeRunner([okPermission(), okJson('')]);
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.closePullRequest(87, { scope: 'github.com/octo/repo' });
+
+    assert.equal(res.ok, true, res.error);
+    const graphqlCall = calls.find((call) => call.argv[0] === 'api' && call.argv[1] === 'graphql');
+    assert.equal(graphqlCall.argv[graphqlCall.argv.indexOf('--hostname') + 1], 'github.com');
+    assert.equal(graphqlCall.runOpts.env.GH_HOST, 'github.com');
+    const closeCall = argvStartingWith(calls.map((call) => call.argv), 'pr', 'close');
+    assert.ok(closeCall, 'the close child ran');
+    assert.equal(calls[calls.length - 1].runOpts.env.GH_HOST, 'github.com');
+  });
+
+  test('the injected issue module\'s repository answer supplies the host too', async () => {
+    const writes = [];
+    const client = ghPrsModule.createPrsClient({
+      issues: {
+        // The extension injects its own issue module; that module answers the
+        // repository AND the host gh resolved for it (S2/D28).
+        reportedRepoName: async () => ({ ok: true, nameWithOwner: 'amber/widget', host: 'github.company.example' }),
+      },
+    });
+    client.setGhRunner(async (_bin, argv, runOpts = {}) => {
+      const env = runOpts.env || {};
+      if (argv.slice(0, 2).join(' ') === 'api graphql') {
+        return okJson(JSON.stringify({ data: { repository: { viewerPermission: 'WRITE', pullRequest: { state: 'OPEN' } } } }));
+      }
+      writes.push({ argv: argv.slice(), repo: env.GH_REPO, host: env.GH_HOST });
+      return okJson('');
+    });
+
+    const res = await client.closePullRequest(87);
+    client.setGhRunner(null);
+
+    assert.equal(res.ok, true, res.error);
+    assert.deepEqual(writes.map((write) => [write.repo, write.host]), [
+      ['github.company.example/amber/widget', 'github.company.example'],
+    ]);
+  });
+
+  test('an ambient enterprise repository pins the host its own URL names', async () => {
+    const writes = [];
+    const client = ghPrsModule.createPrsClient({});
+    client.setGhRunner(async (_bin, argv, runOpts = {}) => {
+      const env = runOpts.env || {};
+      if (argv.slice(0, 2).join(' ') === 'repo view') {
+        return okJson(JSON.stringify({
+          nameWithOwner: 'amber/widget',
+          url: 'https://github.company.example/amber/widget',
+        }));
+      }
+      if (argv.slice(0, 2).join(' ') === 'api graphql') {
+        return okJson(JSON.stringify({ data: { repository: { viewerPermission: 'WRITE', pullRequest: { state: 'OPEN' } } } }));
+      }
+      writes.push({ argv: argv.slice(), repo: env.GH_REPO, host: env.GH_HOST });
+      return okJson('');
+    });
+
+    const res = await client.closePullRequest(87);
+    client.setGhRunner(null);
+
+    assert.equal(res.ok, true, res.error);
+    assert.deepEqual(writes.map((write) => [write.repo, write.host]), [
+      ['github.company.example/amber/widget', 'github.company.example'],
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2/S6 (D29): a Development reference is identified by repository AND number.
+// ---------------------------------------------------------------------------
+describe('D29: only this repository\'s linked issues are targets', () => {
+  test('a closing reference of another repository never becomes a linked issue', async () => {
+    const { runner } = makeRunner((call) => {
+      if (call.argv[0] === 'pr' && call.argv[1] === 'view') {
+        return Promise.resolve(okJson(JSON.stringify({ number: 87, title: 'T', state: 'OPEN', body: '' })));
+      }
+      return Promise.resolve(okJson(JSON.stringify({
+        data: {
+          repository: {
+            viewerPermission: 'WRITE',
+            mergeCommitAllowed: true,
+            pullRequest: {
+              isDraft: false,
+              state: 'OPEN',
+              closingIssuesReferences: {
+                nodes: [
+                  { number: 12, repository: { nameWithOwner: 'oak/payroll' } },
+                  { number: 13, repository: { nameWithOwner: 'octo/repo' } },
+                ],
+                pageInfo: { hasNextPage: false },
+              },
+            },
+          },
+        },
+      })));
+    });
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.getPullRequest(87, { includeMetadata: true }, PINNED);
+
+    assert.equal(res.ok, true, res.error);
+    assert.deepEqual(res.pullRequest.linkedIssues, [13], 'the foreign reference is not a target of this pane');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2 (D31): the metadata read is the newest state, and it wins.
+// ---------------------------------------------------------------------------
+describe('D31: the GraphQL state wins over a stale pr view', () => {
+  test('a CLOSED metadata answer closes a detail read that still says open', async () => {
+    const { runner } = makeRunner((call) => {
+      if (call.argv[0] === 'pr' && call.argv[1] === 'view') {
+        return Promise.resolve(okJson(JSON.stringify({ number: 87, title: 'T', state: 'OPEN', body: '' })));
+      }
+      return Promise.resolve(okJson(JSON.stringify({
+        data: {
+          repository: {
+            viewerPermission: 'WRITE',
+            mergeCommitAllowed: true,
+            pullRequest: { isDraft: false, state: 'CLOSED', closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } } },
+          },
+        },
+      })));
+    });
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.getPullRequest(87, { includeMetadata: true }, PINNED);
+
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.pullRequest.state, 'closed');
   });
 });

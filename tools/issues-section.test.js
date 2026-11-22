@@ -2204,8 +2204,10 @@ test('S8 (T9): the ONE combined read supplies both the rows and the pull-request
   }
   assert.ok(query.includes('timelineItems(last: 10, itemTypes: [CROSS_REFERENCED_EVENT])'),
     'the marker selection rides each row and reads the newest events');
-  assert.ok(query.includes('... on PullRequest { number }'),
-    'and the selection asks for the number the mark prints (S8)');
+  // S6/D29: the source carries its REPOSITORY as well, so a same-numbered pull
+  // request in another repository is never the mark this row draws.
+  assert.ok(query.includes('... on PullRequest { number repository { nameWithOwner } }'),
+    'and the selection asks for the number the mark prints and its repository (S8, D29)');
 });
 
 // T14 rewrote this test: its old premise — a separate marker read that fails

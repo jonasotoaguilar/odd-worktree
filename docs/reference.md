@@ -486,7 +486,9 @@ never prefetched, so it is not a fourth tab and the prefetch never reads it.
 - **`linked issues:` is a list of numbers, and every number is its own click.**
   It reads `linked issues: #12, #14` (ascending, `, …` when the read hit its cap)
   and each `#N` is an independent target — never the whole line — that opens
-  `/issues` on that issue.
+  `/issues` on that issue. A reference whose repository is not this one is not a
+  target at all (see the cross-links section), so nothing here can open another
+  repository's same-numbered issue.
 - **The two summaries sit between the relations and the body.**
   `Changes` carries `3 files changed +40 -5` and `7 commits 2h ago`; `Checks`
   carries `5 checks · 1 failed`, `5 checks · all passed`, `5 checks · pending`,
@@ -521,11 +523,17 @@ never prefetched, so it is not a fourth tab and the prefetch never reads it.
   resolves the ambient repository ONCE and pins it host-qualified for the role
   read and the write alike, so a default that moves mid-action cannot authorize
   one repository and write under another (`github.company.example/amber/widget`
-  stays itself), never a bare `owner/name` re-qualified as github.com. The API
-  host travels with the call too: `gh api`/GraphQL never read it from `GH_REPO`,
-  so every `api` child of a non-github.com scope carries `--hostname <host>`
+  stays itself), never a bare `owner/name` re-qualified as github.com. That
+  ambient host comes from the repository lookup itself — `gh repo view --json
+  nameWithOwner,url`, read from the URL gh answered — never from a github.com
+  assumption. The API host travels with the call too: `gh api`/GraphQL never
+  read it from `GH_REPO`, so every `api` child carries `--hostname <host>`
   (after its own flags, so the query slot is unchanged) and every child of that
-  scope carries `GH_HOST`; a github.com scope adds neither.
+  scope carries `GH_HOST` — github.com INCLUDED, because gh's own default may
+  itself be an Enterprise server. The host is named only when the call can prove
+  it (an explicit pin, `GH_HOST`, or the host half of `GH_REPO`); a caller
+  environment that selects a different server is left exactly as given, so the
+  identity resolution still refuses it before any child runs.
 - **The `o` key opens it on GitHub.** `gh pr view <n> --web -R
   <host>/<owner>/<repo>` — the pinned identity, normalized the same way, never a
   raw value.
@@ -612,22 +620,26 @@ again`.
   (`[x] #63`), `space` toggles one, `n` adds a number (`enter add`), `esc back`
   leaves and `ctrl+s apply` sends the add/remove delta. The pane says what the
   write really is: `closes #N lines in the body`. GitHub exposes no mutation for
-  that panel, so the client appends or removes a `Closes #N` line in the pull
-  request body through `gh pr edit --body` and preserves every other byte of it
-  — line endings included. A body that already declares the number, and a
-  removal of a number it never declared, change nothing at all, and a number
-  that is not one refuses with `a linked issue needs a number`. The fence rule
-  is conservative on purpose: only a COLUMN-0 `Closes #N` line is ever added,
-  counted or removed, a fence opens at up to three leading spaces and closes with
-  the same character at least as long, and every line between the two is code —
-  so a `Closes #N` inside a fenced example (a list item's own margin and an
-  indented block included) is never touched. A body that ENDS inside a fence
-  nothing closed refuses the add with `the pull request body ends inside an
-  unclosed code fence`, because the line would land in the code block; a fence
-  marker the rule cannot read (a backtick fence whose info string carries a
-  backtick) refuses both directions with `the pull request body has code fences
-  this edit cannot read safely` and writes nothing. The outcome reads `linked
-  issues updated`.
+  that panel, so the client writes a `Closes #N` line in the pull request body
+  through `gh pr edit --body` and preserves every other byte of it — line
+  endings included. A number that is not one refuses with `a linked issue needs
+  a number`. The rule is a MARKER rule, not a Markdown reader: every line the
+  panel adds is `Closes #N <!-- odd-worktree:linked -->`, on a line of its own
+  (a blank line first unless the body already ends with one), and a body that
+  already declares the number at column 0 — any closing keyword, marked or not —
+  is left alone with nothing written. A REMOVAL deletes only a marked line, so a
+  declaration this panel did not write is never rewritten: a number whose only
+  declarations are somebody else's refuses with `that link was not added by this
+  panel; remove it on GitHub`, and nothing is written. Two structure facts are
+  read loosely and refuse BOTH directions with `the pull request body ends
+  inside an unclosed code fence or comment`: an odd number of three-plus
+  backtick or tilde runs anywhere in the body, and an unbalanced `<!--`/`-->`
+  count. Nothing else interprets the Markdown, which is what keeps a code
+  example out of reach by construction. The body is read once to prepare the
+  edit and once more immediately before the write; any difference refuses with
+  `the pull request body changed while it was being edited` and nothing is
+  written, so an author's edit that lands in between is never overwritten. The
+  outcome reads `linked issues updated`.
 - **Any write owns the keyboard until it settles.** A save in flight paints its
   own note and ignores every key, so a second save, a navigation or a keystroke
   can never race it, and a rejected save stays visible with its draft intact.
@@ -644,6 +656,15 @@ reload did to the rows underneath it. The `/prs` pin-drift refusal names `/prs`
 
 Both panes publish one click target per relation number, never one per line.
 
+- **A linked reference is identified by repository AND number.** The rail's read
+  and the issue's metadata both ask the linked pull request for its
+  `repository { nameWithOwner }`, and one that names another repository is not
+  this repository's pull request: the rail draws no mark for it, a rail row never
+  routes to `/prs` for it, and the pane paints it as plain `owner/repo#N` text
+  with no click range, so a same-numbered lookalike can never be opened (or
+  closed) here. A reference that names no repository is kept, because the read
+  itself is repository-scoped. The same rule holds the other way round for the
+  `/prs` pane's `linked issues:`.
 - **In `/issues`**, the pane's `linked PRs: #69, #77` row is a set of independent
   ranges: a left click on one number opens `/prs` on that pull request, while the
   row label, its separators, the truncation ellipsis and a `#N` that appears in

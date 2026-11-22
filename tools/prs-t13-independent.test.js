@@ -52,9 +52,14 @@ function client(t, fixture = {}) {
   return { c: createPrsClient(fixture.options), run, writes, calls };
 }
 const opts = {scope:'github.com/amber/widget'};
+// D27 replaced the Markdown reader: a line the panel wrote carries this marker
+// and is the only line a removal may delete, so every removal fixture below
+// names the panel's own declaration.
+const MARK = '<!-- odd-worktree:linked -->';
+const UNREADABLE = 'the pull request body ends inside an unclosed code fence or comment';
 async function removeBody(t, prefix, eol = '\n', fixture = {}) {
   const expected = `${prefix}${eol}${eol}footer${eol}`;
-  const body = `${prefix}${eol}${eol}Closes #915${eol}footer${eol}`;
+  const body = `${prefix}${eol}${eol}Closes #915 ${MARK}${eol}footer${eol}`;
   const { c, writes } = client(t, { ...fixture, body });
   const result = await c.editLinkedIssues(prNum, { remove: [915] }, opts);
   assert.equal(result.ok, true);
@@ -69,26 +74,32 @@ for (const [name, lines, eol] of [
   ['tab-indented list continuation', ['- item', '\t```txt', '\tCloses #915', '\t```']],
   ['blockquote', ['> intro', '>', '> ```txt', '> Closes #915', '> ```']],
   ['CRLF list', ['10. item', '    ```txt', '    Closes #915', '    ```'], '\r\n'],
-]) test(`D16: ${name}, remove real declaration only`, t => removeBody(t, lines.join(eol || '\n'), eol));
+]) test(`D16: ${name}, remove the panel's own declaration only`, t => removeBody(t, lines.join(eol || '\n'), eol));
 for (const remove of [[], [915]]) test(`D16: open to EOF, add + remove=${remove.length}`, async t => {
   const body = 'Closes #915\r\n\r\n````text\r\nCloses #915';
   const {c,writes} = client(t,{body});
-  assert.deepEqual(await c.editLinkedIssues(prNum,{add:[916],remove},opts), {ok:false,error:'the pull request body ends inside an unclosed code fence'});
+  assert.deepEqual(await c.editLinkedIssues(prNum,{add:[916],remove},opts), {ok:false,error:UNREADABLE});
   assert.deepEqual(writes, []);
 });
-test('D16: open to EOF, removal still works and keeps the example unchanged', async t => {
-  const tail = '\r\n````text\r\nCloses #915';
-  const {c,writes} = client(t,{body:`Closes #915\r\n${tail}`});
-  assert.deepEqual(await c.editLinkedIssues(prNum,{remove:[915]},opts),{ok:true,changed:true,body:tail});
-  assert.deepEqual(writes[0].argv,['pr','edit','64','--body',tail]);
+test('D16: open to EOF is refused, so a removal never edits half a body', async t => {
+  // D27: the run total is odd, so the body cannot be read safely and NOTHING is
+  // written — the previous rule removed the real line and left the fence open.
+  const body = 'Closes #915\r\n\r\n````text\r\nCloses #915';
+  const {c,writes} = client(t,{body});
+  assert.deepEqual(await c.editLinkedIssues(prNum,{remove:[915]},opts),{ok:false,error:UNREADABLE});
+  assert.deepEqual(writes, []);
 });
 test('D16: fence directly after a list marker', t => removeBody(t, '- ```text\n  Closes #915\n  ```'));
-test('NEW: excessive indent on fence-looking code is not a list-fence closer', t => removeBody(t, '- item\n  ```txt\n      ```\n  Closes #915\n  ```'));
-test('NEW: unclosed list fence ends on dedent; following prose declaration is removable', async t => {
+test('NEW: a fence structure with three runs is refused, never resumed', async t => {
+  const {c,writes} = client(t,{body:`- item\n  \`\`\`txt\n      \`\`\`\n  Closes #915 ${MARK}\n  \`\`\`\n`});
+  assert.deepEqual(await c.editLinkedIssues(prNum,{remove:[915]},opts),{ok:false,error:UNREADABLE});
+  assert.deepEqual(writes, []);
+});
+test('NEW: an unclosed list fence is refused; the body is never half-read', async t => {
   const prefix = '10. item\n    ```txt\n    example\n';
-  const {c,writes} = client(t,{body:`${prefix}\nCloses #915\n`});
-  assert.deepEqual(await c.editLinkedIssues(prNum,{remove:[915]},opts),{ok:true,changed:true,body:`${prefix}\n`});
-  assert.deepEqual(writes[0].argv,['pr','edit','64','--body',`${prefix}\n`]);
+  const {c,writes} = client(t,{body:`${prefix}\nCloses #915 ${MARK}\n`});
+  assert.deepEqual(await c.editLinkedIssues(prNum,{remove:[915]},opts),{ok:false,error:UNREADABLE});
+  assert.deepEqual(writes, []);
 });
 
 for (const [name, call] of writeCalls) test(`D19: ${name} uses enterprise GH_REPO for every child`, async t => {

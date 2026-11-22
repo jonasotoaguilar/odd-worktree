@@ -323,3 +323,50 @@ describe('linked PR click ranges (S6)', () => {
     assert.deepEqual(collected.lines, plainRows, 'the collector changes nothing about the painted rows');
   });
 });
+
+// S6/D29: a linked pull request is identified by REPOSITORY and number. One of
+// another repository is painted with the repository it belongs to — never as a
+// bare `#N` that would read as this repository's number — and it owns no click
+// range, because this panel cannot open a pull request it has no identity for.
+describe('a linked PR of another repository (D29)', () => {
+  function rangesOf(detail, options = {}) {
+    const ranges = [];
+    const lines = issueDetailLines(detail, [], {
+      width: 80,
+      paint: plain,
+      emphasis: bold,
+      now: NOW,
+      ranges,
+      ...options,
+    });
+    return { lines, ranges };
+  }
+
+  test('renders as plain owner/repo#N and owns no click range', () => {
+    const { lines, ranges } = rangesOf({
+      ...FULL,
+      linkedPullRequests: [69],
+      linkedPullRequestsForeign: [{ repository: 'oak/payroll', number: 381 }],
+    });
+    const row = lines.find((line) => line.includes('linked PRs:'));
+    assert.ok(row, 'the relation row is painted');
+    assert.equal(row.trim(), 'linked PRs: #69, oak/payroll#381',
+      'the foreign link names its repository, so it cannot read as this one');
+    assert.deepEqual(ranges.map((range) => range.number), [69], 'only the same-repository number is a target');
+  });
+
+  test('a foreign link with the same number as a linked one is still not a target', () => {
+    const { ranges } = rangesOf({
+      ...FULL,
+      linkedPullRequests: [69],
+      linkedPullRequestsForeign: [{ repository: 'oak/payroll', number: 69 }],
+    });
+    assert.equal(ranges.length, 1, 'the bare #69 is the only range');
+    assert.equal(ranges[0].number, 69);
+  });
+
+  test('an absent foreign list paints nothing extra', () => {
+    const text = render(FULL, []);
+    assert.match(text, /linked PRs: #69, #77/);
+  });
+});

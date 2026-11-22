@@ -209,16 +209,21 @@ The question this page answers: which rules must every change preserve, and what
    repository. `lib/gh-prs.js` carries the SAME rule for `/prs` — one pin for every
    page, detail, label and assignee read, the same scope-drift refusal before a
    write — and `tools/gh-prs.test.js` and `tools/prs-command.test.js` pin both the
-   pin and the refusal.
+   pin and the refusal. A linked reference is identified by repository AND number
+   on every surface that routes it: the rail's read and both issue reads ask for
+   the reference's `repository { nameWithOwner }`, and one that names another
+   repository gets no rail mark, no `/prs` dispatch and no pane click range
+   (it is painted as `owner/repo#N`), so a same-numbered lookalike in this
+   checkout is never opened, commented on or closed.
 7. **`/issues` capabilities fail closed.** Close, labels and assignees need
    `TRIAGE`; creating a label needs `WRITE`; commenting is ungated. Anything but
    a literal `true` capability means no hint, no editor, no mutation. `/prs`
    reads its own map the same way (`pullRequestPermissions` in `lib/gh-prs.js`, into
    the view's `permissions`): labels and assignees need one of
    `TRIAGE|WRITE|MAINTAIN|ADMIN`, closing, merging and editing the linked issues
-   need `WRITE|MAINTAIN|ADMIN` (so does creating a label, `canCreateLabels`, re-checked at the save), commenting stays ungated in every pull request state, every write re-reads the role and writes under the ONE scope that read resolved, and `canMerge` is only
+   need `WRITE|MAINTAIN|ADMIN` (so does creating a label, `canCreateLabels`, re-checked at the save), commenting stays ungated in every pull request state, every write re-reads the role — with the pull request's own state in that same round trip, so a non-open one keeps only its comment key — and writes under the ONE scope that read resolved, and `canMerge` is only
    true for a pull request that is not a draft in a repository that allows at least
-   one merge method. A refused key paints no hint and reaches no seam;
+   one merge method, with the merge form's chosen method re-checked against the freshly read `mergeMethods` before the seam. A refused key paints no hint and reaches no seam;
    `tools/prs-view.test.js` pins every refusal sentence and that no seam is called.
 8. **The package ships only `extensions`, `lib`, `tools`, `README.md`.** Adding a
    shipped path means changing `files[]` and the package-surface test together.
@@ -227,7 +232,11 @@ The question this page answers: which rules must every change preserve, and what
    `gh` seams — `lib/gh-issues.js` and `lib/gh-prs.js` — spawn through the same
    `execFile`-shaped runner with its argv array and its bound.
    Interactive paths await the async runner; nothing blocks the host event loop
-   with `spawnSync`.
+   with `spawnSync`. The API host is part of that fixed argv: `gh api`/GraphQL
+   never read it from `GH_REPO`, so every `/prs` `api` child carries
+   `--hostname <host>` and its scope's `GH_HOST`, github.com included, and an
+   ambient repository's host is read from `gh repo view --json nameWithOwner,url`
+   rather than assumed.
 10. **There is no worktree document.** A create always lands at
     `<repo-parent>/<repo-name>-worktrees/<odd>`, so the path is the whole record:
     which checkouts this package created and which ODD each one serves. No

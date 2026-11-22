@@ -44,9 +44,13 @@ test('S2: merge refuses missing draft metadata', async () => {
   assert.equal(result.ok, false);
 });
 
-test('S2: a linked edit removes the actual line, not a fenced Markdown example', async () => {
-  const body = 'Intro 🧪\r\n```text\r\nCloses #12\r\n```\nCloses #12\r\nKeep me \t\nend';
-  const wanted = body.replace('```\nCloses #12\r\n','```\n') + '\r\nCloses #14\r\n';
+// S2 (D27): the body edit no longer interprets Markdown. A line the panel wrote
+// carries its marker, only a marked line is ever removed, and the fenced example
+// — which carries none — survives because it was never a candidate. The added
+// link is a marked line on a line of its own.
+test('S2: a linked edit removes only the marked line, never a fenced Markdown example', async () => {
+  const body = 'Intro 🧪\r\n```text\r\nCloses #12\r\n```\nCloses #12 <!-- odd-worktree:linked -->\r\nKeep me \t\nend';
+  const wanted = `${body.replace('```\nCloses #12 <!-- odd-worktree:linked -->\r\n','```\n')}\r\n\r\nCloses #14 <!-- odd-worktree:linked -->\r\n`;
   const {client, writes} = mockClient({viewerPermission:'WRITE'}, ok({body}));
   await client.editLinkedIssues(87, {add:[14], remove:[12]}, pin);
   assert.deepEqual(writes, [['pr','edit','87','--body', wanted]]);

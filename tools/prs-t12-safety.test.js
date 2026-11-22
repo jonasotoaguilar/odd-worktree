@@ -67,9 +67,11 @@ function clientMock({ permission = 'WRITE', state = 'OPEN', body = 'PR body', re
 }
 
 // ---------------------------------------------------------------------------
-// D16 (S2): the closing-line rewrite reads a fence that a list container
-// indented, and refuses to append into a fence that never closed.
+// D16 (S2), amended by D27: the body edit no longer reads Markdown. A line the
+// panel wrote carries its marker and is the only line a removal may delete, and
+// a body whose fence runs do not pair up is refused rather than appended to.
 // ---------------------------------------------------------------------------
+const MARK = '<!-- odd-worktree:linked -->';
 test('S2: a fence nested in a list item is code, so its example survives a removal', async () => {
   const body = [
     'Intro',
@@ -79,7 +81,7 @@ test('S2: a fence nested in a list item is code, so its example survives a remov
     '    Closes #915',
     '    ```',
     '',
-    'Closes #915',
+    `Closes #915 ${MARK}`,
   ].join('\n');
   const { client, writes } = clientMock({ body });
 
@@ -92,7 +94,7 @@ test('S2: a fence nested in a list item is code, so its example survives a remov
     '87',
     '--body',
     'Intro\n- item:\n\n    ```text\n    Closes #915\n    ```\n\n',
-  ]], 'only the real closing line outside the list container is removed');
+  ]], 'only the marked line outside the list container is removed');
 });
 
 test('S2: adding a closing line to a body that ends inside an unclosed fence is refused', async () => {
@@ -102,7 +104,7 @@ test('S2: adding a closing line to a body that ends inside an unclosed fence is 
   const res = await client.editLinkedIssues(87, { add: [14] }, pin);
 
   assert.equal(res.ok, false, 'a line appended inside the code block is never written');
-  assert.equal(res.error, 'the pull request body ends inside an unclosed code fence');
+  assert.equal(res.error, 'the pull request body ends inside an unclosed code fence or comment');
   assert.deepEqual(writes, [], 'nothing is written at all');
 });
 

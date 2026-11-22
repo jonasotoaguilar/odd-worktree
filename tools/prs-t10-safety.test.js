@@ -35,11 +35,13 @@ function mockClient(repository, bodyRead = ok({ body: 'PR body' }), children = [
 }
 
 // ---------------------------------------------------------------------------
-// D4 (S2): the closing-line rewrite tracks CommonMark fences. A closing fence
-// uses the SAME character as the opening one and at least as many of them, and
-// only a fence indented by up to three spaces opens a block — so a four-backtick
-// fence holding three backticks and `Closes #19` is CODE, not a declaration.
+// D4 (S2), amended by D27: the body edit no longer interprets Markdown. Every
+// line the panel writes carries a marker, only a marked line is ever removed,
+// and a body whose fence runs do not pair up is refused instead of guessed at.
+// These cases keep their original bodies: the panel's own line now carries the
+// marker, and the code examples are untouched because they are never candidates.
 // ---------------------------------------------------------------------------
+const MARK = '<!-- odd-worktree:linked -->';
 test('S2: a four-backtick fence holding three backticks and Closes #19 is code', async () => {
   const body = [
     'Intro',
@@ -48,7 +50,7 @@ test('S2: a four-backtick fence holding three backticks and Closes #19 is code',
     'Closes #19',
     '```',
     '````',
-    'Closes #19',
+    `Closes #19 ${MARK}`,
   ].join('\n');
   const { client, writes } = mockClient({ viewerPermission: 'WRITE' }, ok({ body }));
 
@@ -62,10 +64,13 @@ test('S2: a four-backtick fence holding three backticks and Closes #19 is code',
     'Closes #19',
     '```',
     '````',
-  ].join('\n')}\n`]], 'only the real closing line outside the fence is removed');
+  ].join('\n')}\n`]], 'only the marked line outside the fence is removed');
 });
 
-test('S2: a closing fence needs the opening character and at least its length', async () => {
+test('S2: a fence structure the reader cannot pair up refuses the edit outright', async () => {
+  // D27 replaced the Markdown reader with one conservative rule: the runs of
+  // three or more backticks and tildes must PAIR UP. This body has three of
+  // them, so nothing is interpreted and nothing is written.
   const body = [
     '~~~text',
     '```',
@@ -73,36 +78,30 @@ test('S2: a closing fence needs the opening character and at least its length', 
     '~~',
     'Closes #20',
     '~~~',
-    'Closes #20',
+    `Closes #20 ${MARK}`,
   ].join('\n');
   const { client, writes } = mockClient({ viewerPermission: 'WRITE' }, ok({ body }));
 
   const res = await client.editLinkedIssues(87, { remove: [20] }, pin);
 
-  assert.equal(res.ok, true, res.error);
-  assert.deepEqual(writes, [['pr', 'edit', '87', '--body', `${[
-    '~~~text',
-    '```',
-    'Closes #19',
-    '~~',
-    'Closes #20',
-    '~~~',
-  ].join('\n')}\n`]], 'a shorter fence and another character stay inside the code block');
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'the pull request body ends inside an unclosed code fence or comment');
+  assert.deepEqual(writes, [], 'a body this reader cannot pair up is never rewritten');
 });
 
-test('S2: a fence indented by three spaces opens a block, and its example is not a declaration', async () => {
+test('S2: an added link is a marked line on a line of its own', async () => {
   const body = ['   ```', '   Closes #19', '   ```', 'Closes #20'].join('\n');
   const { client, writes } = mockClient({ viewerPermission: 'WRITE' }, ok({ body }));
 
   const res = await client.editLinkedIssues(87, { add: [19] }, pin);
 
   assert.equal(res.ok, true, res.error);
-  assert.deepEqual(writes, [['pr', 'edit', '87', '--body', `${body}\nCloses #19\n`]],
-    'the fenced example never counts as a declaration, so the real line is appended');
+  assert.deepEqual(writes, [['pr', 'edit', '87', '--body', `${body}\n\nCloses #19 ${MARK}\n`]],
+    'the panel appends its own marked line, separated by a blank line');
 });
 
 test('S2: a closing fence may carry trailing spaces and be longer than the opening one', async () => {
-  const body = ['```', 'Closes #19', '`````  ', 'Closes #19'].join('\n');
+  const body = ['```', 'Closes #19', '`````  ', `Closes #19 ${MARK}`].join('\n');
   const { client, writes } = mockClient({ viewerPermission: 'WRITE' }, ok({ body }));
 
   const res = await client.editLinkedIssues(87, { remove: [19] }, pin);

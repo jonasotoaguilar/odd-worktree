@@ -43,6 +43,14 @@ The question this page answers: which rules must every change preserve, and what
    what an agent may run itself — invariant 5 says how a merged checkout is
    removed. Each command and tool keeps its declared name and label.
 
+   **Two halves are optional, and nothing else is.** The `Tools` page of
+   `/gentle:customize` (`lib/modules.js`, a plain `registerRows` provider) holds the
+   `Codegraph+` and `Worktrees+` Off/On lines. They are read once, when the surface
+   registers, from the package's own store; `Worktrees+` Off leaves out `/warp`, its
+   card, the two tools, the worktree guards and prompt text, and `Codegraph+` Off leaves
+   out the CodeGraph wiring and prompt text. A change lands on the next load, so each
+   one says so. Neither adds a command or a tool name.
+
    **The section reaches the host only through gentle-shell-bridge.** It is
    published through that package's sidebar-section API alone: the object read from
    its `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
@@ -537,8 +545,9 @@ The question this page answers: which rules must every change preserve, and what
     unreadable repository leaves only the `bash` worktree refusal active, and the
     default branch is resolved lazily and memoized per checkout.
     `ODD_WORKTREE_GUARD=0` is the one way to turn all of them off, like
-    `ODD_WORKTREE_PROMPT=0` for the prompt blocks; no other value, option or config
-    file does, and they register no command or tool name (invariant 3). Each refusal
+    `ODD_WORKTREE_PROMPT=0` for the prompt blocks, and the `Worktrees+` switch
+    leaves the worktree guards out at registration (the skill-read guard stays); no
+    other value, option or config file does, and they register no command or tool name (invariant 3). Each refusal
     names the tool that replaces the blocked action, and the prompt block (invariant
     14) is what keeps the agent from reaching them, so a change to one is read
     against the other.

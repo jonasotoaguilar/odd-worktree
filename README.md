@@ -64,6 +64,7 @@ The full rules of each step, including every refusal, are in [Create, list, move
 
 ## Key Features You Should Know About
 
+- **Two halves are optional.** With `gentle-shell-bridge`, `/gentle:customize` has a `Tools` page with an Off/On line for `Codegraph+` (the CodeGraph prompt text, reminders and wiring) and one for `Worktrees+` (the worktree tools, `/warp`, the worktree guards and prompt text). Both are On by default; a change needs `/reload` and a new session. See [the module switches](docs/reference.md#the-module-switches).
 - **A create is instant and writes no state.** The directory is the whole record; there is no list file and no lock file.
 - **Deleting refuses on a live session.** The guard reads Gentle Shell's presence records, discloses what it could not resolve, and never auto-warps. Removal is `git worktree remove` and the branch is kept. See [the deletion guard](docs/reference.md#the-deletion-guard-and-its-honest-limit).
 - **A warp is queued, never dropped.** While this session's tools, agent tasks or background jobs are still running, `/warp` keeps the request pending and moves when they finish. See [the queued warp](docs/reference.md#a-warp-waits-for-this-sessions-own-tools-agent-tasks-and-background-jobs).

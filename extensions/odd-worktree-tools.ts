@@ -9308,6 +9308,27 @@ function registerDiffDesignRows(api) {
   }
 }
 
+// modular-tools: the two module switches. `Codegraph+` and `Worktrees+` live on the
+// bridge's own `Tools` page as plain Off/On rows (`lib/modules.js`), persisted in this
+// package's store. They are read ONCE per registration episode, below: a change lands on
+// the next load, and the row says so through the session's own notifier.
+let oddModules = { codegraph: true, worktrees: true };
+
+function notifyModulesChange(text) {
+  const ui = issuesSidebarCtx && issuesSidebarCtx.ui;
+  if (ui && typeof ui.notify === "function") ui.notify(text, "info");
+}
+
+function registerModuleRows(api) {
+  try {
+    if (!api || typeof api.registerRows !== "function") return;
+    const modules = libRequire("modules.js");
+    api.registerRows(modules.moduleRowsProvider({ api, notify: notifyModulesChange }));
+  } catch {
+    // The page is optional: a bridge that refuses it keeps both modules on.
+  }
+}
+
 // S2 (issues-sidebar): the section reaches the rail ONLY through the bridge's
 // published object. A host without it is subscribed to the ready announcement
 // ONCE and nothing else happens: no notify, no throw, no other surface touched.
@@ -9324,6 +9345,7 @@ function registerIssuesSidebar(pi) {
       // its surfaces are registered on it and the previous binding is replaced,
       // with `mountIssuesSidebar` tearing the old section down first.
       if (api !== issuesSidebarApi) {
+        registerModuleRows(api);
         registerBashDesignRows(api);
         registerDiffDesignRows(api);
         issuesSidebarApi = api;
@@ -9756,18 +9778,26 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
   // moves the session, so the command is where a handoff waits and lands.
   warpHandoffPi = pi;
-  registerWarpMessageRenderer(pi);
+  // modular-tools: the two module switches are read ONCE, here. `Worktrees+` off leaves
+  // out everything worktree below — the tools, `/warp` with its card and bookkeeping, the
+  // guards and the prompt text; `Codegraph+` off leaves out the CodeGraph wiring and text.
+  try {
+    oddModules = libRequire("modules.js").readModules(issuesSidebarBridge());
+  } catch {
+    oddModules = { codegraph: true, worktrees: true };
+  }
+  if (oddModules.worktrees) registerWarpMessageRenderer(pi);
   // S5 (warp-queue-boundary): the durable fallback of the queued line needs a
   // renderer for its own entry type, exactly like Pi's `restored N messages`
   // line. A host without the seam simply never shows the fallback.
-  registerWarpQueueEntryRenderer(pi);
+  if (oddModules.worktrees) registerWarpQueueEntryRenderer(pi);
   // S9 (T10): the issues-panel refusal's one visible fallback line.
   registerIssuesRefusalEntryRenderer(pi);
   // S2 (issues-sidebar): the rail section, only when gentle-shell-bridge
   // published its API; otherwise one ready-announcement subscription. The same
   // path contributes the bash activity design.
   registerIssuesSidebar(pi);
-  registerWarpCommand(pi);
+  if (oddModules.worktrees) registerWarpCommand(pi);
   registerOddCommand(pi);
   // T7 (files-picker): the file picker is the fourth command. It mounts its own
   // overlays, reads Git through the package's async runner and adds no tool.
@@ -9780,8 +9810,10 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // picker's — bound after its command exists, and therefore never when the
   // `gh`-absent gate left that command unregistered.
   bindIssuesShortcut(pi);
-  pi.registerTool(worktreeCreateTool);
-  pi.registerTool(worktreeListTool);
+  if (oddModules.worktrees) {
+    pi.registerTool(worktreeCreateTool);
+    pi.registerTool(worktreeListTool);
+  }
   if (typeof pi?.on !== "function") return;
   // S5: the cards follow the style chosen in Gentle Shell with no hook of their
   // own. The shell publishes the live value on a process-wide slot and the card
@@ -9886,24 +9918,24 @@ function registerOddWorktreeSurfaceEntries(pi) {
   pi.on("session_shutdown", () => {
     startupEpoch += 1;
   });
-  pi.on("tool_call", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi));
+  if (oddModules.worktrees) pi.on("tool_call", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi));
   // S1/S3/S4/S9: the worktree guard, the first `tool_call` observation that refuses a
   // `bash` command instead of observing it. It sits beside the naming handler and is
   // one of the two handlers that return a `block` answer — the skill-read guard, below,
   // is the other; every other tool call is left exactly as the host proposed it. Nothing
   // about it is callable by the agent (S7).
-  pi.on("tool_call", (event, ctx) => guardWorktreeBashCall(event, ctx));
+  if (oddModules.worktrees) pi.on("tool_call", (event, ctx) => guardWorktreeBashCall(event, ctx));
   // S4 (T3): the write guard, a second `tool_call` observation that refuses an `edit`
   // or `write` into the primary checkout while it sits on the default branch. It is a
   // sibling of the bash guard, not a part of it: the two read different inputs, and a
   // `bash` call and a file write are refused for different reasons.
-  pi.on("tool_call", (event, ctx) => guardWorktreeWriteCall(event, ctx));
+  if (oddModules.worktrees) pi.on("tool_call", (event, ctx) => guardWorktreeWriteCall(event, ctx));
   // invariant 22: the skill-read guard, the second refusal and the guard registered LAST
   // of the two, so a call that would break both shows the worktree refusal. It reads the
   // command text only, shares the same `ODD_WORKTREE_GUARD=0` switch, and adds no
   // command, tool, option or setting of its own.
   pi.on("tool_call", (event) => guardSkillReadBashCall(event));
-  pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
+  if (oddModules.worktrees) pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
   // S10 (T9): ONE `tool_result` observation for the rail's forced refresh. It
   // answers the `bash` tool only — every other tool returns before the classifier
   // is even loaded — and it is separate from the naming handler because the two
@@ -9911,8 +9943,10 @@ function registerOddWorktreeSurfaceEntries(pi) {
   pi.on("tool_result", (event, ctx) => forceIssuesSidebarRefreshForBash(event, ctx));
   // S10: the host's execution pair feeds the queue's in-flight tool counter for
   // EVERY tool of the session, not only this package's.
-  pi.on("tool_execution_start", (event) => warpNoteToolExecution(event, false));
-  pi.on("tool_execution_end", (event) => warpNoteToolExecution(event, true));
+  if (oddModules.worktrees) {
+    pi.on("tool_execution_start", (event) => warpNoteToolExecution(event, false));
+    pi.on("tool_execution_end", (event) => warpNoteToolExecution(event, true));
+  }
   // S1/S13/S17 (warp-queue-boundary): the turn boundary. Pi delivers a queued
   // input at the end of the current assistant turn, after its tool calls and
   // before the next model call; a pending warp takes effect at that SAME
@@ -9944,6 +9978,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // T13: the read itself happens only while the section is drawn.
     rememberIssuesSidebarSession(ctx);
     refreshIssuesSidebarIfDrawn();
+    if (!oddModules.worktrees) return;
     try {
       const lib = libRequire("worktree-warp-busy.js");
       if (!lib || typeof lib.pendingWarpTurnBoundary !== "function") return;
@@ -9963,7 +9998,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // rejects. One tick per record: the record's own `dispatching` guard makes the
   // boundary and a concurrent poll dispatch it at most once, and a throwing
   // tick must never break the host.
-  pi.on("agent_settled", async () => {
+  if (oddModules.worktrees) pi.on("agent_settled", async () => {
     try {
       const lib = libRequire("worktree-warp-busy.js");
       if (!lib || typeof lib.pendingWarpKeys !== "function" || typeof lib.pendingWarpTick !== "function") return;
@@ -9988,26 +10023,32 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // T13: and like the turn boundary, it reads only while the section is drawn.
     rememberIssuesSidebarSession(ctx);
     refreshIssuesSidebarIfDrawn();
-    try {
-      libRequire("odd-worktrees-prompt.js").appendOddWorktreesSection(event);
-    } catch {
-      // The prompt block is best effort.
+    if (oddModules.worktrees) {
+      try {
+        libRequire("odd-worktrees-prompt.js").appendOddWorktreesSection(event);
+      } catch {
+        // The prompt block is best effort.
+      }
     }
     // The role's CodeGraph text rides the same append-only channel. It only
     // advises a session that already holds a CodeGraph tool.
-    try {
-      libRequire("codegraph-rules.js").appendCodegraphSection(event);
-    } catch {
-      // The prompt block is best effort.
+    if (oddModules.codegraph) {
+      try {
+        libRequire("codegraph-rules.js").appendCodegraphSection(event);
+      } catch {
+        // The prompt block is best effort.
+      }
     }
   });
   // CodeGraph, only with its CLI installed: the global MCP entry, create-or-sync at session
   // start, the compaction sync, the observed native init and the edit/write sync. Every
   // piece runs in the background and none can fail the host.
-  try {
-    libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
-  } catch {
-    // CodeGraph is best effort.
+  if (oddModules.codegraph) {
+    try {
+      libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
+    } catch {
+      // CodeGraph is best effort.
+    }
   }
   // S1 (T2): the file cards, through the same host hook. A `read`/`edit`/`write` call whose
   // path names a skill or an ODD artifact heads as that file while the bridge's `Card tags`
@@ -10050,7 +10091,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // 483 ms → 72 ms of awaited `session_start`, and the rest of that 72 ms went with
   // the barrier. The task is still TRACKED, so `awaitPendingStartupTasks` and a
   // shutdown barrier can wait for it, and a failure still cannot break a session.
-  pi.on("session_start", (event, ctx) => {
+  if (oddModules.worktrees) pi.on("session_start", (event, ctx) => {
     try {
       const cwd = ctx && typeof ctx.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd
         : event && typeof event.cwd === "string" && event.cwd.length > 0 ? event.cwd

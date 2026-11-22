@@ -1296,6 +1296,23 @@ registration is no design and never a throw; a bridge that cannot store the choi
 the row — `Card diff` IS registered and only the first-run seed writes nothing, so the line
 opens on the host's own card (`default`) until a choice is made.
 
+## The module switches
+
+`/gentle:customize` gains a `Tools` page when `gentle-shell-bridge` is installed, with two Off/On lines.
+Both are On by default, and everything not named here (the issues surfaces, `/odd`, `/files`, every
+card, the skill-read guard) is transversal and has no switch.
+
+| Switch | Off leaves out |
+| --- | --- |
+| `Codegraph+` | the `## CodeGraph` prompt text for every role, the two CodeGraph reminders and the whole CodeGraph session wiring (index, daemon, MCP entry, edit sync, card) |
+| `Worktrees+` | the `## ODD worktrees` prompt text, the tools `worktree_create` and `worktree_list`, `/warp` with its card, queue and bookkeeping, the bash and write guards and the ODD session naming |
+
+The choice is one document in the bridge's own store (`odd-worktree` → `modules`), read once when the
+extension registers. A change is saved at once and says so in one line — `Codegraph+ Off · run /reload
+and start a new session to apply` — because a reload alone is not enough: the session in progress already
+carries the prompt text and the registered guards. Choosing the value a line already has changes nothing
+and says nothing. A missing, malformed or unreadable document keeps both On.
+
 ## The list
 
 `worktree_list` prints the main checkout first and unnumbered, as the `base: <branch>@<sha>`

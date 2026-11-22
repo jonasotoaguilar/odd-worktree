@@ -32,7 +32,7 @@ ver el path diria."
 ## Tasks
 
 - [x] T1 (S4, S5, S6, S7) cleanups: child prompt deleted, explore.md reworded, the list guard removed, `worktree_list` rows as `path · branch`; tests and docs alongside. inline.
-- [ ] T2 (S1, S2, S3) `lib/modules.js` + the `Tools` page rows + the notice; gate the Codegraph and Worktree surfaces in the extension; tests and docs. inline.
+- [x] T2 (S1, S2, S3) `lib/modules.js` + the `Tools` page rows + the notice; gate the Codegraph and Worktree surfaces in the extension; tests and docs. inline.
 
 ## Log
 

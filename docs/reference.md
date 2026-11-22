@@ -1324,6 +1324,11 @@ opens on the host's own card (`default`) until a choice is made.
 Both are On by default, and everything not named here (the issues surfaces, `/odd`, `/files`, every
 card, the skill-read guard) is transversal and has no switch.
 
+The page sits right after the host's `Sections` page and before `Keymaps`: the provider asks for that
+position with `categoryPlacement: { after: "Sections" }`, because the bridge derives its page list from
+the order of the rows while it builds the menu. A bridge older than `0.16.1` ignores the field, and the
+page opens at the end instead — everything else works the same.
+
 | Switch | Off leaves out |
 | --- | --- |
 | `Codegraph+` | the `## CodeGraph` prompt text for every role, the two CodeGraph reminders and the whole CodeGraph session wiring (index, daemon, MCP entry, edit sync). The CodeGraph CARD is not here: it is a design, so it follows `Card activity` → `activity` |

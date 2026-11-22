@@ -29,7 +29,9 @@ Feature: a `/prs` panel cloned from `/issues` for pull requests, joined to the G
 | T9 | all | second independent verification of the final state | FAIL on S2, S4 (new D11-D17); D4, D7, D9 partly open |
 | T10a | S2 | writer, view + client D4, D11-D14 | done, `0d8fc22` |
 | T10b | S4 | writer, rail D9 repaint, D15 totals | done, `d78633c` |
-| T11 | all | third verification, scoped to D4, D9, D11-D17 and a regression sweep | pending |
+| T11 | all | third verification | FAIL on S2: D4, D11 (display), D12, D13 (host), D3 (reorder/removal) still open; D9, D14, D15 fixed |
+| T12 | S2 | writer, view + client D16-D20 | pending |
+| T13 | all | final scoped verification (D16-D20 only plus the suite) | pending |
 
 ## Contract (fixed before T1-T4 start; the four units are parallel and share no file)
 
@@ -89,6 +91,14 @@ Decision recorded first (parent): **comments stay available in every PR state**,
 - **D14 (label creation)** `lib/gh-prs.js:691-702,870-875`, `lib/prs-view.js:1303,1737-1750`: real PR metadata never carries `canCreateLabels`, so the picker never offers creation; add it to `pullRequestPermissions` (WRITE and up, literal true) and have the save re-check it at write time like the other editors.
 - **D9 repaint** `lib/issues-section.js:581-599,665-694`: neither the hydration nor the live settlement of the PR read asks for a repaint, so the header keeps the old count until some other event; both must call the section's refresh notifier (`onRefreshed`) like the issues read does.
 - **D15 (restart shrinks the count)** `extensions/odd-worktree-tools.ts:8593-8608`, `lib/prs-rail-store.js`: 50 returned rows with a total of 52 paints `2 issues · 52 pr` live but `· 50 pr` from the store. The store keeps the per-bucket TOTAL beside the rows (still no stored header count: the number is derived from rows plus totals on load, and a total below its rows is ignored), so a cold start paints the same number the live read did.
+
+### T11 verdict: defects to fix (T12, the last fix round)
+
+- **D16 (D4, nested and unclosed fences)** `lib/gh-prs.js:925-952,979-985`: (a) a fence nested in a list item (indented by the list container, e.g. `- item` then an indented fenced block) is code: removing `#915` must not delete the example inside it; treat a fence marker indented by any amount of spaces as a fence delimiter when it follows list-item or other container context, and when the structure is ambiguous leave the line alone; (b) adding `Closes #N` to a body that ENDS inside an unclosed fence reports success while appending the line inside the code block: refuse that edit with a sentence (`the pull request body ends inside an unclosed code fence`) and write nothing.
+- **D17 (D12, target highlight)** `lib/prs-view.js:1198-1215`: the merge form / close confirm highlight is lost when a reload moves the captured row beyond the visible window: the list window must follow the captured number (scroll to it), and when the row is gone from the list the confirmation still names `#N` in its own line.
+- **D18 (D11, composer title)** `lib/prs-view.js:1210-1215,1465-1466`: the composer shows `Comment on #N` for its captured number and highlights that row (same window rule as D17), so what the user sees is where the comment goes.
+- **D19 (D13, host dropped)** `lib/gh-prs.js:1307-1322`: `closePullRequest(64, {env:{GH_REPO:'github.company.example/amber/widget'}})` with no scope and no cwd: the repository lookup uses the enterprise host but the role read and the write receive `github.com/amber/widget`. The fallback scope must keep the host exactly as T9 did (all five writes).
+- **D20 (D3, stale permission and non-open target)** `lib/prs-view.js:825,1016-1025,1924,1968,2012`: when a reload reorders or removes the captured row, only the new index's metadata is refreshed, so close/merge/linked-issue confirms reach their write seam with the cached permission of the captured PR. The captured number's own detail is re-read (capabilities AND state) before its confirm or save can proceed, and a PR that is no longer `open` (merged, closed, gone) refuses close, merge and linked-issue edits with a sentence and writes nothing. The client enforces the same: `closePullRequest`, `mergePullRequest` and `editLinkedIssues` refuse a PR whose fresh state is not OPEN (the role read already round-trips: fetch the state in the same query).
 
 ## Log
 

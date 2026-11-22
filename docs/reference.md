@@ -1154,9 +1154,20 @@ substrate (`lib/shell-card.js`) through the host's `registerToolRenderer` hook, 
   declares these four tools (`lib/bash-design.js`), and only the answer `design` carrying `odd-worktree.bash-activity`
   paints. `native`, `not-covered`, `missing`, another plugin's design, no bridge, a bridge older than the reader, a reader
   that throws and an answer nothing can read all leave Pi's own box exactly as it was.
-- **When it is read.** The file cards forward to the host's renderers while their switch is off, so they decide on every
-  paint. These four tools have no renderer to forward to, so the answer is read when the card is built: a switch made
-  mid-session reaches the next job card, not the one already on screen.
+- **When it is read.** On every paint, inside the component the host already mounted. Pi resolves a tool's renderers once
+  (`interactive-mode.js` hands the resolved definition to `ToolExecutionComponent` at construction) and never asks again, so a
+  gate read at resolver time could only reach the next card: the line is asked in the card's own `render(width)`, which is what
+  makes flipping `Card activity` repaint the job cards already on screen, exactly as it does for `bash`.
+- **Off, it draws exactly the host's own row.** These four tools have no renderer of their own, so `lib/file-card.js` reproduces
+  what Pi draws for one: the host's box — `Box(outputPad, 1, bgFn)` in `toolPendingBg` while the call streams, `toolErrorBg`
+  once it failed, `toolSuccessBg` otherwise — around the host's own fallback, `formatToolCallWithArgs` for the call and the
+  result's text in `toolOutput` (ten rows collapsed, with the host's expand hint) for the result. Nothing of this card's is
+  drawn: no mark, no frame, no tone. The box closes ONCE: the call carries its closing blank only while no result follows it,
+  and the result half carries it afterwards — a result the host builds marks the frame before the pass that paints it, so a
+  result still streaming is not boxed twice. The result's text is read with the host's own reader,
+  `sanitizeBinaryOutput(stripAnsi(text))` with carriage returns removed, so U+FFF9–U+FFFB and the binary controls go and DEL
+  stays, exactly as Pi reads it. The host still adds its one separator blank row above a self-framed tool, as it does for the
+  file card's forwarded rows.
 - **Content level.** Under `minimal` a collapsed card is the call alone; a failed result still says why.
 - **One family, two voices.** `bash_background` and `monitor` wear the same mark and the same role
   (`⧗`, `bashMode`), because they are the same tool with two timeouts; their words say which TOOL ran —
@@ -1645,7 +1656,20 @@ package never stops a daemon it did not start.
 **Its switch is the `Card activity` line, not `Codegraph+`.** The card paints a call; it never runs
 CodeGraph, so it belongs with the other cards of the `activity` design: with `activity` selected it
 paints, and with `native` (or a line that no longer covers these tools) every row is handed back to
-the chain exactly as it resolved. `Codegraph+` off removes the CodeGraph wiring and its prompt text
+the chain exactly as it resolved — asked on every paint, inside the component the host already
+mounted, so flipping the line repaints the cards already on screen. The host resolves a tool's
+renderers once and never asks again, so the card claims the native tool and both MCP spellings on
+every answer and the chain's own renderers, captured when it was built, draw the row while the line
+says anything else — including a renderer that throws, which falls back to the host's own fallback
+row exactly as the host catches it. When the chain resolved none (Pi's own `codegraph` ships a
+definition with no renderer) the host's own fallback is reproduced instead — `formatToolCallWithArgs`
+for the call and the result's text in `toolOutput` for the result, inside the host's box for a
+default-shell tool and bare for one that declares `renderShell: "self"`, which is what the host draws
+for a tool with no renderer at all. One surface is the exception: `bash` is decided per CALL, which a
+resolver never sees, so a bash row is only wrapped while the line already claims it (a bash row's own
+repaint is the bridge's design pass, not this card's) and a bash call that runs no CodeGraph keeps the
+host's component itself — its rows, its mouse handling and every other behaviour untouched, on
+every answer. `Codegraph+` off removes the CodeGraph wiring and its prompt text
 and leaves this card alone, and a bridge with no such reader at all paints nothing of it.
 
 With the CLI installed the package also draws CodeGraph's tool rows as a card on the same card

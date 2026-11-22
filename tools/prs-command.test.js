@@ -262,9 +262,11 @@ function connectionPage(argv, rows) {
   });
 }
 
-function railBucket(rows) {
+// `total` is the bucket's EXACT `issueCount`, which the window of `rows` may
+// under-represent (D8): the header must count the difference too.
+function railBucket(rows, total = rows.length) {
   return {
-    issueCount: rows.length,
+    issueCount: total,
     nodes: rows.map((row) => ({
       number: row.number,
       closingIssuesReferences: {
@@ -322,11 +324,14 @@ function makeGithub(options = {}) {
     railFail: options.railFail === true,
     railReads: 0,
     railGate: null,
+    railTotals: { mine: null, review: null },
   };
   const prRows = options.prRows || [{ number: 69 }, { number: 70 }];
   const issueRows = options.issueRows || [{ number: 1, title: 'One' }, { number: 2, title: 'Two' }];
   const railMine = options.railMine || [{ number: 69, linkedIssues: [1] }];
   const railReview = options.railReview || [{ number: 70, linkedIssues: [2] }, { number: 69, linkedIssues: [1] }];
+  state.railTotals.mine = Number.isInteger(options.railMineTotal) ? options.railMineTotal : railMine.length;
+  state.railTotals.review = Number.isInteger(options.railReviewTotal) ? options.railReviewTotal : railReview.length;
   const runner = async (bin, argv, runOpts = {}) => {
     const env = runOpts.env || {};
     calls.push({
@@ -372,8 +377,8 @@ function makeGithub(options = {}) {
         if (state.railGate !== null) await state.railGate;
         if (state.railFail) return failed('rate limited');
         return ok(JSON.stringify({ data: {
-          mine: railBucket(railMine),
-          review: railBucket(railReview),
+          mine: railBucket(railMine, state.railTotals.mine),
+          review: railBucket(railReview, state.railTotals.review),
         } }));
       }
       if (query.includes('is:issue') && query.includes('mine: search')) {
@@ -1003,5 +1008,147 @@ describe('S5: the session-start preload is dispatched, never awaited', () => {
     await new Promise((resolve) => realSetTimeout(resolve, 20));
     await b.loaded.mod.awaitPendingStartupTasks();
     assert.equal(spy.calls, 0, 'a section nobody drew costs no read');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T8b (S4, S2): the defects T7 found in the rail and in `/prs`'s own refusals.
+//
+// D8 — the rail's read carries an EXACT `issueCount` per bucket and at most a
+// window of rows, so the header counts the unfetched remainder of each total as
+// well as the distinct numbers it fetched: `issueCount=51` with 50 nodes and an
+// empty review is `2 issues · 51 pr`, never `50 pr`.
+//
+// D9 — the persisted `prs-rail.json` count is painted at a COLD START, from the
+// async loader, while the live read is still in flight; the live answer then
+// replaces it. The stored entry never settles the read (the live one is asked
+// anyway) and a mutation that invalidated the identity is never painted back.
+//
+// D10 — the remote-moved refusal of a `/prs` action names `/prs`.
+// ---------------------------------------------------------------------------
+
+describe('T8b: the exact count, the cold-start paint and the /prs refusal', () => {
+  test('S4 (D8): the header counts each bucket\'s total, not only the rows it carried', async () => {
+    installBridge();
+    const first = Array.from({ length: 50 }, (_, index) => ({ number: index + 1, linkedIssues: [] }));
+    const b = await boot({ railMine: first, railMineTotal: 51, railReview: [] });
+    const { registered } = installBridge();
+    const root = makeCheckout();
+    await warmGate(b.loaded);
+    const ctx = sessionCtx(root);
+    await fireSessionStart(b.loaded.hooks, ctx);
+    const section = registered[0];
+    await drawSection(section, ctx);
+    await waitFor(() => String(section.meta(ctx)).includes(' pr'));
+    assert.equal(section.meta(ctx), '2 issues · 51 pr',
+      'the one node the window cut is counted, not dropped');
+  });
+
+  test('S4/S5 (D9): a cold start paints the stored count at once, and the live read still replaces it', async () => {
+    installBridge();
+    // The entry a previous process left behind: ONE pull request, stored under the
+    // identity this checkout proves.
+    const docPath = path.join(process.env.XDG_CACHE_HOME, 'odd-worktree', 'prs-rail.json');
+    fs.mkdirSync(path.dirname(docPath), { recursive: true });
+    fs.writeFileSync(docPath, JSON.stringify({
+      version: 1,
+      identities: [{
+        identity: 'github.com/myfork/project',
+        mine: [{ number: 69, linkedIssues: [1] }],
+        review: [],
+        syncedAt: Date.now(),
+      }],
+    }));
+    const b = await boot({ railMine: [{ number: 71 }], railReview: [{ number: 72 }] });
+    const { registered } = installBridge();
+    const root = makeCheckout();
+    await warmGate(b.loaded);
+    const ctx = sessionCtx(root);
+    // The live read is HELD, so anything on the header before it is released was
+    // painted by the stored entry alone.
+    let release = null;
+    b.gh.state.railGate = new Promise((resolve) => { release = resolve; });
+    await fireSessionStart(b.loaded.hooks, ctx);
+    const section = registered[0];
+    await drawSection(section, ctx);
+
+    await waitFor(() => String(section.meta(ctx)).includes(' pr'));
+    assert.equal(section.meta(ctx), '2 issues · 1 pr', 'the stored count is painted while the live read is held');
+    // The live read was asked anyway: the stored entry is a paint, never the read's
+    // own answer (invariant 25 keeps the TTL the live read's).
+    await waitFor(() => b.gh.state.railReads >= 1);
+    assert.equal(section.meta(ctx), '2 issues · 1 pr', 'and the live read is in flight, not skipped');
+
+    b.gh.state.railGate = null;
+    release();
+    await waitFor(() => section.meta(ctx) === '2 issues · 2 pr');
+    assert.equal(section.meta(ctx), '2 issues · 2 pr', 'the live answer replaces the stored one');  });
+
+  test('S4/S5 (D9): a mutation\'s invalidation is never painted back from the store', async () => {
+    installBridge();
+    const docPath = path.join(process.env.XDG_CACHE_HOME, 'odd-worktree', 'prs-rail.json');
+    fs.mkdirSync(path.dirname(docPath), { recursive: true });
+    fs.writeFileSync(docPath, JSON.stringify({
+      version: 1,
+      identities: [{
+        identity: 'github.com/myfork/project',
+        mine: [{ number: 69, linkedIssues: [1] }],
+        review: [],
+        syncedAt: Date.now(),
+      }],
+    }));
+    const b = await boot({ railMine: [{ number: 71 }], railReview: [{ number: 72 }] });
+    const { registered } = installBridge();
+    const root = makeCheckout();
+    await warmGate(b.loaded);
+    const ctx = sessionCtx(root);
+    await fireSessionStart(b.loaded.hooks, ctx);
+    const section = registered[0];
+    await drawSection(section, ctx);
+    await waitFor(() => section.meta(ctx) === '2 issues · 2 pr');
+
+    // A write made in the panel drops the identity, so nothing may hydrate it back.
+    const capture = captureView(b.loaded.mod, 'prs-view.js', 'createPrsView');
+    await mountCommand(b.loaded, 'prs', '', ctx, { capture });
+    const merged = await capture.options.actions.mergePullRequest(69, { method: 'merge', subject: 's', body: 'b' });
+    assert.equal(merged.ok, true);
+    const held = new Promise(() => {});
+    b.gh.state.railGate = held;
+    await fireHook(b.loaded.hooks, 'tool_result', {
+      tool: 'bash',
+      args: { command: 'gh pr merge 69 --merge' },
+      toolResults: [],
+    }, ctx);
+    await new Promise((resolve) => realSetTimeout(resolve, 50));
+    section.lines(ctx);
+    assert.notEqual(section.meta(ctx), '2 issues · 1 pr',
+      'the invalidated entry is never painted back while the live read is held');
+  });
+
+  test('S2 (D10): the remote-moved refusal of a /prs action names /prs', async () => {
+    installBridge();
+    const b = await boot();
+    installBridge();
+    const root = makeCheckout();
+    await warmGate(b.loaded);
+    const ctx = sessionCtx(root);
+    await fireSessionStart(b.loaded.hooks, ctx);
+    const capture = captureView(b.loaded.mod, 'prs-view.js', 'createPrsView');
+    await mountCommand(b.loaded, 'prs', '', ctx, { capture });
+    assert.ok(capture.options, 'the panel opened');
+
+    // The checkout moves to another repository under the open panel: every write
+    // must refuse and say which panel to reopen.
+    git(root, ['remote', 'set-url', 'origin', 'git@github.com:otherfork/project.git']);
+    const before = b.gh.calls.length;
+    const refused = await capture.options.actions.closePullRequest(69);
+    assert.equal(refused.ok, false, 'the close is refused on the drift');
+    assert.match(refused.error, /changed since this pull request list loaded/,
+      'the refusal names the list that loaded');
+    assert.match(refused.error, /reopen \/prs$/,
+      'and the panel to reopen is /prs, never /issues');
+    const mutations = b.gh.calls.slice(before)
+      .filter((call) => call.argv[0] === 'pr' && ['close', 'merge', 'edit', 'comment'].includes(call.argv[1]));
+    assert.deepEqual(mutations, [], 'no mutating gh command ran after the drift');
   });
 });

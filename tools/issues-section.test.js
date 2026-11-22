@@ -1590,8 +1590,13 @@ function sectionGithub({ issues = [], mine = [], involved = [], counts = {}, rep
   return { runner, calls };
 }
 
+// D9 (S4): the rail's pull-request read is a GraphQL request of its own and is
+// now issued as early as a cold start allows, so it is not one of the ISSUES
+// reads these assertions order and count. It is told apart by the qualifier only
+// it carries.
 function graphqlCalls(calls) {
-  return calls.filter((call) => call.argv[0] === 'api' && call.argv[1] === 'graphql');
+  return calls.filter((call) => call.argv[0] === 'api' && call.argv[1] === 'graphql'
+    && !call.argv.join(' ').includes('is:pr'));
 }
 
 function sessionStartHandlers(hooks) {
@@ -1649,6 +1654,15 @@ async function waitForRows(section, ctx) {
   throw new Error('the section never left loading');
 }
 
+// D9 (S4): the rail's `· M pr` segment is a SECOND read, and it now lands as
+// early as a cold start allows (a stored entry paints at once, the live answer
+// follows). A test about the ISSUES count therefore asserts the part it is
+// about: the issues number and the `· stale` mark stay exact, and whichever
+// pull-request count the same header already carries is not what the test reads.
+function issuesCount(text) {
+  return String(text).replace(/ · \d+ pr/, '');
+}
+
 // S1/S2 (issues-startup-performance T1): the `gh` gate is DISPATCHED startup work
 // now, not an awaited step of `session_start`, so it settles a moment after the
 // host's handlers return. A test that counts `gh` children waits for that work to
@@ -1699,6 +1713,9 @@ test('S2: a published bridge receives exactly one section with the decided ident
   // for `github`, because the section now carries pull requests beside them.
   assert.equal(section.rowLabel, 'github');
   assert.equal(section.defaultVisible, true);
+  // gentle-shell-bridge 0.13.0: the card is placed at the end of the rail, stated
+  // rather than left to the bridge's default.
+  assert.equal(section.placement, 'end');
   assert.equal(typeof section.lines, 'function');
   assert.equal(typeof section.meta, 'function');
   assert.equal(loaded.commands.has('issues'), true, 'every other surface still registers');
@@ -2168,7 +2185,7 @@ test('S8 (T9): the ONE combined read supplies both the rows and the pull-request
   assert.equal(rows[2].meta, '\ue726 #69');
   assert.deepEqual(rows.map((row) => row.tone), ['text', 'text', 'text'],
     'only the meta column is gray: the row keeps the plain text tone');
-  assert.equal(section.meta(ctx), '3 issues', 'the marker never changes the count');
+  assert.equal(issuesCount(section.meta(ctx)), '3 issues', 'the marker never changes the count');
 
   // T14: the marker read T9 introduced is gone — the same read that returns the
   // rows returns their cross-reference facts, so there is no second call.
@@ -2220,7 +2237,7 @@ test('S4 (T9): a row without a cross-referenced pull request carries no marker a
   assert.equal('meta' in rows[0], false, 'the decoration is simply absent');
   assert.equal(rows[1].meta, '\ue726 #69', 'the row with a pull request carries its number');
   const meta = section.meta(ctx);
-  assert.equal(meta, '2 issues', 'the section stays ready, never stale');
+  assert.equal(issuesCount(meta), '2 issues', 'the section stays ready, never stale');
   assert.ok(!String(meta).includes('stale'), 'a decoration never reports a stall');
 });
 
@@ -3874,7 +3891,7 @@ test('S9 (T14): an issue that left the assigned set makes the next refresh a ful
       () => section.lines(ctx).map((row) => row.label).join('|') === '#12 Twelve',
       'the full read never replaced the bucket',
     );
-    assert.equal(section.meta(ctx), '1 issues');
+    assert.equal(issuesCount(section.meta(ctx)), '1 issues');
   } finally {
     Date.now = realNow;
   }
@@ -3924,7 +3941,7 @@ test('S9 (T14): a failed read keeps the cache and the section stale, so the next
     await fireSessionStart(loaded.hooks, ctx);
     const section = registered[0];
     await waitForRows(section, ctx);
-    assert.equal(section.meta(ctx), '2 issues');
+    assert.equal(issuesCount(section.meta(ctx)), '2 issues');
 
     offset = 61000;
     section.lines(ctx);
@@ -4293,7 +4310,7 @@ test('S6/S9 (T16): a checkout switch cuts the previous read out of the cache', a
   );
   assert.ok(!section.lines(ctxB).some((row) => row.label === '#11 Left behind'),
     "the previous checkout's rows never survive the move");
-  assert.match(section.meta(ctxB), /^1 issues$/, 'the header counts only the moved session rows');
+  assert.equal(issuesCount(section.meta(ctxB)), '1 issues', 'the header counts only the moved session rows');
 });
 
 // T10 (S9): the pre-dispatch proof E18 described is gone, so there is no window
@@ -4579,4 +4596,174 @@ test('S4 (T3): a save that REJECTS never escapes as an unhandled rejection and n
     process.removeListener('unhandledRejection', onUnhandled);
     store.createIssuesCacheStore = originalFactory;
   }
+});
+
+// ---------------------------------------------------------------------------
+// T8b (S4): the header's `pr` count is EXACT, and a cold start paints it from
+// the disk at once.
+//
+// D8: the rail's read reports an exact `issueCount` per bucket while carrying at
+// most a window of rows. The count is the distinct numbers in mine ∪ review PLUS
+// the remainder of each bucket's total — the numbers the answer never carried,
+// which cannot be deduplicated against anything and so are counted one by one.
+// It is never less than what is known: a total below the rows it came with, a
+// hostile total, or no total at all leaves the distinct count alone.
+//
+// D9: `hydratePullRequests` is the stored entry's own seam. The section asks it
+// only from a read it already dispatched (never from a frame, never from a
+// session path), paints it only while no read has painted a count yet, and the
+// live answer always replaces it. The stored entry never settles the read: the
+// live read is asked every time its own TTL says so, and a settled state — no
+// repository proof — reads no entry at all.
+// ---------------------------------------------------------------------------
+
+// `total` is the bucket's exact `issueCount`, which the window of `rows` may
+// under-represent.
+function countedBuckets(buckets, totals) {
+  return async () => ({
+    ok: true,
+    mine: (buckets.mine || []).map((number) => ({ number, linkedIssues: [] })),
+    review: (buckets.review || []).map((number) => ({ number, linkedIssues: [] })),
+    counts: totals,
+  });
+}
+
+test('S4 (T8b, D8): the pr count adds each bucket\'s unfetched remainder', async () => {
+  const numbers = Array.from({ length: 50 }, (_, index) => index + 1);
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    // The verifier's own case: `issueCount=51` with 50 nodes and an empty
+    // review painted `2 issues · 50 pr`, dropping the one row the window cut.
+    loadPullRequests: countedBuckets({ mine: numbers, review: [] }, { mine: 51, review: 0 }),
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+
+  assert.equal(handle.section.meta({}), '2 issues · 51 pr',
+    'the unfetched remainder of a bucket counts too, so the header is never short');
+});
+
+test('S4 (T8b, D8): remainders are added per bucket, and no total can lower the count', async () => {
+  const mine = Array.from({ length: 50 }, (_, index) => index + 1);
+  const overlapping = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    // Two buckets, both cut: 50 fetched (1..50) + 69 = 51 distinct numbers, plus
+    // one remainder each — 69 shared with nothing, since a remainder's number was
+    // never carried.
+    loadPullRequests: countedBuckets({ mine, review: [50, 69] }, { mine: 51, review: 3 }),
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  await overlapping.refresh();
+  await settleFrames();
+  assert.equal(overlapping.section.meta({}), '2 issues · 53 pr',
+    'each bucket\'s remainder counts, and the fetched numbers still dedupe');
+
+  const hostile = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    // A total BELOW the rows it came with, and a total that is not a count at
+    // all: neither is trusted, and neither can shrink what the rows prove.
+    loadPullRequests: countedBuckets({ mine, review: [69] }, { mine: 3, review: 'many' }),
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  await hostile.refresh();
+  await settleFrames();
+  assert.equal(hostile.section.meta({}), '2 issues · 51 pr',
+    'the distinct numbers stay the floor, whatever a total claims');
+});
+
+test('S4 (T8b, D9): a cold start paints the stored count while the live read is held, and the live answer replaces it', async () => {
+  const pending = [];
+  const hydrated = [];
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    hydratePullRequests: async (identity) => {
+      hydrated.push(identity);
+      return { mine: [{ number: 69, linkedIssues: [1] }], review: [], syncedAt: 1 };
+    },
+    loadPullRequests: () => new Promise((resolve) => pending.push(resolve)),
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+
+  assert.deepEqual(hydrated, [IDENTITY], 'the entry is asked for the identity the issues read proved');
+  assert.equal(handle.section.meta({}), '2 issues · 1 pr',
+    'the stored count paints at once, before the live read answers');
+
+  pending.shift()(railBuckets({ mine: [69, 70] }));
+  await settleFrames();
+  assert.equal(handle.section.meta({}), '2 issues · 2 pr', 'the live answer replaces the stored one');
+});
+
+test('S4 (T8b, D9): the stored entry never settles the read, and a failed live read keeps its count', async () => {
+  const pending = [];
+  let hydrations = 0;
+  let liveReads = 0;
+  let failNext = false;
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    hydratePullRequests: async () => {
+      hydrations += 1;
+      return { mine: [{ number: 69, linkedIssues: [] }], review: [], syncedAt: 1 };
+    },
+    loadPullRequests: () => {
+      liveReads += 1;
+      if (failNext) return { ok: false, error: 'gh timed out' };
+      return new Promise((resolve) => pending.push(resolve));
+    },
+    open: () => {},
+    openAll: () => {},
+    // `ttlMs: 0` makes every attempt stale, so the second refresh asks again.
+    ttlMs: 0,
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+  assert.equal(liveReads, 1, 'a stored entry does not defeat the live read: it was asked anyway');
+  assert.equal(handle.section.meta({}), '2 issues · 1 pr');
+  pending.shift()(railBuckets({ mine: [69, 70] }));
+  await settleFrames();
+  assert.equal(handle.section.meta({}), '2 issues · 2 pr');
+
+  failNext = true;
+  await handle.refresh();
+  await settleFrames();
+  assert.equal(liveReads, 2, 'the next attempt asks the live read again, stored entry or not');
+  assert.equal(hydrations, 1, 'nothing is hydrated over a count that is already painted');
+  assert.equal(handle.section.meta({}), '2 issues · 2 pr', 'a failed read keeps the count it had');
+});
+
+test('S4 (T8b, D9): a settled state reads no stored entry at all', async () => {
+  let hydrations = 0;
+  let liveReads = 0;
+  const handle = createIssuesSection({
+    load: async () => ({ ok: false, error: 'not a git repository', errorTone: 'dim' }),
+    hydratePullRequests: async () => {
+      hydrations += 1;
+      return { mine: [{ number: 69, linkedIssues: [] }], review: [], syncedAt: 1 };
+    },
+    loadPullRequests: async () => {
+      liveReads += 1;
+      return railBuckets({ mine: [69] });
+    },
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+
+  assert.deepEqual(handle.section.lines({}), [{ label: 'not a git repository', tone: 'dim' }]);
+  assert.equal(hydrations, 0, 'a settled state hydrates nothing from the disk');
+  assert.equal(liveReads, 0, 'and reads no pull requests');
+  assert.equal(handle.section.meta({}), undefined, 'nor paints a count it was never given');
 });

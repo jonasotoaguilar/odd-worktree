@@ -7704,8 +7704,12 @@ function issuesScopeLabel(name) {
   return typeof name === "string" && name.length > 0 ? name : "gh's default repository";
 }
 
-function issuesScopeDriftLine(currentName, pinnedName) {
-  return `the checkout's repository changed since this issue list loaded (now ${issuesScopeLabel(currentName)} instead of ${issuesScopeLabel(pinnedName)}); reopen /issues`;
+function issuesScopeDriftLine(currentName, pinnedName, command = "/issues") {
+  // D10 (S2): the refusal names the panel whose rows moved, so a `/prs` action
+  // is never told to reopen `/issues`. Both sentences are built here so the two
+  // panels cannot drift apart.
+  const what = command === "/prs" ? "pull request list" : "issue list";
+  return `the checkout's repository changed since this ${what} loaded (now ${issuesScopeLabel(currentName)} instead of ${issuesScopeLabel(pinnedName)}); reopen ${command}`;
 }
 
 // The TUI hands the terminal to another program: a browser open must give it
@@ -8324,6 +8328,49 @@ let prsBoundIssues = null;
 // offered back as if nothing had changed.
 let prsRailDiskStore = null;
 const prsRailStaleIdentities = new Set();
+// S4 (D9): ONE disk read serves BOTH halves of a flight — the section's cold
+// start hydration (which paints the stored count while `gh` answers) and the
+// loader's own fallback for a failed live read. The entry is remembered for the
+// identity it was read for, so a second read of the same identity costs no file.
+let prsRailStoredIdentity = null;
+let prsRailStoredEntry = null;
+
+function clearPrsRailStoredEntry(identity) {
+  if (typeof identity !== "string" || identity.length === 0) {
+    prsRailStoredIdentity = null;
+    prsRailStoredEntry = null;
+    return;
+  }
+  if (prsRailStoredIdentity !== identity) return;
+  prsRailStoredIdentity = null;
+  prsRailStoredEntry = null;
+}
+
+// The stored entry for ONE identity: `{ mine, review, syncedAt }`, or `null` for
+// an identity a panel write invalidated, a document that is missing, malformed or
+// unreadable, and a host with no store at all. It is read at most once per
+// identity (a `null` is remembered too, so a machine with no cache file never
+// asks the disk again), which is the same cost the loader paid before the cold
+// start needed it: no flight reads this file twice.
+async function loadStoredRailPullRequests(identity) {
+  if (typeof identity !== "string" || identity.length === 0) return null;
+  if (prsRailStaleIdentities.has(identity)) return null;
+  if (prsRailStoredIdentity === identity) return prsRailStoredEntry;
+  const store = prsRailStore();
+  if (store === null) return null;
+  let stored = null;
+  try {
+    stored = await store.load(identity);
+  } catch {
+    stored = null;
+  }
+  // A write made while the disk was answering owns the answer: it is never
+  // remembered, so nothing paints an entry the panel just invalidated.
+  if (prsRailStaleIdentities.has(identity)) return null;
+  prsRailStoredIdentity = identity;
+  prsRailStoredEntry = stored && Array.isArray(stored.mine) && Array.isArray(stored.review) ? stored : null;
+  return prsRailStoredEntry;
+}
 
 function prsClient() {
   const issues = libRequire("gh-issues.js");
@@ -8471,6 +8518,8 @@ function openLinkedPanel(pi, link, closePanel) {
 // for a section nobody is drawing (S11).
 function invalidatePrsRail(identity) {
   if (typeof identity === "string" && identity.length > 0) prsRailStaleIdentities.add(identity);
+  // D9: the entry remembered for a cold start is gone with it.
+  clearPrsRailStoredEntry(identity);
   const handle = issuesSidebarHandle;
   if (!handle) return;
   try {
@@ -8532,14 +8581,9 @@ async function loadIssuesRailPullRequests() {
   }
   const identity = resolved.identity;
   const store = prsRailStore();
-  let stored = null;
-  if (store !== null && !prsRailStaleIdentities.has(identity)) {
-    try {
-      stored = await store.load(identity);
-    } catch {
-      stored = null;
-    }
-  }
+  // D9: the stored entry is the SAME one the section's cold-start hydration asks
+  // for, so a flight reads the document once and both halves agree on it.
+  const stored = await loadStoredRailPullRequests(identity);
   let read = null;
   try {
     read = await prs.listRailPullRequests({}, { cwd: checkoutRoot, scope: identity });
@@ -8557,11 +8601,37 @@ async function loadIssuesRailPullRequests() {
   prsRailStaleIdentities.delete(identity);
   if (store !== null && issuesSidebarCacheGeneration === generation) {
     const snapshot = { mine: read.mine, review: read.review, syncedAt: Date.now() };
+    // The live answer IS what the entry now holds, so a later cold start paints
+    // it without another read of the file.
+    prsRailStoredIdentity = identity;
+    prsRailStoredEntry = { ...snapshot };
     // Fire and forget: the answer is already visible, and a slow disk must not
     // hold the rail's next read.
     Promise.resolve().then(() => store.save(identity, snapshot)).catch(() => {});
   }
-  return { ok: true, identity, mine: read.mine, review: read.review };
+  // D8 (S4): the buckets' EXACT totals travel with their rows — the section
+  // counts what the window cut as well as the numbers it carried.
+  const counts = read.counts && typeof read.counts === "object" ? read.counts : null;
+  return { ok: true, identity, mine: read.mine, review: read.review, ...(counts === null ? {} : { counts }) };
+}
+
+// D9 (S4): the stored entry, asked BESIDE the live read by the section's own
+// dispatched pull-request read, so a cold start paints `N issues · M pr` while
+// `gh` is still answering. It is the same document `loadIssuesRailPullRequests`
+// writes, read for the identity the issues read just PROVED — so no entry is ever
+// painted under another repository's name — and it answers `null` for anything
+// that must not hydrate: no session, no `gh` CLI (a settled `dim` state reads no
+// disk at all, invariant 28), an identity a panel write invalidated (invariant
+// 25), or a document that is missing or unreadable. Nothing here is awaited by a
+// frame or a session path: only the section's async loader calls it.
+async function hydrateIssuesRailPullRequests(identity) {
+  if (typeof identity !== "string" || identity.length === 0) return null;
+  if (issuesGhCliMissing()) return null;
+  if (issuesSidebarCtx === null) return null;
+  if (prsRailStaleIdentities.has(identity)) return null;
+  const stored = await loadStoredRailPullRequests(identity);
+  if (!stored) return null;
+  return { mine: stored.mine, review: stored.review, syncedAt: stored.syncedAt };
 }
 
 function registerPrsCommand(pi) {
@@ -8717,7 +8787,8 @@ async function openPrsPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, pi)
       return { ok: false, error: (current && current.error) || "cannot verify this checkout's own repository" };
     }
     if (current.identity !== pinned.identity) {
-      return { ok: false, error: issuesScopeDriftLine(current.identity, pinned.identity) };
+      // D10 (S2): a `/prs` action tells the human to reopen `/prs`.
+      return { ok: false, error: issuesScopeDriftLine(current.identity, pinned.identity, "/prs") };
     }
     return { ok: true, scope: pinned.identity };
   };
@@ -9847,6 +9918,11 @@ function mountIssuesSidebar(pi, api) {
       // issues read proved a repository, and it keeps the `github` row label the
       // human named in customize.
       loadPullRequests: () => loadIssuesRailPullRequests(),
+      // D9 (S4): the persisted count paints a cold start while that read is in
+      // flight. Hydration belongs to the read alone — this seam is reached only
+      // from the section's async loader, never from a frame or a session path —
+      // and the live answer always replaces what it painted.
+      hydratePullRequests: (identity) => hydrateIssuesRailPullRequests(identity),
       rowLabel: "github",
       // S10 (T8, L9): the rail re-reads on TIME, not on the session's activity.
       // The section owns the timer (armed by a draw, unref'd, cleared by

@@ -52,6 +52,13 @@ after(() => {
   }
 });
 
+
+// The header may also carry the rail's pull-request segment (`· M pr`), which this
+// suite does not read: only the issues number and the `· stale` mark are asserted.
+function issuesCount(text) {
+  return String(text).replace(/ · \d+ pr/, '');
+}
+
 function track(dir) {
   roots.push(dir);
   return dir;
@@ -2595,7 +2602,7 @@ describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)
     const root = makeRepo({ tag: 'issues-self-assign' });
     const state = repoState();
     const { loaded, gh, section, ctx } = await warmRail(root, state);
-    assert.equal(section.meta(ctx), '2 issues', 'the rail starts with both rows');
+    assert.equal(issuesCount(section.meta(ctx)), '2 issues', 'the rail starts with both rows');
 
     const { component } = await mountPanel(loaded, root);
     // `Assigned` is where the viewer's own row lives; the tab reads it on entry.
@@ -2633,7 +2640,7 @@ describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)
     assert.ok(await waitFor(() => railReads(gh).length >= 2), 'the write started a rail read of its own');
     assert.match(railQuery(railReads(gh)[1]), /first: 100/,
       'the dropped entry makes the next rail read the full size, so a removal can land');
-    assert.ok(await waitFor(() => section.meta(ctx) === '1 issues'), 'the rail count follows the removal');
+    assert.ok(await waitFor(() => issuesCount(section.meta(ctx)) === '1 issues'), 'the rail count follows the removal');
     assert.deepEqual(section.lines(ctx).map((row) => row.label), ['#12 Mine twelve'],
       'and the merged rows are the ones the full read answered');
   });
@@ -2660,7 +2667,7 @@ describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)
     await tick();
     assert.equal(component.state.mode, 'assignees', 'the editor keeps the draft');
     assert.equal(railReads(gh).length, before, 'a failed write invalidates nothing, so no rail read starts');
-    assert.equal(section.meta(ctx), '2 issues', 'the rail keeps the pre-write count');
+    assert.equal(issuesCount(section.meta(ctx)), '2 issues', 'the rail keeps the pre-write count');
     assert.match(frameOf(component), /Assigned \(1\)/, 'and the panel keeps the pre-write count');
     assert.ok(frameOf(component).includes('Assigned twenty-one'), 'the row never left');
   });

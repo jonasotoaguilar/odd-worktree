@@ -1,0 +1,68 @@
+# message-cards — paint the two ODD advisory messages in the active card style
+
+The two advisory custom messages Gentle Shell sends (`gentle-pi.exploration-budget`,
+`gentle-pi.verifier-settle-reminder`) draw Pi's default box: no renderer is registered for either type
+anywhere, and the shell's card-style pass is positional, so it drops them at `no-card`. Gentle Shell is
+upstream and must not be modified (`/home/jona/dev/upstream/gentle-shell`), so this package paints them
+through `gentle-shell-bridge@0.11.0`, which ships the message-design surface and nothing else.
+
+## Specs
+
+S1 — the gate is the switch that already exists, verbatim from the human:
+> "y en nuestro caso vencdria activado con el mismo de "card tags" "activity""
+
+Choosing `activity` on the `Card tags` line is what turns these two message cards on. There is no second
+switch to flip and no separate first-run seed: the human's existing choice applies.
+
+S2 — the body is never clipped, verbatim from the human:
+> "igual considera que por ejemplo ese tipo demensaje deberia verse completo incluso en modo minimal, como
+> con worktrree list o create"
+
+Both alerts are INSTRUCTIONS the agent must read, so the card prints every row of the message at any card
+content level: no `previewRows`, no `minimal` withholding, no expand hint (nothing is hidden, a hint would
+lie). This is the consumer's decision — the bridge clips nothing and reads no level — and it is the exact
+opposite of `lib/jobs-card.js:200`.
+
+S3 — the style comes from the host, not from the bridge:
+`ctx.cardStyle` is the bridge's own Card style selection (`native` / a registered style / missing), NOT the
+host's float/neon chrome. The card reads the host's setting through this package's own reader
+(`lib/card-style.js`, `cardStyle()`) inside the paint, so a mid-session flip repaints what is on screen.
+
+S4 — byte stability, the bridge's own contract: with no bridge, an old bridge without the reader, a
+non-`activity` selection, a reader that throws, or a design that fails, Pi's own box stays exactly as it
+was and no pass pays for the surface.
+
+S5 — one family: the frame, roles and measurement come from this package's substrate
+(`lib/shell-card.js`) and its shared helpers (`lib/file-card.js`), exactly as the jobs card does. No
+palette, no raw escape sequence, no second card grammar.
+
+## Tasks
+
+| ID | Spec | Route | Risk | Commit |
+| --- | --- | --- | --- | --- |
+| T1 | S1, S2, S5 | worker (`gentle-ai-worker`) | none (new module, no shared code) | pending |
+| T2 | S1, S3, S4 | inline (parent) | item 3 (`extensions/odd-worktree-tools.ts` is a host registration surface other extensions load) | pending |
+
+T1 builds `lib/message-card.js` + `tools/message-card.test.js` + the docs. T2 wires the registration in
+`extensions/odd-worktree-tools.ts` and commits both slices.
+
+## Log
+
+L1 — the human, verbatim, on the original defect:
+> "[Image#1] recuerdas lo que lo que implemetamos de que siga float/neon las aletar de exploration y verify de gentle shell con activity activo. Y para bash background y monitor, pues no funciona, miralo."
+
+L2 — the human, verbatim, on the gate (S1):
+> "y en nuestro caso vencdria activado con el mismo de "card tags" "activity""
+
+L3 — the human, verbatim, on the full body (S2):
+> "[Image#6] igual considera que por ejemplo ese tipo demensaje deberia verse completo incluso en modo minimal, como con worktrree list o create, aunque ahi nose si seria del bridge o de aca dicha implementacion"
+
+L4 — the human, verbatim, on who owns the work:
+> "bien, agregalo al bridge, abre sesion ahi y avisale que lo agregue"
+
+L5 — the bridge half is DONE and released, reported by the bridge session (evidence, not a request):
+`gentle-shell-bridge@0.11.0`, merge `af3af60`, release `c794dbf`; `node --test` 858 (857 pass, 1 skipped),
+`tsc --noEmit` clean, `test/message-design-pi-release.test.mjs` 5/5 against real Pi 1.6.0, byte-identical
+`/bridge-status` with no message design. Two corrections it carries: adoption happens on
+`CustomMessageComponent.customRenderer` (patching `pi.registerMessageRenderer` captures nobody), and
+`ctx.cardStyle` is NOT the host palette (S3).

@@ -2988,8 +2988,9 @@ function handleWorktreeOddEvent(event, ctx, pi, allowPhaseTrigger) {
 // ---------------------------------------------------------------------------
 // The ODDs THIS session wrote or edited (odd-rail-section T8: S8, S9).
 //
-// S9: this is an ANNOTATION, never the source of truth. What exists, where it lives and
-// which copy is newest is the scan's answer (lib/odd-scan.js, lib/odd-group.js); the
+// S9: this is an ANNOTATION, never the source of truth. What exists and where it lives
+// is the grouped model's answer (`lib/odd-group.js`), and which copy of a name is
+// newest belongs to the rail's row model (`lib/odd-rail-model.js`); the
 // record below only says "this session touched that document", so the rail can order it
 // first and ask for an immediate refresh instead of waiting for its TTL.
 //
@@ -6902,6 +6903,11 @@ async function runOddFallback(ctx, listing) {
 }
 
 async function executeOdd(rawArgs, ctx) {
+  // T4 (odd-rail-section S6): the rail click that dispatched this command is over
+  // the instant the command runs, so the one-shot open guard is released HERE
+  // instead of waiting for its timer. Idempotent, and a no-op when no rail click is
+  // pending — `/odd` typed by hand never touches it.
+  releaseOddRailOpen();
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
   // S6 (T4): ONE optional target replaces the blanket refusal. A flag, a relative
@@ -9679,6 +9685,244 @@ function registerIssuesSidebar(pi) {
 }
 
 // ---------------------------------------------------------------------------
+// The ODD rail (odd-rail-section T4: S1, S2, S5, S6, S9, S12, S13). A SECOND
+// section beside the issues one, answered by the same bridge object and by the
+// package's own `lib/odd-rail-section.js` factory. It is the sibling of
+// `registerIssuesSidebar` above, not a part of it: same gate, same subscription,
+// same teardown, different read.
+//
+// The corrected S7 is the reason nothing below reads `oddModules.worktrees`: the
+// rail is driven by the worktrees REGISTERED in this session (the `worktree_register`
+// entries `filesSessionWorktreeRoots` reads, the same reader the files panel uses),
+// so it works with Worktrees+ off. The ONE gate is the bridge having published a
+// compatible object — without it there is no rail to register.
+//
+// S9/S13: the rows are the grouped model's, scoped to the registered set, one row per
+// ODD name (S12), with the session's `write`/`edit` record only ORDERING them.
+// `lines()` never runs git: the section reads ONE in-process snapshot and schedules
+// its own read, so a frame is never spent on a checkout listing.
+//
+// S6: the click DISPATCHES `/odd <document>`, it does not mount a panel — the command
+// is the one way in, exactly like the issues rail's. One open at a time, guarded
+// synchronously before `sendUserMessage` and released by the command it started or by
+// the bounded timer below (`sendUserMessage` returns `void` by contract, so a command
+// the host never runs must not leave the rail dead).
+const ODD_RAIL_OPEN_GUARD_MS = 10000;
+const ODD_RAIL_DISPATCH_FAILED = "the /odd command could not be dispatched";
+
+// The live binding, torn down and remade exactly like the issues one: `oddRailHandle`
+// owns the section's floor timer, `oddRailDisposer` is the bridge's own unregister
+// for it, and `oddRailApi` is the published object the section was registered on.
+let oddRailHandle = null;
+let oddRailDisposer = null;
+let oddRailApi = null;
+let oddRailSubscribed = false;
+// The one-shot open guard: a token taken synchronously by a click, and the bounded
+// timer that releases it if the command never runs.
+let oddRailOpenToken = null;
+let oddRailOpenTimer = null;
+
+function clearOddRailOpenTimer() {
+  if (oddRailOpenTimer === null) return;
+  const timer = oddRailOpenTimer;
+  oddRailOpenTimer = null;
+  try {
+    clearTimeout(timer);
+  } catch {
+    // A host timer that cannot be cancelled still fires into a released guard.
+  }
+}
+
+// Idempotent, and scoped to one token when one is named, so a release can never
+// clear a NEWER open's guard.
+function releaseOddRailOpen(token) {
+  if (token !== undefined && oddRailOpenToken !== token) return;
+  clearOddRailOpenTimer();
+  oddRailOpenToken = null;
+}
+
+function armOddRailOpenGuard(token) {
+  clearOddRailOpenTimer();
+  let timer = null;
+  try {
+    timer = setTimeout(() => {
+      releaseOddRailOpen(token);
+    }, ODD_RAIL_OPEN_GUARD_MS);
+  } catch {
+    timer = null;
+  }
+  // Unref'd: the guard is a safety net for the rail, never a reason for the process
+  // to stay alive.
+  if (timer && typeof timer.unref === "function") {
+    try {
+      timer.unref();
+    } catch {
+      // A host timer without a working unref still bounds the wait.
+    }
+  }
+  oddRailOpenTimer = timer;
+}
+
+// The documented path travels in the message and nowhere else: it is not logged,
+// not announced and not kept once the open is released.
+function dispatchOddRailOpen(pi, target) {
+  // A click while a rail open is in flight has no effect at all, exactly like the
+  // issues rail's: no second command, no notice, no paint.
+  if (oddRailOpenToken !== null) return { ok: true };
+  const docPath = target && typeof target.docPath === "string" ? target.docPath : "";
+  if (docPath.length === 0) return { ok: false, error: ODD_RAIL_DISPATCH_FAILED };
+  const token = {};
+  oddRailOpenToken = token;
+  armOddRailOpenGuard(token);
+  if (!pi || typeof pi.sendUserMessage !== "function") {
+    // The host cannot dispatch, so nothing will run to release the guard.
+    releaseOddRailOpen(token);
+    return { ok: false, error: ODD_RAIL_DISPATCH_FAILED };
+  }
+  try {
+    pi.sendUserMessage(`/odd ${docPath}`, { expandPromptTemplates: true });
+  } catch (err) {
+    // A dispatch that threw reaches no command either.
+    releaseOddRailOpen(token);
+    return { ok: false, error: `${ODD_RAIL_DISPATCH_FAILED}: ${issuesSidebarError(err, "unknown error")}` };
+  }
+  return { ok: true };
+}
+
+// The section's read: the session's own checkout, the checkouts it REGISTERED, the
+// grouped model over those, and the session's touch record (S9) — the one argument
+// that never decides existence, only order. A read with no session, no checkout or
+// no model answers an empty list rather than an error row: there is simply nothing
+// to draw.
+async function loadOddRailRows() {
+  const ctx = issuesSidebarCtx;
+  if (ctx === null) return [];
+  const repoRoot = await oddCheckoutRootAsync(toolCwd(ctx));
+  if (!repoRoot) return [];
+  const groups = await oddGroupsFor(repoRoot, filesSessionWorktreeRoots(ctx));
+  const model = libRequire("odd-rail-model.js");
+  return model.railRows({
+    groups: Array.isArray(groups) ? groups : [],
+    touched: oddSession === null ? [] : oddSession.touched(),
+  });
+}
+
+// T18's teardown, for this section: the bridge's unregister first, then the
+// section's own `dispose()`, each guarded on its own so a teardown that throws still
+// leaves the caller free to register the replacement. The slots are cleared BEFORE
+// either call, so a re-entrant teardown cannot run twice and nothing keeps pointing
+// at a section this module no longer owns. The touch callback is unset here as well,
+// so a write after the session ended asks nobody for a refresh.
+function teardownOddRail() {
+  const disposer = oddRailDisposer;
+  const handle = oddRailHandle;
+  oddRailDisposer = null;
+  oddRailHandle = null;
+  releaseOddRailOpen();
+  setOddSessionRefresh(null);
+  if (disposer !== null) {
+    try {
+      disposer();
+    } catch {
+      // A bridge that refuses the unregister still gets its section disposed.
+    }
+  }
+  if (handle !== null && typeof handle.dispose === "function") {
+    try {
+      handle.dispose();
+    } catch {
+      // A section that refuses `dispose()` never blocks the replacement.
+    }
+  }
+}
+
+function mountOddRail(pi, api) {
+  let factory;
+  try {
+    factory = libRequire("odd-rail-section.js");
+  } catch {
+    return;
+  }
+  if (!factory || typeof factory.createOddRailSection !== "function") return;
+  // A mount REPLACES the binding (`/reload`, a republished bridge, a second mount).
+  teardownOddRail();
+  const onRefreshed = typeof api.requestRepaint === "function"
+    ? () => {
+      try {
+        api.requestRepaint();
+      } catch {
+        // A repaint failure never breaks the section.
+      }
+    }
+    : undefined;
+  let handle;
+  try {
+    handle = factory.createOddRailSection({
+      load: () => loadOddRailRows(),
+      open: (target) => dispatchOddRailOpen(pi, target),
+      ...(onRefreshed === undefined ? {} : { requestRepaint: onRefreshed }),
+    });
+  } catch {
+    return;
+  }
+  if (!handle || !handle.section) return;
+  let disposer;
+  try {
+    disposer = api.registerSection(handle.section);
+  } catch {
+    return;
+  }
+  oddRailHandle = handle;
+  oddRailDisposer = typeof disposer === "function" ? disposer : null;
+  oddRailApi = api;
+  // T8 (S9): a `write`/`edit` this session made on an `odd/tasks` document asks the
+  // section for ONE immediate read — the touch already moved that ODD to the front of
+  // the record, so the refresh is what puts it first on screen. Unset by
+  // `teardownOddRail()`, and calling it while unset is a no-op.
+  setOddSessionRefresh(() => {
+    const live = oddRailHandle;
+    if (live === null || typeof live.refresh !== "function") return;
+    try {
+      const pending = live.refresh();
+      if (pending && typeof pending.catch === "function") pending.catch(() => {});
+    } catch {
+      // The rail is optional: a failed refresh never breaks the record.
+    }
+  });
+}
+
+// The rail reaches the host ONLY through the published bridge object — the same gate
+// the issues section uses, and the ONLY one: nothing here reads `oddModules`. A host
+// without the object is subscribed to the ready announcement ONCE and nothing else
+// happens (no notify, no throw, no other surface touched).
+function registerOddRail(pi) {
+  try {
+    const api = issuesSidebarBridge();
+    if (api !== null) {
+      // The SAME published object is the same bridge, so a second moment (a
+      // `session_start` after a shutdown tore the section down) binds the rail again
+      // only when it has no section; otherwise it contributes nothing twice. A
+      // DIFFERENT object is a republished bridge, and `mountOddRail` replaces the
+      // previous binding.
+      if (api === oddRailApi && oddRailHandle !== null) return;
+      mountOddRail(pi, api);
+      return;
+    }
+    if (oddRailSubscribed) return;
+    const subscribed = subscribeBridgeReady(pi, () => {
+      try {
+        registerOddRail(pi);
+      } catch {
+        // The rail stays absent; every other surface keeps working.
+      }
+    });
+    if (subscribed) oddRailSubscribed = true;
+  } catch {
+    // The rail is optional: a broken bridge never breaks this extension.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // S36 (files-picker T15): the file picker's ONE key, bound directly.
 //
 // The key is bound HERE, on the host's own seam and bound once at extension load:
@@ -10103,6 +10347,10 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // published its API; otherwise one ready-announcement subscription. The same
   // path contributes the bash activity design.
   registerIssuesSidebar(pi);
+  // T4 (odd-rail-section): the ODD rail, a second section on the SAME published
+  // object. It is registered here rather than inside the `Worktrees+` half because
+  // the corrected S7 makes the session's REGISTERED worktrees its scope.
+  registerOddRail(pi);
   if (oddModules.worktrees) registerWarpCommand(pi);
   registerOddCommand(pi);
   // T7 (files-picker): the file picker is the fourth command. It mounts its own
@@ -10171,6 +10419,8 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // new binding. This is the moment both are picked up again; with a live
     // section on the same bridge it is a no-op.
     registerIssuesSidebar(pi);
+    // T4 (odd-rail-section): the same moment for the ODD rail, for the same reason.
+    registerOddRail(pi);
     // T11 (S2 amended): the missing-plugin hint. It is armed in the same
     // boundary as the section's own state, and it says nothing yet when the
     // host could still announce.
@@ -10223,6 +10473,10 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // ended here: the bridge's unregister and the section's own `dispose()`, so a
     // frame the host still paints after shutdown arms nothing and reads nothing.
     teardownIssuesSidebar();
+    // T4 (odd-rail-section): the ODD rail goes with the session it read for, and
+    // the open guard goes with it too, so a click left over never blocks the next
+    // session.
+    teardownOddRail();
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,
   // so startup work still in flight drops instead of writing into the session

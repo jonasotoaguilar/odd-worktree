@@ -1,8 +1,7 @@
 'use strict';
-// S7 and (T3) S5: the `## ODD worktrees` section and its append-only injection. The
-// text is the contract, so it is asserted verbatim. There is exactly ONE primary
-// section, plus the one short block a child that WRITES gets (S5): the same heading,
-// its own file, and only for the three kinds of writing child.
+// S7: the `## ODD worktrees` section and its append-only injection. The text is the
+// contract, so it is asserted verbatim. There is exactly ONE section, for the primary
+// session only: a child gets none of it.
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
@@ -16,17 +15,7 @@ const PROMPT_DIR = path.resolve(__dirname, '..', 'lib', 'odd-prompt');
 const SECTION_FILE = path.join(PROMPT_DIR, 'odd-worktrees.md');
 const SECTION = fs.readFileSync(SECTION_FILE, 'utf8').trim();
 
-// S5: the one-line block a CHILD that writes gets. It lives in its own file, so it is
-// read here the way it is read on disk; a file that is gone fails the cases below.
-const CHILD_FILE = path.join(PROMPT_DIR, 'odd-worktrees-child.md');
-const childSection = () => fs.readFileSync(CHILD_FILE, 'utf8').trim();
-
-// The argv a subagent child really runs with: one directory named after the agent.
-function childArgv(agent) {
-  if (typeof agent !== 'string') return ['node', path.join(os.tmpdir(), 'plain-agent', 'instructions.md')];
-  return ['node', path.join(os.tmpdir(), `gentle-pi-subagent-${agent}-ab12cd`, 'instructions.md')];
-}
-
+// The argv-free child switch: a subagent child runs with this environment.
 const CHILD_ENV = { GENTLE_PI_AGENTS_CHILD: '1' };
 
 const savedEnv = { ...process.env };
@@ -104,13 +93,17 @@ describe('session gating', () => {
     }
   });
 
-  test('a GENTLE_PI_AGENTS_CHILD session gets the child block, never the primary one', () => {
+  test('a GENTLE_PI_AGENTS_CHILD session gets nothing, whatever agent it is', () => {
     clearEnv();
     process.env.GENTLE_PI_AGENTS_CHILD = '1';
+    for (const argv of [undefined, ['node', '/tmp/gentle-pi-subagent-gentle-ai-worker-ab12cd/instructions.md']]) {
+      const options = {};
+      run(primaryEvent(options), { env: process.env, argv });
+      assert.equal(options.appendSystemPrompt, undefined);
+    }
     const options = {};
-    run(primaryEvent(options), { env: process.env });
-    assert.equal(options.appendSystemPrompt, childSection(), 'a child whose name cannot be read is the generic child');
-    assert.notEqual(options.appendSystemPrompt, SECTION);
+    run(primaryEvent(options), { env: CHILD_ENV });
+    assert.equal(options.appendSystemPrompt, undefined);
   });
 
   test('ODD_WORKTREE_PROMPT=0 suppresses the block entirely', () => {
@@ -139,77 +132,6 @@ describe('extension wiring (T3)', () => {
     for (const handler of handlers) await handler({ systemPromptOptions: options }, { cwd: os.tmpdir() });
     assert.equal(options.appendSystemPrompt, SECTION, 'the injected block is the one exact section, appended once');
     for (const handler of handlers) assert.doesNotThrow(() => handler({}, {}));
-  });
-});
-
-// ---------------------------------------------------------------------------
-// S5: the child block — one short line, and only for a child that writes.
-// ---------------------------------------------------------------------------
-describe('S5: a child that writes gets one short block', () => {
-  test('the block lives in its own file, opens with the idempotency heading and states the rule in two sentences at most', () => {
-    const text = childSection();
-    assert.ok(text.startsWith('## ODD worktrees'), text.split('\n')[0]);
-    assert.match(text.replace(/\s+/g, ' '), /work only under the worktree of your workspace root/i);
-    assert.match(text.replace(/\s+/g, ' '), /primary checkout on the default branch/i);
-    assert.match(text.replace(/\s+/g, ' '), /stop and report/i);
-    assert.match(text.replace(/\s+/g, ' '), /instead of writing/i);
-    const sentences = (text.replace(/\s+/g, ' ').match(/[.!?](\s|$)/g) || []).length;
-    assert.ok(sentences <= 2, `two sentences at most, got ${sentences}`);
-    assert.notEqual(text, SECTION, 'the child block is not the primary block');
-  });
-
-  test('gentle-ai-worker, jd-fix-agent and a child whose agent name cannot be read get it', () => {
-    for (const agent of ['gentle-ai-worker', 'jd-fix-agent', undefined]) {
-      const options = {};
-      run(primaryEvent(options), { env: CHILD_ENV, argv: childArgv(agent) });
-      assert.equal(options.appendSystemPrompt, childSection(), String(agent));
-    }
-  });
-
-  test('a child whose name is outside the table is the generic child, and gets it too', () => {
-    const options = {};
-    run(primaryEvent(options), { env: CHILD_ENV, argv: childArgv('some-unknown-agent') });
-    assert.equal(options.appendSystemPrompt, childSection());
-  });
-
-  test('explore, verify, the two judges and every review-* child get nothing', () => {
-    for (const agent of ['gentle-ai-explore', 'gentle-ai-verify', 'jd-judge-a', 'jd-judge-b', 'review-a', 'review-verify']) {
-      const options = {};
-      run(primaryEvent(options), { env: CHILD_ENV, argv: childArgv(agent) });
-      assert.equal(options.appendSystemPrompt, undefined, agent);
-    }
-  });
-
-  test('a child block is appended after the harness text and is idempotent', () => {
-    const harness = 'You are Pi.\n\nUse the tools.';
-    const options = { appendSystemPrompt: harness };
-    run(primaryEvent(options), { env: CHILD_ENV, argv: childArgv('gentle-ai-worker') });
-    assert.ok(options.appendSystemPrompt.startsWith(harness), 'existing text is the prefix');
-    assert.equal(options.appendSystemPrompt, `${harness}\n\n${childSection()}`);
-    const once = options.appendSystemPrompt;
-    run(primaryEvent(options), { env: CHILD_ENV, argv: childArgv('gentle-ai-worker') });
-    assert.equal(options.appendSystemPrompt, once, 'a second call adds nothing');
-  });
-
-  test('ODD_WORKTREE_PROMPT=0 suppresses the child block too', () => {
-    const options = {};
-    run(primaryEvent(options), { env: { ...CHILD_ENV, ODD_WORKTREE_PROMPT: '0' }, argv: childArgv('gentle-ai-worker') });
-    assert.equal(options.appendSystemPrompt, undefined);
-  });
-
-  test('the primary session keeps its own block, unchanged', () => {
-    const options = {};
-    run(primaryEvent(options), { env: {}, argv: childArgv('gentle-ai-worker') });
-    assert.equal(options.appendSystemPrompt, SECTION, 'a primary session gets the primary block');
-    assert.notEqual(SECTION, childSection());
-  });
-
-  test('a missing child file falls back to the heading alone, never a crash', () => {
-    const missing = path.join(os.tmpdir(), `odd-prompt-missing-${process.pid}`, 'odd-worktrees-child.md');
-    assert.equal(prompt.readPromptFile(missing), null);
-    assert.equal(prompt.sectionFromFile(missing, prompt.CHILD_FALLBACK), prompt.CHILD_FALLBACK);
-    assert.equal(prompt.CHILD_FALLBACK.trim(), '## ODD worktrees');
-    assert.equal(prompt.CHILD_SECTION, childSection());
   });
 });
 

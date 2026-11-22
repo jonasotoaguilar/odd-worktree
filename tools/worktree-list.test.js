@@ -6,7 +6,7 @@
 //
 // S2: the default view is the checkouts this package created plus the main one.
 // S2/S3: `all` adds the worktrees Git knows outside `<repo-name>-worktrees`.
-// S3: a row is its directory's basename (the ODD) and its branch — no `odd:` field, no
+// S3: a row is the checkout's absolute path (whose last segment is the ODD) and its branch — no `odd:` field, no
 // date, no setup or hooks line, no stored state. A directory that exists is a worktree
 // and one that does not is simply not listed.
 
@@ -59,13 +59,13 @@ test('prints project, path, the unnumbered main checkout and the created worktre
 		'project: demo',
 		'path: /work/demo',
 		'base: main@1a2b3c4',
-		'1 alpha · feat/alpha',
-		'2 zeta · feat/zeta',
+		'1 /work/demo-worktrees/alpha · feat/alpha',
+		'2 /work/demo-worktrees/zeta · feat/zeta',
 	].join('\n'));
 	assertPlainLines(view.text);
 });
 
-test('each row is the directory basename — the ODD — and the branch, and nothing else', () => {
+test('each row is the absolute path, whose last segment is the ODD, and the branch, and nothing else', () => {
 	const view = viewOf({ entries: [MAIN, entry(`${WORKTREES}/worktree-surface`, 'feat/surface')] });
 	const row = view.details.worktrees[1];
 	assert.equal(row.name, 'worktree-surface', 'the ODD is the directory basename');
@@ -109,9 +109,9 @@ test('all adds the worktrees outside the canonical directory, after ours and by 
 		'project: demo',
 		'path: /work/demo',
 		'base: main@1a2b3c4',
-		'1 alpha · feat/alpha',
-		'2 beta · feat/beta',
-		'3 gamma · -',
+		'1 /work/demo-worktrees/alpha · feat/alpha',
+		'2 /elsewhere/beta · feat/beta',
+		'3 /elsewhere/gamma · -',
 	].join('|'));
 	assert.deepEqual(worktreeListFooters(view.details), [], 'nothing is hidden when everything is listed');
 	assert.equal('foreign' in view.details, false, 'no state field decides what a row is');
@@ -120,7 +120,7 @@ test('all adds the worktrees outside the canonical directory, after ours and by 
 test('a detached checkout prints a dash instead of inventing a branch', () => {
 	const view = viewOf({ entries: [MAIN, entry(`${WORKTREES}/alpha`, null)] });
 	assert.equal(view.details.worktrees[1].branch, '-');
-	assert.equal(view.text.split('\n').at(-1), '1 alpha · -');
+	assert.equal(view.text.split('\n').at(-1), '1 /work/demo-worktrees/alpha · -');
 });
 
 test('the main row prints first and unnumbered, as Git lists it', () => {

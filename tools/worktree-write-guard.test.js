@@ -440,7 +440,7 @@ describe('the tool_call handler the extension registers (S4)', () => {
     assert.equal(await callTool({ toolName: 'read', input: { path: target } }, PRINCIPAL), undefined);
     assert.equal(await callTool({ toolName: 'grep', input: { pattern: 'x', path: PRINCIPAL } }, PRINCIPAL), undefined);
     assert.deepEqual(await callTool(bash('git worktree add ../odd-b'), PRINCIPAL), { block: true, reason: WORKTREE_ADD_REFUSAL });
-    assert.deepEqual(await callTool(bash('git worktree list --porcelain'), PRINCIPAL), { block: true, reason: '`git worktree list` did not run: use `worktree_list` (`all: true` also shows checkouts outside `<repo-name>-worktrees`).' });
+    assert.equal(await callTool(bash('git worktree list --porcelain'), PRINCIPAL), undefined);
     assert.deepEqual(await callTool(bash('git switch develop'), PRINCIPAL), { block: true, reason: BRANCH_SWITCH_REFUSAL });
     assert.equal(await callTool(bash('git switch develop'), linked), undefined);
     assert.equal(await callTool(bash('git status'), PRINCIPAL), undefined);

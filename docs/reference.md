@@ -1300,9 +1300,9 @@ opens on the host's own card (`default`) until a choice is made.
 
 `worktree_list` prints the main checkout first and unnumbered, as the `base: <branch>@<sha>`
 line `worktree_create` also prints (the branch it stands on is always named), then one numbered
-row per checkout this package created under `<repo-name>-worktrees`, by name.
-A row is its directory's basename — which IS the ODD — then ` · ` and the branch Git
-reports. With `all: true`, the worktrees Git knows outside that directory follow,
+row per checkout this package created under `<repo-name>-worktrees`, in name order.
+A row is the checkout's absolute path — whose last segment IS the ODD — then ` · ` and the
+branch Git reports. With `all: true`, the worktrees Git knows outside that directory follow,
 and a footer counts them while they are hidden. The text is fixed-field and
 undecorated, so it reads the same on every run:
 
@@ -1310,8 +1310,8 @@ undecorated, so it reads the same on every run:
 project: repo
 path: /code/repo
 base: main@1a2b3c4
-1 worktree-tools · feat/worktree-tools
-2 billing · feat/billing
+1 /code/repo-worktrees/billing · feat/billing
+2 /code/repo-worktrees/worktree-tools · feat/worktree-tools
 ```
 
 There is no `odd:` field, no date, no setup line, no hooks line and no stored
@@ -1357,20 +1357,19 @@ Shell's own `card-style.json` is read here, never written.
 
 ## The `bash` guards
 
-The extension watches every `bash` tool call and refuses four things before the command
+The extension watches every `bash` tool call and refuses three things before the command
 runs. The refusal is the call's result: it says the command did not run and names the
-single tool that replaces it, `worktree_list` for a listing, `worktree_create` for
+single tool that replaces it, `worktree_create` for
 a creation, the ODD's checkout for a branch switch, and `read` for a skill file. The prompt block above is what is meant to keep the agent from ever
 reaching them.
 
 | Refused | Where |
 | --- | --- |
 | `git worktree add` | any cwd |
-| `git worktree list` | any cwd |
 | a command that leaves the branch the checkout is on (`checkout`/`switch <other>`, `-`, a detached checkout, `checkout -b/-B/--orphan`, `switch -c/-C/--create/--force-create`) | the principal checkout only, and only while that branch is the repository's default |
 
 - **Text only.** The guard reads the command string and nothing else: it finds the
-  `git` … `worktree` … `add|list` sequence anywhere in it, also after `&&`, `||`, `;`,
+  `git` … `worktree` … `add` sequence anywhere in it, also after `&&`, `||`, `;`,
   `|`, a newline, a subshell, a line continuation, inside `$(…)` or inside a quoted
   `bash -c '…'`, and tolerates git's global options (`-C <dir>`, `--no-pager`) and a
   `git` given by path. It never opens a script, an alias or a file, so a script that
@@ -1462,11 +1461,9 @@ It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other
 extension) put there is preserved verbatim and our text lands after it. There is
 one text for the primary session, read from `lib/odd-prompt/odd-worktrees.md` at load.
-A child that writes — `gentle-ai-worker`, `jd-fix-agent` and any other child, whose agent name is unknown or cannot be read — gets one short line instead (`lib/odd-prompt/odd-worktrees-child.md`):
-work only under your workspace root's worktree, and stop and report if it is the primary
-checkout on the default branch. Explore, verify, the judges, every `review-*` and named
-agents get nothing, because their own instructions are already the bounded task they
-received. `ODD_WORKTREE_PROMPT=0` suppresses both.
+A child gets nothing, and neither does a named agent: they work where the primary
+session's handoff put them (its `workspace_root`), so the rule is the primary session's to
+apply. `ODD_WORKTREE_PROMPT=0` suppresses it.
 
 One limit, stated plainly: a string has no "must be last" flag, so the block's
 position follows extension load order. It can sit before a later extension's

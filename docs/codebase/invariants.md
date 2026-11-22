@@ -216,9 +216,9 @@ The question this page answers: which rules must every change preserve, and what
 11. **The listing is read-only and has no state.** `worktree_list` reads Git's own
     worktree set and writes nothing, prunes nothing and reads no document: the main
     checkout prints first and unnumbered, then the checkouts under
-    `<repo-name>-worktrees` by name, and `all: true` adds the worktrees Git knows
-    outside that directory. A row is its directory's basename — which IS the ODD —
-    and its branch; there is no `odd:` field, no date, no setup or hooks line and no
+    `<repo-name>-worktrees` in name order, and `all: true` adds the worktrees Git knows
+    outside that directory. A row is the checkout's absolute path — whose last segment
+    IS the ODD — and its branch; there is no `odd:` field, no date, no setup or hooks line and no
     state vocabulary. A directory that exists is a worktree and one that does not is
     simply not listed; nothing is reported as `gone` or `missing`, because nothing
     was stored to go stale. The footer counts the outside worktrees it hides.
@@ -247,11 +247,8 @@ The question this page answers: which rules must every change preserve, and what
     the model only through `systemPromptOptions.appendSystemPrompt`; no handler
     returns a replacement `systemPrompt` (the bridge drops it) and no existing
     text is removed. The primary session gets one text
-    (`lib/odd-prompt/odd-worktrees.md`); a child gets the one-line
-    `lib/odd-prompt/odd-worktrees-child.md` only when it writes — `gentle-ai-worker`,
-    `jd-fix-agent` and any other child (an agent name that is unknown or cannot be read) — and explore, verify,
-    the judges and every `review-*` get none. Both are idempotent by content and
-    `ODD_WORKTREE_PROMPT=0` suppresses them.
+    (`lib/odd-prompt/odd-worktrees.md`); a child and a named agent get none. It is
+    idempotent by content and `ODD_WORKTREE_PROMPT=0` suppresses it.
 15. **A warp waits for this session's own tools, agent tasks AND background
     jobs, and it is queued, never thrown away.** While
     `lib/worktree-warp-busy.js` reports a tool still executing, a running or
@@ -507,7 +504,7 @@ The question this page answers: which rules must every change preserve, and what
     call they cannot judge passes.
 
     **`bash`** (`decideBashGuard`): a call whose command contains `git … worktree
-    add` or `git … worktree list` in any cwd is refused, and, only when the command
+    add` in any cwd is refused, and, only when the command
     runs in the principal checkout (its root is the parent of the git common dir) AND
     that checkout is on the repository's default branch, so is a switch that leaves
     that branch. Detection is text only: no script, alias or file is read. Seams:
@@ -537,7 +534,7 @@ The question this page answers: which rules must every change preserve, and what
     heredoc body, `grep`, `rg`, a write and a `$VAR` path pass.
 
     No guard ever throws (a throwing `tool_call` handler blocks the tool), an
-    unreadable repository leaves only the `bash` worktree refusals active, and the
+    unreadable repository leaves only the `bash` worktree refusal active, and the
     default branch is resolved lazily and memoized per checkout.
     `ODD_WORKTREE_GUARD=0` is the one way to turn all of them off, like
     `ODD_WORKTREE_PROMPT=0` for the prompt blocks; no other value, option or config

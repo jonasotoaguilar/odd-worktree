@@ -72,6 +72,11 @@ describe('the Tools page', () => {
         tools[0].rows({}).map((row) => `${row.choice.setting} ${row.choice.value}`),
         ['Codegraph+ Off', 'Codegraph+ On', 'Worktrees+ Off', 'Worktrees+ On'],
       );
+      assert.deepEqual(
+        tools[0].categoryPlacement,
+        { after: 'Sections' },
+        'the page is placed by the bridge, right after the host Sections page',
+      );
     }
   });
 });

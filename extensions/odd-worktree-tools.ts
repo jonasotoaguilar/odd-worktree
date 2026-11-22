@@ -6801,6 +6801,81 @@ function openExternalSuspended(hostTui, target) {
     .finally(resume);
 }
 
+// S6 (T4): the ONE optional target `/odd <target>` takes — and the reason the
+// refusal sentence keeps exactly the wording it always had. Two shapes are
+// targets: an ABSOLUTE path to an existing `odd/tasks/*.md` document (the rule
+// lib/odd-docs.js scans: directly under that directory, never a dotfile), and a
+// BARE ODD name, which is resolved against the loaded groups below because only
+// the scan knows which names exist. Everything else — a flag, a relative path, a
+// nested path, another extension, a document outside `odd/tasks` — is the
+// unknown option it always was. This panel is never a general file opener.
+function oddTargetRequest(raw) {
+  if (raw === "") return { kind: "none" };
+  // A flag is never a target, so `--nope` keeps refusing before any git read.
+  if (raw.startsWith("-")) return { kind: "invalid" };
+  if (path.isAbsolute(raw)) {
+    return oddTaskDocument(raw) ? { kind: "path", target: raw } : { kind: "invalid" };
+  }
+  // A relative path is refused rather than resolved against the session cwd: the
+  // target is either an absolute document or a name, and nothing in between.
+  if (raw.includes("/") || raw.includes(path.sep)) return { kind: "invalid" };
+  return { kind: "name", name: raw };
+}
+
+// S6: a document is `<checkout>/odd/tasks/<name>.md`, non-recursive, no dotfile —
+// the segments come from the library that owns the rule instead of being restated
+// here, and the file has to be a regular one, exactly like the scan's own row.
+function oddTaskDocument(target) {
+  const name = path.basename(target);
+  if (!/\.md$/i.test(name) || name.startsWith(".")) return false;
+  let segments = ["odd", "tasks"];
+  try {
+    const shared = libRequire("odd-docs.js").TASKS_DIR;
+    if (typeof shared === "string" && shared.length > 0) {
+      const parts = shared.split(/[\\/]+/).filter((part) => part.length > 0);
+      if (parts.length >= 2) segments = parts;
+    }
+  } catch {
+    // The documented default above stands.
+  }
+  const dir = path.dirname(target);
+  if (path.basename(dir) !== segments[segments.length - 1]) return false;
+  if (path.basename(path.dirname(dir)) !== segments[segments.length - 2]) return false;
+  try {
+    return fs.statSync(target).isFile();
+  } catch {
+    return false;
+  }
+}
+
+// S10/S13 (T4): the grouped model the panel draws and `a` toggles. `roots` is the
+// session's REGISTERED worktrees: an array groups exactly those, absent groups
+// every owned worktree. The read is awaited off the same git seam the rest of
+// this file uses, and a model that cannot be read is `null`, which leaves the
+// flat listing the caller already holds standing.
+async function oddGroupsFor(repoRoot, roots) {
+  try {
+    const git = libRequire("worktree-git.js");
+    const grouped = await libRequire("odd-group.js").groupOddDocs({
+      repoRoot,
+      runAsync: libRunner(git),
+      ...(Array.isArray(roots) ? { roots } : {}),
+    });
+    if (Array.isArray(grouped)) return grouped;
+  } catch {
+    // A missing or broken lib never opens a grouped panel.
+  }
+  return null;
+}
+
+// S21 (T4): the git-ranked listing ranks ONE checkout's own documents, so in a
+// grouped model it belongs to main's group — the list the panel actually draws.
+// Without this the ranked answer and `r` would refresh a listing nobody sees.
+function oddGroupsWithRankedMain(groups, docs) {
+  if (!Array.isArray(groups) || !Array.isArray(docs)) return groups;
+  return groups.map((group) => (group && group.isMain === true ? { ...group, docs: docs.slice() } : group));
+}
+
 async function runOddFallback(ctx, listing) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const select = ctx && ctx.ui ? ctx.ui.select : undefined;
@@ -6829,7 +6904,12 @@ async function runOddFallback(ctx, listing) {
 async function executeOdd(rawArgs, ctx) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
-  if (raw !== "") {
+  // S6 (T4): ONE optional target replaces the blanket refusal. A flag, a relative
+  // path, a nested path, another extension and a document outside an `odd/tasks`
+  // directory are all refused HERE, before any git read, with exactly the sentence
+  // every unknown argument has always got.
+  const request = oddTargetRequest(raw);
+  if (request.kind === "invalid") {
     if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
     return;
   }
@@ -6841,6 +6921,12 @@ async function executeOdd(rawArgs, ctx) {
   // (below). Nothing on this path blocks the host event loop.
   const checkoutRoot = await oddCheckoutRootAsync(cwd);
   if (!checkoutRoot) {
+    // A bare name can only be told apart from an unknown option by the scan, so a
+    // checkout that cannot be read keeps the refusal it always answered with.
+    if (request.kind === "name") {
+      if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
+      return;
+    }
     if (typeof notify === "function") notify(notGitRepositoryLine(cwd), "info");
     return;
   }
@@ -6851,10 +6937,35 @@ async function executeOdd(rawArgs, ctx) {
   }
   // S9: with nothing to read there is no overlay at all — one muted line,
   // exactly like the changes view answers an empty repository. The cheapest
-  // scan already answers this, so an empty checkout costs no Git process.
-  if (listing.docs.length === 0) {
+  // scan already answers this, so a bare `/odd` in an empty checkout costs no
+  // Git process. A TARGET is answered from the grouped model below instead,
+  // because the document may belong to another checkout of this clone (S6).
+  if (listing.docs.length === 0 && request.kind === "none") {
     if (typeof notify === "function") notify("No odd documents under odd/tasks/ in this checkout.", "info");
     return;
+  }
+  // S10/S13 (T4): the panel draws the checkouts this SESSION registered — main
+  // always, whole, plus one group per registered worktree carrying what that
+  // worktree has that main does not. The set is the same one the files panel
+  // reads, which is why both surfaces stay in sync. Nothing here reads
+  // `oddModules.worktrees`: registration decides the scope, not the module
+  // switch (corrected S7).
+  const registeredRoots = filesSessionWorktreeRoots(ctx);
+  const groups = await oddGroupsFor(checkoutRoot, registeredRoots);
+  // S6: a bare name is a target only when a loaded group carries it — main's ODDs
+  // and the registered worktrees' alike. An absolute target is accepted on its
+  // own rule (above) and travels even when no group names it: the view opens on
+  // its first document rather than failing.
+  let initialDoc = null;
+  if (request.kind === "path") initialDoc = request.target;
+  if (request.kind === "name") {
+    const known = Array.isArray(groups) && groups.some((group) => Array.isArray(group && group.docs)
+      && group.docs.some((entry) => entry && entry.name === request.name));
+    if (!known) {
+      if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
+      return;
+    }
+    initialDoc = request.name;
   }
   // The viewer names only the checkout it reads: nothing is assigned from this
   // surface (S10b), so the root exists solely to know what was listed.
@@ -6865,6 +6976,18 @@ async function executeOdd(rawArgs, ctx) {
   } catch {
     helpers = null;
   }
+  // S10/S11 (T4): the grouped model is reloaded OFF the key handler, and the live
+  // view plus the reader's own mode are the only state these seams share: `a`
+  // reports the new mode, the reload that follows keeps it, and `r` reloads in the
+  // mode the reader is in.
+  let liveView = null;
+  let liveGroups = Array.isArray(groups) ? groups : null;
+  let showAll = false;
+  const applyOddGroups = (next) => {
+    if (!Array.isArray(next)) return;
+    liveGroups = next;
+    if (liveView && typeof liveView.applyGroups === "function") liveView.applyGroups(next);
+  };
   if (helpers && ctx && ctx.ui && typeof ctx.ui.custom === "function") {
     try {
       await ctx.ui.custom(
@@ -6875,6 +6998,17 @@ async function executeOdd(rawArgs, ctx) {
           const settled = oddDocsOrdered(checkoutRoot);
           const view = libRequire("odd-view.js").createOddView({
             docs: listing.docs,
+            // S10/S13 (T4): the grouped model — main whole, then one group per
+            // registered worktree with something of its own — is what the panel
+            // draws; `docs` stays the flat listing it has always been, and a
+            // model that could not be read leaves that listing standing. Whether
+            // a registered but unchanged worktree gets a header is the view's own
+            // rule (S10), never repeated here.
+            groups,
+            // S6 (T4): the target the command was given. The view resolves it
+            // against the model above and, for one it cannot place, opens on its
+            // own first document instead of failing.
+            initialDoc,
             checkoutName,
             // S1: the viewer reads documents. It is handed NO association prop
             // and NO write callback — a worktree carries no ODD document, so
@@ -6888,9 +7022,33 @@ async function executeOdd(rawArgs, ctx) {
             // it.
             openExternal: (target) => openExternalSuspended(hostTui, target),
             loadDoc: (doc) => libRequire("odd-docs.js").readOddDoc(doc),
+            // S11 (T4): `a` flips the mode in the view and reports the new value
+            // once; the reload happens here, awaited off the key handler, and
+            // lands back through `applyGroups`. `true` means EVERY owned
+            // worktree (no `roots` at all), `false` the session's registered set.
+            // A reload that fails keeps the groups already on screen and never
+            // throws into the host.
+            onToggleAll: (all) => {
+              showAll = all === true;
+              return Promise.resolve(oddGroupsFor(checkoutRoot, showAll ? undefined : registeredRoots))
+                .then(applyOddGroups)
+                .catch(() => {});
+            },
             // S21: the reload is the awaited reader too, so `r` never freezes
-            // the frame on a slow history walk.
-            reloadDocs: () => oddDocsFor(cwd),
+            // the frame on a slow history walk. S10/S11 (T4): the GROUPS are the
+            // model actually drawn, so they are reloaded through the same seam
+            // in the reader's own mode — otherwise a reload would refresh a
+            // listing nobody sees and leave the drawn one stale.
+            reloadDocs: async () => {
+              const [flat, next] = await Promise.all([
+                oddDocsFor(cwd),
+                oddGroupsFor(checkoutRoot, showAll ? undefined : registeredRoots),
+              ]);
+              // A reload the flat listing could not answer keeps the groups it
+              // already has, exactly as it keeps its documents.
+              if (flat && flat.ok === true) applyOddGroups(oddGroupsWithRankedMain(next, flat.docs));
+              return flat;
+            },
             helpers,
             theme,
             rowsAvailable: () => oddTerminalRows(hostTui),
@@ -6903,13 +7061,20 @@ async function executeOdd(rawArgs, ctx) {
             },
             done,
           });
+          liveView = view;
           // The ranked order replaces the cheap one in the LIVE view: the
           // focused document survives by identity, so the reader never loses
           // the pane they are already reading. A walk that could not answer
           // leaves the cheap first frame standing — it is the documented mtime
-          // fallback, never an empty viewer.
+          // fallback, never an empty viewer. S10/S21 (T4): a grouped panel draws
+          // the MODEL, and this listing ranks one checkout's own documents, so
+          // with groups the order lands on main's group.
           settled.then((next) => {
             if (!next || next.ok !== true || !Array.isArray(next.docs)) return;
+            if (Array.isArray(liveGroups)) {
+              applyOddGroups(oddGroupsWithRankedMain(liveGroups, next.docs));
+              return;
+            }
             if (typeof view.applyDocs === "function") view.applyDocs(next.docs);
           }).catch(() => {
             // The cheap first frame already stands.
@@ -6944,7 +7109,7 @@ async function oddFallbackListing(root, local) {
 function registerOddCommand(pi) {
   if (typeof pi?.registerCommand !== "function") return;
   pi.registerCommand("odd", {
-    description: "Read this checkout's odd documents: list on the left, styled markdown on the right",
+    description: "Read this checkout's odd documents: list on the left, styled markdown on the right; one optional target — an ODD name or an absolute odd/tasks/*.md document",
     handler: async (args, ctx) => {
       await executeOdd(args, ctx);
     },

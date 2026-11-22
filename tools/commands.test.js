@@ -488,6 +488,64 @@ describe('/odd', () => {
     await commands.get('odd').handler('nope', makeCtx(makeRepo()));
     assert.deepEqual(notifications, [['error', 'Unknown option "nope". Use /odd.']]);
   });
+
+  // S6 (T4): ONE optional target. An absolute `odd/tasks/*.md` and a bare ODD
+  // name that the scan knows are opened instead of refused; every other shape
+  // keeps the sentence above, verbatim. There is no overlay here (the ctx offers
+  // no `custom`), so an accepted target is observable as the absence of that
+  // sentence and the degraded menu's own one muted line.
+  test('an absolute target directly under odd/tasks is accepted', async () => {
+    const repo = makeRepo();
+    const target = path.join(repo, 'odd', 'tasks', 'feature.md');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, '# Feature\n');
+    notifications.length = 0;
+    await commands.get('odd').handler(target, makeCtx(repo));
+    assert.deepEqual(notifications, [
+      ['info', 'odd: 1 document(s) under odd/tasks/ (the viewer needs an interactive session)'],
+    ]);
+  });
+
+  test('a bare ODD name that exists is accepted', async () => {
+    const repo = makeRepo();
+    fs.mkdirSync(path.join(repo, 'odd', 'tasks'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'odd', 'tasks', 'feature.md'), '# Feature\n');
+    notifications.length = 0;
+    await commands.get('odd').handler('feature', makeCtx(repo));
+    assert.deepEqual(notifications, [
+      ['info', 'odd: 1 document(s) under odd/tasks/ (the viewer needs an interactive session)'],
+    ]);
+  });
+
+  test('every shape that is not a target keeps the refusal verbatim', async () => {
+    const repo = makeRepo();
+    const tasks = path.join(repo, 'odd', 'tasks');
+    fs.mkdirSync(path.join(tasks, 'nested'), { recursive: true });
+    fs.writeFileSync(path.join(tasks, 'feature.md'), '# Feature\n');
+    fs.writeFileSync(path.join(tasks, 'nested', 'deep.md'), '# Deep\n');
+    fs.writeFileSync(path.join(tasks, 'notes.txt'), 'notes\n');
+    fs.writeFileSync(path.join(tasks, '.hidden.md'), '# Hidden\n');
+    const refused = [
+      // a flag is never a target
+      '--nope',
+      // a name the scan does not know
+      'missing-odd',
+      // relative, nested, another extension, a dotfile, a missing document
+      'odd/tasks/feature.md',
+      path.join(tasks, 'nested', 'deep.md'),
+      path.join(tasks, 'notes.txt'),
+      path.join(tasks, '.hidden.md'),
+      path.join(tasks, 'absent.md'),
+      // a real `.md` outside an `odd/tasks` directory
+      path.join(repo, 'README.md'),
+      path.join(repo, 'odd', 'README.md'),
+    ];
+    for (const raw of refused) {
+      notifications.length = 0;
+      await commands.get('odd').handler(raw, makeCtx(repo));
+      assert.deepEqual(notifications, [['error', `Unknown option "${raw}". Use /odd.`]], raw);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

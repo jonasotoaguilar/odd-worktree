@@ -588,6 +588,30 @@ The question this page answers: which rules must every change preserve, and what
     a default-shell renderer (`read`, `write`), and untouched, with no box, no
     padding and no background, for one that frames itself (Pi's `edit`).
 
+    **The jobs and CodeGraph cards claim their tools on every answer, because Pi
+    never asks twice.** The host resolves a tool's renderers ONCE, when it mounts
+    the card (`interactive-mode.js` hands the definition it resolved to
+    `ToolExecutionComponent`), so a `Card activity` gate read at resolver time could
+    only ever reach the next card. Both gates are therefore read INSIDE the
+    component's `render(width)`, which the host does run on every frame, and both
+    cards draw the host's own rows for every answer but `activity`:
+    `bash_background`, `monitor`, `job_stop` and `job_list` have no renderer of their
+    own, so `lib/file-card.js` reproduces the host's fallback itself —
+    `formatToolCallWithArgs` for the call, `createResultFallback` for the result
+    (read with the host's own `sanitizeBinaryOutput(stripAnsi(...))`), inside the
+    same reproduced box, whose ONE closing blank is the call's only while no result
+    follows and the result's afterwards; the CodeGraph card hands the row to the
+    chain's own renderers, captured by reference when the card was built, and
+    reproduces that same fallback for a tool whose definition resolved none (Pi's
+    own `codegraph`, which declares `renderShell: "self"`: its rows are drawn bare,
+    with no box) or whose renderer throws, exactly as the host catches it. `bash` is
+    the exception: its call is decided per COMMAND, which a resolver never sees, so a
+    bash row is wrapped only while the line already claims it and a bash call that
+    runs no CodeGraph keeps the host's very component — rows, mouse handling and all
+    — on every answer. One row of difference is expected and is the host's own: a
+    self-framed tool gets the host's separator blank row above it, exactly as the
+    file card's forwarded rows already do.
+
     **The bridge's design selection is the one switch, and this card owns none of
     it.** The card is painted while — and only while — the bridge's published
     reader answers that this package's activity design draws the tool being

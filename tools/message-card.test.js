@@ -270,6 +270,37 @@ test('a live flip repaints the message and turns it off again, with no re-regist
   assert.ok(wire.bridge.resolutions >= 4, 'the follow was read on every pass');
 });
 
+/**
+ * One MOUNTED message component: the rows the bridge answers for this message, read again on
+ * every paint. Mounted once, like the component Pi builds for a custom message — nothing here
+ * is rebuilt between the flips below, which is exactly the claim (S5).
+ */
+function mountMessage(state, customType, lines, width = 70) {
+  const hostRows = [...lines];
+  return {
+    render() {
+      return renderMessage(state, customType, hostRows, width);
+    },
+  };
+}
+
+test('a mounted message card repaints when Card activity flips, in both directions', () => {
+  // S5: the message designs are FOLLOWED per pass by the bridge, so a mounted message
+  // (Pi builds one per message and never asks its renderer again) repaints when the line
+  // moves — the one claim this card has to make good on, and the reason it owns no switch.
+  const wire = registered({ toolLine: ACTIVITY });
+  const input = plainBody(EXPLORATION, STARTED);
+  const mounted = mountMessage(wire.bridge, EXPLORATION, input);
+  const on = mounted.render();
+  assert.equal(unpaint(on[0]), headOf(EXPLORATION_HEADING, 70), 'the card is drawn while the line says activity');
+  wire.bridge.toolLine = 'native';
+  assert.deepEqual(mounted.render(), input, 'flipped off, the very same component draws Pi\'s own rows, byte for byte');
+  wire.bridge.toolLine = ACTIVITY;
+  assert.deepEqual(mounted.render(), on, 'flipped back on, the card is drawn again, unchanged');
+  assert.equal(wire.bridge.calls.length, 1, 'no re-registration: one design, asked again on every pass');
+  assert.equal(wire.bridge.resolutions, 3, 'the follow was read on each of the three passes');
+});
+
 test('registration needs no store, so no seed is written for a switch that already exists', () => {
   // The fake publishes no `createStore`: a module that seeded anything would have to throw here.
   const outcome = registered();

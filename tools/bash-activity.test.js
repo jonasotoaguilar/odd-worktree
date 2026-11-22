@@ -326,9 +326,9 @@ test('make options keep a check while an unknown recipe names nothing', () => {
 	}
 });
 
-// A watchdog bounds how long a check may run without changing what it does, so a
-// runner behind `timeout` still names the call. Anything else behind one is not a
-// check and is not inspection either.
+// A watchdog bounds how long a command may run without changing what it does, so the
+// command behind `timeout` names the call exactly as it would alone (every other family
+// is pinned in 'timeout names the command it bounds'). What no table names stays unnamed.
 test('a verification runner behind timeout still names the checking activity', () => {
 	for (const command of [
 		'timeout 900 pnpm typecheck 2>&1 | tail -20',
@@ -343,7 +343,7 @@ test('a verification runner behind timeout still names the checking activity', (
 	]) {
 		assert.equal(inferBashActivity(command), 'checking', command);
 	}
-	for (const command of ['timeout 5 node scripts/release.mjs', 'timeout 5 git status', 'timeout 300 unknown-script --watch', 'timeout 5']) {
+	for (const command of ['timeout 5 node scripts/release.mjs', 'timeout 300 unknown-script --watch', 'timeout 5']) {
 		assert.equal(inferBashActivity(command), undefined, command);
 	}
 });
@@ -726,14 +726,16 @@ test('a database client fed a deletion names the destructive card', () => {
 	]) {
 		assert.equal(inferBashActivity(command), undefined, command);
 	}
-	// A segment outside the payload is still unnamed, so the whole call stays generic:
-	// the deletion is proven, but the card never hides the work it cannot name.
+	// A segment outside the payload that nothing can name does not take the deletion away:
+	// the deletion is proven, and the heading claims only what the call provably did.
 	for (const command of [
 		`psql -c 'DROP TABLE t' && ./scripts/unknown.sh`,
 		`echo 'DROP TABLE t' | psql && ./scripts/unknown.sh`,
 		"psql <<'SQL'\nDROP TABLE t;\nSQL\n./scripts/unknown.sh",
+		'rm -rf dist && ./scripts/unknown.sh',
+		'python3 tools/run.py && rm -f out.log',
 	]) {
-		assert.equal(inferBashActivity(command), undefined, command);
+		assert.equal(inferBashActivity(command), 'destructive', command);
 	}
 });
 
@@ -753,7 +755,9 @@ test('a deleting program asked for its usage page is the query it is', () => {
 	]) {
 		assert.equal(inferBashActivity(command), 'exploring', command);
 	}
-	assert.equal(inferBashActivity('psql --help'), undefined);
+	// An unknown program asked for its usage in the one plain shape (bare words and a final
+	// `--help`) is the same query; any other shape of an unknown program stays unnamed.
+	assert.equal(inferBashActivity('psql --help'), 'exploring');
 	// A help flag directly after a flag-shaped word stays that word's value, the
 	// reading this classifier already makes everywhere (T2): the flag is then not a
 	// query, and the deletion it would have printed usage for removed nothing either,
@@ -769,16 +773,17 @@ test('a deleting program asked for its usage page is the query it is', () => {
 // whose name is an inherited member of a lookup table answers "no evidence" instead
 // of throwing on the row it was asked to draw.
 test('prototype-hazardous programs never throw and never name a deletion', () => {
-	for (const command of ['constructor -rf dist', '__proto__ -rf dist', '__proto__ rm -rf dist', 'constructor --help']) {
+	for (const command of ['constructor -rf dist', '__proto__ -rf dist', '__proto__ rm -rf dist']) {
 		assert.equal(inferBashActivity(command), undefined, command);
 	}
+	assert.equal(inferBashActivity('constructor --help'), 'exploring');
 });
 
 // ---- the precedence ladder ----
 
-// A check outranks a remote write, a history change, a rewrite and a build-up; a
-// remote write outranks a history change, a rewrite outranks a build-up, and
-// CodeGraph sits just above plain inspection. Every rung is stated with the two
+// What the call changed outranks what it verified: a remote write outranks a history
+// change, a history change outranks a check, a check outranks a rewrite, a rewrite outranks
+// a build-up, and CodeGraph sits just above plain inspection. Every rung is stated with the two
 // families it separates, so a moved rung fails here.
 test('the strongest named segment decides the card', () => {
 	assert.equal(inferBashActivity('pnpm test | tail -20'), 'checking');
@@ -788,9 +793,12 @@ test('the strongest named segment decides the card', () => {
 	assert.equal(inferBashActivity('pnpm install && git config user.name x'), 'preparing');
 	assert.equal(inferBashActivity('prettier --write . && pnpm install'), 'formatting');
 	assert.equal(inferBashActivity('git status && pnpm install'), 'preparing');
-	for (const command of ['pnpm install && pnpm test', 'git push && pnpm test', 'git commit -m x && make test']) {
+	for (const command of ['pnpm install && pnpm test', 'prettier --write . && pnpm test', 'git status && make test']) {
 		assert.equal(inferBashActivity(command), 'checking', command);
 	}
+	assert.equal(inferBashActivity('git push && pnpm test'), 'publishing');
+	assert.equal(inferBashActivity('git commit -m x && make test'), 'versioning');
+	assert.equal(inferBashActivity('pnpm test && git commit -m x'), 'versioning');
 	// The top rung: a deletion outranks every identity beside it, because it is the
 	// one consequence of the call a reader cannot undo. A check, an inspection or a
 	// remote write in the same command never takes the card from it.
@@ -813,11 +821,9 @@ test('the strongest named segment decides the card', () => {
 test('an unnamed segment anywhere keeps the whole call generic', () => {
 	for (const command of [
 		'pnpm test && node scripts/release.mjs',
-		'pnpm test && echo ok > out.txt',
-		'pnpm test && echo done | tee log.txt',
 		'pnpm test && ./scripts/deploy.sh',
 		"pnpm test && bash -c 'unknown-tool --flag'",
-		'curl https://example.com',
+		'curl -X POST https://example.com',
 		'ls && unknown-tool --flag',
 		// A program whose name is an inherited member of a lookup table is still just an
 		// unknown program: the row it is drawn on must never throw.
@@ -867,8 +873,10 @@ test('quoted text never turns a command into a write', () => {
 	assert.equal(inferBashActivity('gh issue comment 7 --body "before > after"'), 'publishing');
 	assert.equal(inferBashActivity('git log --format="%h > %s" -3'), 'exploring');
 	assert.equal(inferBashActivity("printf '%s\\n' \"a > b\" | cat"), 'exploring');
-	for (const command of ['git commit -m x > out.txt', 'cat src/a > out', "echo 'a > b' > out.txt"]) {
-		assert.equal(inferBashActivity(command), undefined, command);
+	assert.equal(inferBashActivity('git commit -m x > out.txt'), undefined);
+	// The unquoted redirect is a file the call creates; the quoted `>` stays text.
+	for (const command of ['cat src/a > out', "echo 'a > b' > out.txt"]) {
+		assert.equal(inferBashActivity(command), 'preparing', command);
 	}
 });
 
@@ -902,10 +910,12 @@ test('help detection never masks a mutation or a payload it cannot read', () => 
 	assert.equal(inferBashActivity("git commit -m 'docs: mention --help'"), 'versioning');
 	assert.equal(inferBashActivity("printf 'git push --help'"), undefined);
 	assert.equal(inferBashActivity('echo "--help"'), undefined);
-	// An unknown program's help flag is a guess, and a payload flag can swallow the
-	// help flag, so neither is a query.
+	// An unknown program's help flag is a query only in the plain shape (bare words, a final
+	// `--help`, no path, no runner); a script path, a shell and a payload flag can swallow
+	// the help flag, so none of them is a query.
 	for (const command of [
-		'unknown-tool --help',
+		'bash deploy.sh --help',
+		'sudo --help',
 		'./scripts/deploy.sh --help',
 		"bash -c 'git status' --help",
 		"node -e 'process.exit(0)' --help",
@@ -1000,7 +1010,7 @@ test('the segmenter refuses to split what it cannot prove', () => {
 		['git commit -m "unterminated && pnpm test', 'versioning'],
 		// A quoted separator is one argument, and the call keeps the identity its own
 		// command names.
-		['git commit -m "a; b" && pnpm test', 'checking'],
+		['git commit -m "a; b" && pnpm test', 'versioning'],
 		// A quoted `$(...)` still contributes its own commands, so a check hidden in a
 		// commit message is a check this card names.
 		['git commit -m "$(printf x)"', 'versioning'],
@@ -1111,8 +1121,8 @@ test('a program named by a path classifies as its basename', () => {
 
 // A wrapper changes how the command runs, not what it does, so the command behind it
 // names the card. `sudo` is deliberately absent: it runs the command as another user,
-// and no heading may file a privileged action as the read it resembles. `timeout` keeps
-// the reading this suite already pinned — only a check is unwrapped.
+// and no heading may file a privileged action as the read it resembles. `timeout` only
+// bounds the time, so it is unwrapped like the rest.
 test('a wrapper names the command it runs, and sudo never names anything', () => {
 	for (const [command, activity] of [
 		['env FOO=1 git status', 'exploring'],
@@ -1134,8 +1144,8 @@ test('a wrapper names the command it runs, and sudo never names anything', () =>
 		['sudo git status', undefined],
 		['sudo -u root pnpm test', undefined],
 		['env -S "git status"', undefined],
-		['env', undefined],
-		['timeout 5 git status', undefined],
+		['env', 'exploring'],
+		['timeout 5 git status', 'exploring'],
 	]) {
 		assert.equal(inferBashActivity(command), activity, command);
 	}
@@ -1364,10 +1374,9 @@ test('a heredoc body belongs to the command that reads it', () => {
 	assert.equal(inferBashActivity("git commit -F - <<'EOF'\nMerge branch 'main' of example\nEOF"), 'versioning');
 	assert.equal(inferBashActivity("gh pr create --title x --body \"$(cat <<'EOF'\nsome body\nEOF\n)\""), 'publishing');
 	assert.equal(inferBashActivity("git commit -m \"$(cat <<'EOF'\nMerge branch 'main'\n\nbody\nEOF\n)\""), 'versioning');
-	// A heredoc that writes a file is still a write, and a payload this classifier cannot
-	// read is still unnamed.
-	assert.equal(inferBashActivity("cat > notes.txt <<'EOF'\nhello\nEOF"), undefined);
-	assert.equal(inferBashActivity("python3 - <<'PY'\nprint(1)\nPY"), undefined);
+	// A heredoc that writes a file creates it, and a script that only prints is read.
+	assert.equal(inferBashActivity("cat > notes.txt <<'EOF'\nhello\nEOF"), 'preparing');
+	assert.equal(inferBashActivity("python3 - <<'PY'\nprint(1)\nPY"), 'exploring');
 });
 
 // The payloads nobody can read stay generic on purpose: an inline script, an interpreter
@@ -1375,15 +1384,10 @@ test('a heredoc body belongs to the command that reads it', () => {
 // file, a privileged invocation, a shell fed by a pipe, and `eval`.
 test('the payloads this classifier cannot read stay generic on purpose', () => {
 	for (const command of [
-		"python3 -c 'print(1)'",
-		"node -e 'console.log(1)'",
 		"bash -c 'echo hi'",
 		'node scripts/build.mjs',
 		'python3 tools/run.py --fast',
 		'bash scripts/deploy.sh',
-		"sed -i 's/a/b/' file.txt",
-		"perl -pi -e 's/a/b/' file.txt",
-		'cat > notes.txt',
 		'echo hi | sh',
 		'eval "$(cat setup.sh)"',
 		'xargs rm -rf',
@@ -1417,4 +1421,365 @@ test('a removed checkout wears the destructive family, a created one prepares', 
 	assert.equal(inferBashActivity('git worktree prune'), 'destructive');
 	assert.equal(inferBashActivity('git worktree add ../new -b feat/x'), 'preparing');
 	assert.equal(inferBashActivity('git worktree list'), 'exploring');
+});
+
+// ---- coverage: the shapes real transcripts left generic ----
+//
+// Mined from the user's own sessions (19k bash calls, ~29% generic): the largest honest
+// share was not an unknown program but a SHAPE the reader misread — a heredoc body that
+// carries backticks or an arrow, a redirect that only creates a file, a bare `do`/`break`
+// line, a `timeout` around an inspection. Each case below names what the call does and
+// nothing it did not.
+
+// A heredoc whose delimiter is quoted hands its body to the program as plain data: a
+// backtick or an `->` in a commit message is that message, not a hidden command and not
+// a redirect. Only an expanding body (unquoted delimiter) can still run something.
+test('a quoted heredoc body is data, whatever characters it carries', () => {
+	assert.equal(inferBashActivity("git commit -q -F - <<'MSG'\nfix(cards): repaint `Card tags` a -> b\n\nbody > more\nMSG"), 'versioning');
+	assert.equal(
+		inferBashActivity("cd /repo && set -e\ngit add a b\ngit commit -q -F - <<'MSG'\nfix: x `y`\nMSG\ngit log --oneline -5; git status --short | wc -l"),
+		'versioning',
+	);
+	assert.equal(inferBashActivity("cat <<'EOF'\nhello `x` --help -> y\nEOF"), 'exploring');
+	assert.equal(inferBashActivity('git commit -F - <<"MSG"\nfix `x`\nMSG'), 'versioning');
+	assert.equal(inferBashActivity('git commit -F - <<\\MSG\nfix `x`\nMSG'), 'versioning');
+	// An unquoted delimiter expands its body, so a substitution there may run anything.
+	for (const command of ['git commit -F - <<MSG\nfix `date`\nMSG', 'git commit -F - <<MSG\nfix $(date)\nMSG']) {
+		assert.equal(inferBashActivity(command), undefined, command);
+	}
+	// What follows the delimiter on the header line is still the command's own text.
+	assert.equal(inferBashActivity("git commit -F - <<'MSG' > out.txt\nfix\nMSG"), undefined);
+});
+
+// A redirect that only CREATES a file from a read or from text is the build-up the
+// `preparing` family already names for `mkdir`, `touch` and `cp`; it is never a mutation
+// of anything else, so a mutating command beside a redirect stays generic.
+test('a redirect that writes a file from a read or from text prepares', () => {
+	for (const command of [
+		"cat > \"$B\" <<'EOF'\n## What\nEOF",
+		"cat >> notes.md <<'EOF'\nmore\nEOF",
+		'echo ok > out.txt',
+		"printf '%s\\n' a b > list.txt",
+		'git show HEAD:a.css > build/a.css',
+		'gh pr view 12 --json body -q .body > body.md',
+		'git log --oneline 2>&1 > log.txt',
+		'echo done | tee log.txt',
+		'ls -la | tee -a listing.txt',
+	]) {
+		assert.equal(inferBashActivity(command), 'preparing', command);
+	}
+	assert.equal(inferBashActivity('pnpm test && echo ok > out.txt'), 'checking');
+	assert.equal(inferBashActivity('git push -q && echo ok > out.txt'), 'publishing');
+	assert.equal(
+		inferBashActivity("B=$(mktemp /tmp/b.XXXXXX)\ncat > \"$B\" <<'EOF'\nx\nEOF\ngh pr create --title t --body-file \"$B\" 2>&1 | tail -1"),
+		'publishing',
+	);
+	// The deletion beside it still outranks everything.
+	assert.equal(
+		inferBashActivity("B=$(mktemp /tmp/b.XXXXXX)\ncat > \"$B\" <<'EOF'\nx\nEOF\ngh pr create --title t --body-file \"$B\"\nrm -f \"$B\""),
+		'destructive',
+	);
+	for (const command of [
+		'git push > out.txt',
+		'npm install > install.log',
+		'git commit -m x > out.txt',
+		'unknown-tool > out.txt',
+		'python3 script.py > out.txt',
+		'echo x > >(tee f)',
+		'cat <(touch marker)',
+		'sed -i s/a/b/ f > out',
+		'echo x >',
+	]) {
+		assert.equal(inferBashActivity(command), undefined, command);
+	}
+});
+
+// The lines of a script the shell reads as keywords carry no work of their own.
+test('loop keywords and declarations are neutral beside the commands they frame', () => {
+	assert.equal(inferBashActivity('for f in a b; do\n  git add "$f"\ndone'), 'versioning');
+	assert.equal(inferBashActivity('for x in a b; do git status; break; done'), 'exploring');
+	assert.equal(inferBashActivity('while read -r l; do\n  git status\n  continue\ndone < list.txt'), 'exploring');
+	assert.equal(inferBashActivity('declare -A m=( [1]=2 )\ngit status'), 'exploring');
+	assert.equal(inferBashActivity('if true; then\n  git status\nelse\n  git log\nfi'), 'exploring');
+	for (const command of ['do', 'done < list.txt', 'break', 'declare -A m=( [1]=2 )']) {
+		assert.equal(inferBashActivity(command), undefined, command);
+	}
+});
+
+// A watchdog changes how long a command may run, never what it does, so the command
+// behind it names the call exactly as it would alone.
+test('timeout names the command it bounds', () => {
+	for (const [command, activity] of [
+		['timeout 5 git status', 'exploring'],
+		['timeout -k 5 60 git fetch', 'versioning'],
+		['timeout --foreground 30 git push', 'publishing'],
+		['timeout 30 rm -rf node_modules', 'destructive'],
+		['timeout 25 grep -rIl -i foo /tmp', 'exploring'],
+		['timeout 5', undefined],
+		['timeout 5 unknown-tool --watch', undefined],
+		['timeout 5 node scripts/release.mjs', undefined],
+	]) {
+		assert.equal(inferBashActivity(command), activity, command);
+	}
+});
+
+test('version probes, environment listings and read-only host probes are exploring', () => {
+	for (const command of [
+		'node -v',
+		'node --version',
+		'python3 --version',
+		'git --version',
+		'cargo -V',
+		'go version',
+		'env',
+		'mount',
+		'ss -ltnp',
+		'lsblk -f',
+		'findmnt /',
+		'ip addr show',
+		'ip -br link',
+		'dconf dump /',
+		'gsettings get org.gnome.desktop.interface gtk-theme',
+		'niri msg outputs',
+		'niri msg focused-window',
+		'pactl info',
+		'wpctl status',
+		'fc-list',
+		'adb devices',
+		'adb -s emulator-5556 shell getprop sys.boot_completed',
+		'herdr pane read wC5:p1 --source visible --lines 60',
+		'herdr plugin config-dir worktree-hooks',
+		'gentle-ai review mode status',
+		'git archive HEAD',
+		'git hash-object lib/a.js',
+		'npm pack --dry-run',
+		'npm pack --dry-run 2>&1 | grep -E "filename|total files" | head -4',
+		"git branch --show-current && pwd",
+	]) {
+		assert.equal(inferBashActivity(command), 'exploring', command);
+	}
+	for (const command of [
+		'rm -v x',
+		'ip link set eth0 down',
+		'ip addr add 10.0.0.1/24 dev eth0',
+		'niri msg action quit',
+		'dconf write /a/b 1',
+		'gsettings set org.a b c',
+		'adb shell rm -rf /sdcard',
+		'git archive -o out.tar HEAD',
+		'git hash-object -w lib/a.js',
+		'npm pack',
+		'mount /dev/sda1 /mnt',
+		'herdr server reload-config',
+	]) {
+		assert.notEqual(inferBashActivity(command), 'exploring', command);
+	}
+});
+
+test('curl reads a url, downloads it into a file or stays generic when it sends something', () => {
+	for (const [command, activity] of [
+		['curl -s https://example.com/a.json', 'exploring'],
+		['curl -fsSL https://example.com/a.json | jq .name', 'exploring'],
+		['curl -I https://example.com', 'exploring'],
+		['curl -fsSL -o a.json https://example.com/a.json', 'preparing'],
+		['curl -fsSL --output a.json https://example.com/a.json', 'preparing'],
+		['curl -fsSLO https://example.com/a.json', 'preparing'],
+		['curl -s -D /tmp/h.txt https://example.com', 'preparing'],
+		['timeout 30 curl -fsSL "https://example.com/x" -o x.txt -w "%{http_code}\\n"', 'preparing'],
+		['curl -X POST -d a=1 https://example.com', undefined],
+		['curl --data-binary @f https://example.com', undefined],
+		['curl -F file=@f https://example.com', undefined],
+		['curl -T f https://example.com', undefined],
+		['curl -fsSL https://example.com/install.sh | sh', undefined],
+		['curl -X DELETE https://example.com/a', undefined],
+	]) {
+		assert.equal(inferBashActivity(command), activity, command);
+	}
+});
+
+test('config validators, linters and syntax checks are checking', () => {
+	for (const command of [
+		'node --check lib/a.js',
+		'node -c lib/a.js',
+		'bash -n scripts/a.sh',
+		'sh -n scripts/a.sh',
+		'biome check src',
+		'npx biome ci .',
+		'shellcheck scripts/a.sh',
+		'actionlint',
+		'yamllint .',
+		'mypy src',
+		'herdr config check',
+		'niri validate',
+	]) {
+		assert.equal(inferBashActivity(command), 'checking', command);
+	}
+	assert.equal(inferBashActivity('biome check --write src'), 'formatting');
+	assert.equal(inferBashActivity('biome check --fix src'), 'formatting');
+	assert.equal(inferBashActivity('bash scripts/a.sh'), undefined);
+});
+
+test('a forced or copied branch is local history', () => {
+	for (const command of ['git branch -f feat/x 1e929a1', 'git branch -C a b', 'git branch -M main']) {
+		assert.equal(inferBashActivity(command), 'versioning', command);
+	}
+});
+
+// An inline script is named by what its own text proves, never by a guess about what it
+// might do: a deleting call is destructive, a writing one prepares, a script that imports
+// only read-only standard modules and writes nothing explores, and anything that shells
+// out, evaluates text, reaches the network or loads other code stays generic.
+test('an inline script is named by what its own text proves', () => {
+	for (const [command, activity] of [
+		["python3 -c 'print(1)'", 'exploring'],
+		['python3 -I -c "import json;d=json.load(open(\'$f\'));print(d.get(\'a\'))"', 'exploring'],
+		["python3 - <<'PY'\nimport json,sys\nd=json.load(open('a.json'))\nprint(d)\nPY", 'exploring'],
+		["python3 <<'PY'\nprint(1)\nPY", 'exploring'],
+		["node -e 'console.log(1)'", 'exploring'],
+		['node -p "require(\'./package.json\').version"', 'exploring'],
+		["node --input-type=module -e \"import fs from 'node:fs'; console.log(fs.readFileSync('a','utf8'))\"", 'exploring'],
+		["node - <<'JS'\nconst fs=require('node:fs');process.stdout.write(fs.readFileSync('a','utf8'))\nJS", 'exploring'],
+		["python3 - <<'PY'\nimport pathlib\npathlib.Path('a').write_text('x')\nPY", 'preparing'],
+		["python3 -c \"open('a','w').write('x')\"", 'preparing'],
+		["node -e \"require('fs').writeFileSync('a','x')\"", 'preparing'],
+		["python3 -c \"import os; os.remove('a')\"", 'destructive'],
+		["python3 - <<'PY'\nimport shutil\nshutil.rmtree('d')\nPY", 'destructive'],
+		["node -e \"require('fs').rmSync('d',{recursive:true})\"", 'destructive'],
+		['python3 -c "print(1)" > out.txt', 'preparing'],
+		// Not readable: another program, text run as code, the network, code loaded by name.
+		["python3 -c \"import subprocess; subprocess.run(['ls'])\"", undefined],
+		['python3 -c "import os; os.system(\'ls\')"', undefined],
+		['python3 -c "eval(input())"', undefined],
+		['python3 -c "import requests"', undefined],
+		['python3 -c "import mymodule"', undefined],
+		["node -e \"require('child_process').execSync('ls')\"", undefined],
+		["node -e \"import('file://$PWD/x.js')\"", undefined],
+		["node -e \"require('./x.js')\"", undefined],
+		["node -e \"fetch('https://example.com')\"", undefined],
+		// A file or a module to run is not an inline script.
+		['python3 tools/run.py', undefined],
+		['python3 -m http.server', undefined],
+		['node scripts/build.mjs', undefined],
+		['node -r ./hook.js -e "1"', undefined],
+	]) {
+		assert.equal(inferBashActivity(command), activity, command);
+	}
+});
+
+test('a shell or ssh handed a command line is named by that command line', () => {
+	for (const [command, activity] of [
+		["bash -c 'git status'", 'exploring'],
+		["sh -c 'git push'", 'publishing'],
+		["bash -c 'rm -rf dist'", 'destructive'],
+		["ssh sv-home 'cat ~/.config/herdr/config.toml'", 'exploring'],
+		["ssh -o BatchMode=yes -o ConnectTimeout=8 sv-home 'hostname; ls -la ~/x'", 'exploring'],
+		["ssh sv-home 'rm -rf /tmp/x'", 'destructive'],
+		["bash -c 'echo hi'", undefined],
+		["bash -c 'unknown-tool'", undefined],
+		['bash scripts/deploy.sh', undefined],
+		['ssh sv-home', undefined],
+		["ssh -L 8080:localhost:80 sv-home 'ls'", undefined],
+	]) {
+		assert.equal(inferBashActivity(command), activity, command);
+	}
+});
+
+// Single quotes expand nothing, so a backtick inside them hides no command.
+test('a backtick inside single quotes is text', () => {
+	assert.equal(inferBashActivity("git commit -m 'fix `Card tags` row'"), 'versioning');
+	assert.equal(inferBashActivity('git commit -m "fix `date`"'), undefined);
+});
+
+// An unknown program's usage page, and an in-place edit, are named by what they do.
+test('plain usage requests and in-place edits are named', () => {
+	for (const command of ['unknown-tool --help', 'dms ipc --help', 'voxtype transcribe --help']) {
+		assert.equal(inferBashActivity(command), 'exploring', command);
+	}
+	for (const command of ['./scripts/deploy.sh --help', 'bash deploy.sh --help', 'tool --help extra', 'tool -x --help']) {
+		assert.notEqual(inferBashActivity(command), 'exploring', command);
+	}
+	for (const command of ["sed -i 's/a/b/' file.txt", "sed -i '49,60d' AGENTS.md", "perl -pi -e 's/a/b/' file.txt", "sed -n -i.bak 1p f"]) {
+		assert.equal(inferBashActivity(command), 'preparing', command);
+	}
+	assert.equal(inferBashActivity("sed -n '1,5p' file.txt"), 'exploring');
+});
+
+// ---- regressions an independent verification found ----
+
+// A script that only PRINTS a deleting word does not delete; a script that mutates through a
+// spelling a pattern list could miss is never filed as a read.
+test('inline script text: strings are not calls, and a mutation is never a read', () => {
+	assert.equal(inferBashActivity(`python3 -c 'print("os.remove")'`), 'exploring');
+	assert.equal(inferBashActivity(`node -e 'console.log("rmSync")'`), 'exploring');
+	assert.equal(inferBashActivity(`codegraph status && python3 -c 'print("os.remove")'`), 'codegraph');
+	for (const command of [
+		`python3 -c 'from os import unlink; unlink("a")'`,
+		`python3 -c 'import os as o; o.remove("a")'`,
+		`python3 -c 'from pathlib import Path; open(Path("a"), "w").close()'`,
+		`python3 -c 'open("a", mode="w").close()'`,
+		`node -e 'const {rm}=require("node:fs/promises"); rm("a")'`,
+		`node -e 'const stdout=new (require("fs").WriteStream)("out"); stdout.write("x")'`,
+		`node -e 'require("fs").openSync("a","w")'`,
+	]) {
+		assert.notEqual(inferBashActivity(command), 'exploring', command);
+	}
+	assert.equal(inferBashActivity(`python3 -c 'from pathlib import Path; open(Path("a")).read()'`), 'exploring');
+	assert.equal(inferBashActivity(`node -e 'const {readFileSync}=require("fs"); console.log(readFileSync("a","utf8"))'`), 'exploring');
+});
+
+test('curl: what it sends, what it keeps in a file, and stdout', () => {
+	for (const args of ['-dfoo=bar', '-T./payload', '-sXMERGE', '--config request.txt', '-X POST', '--request=PUT']) {
+		assert.equal(inferBashActivity(`curl ${args} https://example.test`), undefined, args);
+	}
+	assert.equal(inferBashActivity('curl -oout.txt https://example.test'), 'preparing');
+	assert.equal(inferBashActivity('curl -o - https://example.test'), 'exploring');
+	assert.equal(inferBashActivity('curl -sSLf --max-time 5 https://example.test'), 'exploring');
+	assert.equal(inferBashActivity('curl -X GET https://example.test'), 'exploring');
+});
+
+test('wrappers: positional arguments, redirects and a bounded depth', () => {
+	assert.equal(inferBashActivity(`bash -c 'rm -f "$1"' _ out`), 'destructive');
+	assert.equal(inferBashActivity(`bash -c 'git push' > out`), undefined);
+	assert.equal(inferBashActivity(`bash -c 'git status' > out`), 'preparing');
+	const started = Date.now();
+	assert.doesNotThrow(() => inferBashActivity('ssh host '.repeat(4000) + 'true'));
+	assert.ok(Date.now() - started < 2000, 'a pile of ssh wrappers is read in bounded time');
+});
+
+test('tee and sed -i need a real file and a real flag', () => {
+	assert.equal(inferBashActivity('tee --append'), undefined);
+	assert.equal(inferBashActivity('tee -a log.txt'), 'preparing');
+	assert.notEqual(inferBashActivity('sed -n "1p" "report -i backup.txt"'), 'preparing');
+});
+
+// What follows a heredoc's header on its own line is still the shell's text: a pipe or an
+// `&&` there starts a command of its own, and the body stays with the command that opened it.
+test('a command after a heredoc header on the same line is read', () => {
+	assert.deepEqual(shellCommandSegments("cat <<'EOF' | head x\nbody\nEOF"), ["cat <<'EOF' \nbody\nEOF", ' head x']);
+	assert.equal(inferBashActivity("cat <<'EOF' | rm -f a\nbody\nEOF"), 'destructive');
+	assert.equal(inferBashActivity("cat <<'EOF' | head -3\nbody\nEOF"), 'exploring');
+	// An escaped substitution in an expanding body is text.
+	assert.equal(inferBashActivity('git commit -F - <<MSG\nfix \\$(date)\nMSG'), 'versioning');
+	assert.equal(inferBashActivity('git commit -F - <<MSG\nfix $(date)\nMSG'), undefined);
+});
+
+// ---- second verification: a word is a call only when it is called ----
+test('inline scripts, curl, comments and stacked heredocs name only what they perform', () => {
+	for (const [command, expected] of [
+		[`python3 -c 'unlink = 4; print(unlink)'`, 'exploring'],
+		[`node -e 'const rmSync=3; console.log(rmSync)'`, 'exploring'],
+		[`node -e 'console.log(/rmSync/.test("xyz"))'`, 'exploring'],
+		[`python3 -c 'print("open(x, mode=w)")'`, 'exploring'],
+		[`python3 -c 'from pathlib import Path; Path("out").open(mode="w").close()'`, 'preparing'],
+		[`python3 -c 'from pathlib import Path; Path("out").open("w").close()'`, 'preparing'],
+		[`node -e 'console.log(1)' -r ./helper.cjs`, undefined],
+		['curl --etag-save etag.txt file:///tmp/input.txt', 'preparing'],
+		['curl --output-dir here file:///tmp/input.txt', 'exploring'],
+		["cat <<'ONE' <<'TWO'\nfirst\nONE\nrm -f a\nTWO", 'exploring'],
+		['echo hello # && rm -rf x', undefined],
+		['git status # && rm -rf x', 'exploring'],
+		['git commit -m "a # b"', 'versioning'],
+	]) {
+		assert.equal(inferBashActivity(command), expected, command);
+	}
 });

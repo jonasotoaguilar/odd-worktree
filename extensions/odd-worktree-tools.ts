@@ -2985,6 +2985,124 @@ function handleWorktreeOddEvent(event, ctx, pi, allowPhaseTrigger) {
   return undefined;
 }
 
+// ---------------------------------------------------------------------------
+// The ODDs THIS session wrote or edited (odd-rail-section T8: S8, S9).
+//
+// S9: this is an ANNOTATION, never the source of truth. What exists, where it lives and
+// which copy is newest is the scan's answer (lib/odd-scan.js, lib/odd-group.js); the
+// record below only says "this session touched that document", so the rail can order it
+// first and ask for an immediate refresh instead of waiting for its TTL.
+//
+// S8: the rule is lib/odd-session.js's — a `write` or an `edit` landing on an
+// `odd/tasks/*.md` document. The DECISION lives there, as a pure function of the
+// `{ toolName, paths }` this file already extracts for every other observation
+// (`oddToolNameOf`, `oddTouchedPaths`, `oddEventCwd`), so there is no second
+// tool-argument parser here and the rule is testable without a host.
+//
+// S8: the observation is `tool_result`, not `tool_call`, because a write which FAILS
+// must not leave a phantom row: only a result that is not an error is a touch.
+//
+// S9: a SUBAGENT's write never reaches this handler — a subagent runs in its own
+// session, with its own instance of this extension — so the parent records nothing for
+// it. That is by design and not a gap to work around: the filesystem scan is what
+// covers a subagent's ODD, and this record only ever annotates the session that
+// actually made the call.
+//
+// The record itself is module scope so the rail's section (T4) can read `touched()`
+// and request a refresh; nothing here draws, lists or decides anything.
+//
+// It is NOT part of the `Worktrees+` half: the ODD rail belongs to the worktree module
+// only through registration, so the attribution has to be there with that module OFF —
+// a session that cannot register a worktree still works on ODDs. Only the observation
+// lives here, so leaving it on costs one comparison per tool result and no surface.
+let oddSession = null;
+// The section's immediate-refresh request. Unset until the rail binds it (T4), and
+// calling an unset request is a no-op, so a touch never depends on a section existing.
+let oddSessionRefresh = null;
+
+function setOddSessionRefresh(request) {
+  oddSessionRefresh = typeof request === "function" ? request : null;
+}
+
+// The record this load owns, or null when the module cannot be loaded. It is created
+// whatever the `Worktrees+` switch says, because the attribution is not a worktree
+// feature (see above); the module's own factory takes an injectable clock, and
+// production passes none and gets `Date.now`.
+function createOddSession() {
+  try {
+    const lib = libRequire("odd-session.js");
+    if (!lib || typeof lib.createOddSession !== "function") return null;
+    return lib.createOddSession();
+  } catch {
+    // No record: an annotation nobody can keep is left out, never fatal.
+    return null;
+  }
+}
+
+// S8 (T8): ONE durable entry per registered touch, guarded exactly like
+// `warpAppendQueueEntry`: a host without the seam, or one that throws, simply records
+// the touch in memory and shows nothing. No entry renderer is registered for it — a
+// custom entry paints nothing in the transcript unless it is paired with one (Pi's
+// `appendEntry`/`registerEntryRenderer` contract) — so a touch never adds a line.
+function appendOddTouchEntry(pi, entry) {
+  if (!pi || typeof pi.appendEntry !== "function") return false;
+  try {
+    pi.appendEntry(entry.customType, entry.data);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The `tool_result` observation (S8): never throws, never patches the result, and does
+// nothing at all when the worktree module left no record.
+function noteOddSessionTouch(event, ctx, pi) {
+  try {
+    if (oddSession === null) return;
+    const toolName = oddToolNameOf(event);
+    // The registration test runs in lib before a timestamp is read, so a `read`, a
+    // `bash` or any other tool costs no clock and no entry.
+    const registered = oddSession.note({
+      toolName,
+      paths: oddTouchedPaths(oddArgsOf(event)),
+      cwd: oddEventCwd(event, ctx),
+      isError: event && typeof event === "object" ? event.isError === true : false,
+    });
+    if (registered !== true) return;
+    // The document this call just registered is the record's front row (a touch always
+    // moves its document there), so the persisted entry carries exactly the recorded
+    // path and `at` instead of a second reading of the clock.
+    const touch = oddSession.touched()[0];
+    if (!touch) return;
+    appendOddTouchEntry(pi, oddSession.entryOf(touch));
+    if (oddSessionRefresh !== null) {
+      try {
+        oddSessionRefresh();
+      } catch {
+        // A section that cannot refresh never costs the record.
+      }
+    }
+  } catch {
+    // A `tool_result` observation is bookkeeping: it never breaks the result it rides on.
+  }
+  return undefined;
+}
+
+// S8 (T8): the resume boundary. `session_start` fires for a new, resumed, forked and
+// reloaded session alike, and the persisted entries are what a resumed session
+// remembers — so the record is rebuilt from them there and nowhere else. A manager that
+// cannot answer restores nothing (lib/odd-session.js skips every garbage entry).
+function restoreOddSession(ctx) {
+  try {
+    if (oddSession === null) return;
+    const sm = ctx && ctx.sessionManager;
+    const entries = sm && typeof sm.getEntries === "function" ? sm.getEntries() : undefined;
+    oddSession.restore(entries);
+  } catch {
+    // An unreadable session manager leaves the record empty, never the boundary broken.
+  }
+}
+
 // The worktree guard (S1–S6, S8–S10): one `tool_call` observation that REFUSES the
 // `bash` commands which would take work out of the ODD's own checkout. The decision
 // is `lib/worktree-guard.js`'s — text-only, and only for the `bash` tool — and this
@@ -9804,6 +9922,11 @@ function registerOddWorktreeSurfaceEntries(pi) {
   } catch {
     oddModules = { codegraph: true, worktrees: true };
   }
+  // S8/S9 (T8): the record of the ODDs this session wrote or edited is NOT part of the
+  // worktree half: the ODD rail is `Worktrees+`'s surface, so the attribution has to be
+  // there with that module OFF too. One record per load — a `session_start` restores it
+  // from the session's own entries.
+  oddSession = createOddSession();
   if (oddModules.worktrees) registerWarpMessageRenderer(pi);
   // S5 (warp-queue-boundary): the durable fallback of the queued line needs a
   // renderer for its own entry type, exactly like Pi's `restored N messages`
@@ -9861,6 +9984,12 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // `registerShortcut`, so this boundary has nothing of the picker's to do.
   pi.on("session_start", (event, ctx) => {
     rememberIssuesSidebarSession(ctx);
+    // S8/S9 (T8): the resume boundary. A resumed (or new, forked, reloaded) session
+    // remembers the ODD documents it wrote or edited because the entries are rebuilt
+    // here. It sits in the ONE `session_start` hook rather than a second one for the
+    // same event, and it is not gated by the `Worktrees+` switch: the attribution of
+    // this session's ODDs exists with that module off as well.
+    restoreOddSession(ctx);
     // T16 (S6/S9): a session that starts in another checkout also cuts the CACHE
     // write path, not just the section's snapshot. The identity — not the checkout
     // — keys the cache, so two checkouts of one repository share an entry: an
@@ -9961,6 +10090,14 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // the host runs it. Same switch: with `Worktrees+` off, a read is left as the host proposed it.
   if (oddModules.worktrees) pi.on("tool_call", (event) => keepSkillReadWholeCall(event));
   if (oddModules.worktrees) pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
+  // S8/S9 (T8): the ODD documents THIS session wrote or edited. It is a THIRD
+  // `tool_result` observation beside the naming one — the two answer different
+  // questions about the same event — and it is `tool_result` on purpose: a write that
+  // never landed is not a touch. Nothing here draws: the record is what the rail's
+  // section reads (T4). It is deliberately NOT gated by `Worktrees+`: the rail's ODD
+  // list belongs to that module, so the attribution must already be recording when the
+  // module is off. Every worktree observation above and below keeps its own gate.
+  pi.on("tool_result", (event, ctx) => noteOddSessionTouch(event, ctx, pi));
   // S10 (T9): ONE `tool_result` observation for the rail's forced refresh. It
   // answers the `bash` tool only — every other tool returns before the classifier
   // is even loaded — and it is separate from the naming handler because the two
@@ -10141,4 +10278,4 @@ function registerOddWorktreeSurfaceEntries(pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule, oddSession, setOddSessionRefresh };

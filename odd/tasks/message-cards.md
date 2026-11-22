@@ -42,6 +42,8 @@ palette, no raw escape sequence, no second card grammar.
 | --- | --- | --- | --- | --- |
 | T1 | S1, S2, S5 | worker (`gentle-ai-worker`) | none (new module, no shared code) | `3b8a515` ✅ — `lib/message-card.js` (26 tests), `lib/bash-design.js` `TOOLS_LINE` export (+3), docs. Slice boundary: 1004 authored lines, one unit (drawing + tests + docs) |
 | T2 | S1, S3, S4 | inline (parent) | item 3 (`extensions/odd-worktree-tools.ts` is a host registration surface other extensions load) | `8ca153a` ✅ — the registration beside the jobs card, same bridge-ready path and measurement seam |
+| T3 | S4 | inline (parent) | none (removes a path) | `29ba811` ✅ — the capability probe removed; registration depends on the published release alone, failing closed; width guard; docs no longer overstate the cost |
+| T4 | S1, S4 | inline (parent) | none (one constant + docs) | `4630d37` ✅ — the floor is `0.12.1`: `0.12.0` has `follows` but let a stored message id veto it, so it cannot keep S1 |
 
 T1 builds `lib/message-card.js` + `tools/message-card.test.js` + the docs. T2 wires the registration in
 `extensions/odd-worktree-tools.ts` and commits both slices. Suite after T2: 2623 pass, 0 fail.
@@ -63,6 +65,19 @@ L3 — the human, verbatim, on the full body (S2):
 
 L4 — the human, verbatim, on who owns the work:
 > "bien, agregalo al bridge, abre sesion ahi y avisale que lo agregue"
+
+L6 — independent verification of T2 (read-only `gentle-ai-verify`) rejected the first state and named two
+findings that were ours: the capability probe cannot distinguish a refused follow from an unrelated
+refusal, and an accepted-then-withdrawn probe can leave the bridge's row provider installed; and the docs
+claimed "no extra work per pass" when a claimed-but-inactive alert still paid a selection resolution.
+T3 answers both. It also could not execute anything — its preparer refuses a linked worktree
+(`unsupported repository: ordinary single-root Git directory required`), so its findings are source-level
+and the suite evidence is this document's own.
+
+L7 — bridge `0.12.1` released (tag `v0.12.1`, merge `dd7292d`, release `76b77f6`): a stored message-side id
+is never consulted for a follow now (the follow is answered before the message document is opened), and an
+inactive follow costs a registry walk with no store read at all. No consumer change: the registration this
+package makes keeps working as-is. T4 raises the floor to it, because `0.12.0` cannot keep S1.
 
 L5 — the bridge half is DONE and released, reported by the bridge session (evidence, not a request):
 `gentle-shell-bridge@0.11.0`, merge `af3af60`, release `c794dbf`; `node --test` 858 (857 pass, 1 skipped),

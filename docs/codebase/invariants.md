@@ -23,9 +23,9 @@ The question this page answers: which rules must every change preserve, and what
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
-3. **The shipped surface is exactly five commands, two tools, one sidebar
+3. **The shipped surface is exactly four commands, two tools, one sidebar
    section and two tool designs.** `/warp`, `/odd`,
-   `/files`, `/issues`, `/depth`; `worktree_create`, `worktree_list`; the one fourth kind of
+   `/files`, `/issues`; `worktree_create`, `worktree_list`; the one fourth kind of
    surface, a sidebar section (`lib/issues-section.js`) that is neither a command nor a tool and
    registers no name the host or the agent can call; the two designs
    (`lib/bash-design.js`, `lib/diff-design.js`) on the two lines the bridge owns, one
@@ -724,24 +724,3 @@ The question this page answers: which rules must every change preserve, and what
     `tools/issues-command.test.js` pins "without the CLI neither the command nor the
     rail section exists" and "the decision costs no child process, at load or at
     session start".
-
-29. **`/depth` only launches.** `/depth <request>` starts ONE background
-    `gentle-ai-explore` through the host's own `subagent_run` tool
-    (`ctx.executeTool`, used only when `ctx.tools` names it) with the task
-    `lib/depth-task.js` builds — the instructions of `lib/depth-prompt/depth.md`,
-    then the request verbatim, last — and answers with one notice. Everything after
-    the start is gentle-agents': the progress, the cancel and the handoff that lands
-    in the session. The command draws nothing, keeps no state, registers no key, hook,
-    tool or message of its own, never mutates another tool's input and spawns no
-    child. The arguments are exactly `agent`, `task`, `label` and `mode:
-    "background"`, because the host tool rejects any other key. An empty request, a
-    session without `subagent_run` and a refusal from the host tool each end in one
-    sentence and start nothing; the host tool's own words are shown. The Markdown is
-    read on every call, so an edit applies to the next `/depth`; an unreadable or
-    empty file falls back to a short built-in task that still names every return
-    section, and the shipped file keeps the eight headings of the handoff in order,
-    `## Original request` through `## For the parent`, because the parent reads
-    them; the opening line and the closing paragraph are in the shipped file and in the
-    fallback, because the woken parent has only the handoff to tell it not to
-    implement. Nothing here throws. `tools/depth-task.test.js`,
-    `tools/depth-launch.test.js` and `tools/depth-command.test.js` pin it.

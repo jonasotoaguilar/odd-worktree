@@ -33,7 +33,9 @@ Feature: a `/prs` panel cloned from `/issues` for pull requests, joined to the G
 | T12 | S2 | writer, view + client D16-D20 | pending |
 | T13 | all | final scoped verification | FAIL: D16, D17 (short frame), D19 (real gh), D20 (race), D3 (editors), 2 T12 regressions |
 | T14 | S2 | writer, view + client D21-D26, with the verifier's probe file as RED | pending |
-| T15 | all | last verification: safety-only; whatever remains is reported to the user, not looped | pending |
+| T15 | all | last safety-only verification | FAIL: D27-D32; probes in `tools/prs-t15-independent.test.js` |
+| T16 | S2, S5, S6 | writer, view + client + issue data seam D27-D32 | pending |
+| T17 | all | one scoped verification of D27-D32; anything left is reported to the user, no more loops | pending |
 
 ## Contract (fixed before T1-T4 start; the four units are parallel and share no file)
 
@@ -112,6 +114,17 @@ The verifier's durable probe file is `/tmp/t13-probes/prs-t13-independent.test.j
 - **D24 (T12 regression)** `lib/gh-prs.js:1384-1397`: with no explicit pin and no checkout, the ambient default changing after the role read sent a close to another repository. Resolve the ambient repository ONCE, pin it (host-qualified) for the role read and for the write alike.
 - **D25 (D20 race)** `lib/prs-view.js:941-984,1011-1036`: a held reload installs a newer negative detail, then the older positive save-time read settles and the close/merge/linked seams run. Detail reads carry a per-number monotonic sequence; a save-time read only decides when no newer detail for that number was installed, and a newer negative answer wins (refuse, no seam).
 - **D26 (D3)** `lib/prs-view.js` labels, assignees and label creation: after a reorder the editors save with the cached permission of the captured number; apply the same fresh gate (capabilities and state, newest answer wins) to every editor save, not only close/merge/linked.
+
+### T15 verdict: defects to fix (T16), designed to end the class
+
+RED suite: `tools/prs-t15-independent.test.js` (33 tests, 12 fail). Its single D22 narrow-width test is a verifier-declared MINOR advisory (24 columns, the captured target is still the one dispatched): convert only that test to `test.todo` with a comment saying so; every other assertion stays.
+
+- **D27 (linked-issue body edits, redesigned, replaces the fence parser of D16/D21)** `lib/gh-prs.js:1022-1066,1774-1795`: stop interpreting Markdown. ADD appends `\nCloses #N <!-- odd-worktree:linked -->` (blank line first when the body does not end with one) unless a column-0 `Closes #N` (any closing keyword, case-insensitive) already declares it (then nothing is written); it REFUSES (`the pull request body ends inside an unclosed code fence or comment`) when the body has an odd number of 3+ backtick/tilde runs or an unbalanced `<!--`/`-->` count. REMOVE deletes ONLY a line that carries this panel's own marker; any other declaration is refused with `that link was not added by this panel; remove it on GitHub`; a `Closes` line inside a fence/comment is never touched because it carries no marker. The body is re-read immediately before the write and compared with the first read: any difference refuses with `the pull request body changed while it was being edited` and writes nothing.
+- **D28 (hosts)** `lib/gh-prs.js:322-328,1451-1468`: the role read and the write of every gated operation share one host-qualified scope AND every `gh api` child carries `--hostname <that host>` + `GH_HOST`, github.com included (a public pin must not drift to an Enterprise default, and the reverse). The ambient fallback resolves the host from the repository lookup itself (`gh repo view --json url`), never defaulting to github.com. This intentionally changes the github.com argv of the client's `gh api` calls (adds `--hostname github.com`); update the differential expectations accordingly and say so.
+- **D29 (linked PRs of another repository)** `lib/gh-issues.js:1532,1757,1784` (the issue data seam; you may edit that file and its tests for this alone), `extensions/odd-worktree-tools.ts:8515-8526,9975-9977`: a linked PR is identified by repository AND number. The rail query and the issue metadata read the linked PR's `repository { nameWithOwner }`; a PR whose repository is not the pinned one is neither marked on the rail row, nor routed to `/prs`, nor a click range in the issue pane (it renders as plain `owner/repo#N` text). Same rule for the PR pane's linked issues.
+- **D30 (revoked merge method)** `lib/prs-view.js:2096-2108`: the fresh gate also validates the method chosen in the open merge form against the fresh `mergeMethods`; a method no longer allowed refuses before the seam with its own sentence.
+- **D31 (state on label/assignee writes)** `lib/gh-prs.js:914-929,1623-1658`, `lib/prs-view.js`: editLabels and editAssignees read the PR state in the same round trip that proves the role and refuse a PR that is not OPEN (the decision paragraph already says a non-open PR loses its editor keys); the PR's `state` comes from the GraphQL metadata when it and `pr view` disagree (CLOSED/MERGED wins), in the detail the view caches.
+- **D32** copy the probe-file test names above into your report with their final result, and list any assertion you could not satisfy and why.
 
 ## Log
 

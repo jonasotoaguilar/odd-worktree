@@ -31,7 +31,9 @@ Feature: a `/prs` panel cloned from `/issues` for pull requests, joined to the G
 | T10b | S4 | writer, rail D9 repaint, D15 totals | done, `d78633c` |
 | T11 | all | third verification | FAIL on S2: D4, D11 (display), D12, D13 (host), D3 (reorder/removal) still open; D9, D14, D15 fixed |
 | T12 | S2 | writer, view + client D16-D20 | pending |
-| T13 | all | final scoped verification (D16-D20 only plus the suite) | pending |
+| T13 | all | final scoped verification | FAIL: D16, D17 (short frame), D19 (real gh), D20 (race), D3 (editors), 2 T12 regressions |
+| T14 | S2 | writer, view + client D21-D26, with the verifier's probe file as RED | pending |
+| T15 | all | last verification: safety-only; whatever remains is reported to the user, not looped | pending |
 
 ## Contract (fixed before T1-T4 start; the four units are parallel and share no file)
 
@@ -99,6 +101,17 @@ Decision recorded first (parent): **comments stay available in every PR state**,
 - **D18 (D11, composer title)** `lib/prs-view.js:1210-1215,1465-1466`: the composer shows `Comment on #N` for its captured number and highlights that row (same window rule as D17), so what the user sees is where the comment goes.
 - **D19 (D13, host dropped)** `lib/gh-prs.js:1307-1322`: `closePullRequest(64, {env:{GH_REPO:'github.company.example/amber/widget'}})` with no scope and no cwd: the repository lookup uses the enterprise host but the role read and the write receive `github.com/amber/widget`. The fallback scope must keep the host exactly as T9 did (all five writes).
 - **D20 (D3, stale permission and non-open target)** `lib/prs-view.js:825,1016-1025,1924,1968,2012`: when a reload reorders or removes the captured row, only the new index's metadata is refreshed, so close/merge/linked-issue confirms reach their write seam with the cached permission of the captured PR. The captured number's own detail is re-read (capabilities AND state) before its confirm or save can proceed, and a PR that is no longer `open` (merged, closed, gone) refuses close, merge and linked-issue edits with a sentence and writes nothing. The client enforces the same: `closePullRequest`, `mergePullRequest` and `editLinkedIssues` refuse a PR whose fresh state is not OPEN (the role read already round-trips: fetch the state in the same query).
+
+### T13 verdict: defects to fix (T14)
+
+The verifier's durable probe file is `/tmp/t13-probes/prs-t13-independent.test.js` (66 tests, 17 fail at HEAD; copy it to `tools/prs-t13-independent.test.js` as the RED suite, never weaken an assertion). The fixes are PRINCIPLED, not more CommonMark: when in doubt the edit is refused.
+
+- **D21 (D16, fence parsing)** `lib/gh-prs.js:955-996`: a hand-rolled CommonMark container parser keeps losing code examples (tab-indented and inline list fences; an over-indented fence-looking line inside a list fence; a list fence closed by a dedent). Replace it with a conservative rule that is safe by construction: collect every run of 3+ backticks or tildes anywhere in the body (loose, any indentation, any container prefix); an ODD total means the structure is ambiguous and the edit (add or remove) is refused with `the pull request body has code fences this edit cannot read safely`, nothing written; otherwise the runs pair up in order and every line between a pair is code, never touched; only a column-0 `Closes #N` line outside the pairs is ever added, counted or removed.
+- **D22 (D17)** `lib/prs-view.js:1309-1327,1581-1603`: in a short frame (12 rows) removing the captured row clips `Confirm merge #64` entirely yet Ctrl+S still merges #64. The captured target's own line (`Confirm merge #N` / `Confirm close #N` / `Comment on #N`) is reserved a row that no list window or pane can clip; when the frame cannot hold it, the step refuses to confirm.
+- **D23 (D19)** `lib/gh-prs.js:1172-1177,1384-1397`: real `gh api graphql` ignores `GH_REPO`'s host and goes to api.github.com while `gh pr view` goes to the enterprise host. Every `gh api` call of the client carries the scope's host explicitly (`--hostname <host>` and `GH_HOST`) for every gated read and write; the injected-recorder tests assert the argv carries it, and the verifier's recorded behaviour of the real `gh` is the reference.
+- **D24 (T12 regression)** `lib/gh-prs.js:1384-1397`: with no explicit pin and no checkout, the ambient default changing after the role read sent a close to another repository. Resolve the ambient repository ONCE, pin it (host-qualified) for the role read and for the write alike.
+- **D25 (D20 race)** `lib/prs-view.js:941-984,1011-1036`: a held reload installs a newer negative detail, then the older positive save-time read settles and the close/merge/linked seams run. Detail reads carry a per-number monotonic sequence; a save-time read only decides when no newer detail for that number was installed, and a newer negative answer wins (refuse, no seam).
+- **D26 (D3)** `lib/prs-view.js` labels, assignees and label creation: after a reorder the editors save with the cached permission of the captured number; apply the same fresh gate (capabilities and state, newest answer wins) to every editor save, not only close/merge/linked.
 
 ## Log
 

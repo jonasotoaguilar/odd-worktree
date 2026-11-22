@@ -45,6 +45,14 @@ primary checkout on the default branch with a one-line reminder. Nothing else ch
 - **S6** — «Hay que enmendar la invariante 21 … y la 22» `docs/codebase/invariants.md`
   (21, 22, 14) and `docs/reference.md` describe the new behaviour; the suites pin the old
   texts and are updated, and `npm test` passes.
+- **S7** — «de eso solo B parece bien» (B: «Reinicio por request. Hoy el tope de 3 dura
+  toda la sesión, y una sesión larga queda muda. Con el reinicio en `before_agent_start`,
+  cada prompt nuevo vuelve a tener recordatorio»). Each new request (`before_agent_start`)
+  forgets guard 2's row of searches, its cap of 3, its first-search slots (`own`) and its
+  `used` flag, so the first search of every request, while the graph is unused in it,
+  earns a reminder again. Guard 1's slots and the explored checkouts stay per session;
+  a compaction or a new session still forgets everything; nothing else changes and it
+  stays advice. A, C, D and E from the review of gentle-shell are NOT part of this.
 
 ## Tasks
 
@@ -52,6 +60,7 @@ primary checkout on the default branch with a one-line reminder. Nothing else ch
 - [x] T2: the CodeGraph reminder repeats, with tests (S3). Commit f90ca1a.
 - [x] T3: the `edit`/`write` guard and the child block, with tests (S4, S5). Commit 8001db1; verifier fixes (`@` prefix, live owner read, temp-portable suite) in the closing commit.
 - [x] T4: invariants and reference follow (S6). Commit e250099 and the closing commit.
+- [ ] T5: guard 2 forgets its row, cap, slots and `used` flag at each new request, with tests, invariant 21 and the reference (S7).
 
 Slice boundary: ~1.3k changed lines across four commits, each one reviewable alone (texts; reminder; guard; docs).
 
@@ -65,3 +74,5 @@ Slice boundary: ~1.3k changed lines across four commits, each one reviewable alo
   otras». Non-git paths, the OS temp directories and other repositories never trip the
   new guard (S4); no guard of this change blocks on a path it cannot place in the
   session's own repository.
+- **L3** — «de eso solo B parece bien» after the review of gentle-shell's
+  `exploration-budget` (steer notice per request). Only B (per-request reset) is authorized.

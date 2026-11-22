@@ -102,6 +102,11 @@ function pullRequestGraphql({
   return { runner, calls };
 }
 
+// A repository-permission answer shaped like the client's own role read.
+function okPermission(permission = 'WRITE') {
+  return okJson(JSON.stringify({ data: { repository: { viewerPermission: permission } } }));
+}
+
 function argvStartingWith(calls, first, second) {
   return calls.find((argv) => argv[0] === first && argv[1] === second);
 }
@@ -596,20 +601,24 @@ describe('mutations: their exact argv', () => {
   });
 
   test('editLabels applies and removes labels through the pull request surface', async () => {
-    const { runner, calls } = makeRunner(okJson(''));
+    const { runner, calls } = makeRunner([okPermission(), okJson('')]);
     ghPrs.setGhRunner(runner);
 
     const res = await ghPrs.editLabels(87, { add: ['bug'], remove: ['wontfix'] }, PINNED);
 
     assert.equal(res.ok, true, res.error);
-    assert.deepEqual(calls[0].argv, ['pr', 'edit', '87', '--add-label', 'bug', '--remove-label', 'wontfix']);
+    assert.deepEqual(argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit'),
+      ['pr', 'edit', '87', '--add-label', 'bug', '--remove-label', 'wontfix']);
+    assert.match(queryOf(calls[0]), /viewerPermission/, 'the role is read before the write');
     const noop = await ghPrs.editLabels(87, {}, PINNED);
     assert.equal(noop.ok, true);
-    assert.equal(calls.length, 1, 'an empty edit runs no child');
+    assert.equal(calls.length, 2, 'an empty edit runs no child');
   });
 
   test('listLabels and createLabel are repository-level and mirrored here', async () => {
-    const { runner, calls } = makeRunner([okJson(fixture('gh-label-list.json')), okJson('{"name":"triage"}')]);
+    const { runner, calls } = makeRunner([
+      okJson(fixture('gh-label-list.json')), okPermission(), okJson('{"name":"triage"}'),
+    ]);
     ghPrs.setGhRunner(runner);
 
     const labels = await ghPrs.listLabels(PINNED);
@@ -619,17 +628,19 @@ describe('mutations: their exact argv', () => {
 
     assert.equal(created.ok, true, created.error);
     assert.deepEqual(calls[0].argv.slice(0, 2), ['label', 'list']);
-    assert.deepEqual(calls[1].argv, ['label', 'create', 'triage', '--color', 'FBCA04']);
+    assert.match(queryOf(calls[1]), /viewerPermission/, 'creating a label reads the role first');
+    assert.deepEqual(calls[2].argv, ['label', 'create', 'triage', '--color', 'FBCA04']);
   });
 
   test('closePullRequest closes exactly one pull request', async () => {
-    const { runner, calls } = makeRunner(okJson(''));
+    const { runner, calls } = makeRunner([okPermission(), okJson('')]);
     ghPrs.setGhRunner(runner);
 
     const res = await ghPrs.closePullRequest(87, PINNED);
 
     assert.equal(res.ok, true, res.error);
-    assert.deepEqual(calls[0].argv, ['pr', 'close', '87']);
+    assert.match(queryOf(calls[0]), /viewerPermission/, 'the role is read before the write');
+    assert.deepEqual(argvStartingWith(calls.map((call) => call.argv), 'pr', 'close'), ['pr', 'close', '87']);
   });
 
   test('mergePullRequest pins the method flag and the proposals it was given', async () => {
@@ -752,13 +763,76 @@ describe('mutations: their exact argv', () => {
 });
 
 // ---------------------------------------------------------------------------
+// S2 (D2): a capability is read AGAIN by the client itself, so a pane painted
+// from a lost permission still never issues a write child. Read access keeps
+// the one ungated write S2 names: the comment.
+// ---------------------------------------------------------------------------
+describe('every write re-reads the repository role before it runs', () => {
+  const WRITES = [
+    ['closePullRequest', 'does not allow closing pull requests', (client) => client.closePullRequest(87, PINNED)],
+    ['createLabel', 'does not allow creating labels', (client) => client.createLabel({ name: 'needs-work' }, PINNED)],
+    ['editLabels', 'does not allow editing pull request labels',
+      (client) => client.editLabels(87, { add: ['bug'] }, PINNED)],
+    ['editLinkedIssues', 'does not allow editing pull request linked issues',
+      (client) => client.editLinkedIssues(87, { add: [12] }, PINNED)],
+  ];
+
+  for (const [name, sentence, call] of WRITES) {
+    test(`${name} fails closed on READ access and names the missing permission`, async () => {
+      const { runner, calls } = makeRunner(okPermission('READ'));
+      ghPrs.setGhRunner(runner);
+
+      const res = await call(ghPrs);
+
+      assert.equal(res.ok, false, `${name} is refused`);
+      assert.match(String(res.error), new RegExp(sentence));
+      assert.equal(calls.length, 1, 'the role read is the only child');
+      assert.match(queryOf(calls[0]), /viewerPermission/);
+      const write = calls.find((entry) => !(entry.argv[0] === 'api' && entry.argv[1] === 'graphql'));
+      assert.equal(write, undefined, `${name} spawns no write child`);
+    });
+  }
+
+  test('a TRIAGE role may label but may not close, create or rewrite the body', async () => {
+    const triage = pullRequestGraphql({ permission: 'TRIAGE' });
+    ghPrs.setGhRunner(triage.runner);
+
+    const labelled = await ghPrs.editLabels(87, { add: ['bug'] }, PINNED);
+    assert.equal(labelled.ok, true, labelled.error);
+    const created = await ghPrs.createLabel({ name: 'needs-work' }, PINNED);
+    const closed = await ghPrs.closePullRequest(87, PINNED);
+    const linked = await ghPrs.editLinkedIssues(87, { add: [12] }, PINNED);
+
+    for (const res of [created, closed, linked]) assert.equal(res.ok, false);
+    assert.match(String(created.error), /does not allow creating labels/);
+    assert.match(String(closed.error), /does not allow closing pull requests/);
+    assert.match(String(linked.error), /does not allow editing pull request linked issues/);
+    assert.equal(argvStartingWith(triage.calls, 'pr', 'close'), undefined);
+    assert.equal(argvStartingWith(triage.calls, 'label', 'create'), undefined);
+    assert.equal(triage.calls.filter((argv) => argv[0] === 'pr' && argv[1] === 'edit').length, 1,
+      'the one write that ran is the label edit');
+  });
+
+  test('a comment stays ungated, exactly like the issue client', async () => {
+    const { runner, calls } = makeRunner(okJson(''));
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.commentPullRequest(87, 'hi', PINNED);
+
+    assert.equal(res.ok, true, res.error);
+    assert.deepEqual(calls.map((call) => call.argv), [['pr', 'comment', '87', '--body', 'hi']],
+      'no role read and no gate stands in front of a comment');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // S2: GitHub has no mutation for the Development panel, so a linked issue is a
 // `Closes #N` line in the body — appended or removed, with every other byte of
 // the body preserved exactly.
 // ---------------------------------------------------------------------------
 describe('editLinkedIssues rewrites only the closing lines', () => {
   test('adding a linked issue appends one Closes line and keeps the body byte for byte', async () => {
-    const { runner, calls } = makeRunner([okJson(fixture('gh-pr-view.json')), okJson('')]);
+    const { runner, calls } = makeRunner([okPermission(), okJson(fixture('gh-pr-view.json')), okJson('')]);
     ghPrs.setGhRunner(runner);
     const original = JSON.parse(fixture('gh-pr-view.json')).body;
 
@@ -766,7 +840,8 @@ describe('editLinkedIssues rewrites only the closing lines', () => {
 
     assert.equal(res.ok, true, res.error);
     assert.equal(res.changed, true);
-    const argv = calls[1].argv;
+    assert.match(queryOf(calls[0]), /viewerPermission/, 'the role is read before the body edit');
+    const argv = calls[2].argv;
     assert.deepEqual(argv.slice(0, 4), ['pr', 'edit', '87', '--body']);
     const body = argv[argv.indexOf('--body') + 1];
     assert.equal(body, `${original}\nCloses #71\n`);
@@ -777,6 +852,7 @@ describe('editLinkedIssues rewrites only the closing lines', () => {
   test('removing a linked issue keeps CRLF endings and every other byte', async () => {
     const original = 'Summary line\r\n\r\nfixes #14\r\nCloses #63\r\nTrailing words';
     const { runner, calls } = makeRunner([
+      okPermission(),
       okJson(JSON.stringify({ body: original })),
       okJson(''),
     ]);
@@ -785,20 +861,20 @@ describe('editLinkedIssues rewrites only the closing lines', () => {
     const res = await ghPrs.editLinkedIssues(87, { remove: [14] }, PINNED);
 
     assert.equal(res.ok, true, res.error);
-    const body = calls[1].argv[calls[1].argv.indexOf('--body') + 1];
+    const body = calls[2].argv[calls[2].argv.indexOf('--body') + 1];
     assert.equal(body, 'Summary line\r\n\r\nCloses #63\r\nTrailing words');
     assert.equal(res.changed, true);
   });
 
   test('a number already declared changes nothing and runs no edit child', async () => {
-    const { runner, calls } = makeRunner([okJson(fixture('gh-pr-view.json'))]);
+    const { runner, calls } = makeRunner([okPermission(), okJson(fixture('gh-pr-view.json'))]);
     ghPrs.setGhRunner(runner);
 
     const res = await ghPrs.editLinkedIssues(87, { add: [63] }, PINNED);
 
     assert.equal(res.ok, true, res.error);
     assert.equal(res.changed, false);
-    assert.equal(calls.length, 1, 'only the body read ran');
+    assert.equal(calls.length, 2, 'the role and the body read ran; no edit child did');
   });
 
   test('invalid linked-issue changes are refused without a child', async () => {
@@ -820,6 +896,7 @@ describe('editLinkedIssues rewrites only the closing lines', () => {
 
   test('an unreadable body is reported instead of being overwritten', async () => {
     const { runner, calls } = makeRunner([
+      okPermission(),
       { status: 1, stdout: '', stderr: 'Could not resolve to a PullRequest', error: null },
     ]);
     ghPrs.setGhRunner(runner);
@@ -828,7 +905,105 @@ describe('editLinkedIssues rewrites only the closing lines', () => {
 
     assert.equal(res.ok, false);
     assert.match(String(res.error), /cannot read the body of pull request #87/);
-    assert.equal(calls.length, 1, 'no edit runs on a body that could not be read');
+    assert.equal(calls.length, 2, 'no edit runs on a body that could not be read');
+    assert.equal(argvStartingWith(calls.map((call) => call.argv), 'pr', 'edit'), undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2 (D4, D5): only the lines that really declare a closing issue may change,
+// and a merge refuses rather than sending facts GitHub never confirmed or a
+// message the reader cleared.
+// ---------------------------------------------------------------------------
+describe('merge and the body edit fail closed on missing facts', () => {
+  test('a fenced Closes example survives the removal of the real closing line', async () => {
+    const body = 'Intro\n```text\nCloses #12\n```\nCloses #12\nKeep me';
+    const { runner, calls } = makeRunner([okPermission(), okJson(JSON.stringify({ body })), okJson('')]);
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.editLinkedIssues(87, { remove: [12] }, PINNED);
+
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.changed, true);
+    const written = calls[2].argv[calls[2].argv.indexOf('--body') + 1];
+    assert.equal(written, 'Intro\n```text\nCloses #12\n```\nKeep me',
+      'the example inside the fence is code, so it is untouched');
+  });
+
+  test('a fenced Closes line is not a declaration, so the same number is added for real', async () => {
+    const body = 'Example:\n~~~\nCloses #71\n~~~';
+    const { runner, calls } = makeRunner([okPermission(), okJson(JSON.stringify({ body })), okJson('')]);
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.editLinkedIssues(87, { add: [71] }, PINNED);
+
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.changed, true);
+    const written = calls[2].argv[calls[2].argv.indexOf('--body') + 1];
+    assert.equal(written, `${body}\nCloses #71\n`, 'the real declaration is appended after the fence');
+  });
+
+  test('an unclosed fence keeps every later closing line untouched', async () => {
+    const body = '```\nCloses #12\nmore code';
+    const { runner, calls } = makeRunner([okPermission(), okJson(JSON.stringify({ body }))]);
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.editLinkedIssues(87, { remove: [12] }, PINNED);
+
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.changed, false, 'nothing outside the fence declares #12');
+    assert.equal(calls.length, 2, 'no edit child runs for a body that changes nothing');
+  });
+
+  test('merge refuses a metadata read that never carried the draft state', async () => {
+    const { runner, calls } = makeRunner(okJson(JSON.stringify({
+      data: {
+        repository: {
+          viewerPermission: 'WRITE',
+          mergeCommitAllowed: true,
+          squashMergeAllowed: true,
+          rebaseMergeAllowed: false,
+          pullRequest: { closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } } },
+        },
+      },
+    })));
+    ghPrs.setGhRunner(runner);
+
+    const res = await ghPrs.mergePullRequest(87, { method: 'merge' }, PINNED);
+
+    assert.equal(res.ok, false, 'a missing draft fact is never read as "not a draft"');
+    assert.match(String(res.error), /the draft state is missing/);
+    assert.equal(argvStartingWith(calls.map((call) => call.argv), 'pr', 'merge'), undefined);
+  });
+
+  test('a cleared description is sent empty and a cleared commit message is refused', async () => {
+    const fake = pullRequestGraphql({ merge: true, squash: false, rebase: false });
+    ghPrs.setGhRunner(fake.runner);
+
+    const cleared = await ghPrs.mergePullRequest(87, { method: 'merge', subject: 'Merge it', body: '' }, PINNED);
+
+    assert.equal(cleared.ok, true, cleared.error);
+    assert.deepEqual(argvStartingWith(fake.calls, 'pr', 'merge'),
+      ['pr', 'merge', '87', '--merge', '--subject', 'Merge it', '--body', ''],
+      'an explicitly cleared description reaches gh as empty');
+
+    const blank = pullRequestGraphql({ merge: true, squash: false, rebase: false });
+    ghPrs.setGhRunner(blank.runner);
+    const refused = await ghPrs.mergePullRequest(87, { method: 'merge', subject: '   ', body: 'kept' }, PINNED);
+
+    assert.equal(refused.ok, false);
+    assert.match(String(refused.error), /the merge commit message must not be empty/);
+    assert.equal(blank.calls.length, 0, 'the refusal happens before any child runs');
+  });
+
+  test('rebase ignores both fields, cleared or not', async () => {
+    const fake = pullRequestGraphql({ merge: false, squash: false, rebase: true });
+    ghPrs.setGhRunner(fake.runner);
+
+    const res = await ghPrs.mergePullRequest(87, { method: 'rebase', subject: '', body: '' }, PINNED);
+
+    assert.equal(res.ok, true, res.error);
+    assert.deepEqual(argvStartingWith(fake.calls, 'pr', 'merge'), ['pr', 'merge', '87', '--rebase']);
   });
 });
 

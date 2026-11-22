@@ -1036,15 +1036,17 @@ describe('prs view states and startup (S1, S3)', () => {
     assert.match(rightOf(view, 150), /#3 pull request 3/);
   });
 
-  test('a numbered open that finds nothing says where it looked', async () => {
+  test('a numbered open whose own read fails says where it looked', async () => {
     const source = pageSource({ mine: [pullRequest(1)], review: [pullRequest(2)], involved: [] });
     const { view } = makeView({
       loadPullRequestPage: source.load,
+      loadPullRequest: () => ({ ok: false, error: 'Could not resolve to a PullRequest' }),
       initialBucket: 'mine',
       initialPullRequest: 99,
     });
     await tick();
     assert.match(bodyOf(view, 150), /#99 is not in My Pull Request/);
+    assert.equal(view.state.index, 0, 'no invented row holds the focus');
   });
 
   test('the lazy view names which read is on screen', async () => {
@@ -1055,4 +1057,241 @@ describe('prs view states and startup (S1, S3)', () => {
     await tick();
     assert.match(bodyOf(view, 150), /via connection \(exact total\)/);
   });
+});
+
+// ---------------------------------------------------------------------------
+// S5/S6 (D7): a numbered open is answered by the NUMBER, not by whatever the
+// scoped buckets happen to hold — a merged pull request or another author's
+// open one is fetched by number, shown with its state, and never offered a
+// write it cannot take.
+// ---------------------------------------------------------------------------
+describe('prs view numbered opens by number (S5, S6)', () => {
+  test('a numbered open of a merged pull request fetches it by number and shows its state read-only', async () => {
+    const fetched = [];
+    const source = pageSource({ mine: [pullRequest(1)], review: [], involved: [] });
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => {
+        fetched.push(number);
+        return {
+          ok: true,
+          pullRequest: pullRequest(number, { state: 'MERGED', permissions: EDITABLE }),
+          comments: [],
+        };
+      },
+      initialBucket: 'mine',
+      initialPullRequest: 87,
+    });
+    await tick();
+    assert.ok(fetched.includes(87), 'the detail seam is asked for exactly the number');
+    assert.match(rightOf(view, 150), /#87 pull request 87/);
+    assert.match(rightOf(view, 150), /\[merged\]/, "GitHub's state is shown, not invented as open");
+    assert.match(leftOf(view, 150), /pull request 87/, 'the fetched pull request is in the list');
+    const body = bodyOf(view, 170);
+    assert.match(body, /c comment/, 'the footer is painted; only its write hints are gone');
+    for (const hint of ['l labels', 'a assign', 'x close', 'm merge', 'i linked']) {
+      assert.ok(!body.includes(hint), `a merged pull request offers no ${hint}`);
+    }
+    for (const key of ['l', 'a', 'x', 'm', 'i']) view.handleInput(key);
+    assert.equal(view.state.mode, 'list', 'no editor, confirmation or merge step opens');
+  });
+
+  test("a numbered open of another author's open pull request shows it with the writes the role allows", async () => {
+    const source = pageSource({ mine: [pullRequest(1)], review: [], involved: [] });
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({
+        ok: true,
+        pullRequest: pullRequest(number, { author: 'someone-else', permissions: EDITABLE }),
+        comments: [],
+      }),
+      initialBucket: 'mine',
+      initialPullRequest: 42,
+    });
+    await tick();
+    assert.match(rightOf(view, 150), /#42 pull request 42/);
+    assert.match(rightOf(view, 150), /by someone-else/);
+    assert.match(rightOf(view, 150), /\[open\]/);
+    assert.match(bodyOf(view, 170), /x close/, 'an open pull request keeps the writes the role allows');
+    view.handleInput('x');
+    assert.equal(view.state.mode, 'confirm');
+    assert.match(rightOf(view, 150), /Confirm close #42/);
+  });
+
+  test('the pinned pull request leaves the list when the reader picks another tab', async () => {
+    const source = pageSource({ mine: [pullRequest(1)], review: [pullRequest(2)], involved: [] });
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({
+        ok: true,
+        pullRequest: pullRequest(number, { state: 'MERGED', permissions: EDITABLE }),
+        comments: [],
+      }),
+      initialBucket: 'mine',
+      initialPullRequest: 87,
+    });
+    await tick();
+    assert.match(leftOf(view, 150), /pull request 87/);
+    view.handleInput('tab');
+    await tick();
+    const left = leftOf(view, 150);
+    assert.doesNotMatch(left, /pull request 87/, "another tab paints its own bucket");
+    assert.match(left, /pull request 2/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2 (D1): a confirmation acts on the number it showed, whatever an in-flight
+// reload does to the rows behind it.
+// ---------------------------------------------------------------------------
+describe('prs view confirmations keep their target (S2)', () => {
+  function reloadInFlight() {
+    const rows = [pullRequest(87), pullRequest(88)];
+    let reads = 0;
+    const pending = deferred();
+    const loadPullRequestPage = () => {
+      reads += 1;
+      return reads === 1 ? { ok: true, rows } : pending.promise;
+    };
+    return { rows, pending, loadPullRequestPage };
+  }
+
+  test('the close confirmation writes the number it showed, never the substituted row', async () => {
+    const closed = [];
+    const reload = reloadInFlight();
+    const { view } = makeView({
+      loadPullRequestPage: reload.loadPullRequestPage,
+      loadPullRequest: (number) => ({
+        ok: true,
+        pullRequest: pullRequest(number, { permissions: EDITABLE }),
+        comments: [],
+      }),
+      actions: { close: (number) => { closed.push(number); return { ok: true }; } },
+    });
+    await tick();
+    view.handleInput('r');
+    view.handleInput('x');
+    assert.match(rightOf(view, 150), /Confirm close #87/);
+    reload.pending.resolve({ ok: true, rows: [reload.rows[1], reload.rows[0]] });
+    await tick();
+    assert.equal(view.state.index, 0, 'the reload put the OTHER pull request under the focus');
+    view.handleInput('enter');
+    await tick();
+    assert.deepEqual(closed, [87], 'the confirmation closed the pull request it named');
+  });
+
+  test('the merge confirmation merges the number its step opened on', async () => {
+    const merged = [];
+    const reload = reloadInFlight();
+    const { view } = makeView({
+      loadPullRequestPage: reload.loadPullRequestPage,
+      loadPullRequest: (number) => ({
+        ok: true,
+        pullRequest: pullRequest(number, {
+          permissions: EDITABLE,
+          mergeDefaults: { merge: { subject: `subject ${number}`, body: `body ${number}` } },
+        }),
+        comments: [],
+      }),
+      actions: { merge: (number, options) => { merged.push({ number, options }); return { ok: true }; } },
+    });
+    await tick();
+    view.handleInput('r');
+    view.handleInput('m');
+    assert.equal(view.state.mode, 'merge');
+    reload.pending.resolve({ ok: true, rows: [reload.rows[1], reload.rows[0]] });
+    await tick();
+    assert.equal(view.state.index, 0, 'the reload put the OTHER pull request under the focus');
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].number, 87, 'the merge step merged the pull request it opened on');
+    assert.deepEqual(merged[0].options, { method: 'merge', subject: 'subject 87', body: 'body 87' });
+  });
+
+  test('j and k are text in the merge fields, and the arrows still move between them', async () => {
+    const merged = [];
+    const source = pageSource({ mine: [pullRequest(87)], review: [], involved: [] });
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({
+        ok: true,
+        pullRequest: pullRequest(number, {
+          permissions: EDITABLE,
+          mergeDefaults: { merge: { subject: 'S', body: 'B' } },
+        }),
+        comments: [],
+      }),
+      actions: { merge: (number, options) => { merged.push({ number, options }); return { ok: true }; } },
+    });
+    await tick();
+    view.handleInput('m');
+    view.handleInput('tab');
+    assert.equal(view.state.mergeField, 1, 'the commit message holds the focus');
+    view.handleInput('j');
+    view.handleInput('k');
+    assert.equal(view.state.mergeField, 1, 'typing j and k never navigates the form');
+    view.handleInput('down');
+    assert.equal(view.state.mergeField, 2, 'the arrow still moves to the next field');
+    view.handleInput('j');
+    const pane = rightOf(view, 150);
+    assert.match(pane, /Sjk/);
+    assert.match(pane, /Bj/);
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.deepEqual(merged, [{ number: 87, options: { method: 'merge', subject: 'Sjk', body: 'Bj' } }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S2 (D3): an editor re-reads its capability for its OWN number at save time,
+// so a reload that revoked it writes nothing.
+// ---------------------------------------------------------------------------
+describe('prs view editors re-check their capability at save time (S2)', () => {
+  const EDITORS = [
+    ['l', 'canEditLabels', 'editLabels', ['space'],
+      'labels cannot be edited: this repository permission is missing'],
+    ['a', 'canEditAssignees', 'editAssignees', ['space'],
+      'assignees cannot be edited: this repository permission is missing'],
+    ['i', 'canEditLinkedIssues', 'editLinkedIssues', ['n', '1', '2', 'enter'],
+      'linked issues cannot be edited: this repository permission is missing'],
+  ];
+
+  for (const [key, capability, seam, edit, sentence] of EDITORS) {
+    test(`${seam} writes nothing when the reload revoked its capability`, async () => {
+      const writes = [];
+      let permission = true;
+      let reads = 0;
+      let finish = () => {};
+      const rows = [pullRequest(87)];
+      const { view } = makeView({
+        loadPullRequestPage: () => {
+          reads += 1;
+          if (reads === 1) return { ok: true, rows };
+          return new Promise((resolve) => { finish = resolve; });
+        },
+        loadPullRequest: (number) => ({
+          ok: true,
+          pullRequest: pullRequest(number, { permissions: { [capability]: permission } }),
+          comments: [],
+        }),
+        labels: [{ name: 'bug' }],
+        loadAssignees: () => ({ ok: true, users: [{ login: 'alice' }] }),
+        actions: { [seam]: (...args) => { writes.push([seam, args]); return { ok: true }; } },
+      });
+      await tick();
+      view.handleInput('r');
+      view.handleInput(key);
+      await tick();
+      for (const step of edit) view.handleInput(step);
+      permission = false;
+      finish({ ok: true, rows });
+      await tick();
+      view.handleInput('ctrl+s');
+      await tick();
+      assert.deepEqual(writes, [], 'a lapsed capability never reaches the write seam');
+      assert.equal(view.state.mode, 'list', 'the editor closed instead of writing');
+      assert.match(bodyOf(view, 150), new RegExp(sentence));
+    });
+  }
 });

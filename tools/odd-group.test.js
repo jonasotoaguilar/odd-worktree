@@ -391,6 +391,198 @@ describe('S10: group order and per-group order', () => {
   });
 });
 
+// S13: the machine holds ~20 worktrees, so computing a merge-base diff for every
+// one of them on every refresh is wasted work. The scope is an INPUT: `roots` is
+// the set of worktrees the session registered, and only what Git lists AND that set
+// names is grouped — a worktree left out is never asked a single git question, which
+// is what these tests read from the fake's argv log. An absent `roots` is the old
+// behaviour, unchanged: every OWNED worktree.
+describe('S13: `roots` scopes the scan to the worktrees a session registered', () => {
+  test('without `roots` every owned worktree is grouped, exactly as before', async () => {
+    const box = machine('scope-absent');
+    const oddA = box.worktree('odd-a');
+    const oddB = box.worktree('odd-b');
+    writeDoc(box.mainRoot, 'main-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(oddA, 'a-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(oddB, 'b-doc', { at: '2020-01-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, oddA, oddB] });
+    git.delta(oddA, [['A', 'odd/tasks/a-doc.md']]);
+    git.delta(oddB, [['A', 'odd/tasks/b-doc.md']]);
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync });
+
+    assert.deepEqual(groups.map((group) => group.checkoutName), ['main', 'odd-a', 'odd-b']);
+    assert.deepEqual(contract(groups[1]).docs, [{ name: 'a-doc', status: 'added' }]);
+    assert.deepEqual(contract(groups[2]).docs, [{ name: 'b-doc', status: 'added' }]);
+    assert.deepEqual(
+      git.verbs().filter((call) => call.verb === 'merge-base').map((call) => call.cwd),
+      [oddA, oddB],
+      'no scope means every owned worktree is compared',
+    );
+  });
+
+  test('`roots: undefined` and `roots: null` are the same as no scope at all', async () => {
+    const box = machine('scope-null');
+    const worktree = box.worktree('odd-rail');
+    writeDoc(box.mainRoot, 'main-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(worktree, 'wt-doc', { at: '2020-02-01T00:00:00.000Z' });
+    const answers = [];
+    for (const roots of [undefined, null]) {
+      const git = fakeGit({ paths: [box.mainRoot, worktree] });
+      git.delta(worktree, [['A', 'odd/tasks/wt-doc.md']]);
+      answers.push({
+        groups: await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync, roots }),
+        compared: git.verbs().filter((call) => call.verb === 'merge-base').map((call) => call.cwd),
+      });
+    }
+
+    assert.deepEqual(answers[0].groups, answers[1].groups);
+    assert.deepEqual(answers[0].groups.map((group) => group.checkoutName), ['main', 'odd-rail']);
+    assert.deepEqual(answers[1].compared, [worktree]);
+  });
+
+  test('only the listed worktrees are grouped, and an excluded one costs no git read', async () => {
+    const box = machine('scope-selects');
+    const oddA = box.worktree('odd-a');
+    const oddB = box.worktree('odd-b');
+    const oddC = box.worktree('odd-c');
+    writeDoc(box.mainRoot, 'main-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(oddA, 'a-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(oddB, 'b-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(oddC, 'c-doc', { at: '2020-01-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, oddA, oddB, oddC] });
+    git.delta(oddA, [['A', 'odd/tasks/a-doc.md']]);
+    git.delta(oddB, [['A', 'odd/tasks/b-doc.md']]);
+    git.delta(oddC, [['A', 'odd/tasks/c-doc.md']]);
+
+    const groups = await groupOddDocs({
+      repoRoot: box.mainRoot,
+      runAsync: git.runAsync,
+      roots: [oddA, oddC],
+    });
+
+    assert.deepEqual(groups.map((group) => group.checkoutName), ['main', 'odd-a', 'odd-c']);
+    assert.deepEqual(contract(groups[1]).docs, [{ name: 'a-doc', status: 'added' }]);
+    assert.deepEqual(contract(groups[2]).docs, [{ name: 'c-doc', status: 'added' }]);
+    assert.deepEqual(
+      git.verbs().filter((call) => call.cwd === oddB).map((call) => call.args),
+      [],
+      'an unregistered worktree is never asked anything, not even its own delta',
+    );
+    assert.deepEqual(
+      git.verbs().filter((call) => call.cwd === oddA).map((call) => call.verb),
+      ['merge-base', 'diff', 'status'],
+    );
+    assert.deepEqual(
+      git.verbs().filter((call) => call.cwd === oddC).map((call) => call.verb),
+      ['merge-base', 'diff', 'status'],
+    );
+  });
+
+  test('a registered worktree outside <repo>-worktrees is included: registration is the authority', async () => {
+    const box = machine('scope-outside');
+    const outside = box.outside('elsewhere');
+    writeDoc(box.mainRoot, 'main-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(outside, 'foreign-doc', { at: '2020-02-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, outside] });
+    git.delta(outside, [['A', 'odd/tasks/foreign-doc.md']]);
+
+    // A trailing separator is the same root: paths compare normalized.
+    const groups = await groupOddDocs({
+      repoRoot: box.mainRoot,
+      runAsync: git.runAsync,
+      roots: [`${outside}${path.sep}`],
+    });
+
+    assert.deepEqual(groups.map((group) => [group.checkoutName, group.isMain]), [
+      ['main', true],
+      ['elsewhere', false],
+    ]);
+    assert.deepEqual(contract(groups[1]).docs, [{ name: 'foreign-doc', status: 'added' }]);
+  });
+
+  test('a registered root Git does not list contributes nothing and never throws', async () => {
+    const box = machine('scope-stale');
+    const live = box.worktree('odd-live');
+    const stale = box.worktree('odd-stale');
+    const clone = box.outside('another-clone');
+    writeDoc(box.mainRoot, 'main-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(live, 'live-doc', { at: '2020-02-01T00:00:00.000Z' });
+    fs.mkdirSync(clone, { recursive: true });
+    const git = fakeGit({ paths: [box.mainRoot, live] });
+    git.delta(live, [['A', 'odd/tasks/live-doc.md']]);
+
+    const groups = await groupOddDocs({
+      repoRoot: box.mainRoot,
+      runAsync: git.runAsync,
+      roots: [stale, clone, live],
+    });
+
+    assert.deepEqual(groups.map((group) => group.checkoutName), ['main', 'odd-live']);
+    assert.deepEqual(contract(groups[1]).docs, [{ name: 'live-doc', status: 'added' }]);
+    for (const absent of [stale, clone]) {
+      assert.deepEqual(git.verbs().filter((call) => call.cwd === absent), [], 'a stale root is never read');
+    }
+  });
+
+  test('an empty `roots` is main only, and no worktree is read', async () => {
+    const box = machine('scope-empty');
+    const worktree = box.worktree('odd-rail');
+    const doc = writeDoc(box.mainRoot, 'main-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(worktree, 'wt-doc', { at: '2020-02-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, worktree] });
+    git.delta(worktree, [['A', 'odd/tasks/wt-doc.md']]);
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync, roots: [] });
+
+    assert.deepEqual(groups, [
+      {
+        checkoutName: 'main',
+        checkoutRoot: box.mainRoot,
+        isMain: true,
+        docs: [{ name: 'main-doc', docPath: doc, mtimeMs: mtimeOf(doc) }],
+      },
+    ]);
+    assert.equal(git.calls.length, 1, 'the one listing read, and no worktree read at all');
+  });
+
+  test('a `roots` that is present but not a list fails closed to main only', async () => {
+    const box = machine('scope-malformed');
+    const worktree = box.worktree('odd-rail');
+    const doc = writeDoc(box.mainRoot, 'main-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(worktree, 'wt-doc', { at: '2020-02-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, worktree] });
+    git.delta(worktree, [['A', 'odd/tasks/wt-doc.md']]);
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync, roots: 'odd-rail' });
+
+    assert.deepEqual(groups.map((group) => group.checkoutName), ['main']);
+    assert.equal(groups[0].docs[0].docPath, doc);
+    assert.equal(git.calls.length, 1, 'the one listing read, and no worktree read at all');
+  });
+
+  test('main is always first and is never duplicated when it is itself in `roots`', async () => {
+    const box = machine('scope-main');
+    const worktree = box.worktree('odd-rail');
+    writeDoc(box.mainRoot, 'main-doc', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(worktree, 'wt-doc', { at: '2020-02-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, worktree] });
+    git.delta(worktree, [['A', 'odd/tasks/wt-doc.md']]);
+
+    const groups = await groupOddDocs({
+      repoRoot: box.mainRoot,
+      runAsync: git.runAsync,
+      roots: [`${box.mainRoot}${path.sep}`, worktree],
+    });
+
+    assert.deepEqual(groups.map((group) => [group.checkoutName, group.isMain]), [
+      ['main', true],
+      ['odd-rail', false],
+    ]);
+    assert.deepEqual(groups[0].docs.map((doc) => doc.name), ['main-doc']);
+  });
+});
+
 describe('fail closed, never throw', () => {
   test('an empty delta keeps the group with no documents: the caller decides not to draw it', async () => {
     const box = machine('empty-delta');

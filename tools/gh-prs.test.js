@@ -102,9 +102,11 @@ function pullRequestGraphql({
   return { runner, calls };
 }
 
-// A repository-permission answer shaped like the client's own role read.
-function okPermission(permission = 'WRITE') {
-  return okJson(JSON.stringify({ data: { repository: { viewerPermission: permission } } }));
+// A repository-permission answer shaped like the client's own role read. The
+// pull request state rides the same answer (S2/D20), so a write's own gate sees
+// both facts in one round trip.
+function okPermission(permission = 'WRITE', state = 'OPEN') {
+  return okJson(JSON.stringify({ data: { repository: { viewerPermission: permission, pullRequest: { state } } } }));
 }
 
 function argvStartingWith(calls, first, second) {

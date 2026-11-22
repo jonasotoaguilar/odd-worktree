@@ -517,7 +517,10 @@ never prefetched, so it is not a fourth tab and the prefetch never reads it.
   of …); reopen /issues`). A NUMBERED open pins the scope the checkout already
   proved, so its first frame is not behind a fresh probe; a typed plain `/prs`
   keeps the fresh proof, and a cached pin that cannot be read falls back to it
-  once. Nothing that mutates rides a pin.
+  once. Nothing that mutates rides a pin. A write with no checkout and no pin
+  keeps the host the environment named: the role read and the write run in the
+  ambient host-qualified `GH_REPO` (`github.company.example/amber/widget` stays
+  itself), never a bare `owner/name` re-qualified as github.com.
 - **The `o` key opens it on GitHub.** `gh pr view <n> --web -R
   <host>/<owner>/<repo>` — the pinned identity, normalized the same way, never a
   raw value.
@@ -549,16 +552,27 @@ edited: this repository permission is missing`, `pull requests cannot be closed:
 this repository permission is missing`, `pull requests cannot be merged: this
 repository permission is missing`, `linked issues cannot be edited: this
 repository permission is missing`. The capability is resolved again at the
-write, so a role withdrawn while an editor or the confirmation is on screen never
-reaches GitHub.
+write — and, for close, merge and the linked-issue body edit, the captured
+number's OWN detail is re-read first, capabilities and state together, so a role
+withdrawn (or a row substituted by a reload) while an editor or the confirmation
+is on screen never reaches GitHub. A pull request that is no longer OPEN is
+refused there too, with its own sentence and no child: `pull request #69 is not
+open; it cannot be closed`, `pull request #69 is not open; it cannot be merged`,
+`pull request #69 is not open; its linked issues cannot be edited`. The client
+enforces the same rule for the same three writes, reading the state in the round
+trip that proves the role.
+
+Every confirmation and the comment composer keep their pull request in view: the
+list follows the captured number when a reload moves it out of the window, and a
+row the list no longer holds is still named on the step's own line.
 
 - **Merge is a step of its own.** `m` opens it and the pane reads `Merge` over
   five rows: `Type:` (only the methods the repository allows — `◂ merge ▸` when
   there is more than one, the bare word when there is only one), `Commit
-  message:`, `Description:`, `Confirm merge` and `Cancel`. `↑`/`↓` (also `j`/`k`
+  message:`, `Description:`, `Confirm merge #69` and `Cancel`. `↑`/`↓` (also `j`/`k`
   and `tab`) walk the rows, `←`/`→` (also `space`, `h`/`l`) cycle the type while
   the type row has the focus, typing edits whichever text row does, `enter`
-  confirms from `Confirm merge` and cancels from `Cancel`, `ctrl+s merge` sends
+  confirms from `Confirm merge #69` and cancels from `Cancel`, `ctrl+s merge` sends
   from anywhere and `esc` cancels. The message and the description open
   prefilled with GitHub's own proposals: a merge proposes
   `Merge pull request #69 from owner/branch` with the pull request's title as the
@@ -573,6 +587,9 @@ reaches GitHub.
   `Confirm close #69 (enter confirm · esc cancel)` and
   `This will close the pull request on GitHub.`; `enter` (or `y`) closes, `esc`
   (or `n`, `q`) backs out, and the outcome reads `pull request closed`.
+- **Comment names its pull request.** `c` opens the composer titled
+  `Comment on #69`, over the row it will post to, and `ctrl+s post` sends it to
+  that number; the composer works in every pull request state.
 - **Assign is a toggle.** `a` opens the assignees editor over the assignable
   users plus every current assignee, `space` toggles one and `ctrl+s` sends the
   add/remove delta — so the same editor assigns and unassigns you.
@@ -585,8 +602,12 @@ reaches GitHub.
   request body through `gh pr edit --body` and preserves every other byte of it
   — line endings included. A body that already declares the number, and a
   removal of a number it never declared, change nothing at all, and a number
-  that is not one refuses with `a linked issue needs a number`. The outcome
-  reads `linked issues updated`.
+  that is not one refuses with `a linked issue needs a number`. A `Closes #N`
+  inside a fenced block is an example, never a declaration, whatever container
+  indented the fence — a list item's own margin included; a body that ENDS inside
+  a fence nothing closed refuses the add with `the pull request body ends inside
+  an unclosed code fence`, because the line would land in the code block. The
+  outcome reads `linked issues updated`.
 - **Any write owns the keyboard until it settles.** A save in flight paints its
   own note and ignores every key, so a second save, a navigation or a keystroke
   can never race it, and a rejected save stays visible with its draft intact.

@@ -372,6 +372,7 @@ function makeGithub(options = {}) {
           rebaseMergeAllowed: false,
           pullRequest: {
             isDraft: false,
+            state: 'OPEN',
             closingIssuesReferences: { nodes: [{ number: 63 }], pageInfo: { hasNextPage: false } },
           },
         } } }));
@@ -408,6 +409,8 @@ function makeGithub(options = {}) {
       if (query.includes('viewerPermission')) {
         return ok(JSON.stringify({ data: { repository: {
           viewerPermission: state.role,
+          // S2/D20: a write's role read answers the pull request state too.
+          pullRequest: { state: 'OPEN' },
           issue: { assignees: { nodes: [], pageInfo: { hasNextPage: false } } },
         } } }));
       }

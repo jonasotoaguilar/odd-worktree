@@ -24,7 +24,9 @@ function mockClient(repository, bodyRead = ok({ body: 'PR body' }), children = [
   const writes = [];
   const runGh = async (argv) => {
     children.push(argv.slice());
-    if (argv[0] === 'api') return ok({ data: { repository } });
+    // The role read answers the fresh pull request state in the same round trip
+    // (S2/D20), so a write is refused for a target that is no longer open.
+    if (argv[0] === 'api') return ok({ data: { repository: { ...repository, pullRequest: repository.pullRequest || { state: 'OPEN' } } } });
     if (argv[0] === 'pr' && argv[1] === 'view') return bodyRead;
     writes.push(argv);
     return ok({});
@@ -225,7 +227,9 @@ test('S2: close reads the role and writes in one resolved scope', async () => {
     }
     children.push({ argv: argv.slice(), identity });
     if (argv[0] === 'repo') return ok({ nameWithOwner: 'octo/base' });
-    if (argv[0] === 'api') return ok({ data: { repository: { viewerPermission: 'WRITE' } } });
+    if (argv[0] === 'api') {
+      return ok({ data: { repository: { viewerPermission: 'WRITE', pullRequest: { state: 'OPEN' } } } });
+    }
     return ok('');
   };
   const client = createPrsClient({ issues: { runGh, checkoutRepoScope } });

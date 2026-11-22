@@ -12,7 +12,9 @@ const send = (view, ...keys) => keys.forEach((key) => view.handleInput(key));
 function mockClient(repository, bodyRead = ok({body: 'PR body'})) {
   const writes = [];
   const runGh = async (argv) => {
-    if (argv[0] === 'api') return ok({data: {repository}});
+    // The role read answers the fresh pull request state in the same round trip
+    // (S2/D20), so a write is refused for a target that is no longer open.
+    if (argv[0] === 'api') return ok({data: {repository: {...repository, pullRequest: repository.pullRequest || {state: 'OPEN'}}}});
     if (argv[0] === 'pr' && argv[1] === 'view') return bodyRead;
     writes.push(argv);
     return ok({});
@@ -69,13 +71,16 @@ test('S2: close never acts on an asynchronously substituted PR', async () => {
   assert.ok(closed.length === 0 || closed[0] === 87, `closed ${closed}`);
 });
 
-test('S2: typing letters in the merge editor does not navigate its fields', () => {
+test('S2: typing letters in the merge editor does not navigate its fields', async () => {
   const writes = [];
   const view = createPrsView({pages:[{id:'mine',rows:[{
     ...row(87), permissions:{canMerge:true}, mergeMethods:{merge:true},
     mergeDefaults:{merge:{subject:'M',body:'B'}},
   }]}], actions:{merge:(...args)=>{ writes.push(args); return {ok:true}; }}});
   send(view,'m','tab','backspace','j','k','tab','backspace','j','k','ctrl+s');
+  // S2/D20: the merge re-reads its own detail before the seam is reached, so
+  // the write settles on the next turn rather than inside the key press.
+  await tick();
   assert.deepEqual(writes, [[87,{method:'merge',subject:'jk',body:'jk'}]]);
 });
 

@@ -1112,6 +1112,29 @@ padding and no background, for one that frames itself (Pi's `edit`). A path that
 names neither identity is that same forwarded row, so an ordinary file call looks
 exactly as it did before the card existed.
 
+## The jobs card
+
+`bash_background`, `monitor`, `job_stop` and `job_list` are registered by Gentle Shell with no renderer of their own, so
+Pi draws a plain box and the conversation's card style never reaches them. This package draws them on the card
+substrate (`lib/shell-card.js`) through the host's `registerToolRenderer` hook, in whichever style the shell has chosen.
+
+| Part | What it draws |
+| --- | --- |
+| Call | the tool's mark and word (`⧗ background`, `◉ monitor`, `■ stop`, `≡ jobs`) and what names the call: a job's label, else the first line of its command; a stop its job id; a listing "this session". Expanded, the whole command, every line |
+| Result | the job's own answer: the first rows collapsed, everything expanded, closing the frame with the call's duration |
+
+- **The switch** is the bridge's `Card tags` line, read through its published reader `resolveToolDesignSelection`. The line
+  declares these four tools (`lib/bash-design.js`), and only the answer `design` carrying `odd-worktree.bash-activity`
+  paints. `native`, `not-covered`, `missing`, another plugin's design, no bridge, a bridge older than the reader, a reader
+  that throws and an answer nothing can read all leave Pi's own box exactly as it was.
+- **When it is read.** The file cards forward to the host's renderers while their switch is off, so they decide on every
+  paint. These four tools have no renderer to forward to, so the answer is read when the card is built: a switch made
+  mid-session reaches the next job card, not the one already on screen.
+- **Content level.** Under `minimal` a collapsed card is the call alone; a failed result still says why.
+- **Nothing else is claimed.** Any other tool is returned exactly as the chain resolved it. The tools are never
+  registered, executed or shadowed here: the arguments are only read, and every model-written string is drawn without
+  terminal sequences.
+
 ## The diff card
 
 A second design, `lib/diff-design.js`, registers on the line `diff` through the same
@@ -1566,7 +1589,7 @@ whole-suite level: run the focused file while iterating, then the full command.
 | `release.yml` | tag `v*` push (a `v*-*` tag is excluded), or a manual dispatch naming an existing tag | tag/`package.json` version parity, the suite, the GitHub Release, then `npm publish`, then verification |
 
 The npm package is `pi-odd-worktree`. A release is the tag `v` plus the exact
-`package.json` version — version 3.3.0 is `v3.3.0` — and preflight stops the run
+`package.json` version — version 3.4.0 is `v3.4.0` — and preflight stops the run
 when the two disagree. Publication uses
 [Trusted Publishing](https://docs.npmjs.com/trusted-publishers): `id-token:
 write` is the only such grant in the repository and belongs to the `release` job,

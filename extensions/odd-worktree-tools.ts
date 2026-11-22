@@ -9979,6 +9979,16 @@ function registerOddWorktreeSurfaceEntries(pi) {
   } catch {
     // The card is cosmetic.
   }
+  // The jobs card, through the same host hook: `bash_background`, `monitor`, `job_stop` and
+  // `job_list` have no renderer of their own, so Pi draws a plain box and the conversation's
+  // card style never reaches them. While the bridge's `Card tags` line answers with this
+  // package's activity design for the tool, they are drawn on the card substrate in the
+  // shell's own style; any other answer leaves Pi's drawing exactly as it was.
+  try {
+    libRequire("jobs-card-resolver.js").registerJobsCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
+  } catch {
+    // The card is cosmetic.
+  }
   // The live-checkout scan is DISPATCHED and never awaited. Its only product is
   // `warpDiscoveryCache`, which nothing reads — every warp lists fresh before
   // acting — so the old "startup barrier" awaited three git reads for a result the

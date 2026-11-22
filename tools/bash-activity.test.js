@@ -172,6 +172,69 @@ test('a verification runner names the checking activity', () => {
 	}
 });
 
+// The runners the table did not read yet: each ecosystem names its verification with a
+// subcommand, and that subcommand is the check whatever builds the project.
+test('the remaining ecosystem runners name the checking activity', () => {
+	for (const command of [
+		'mix test',
+		'mix test test/app_test.exs',
+		'dotnet test',
+		'./gradlew test',
+		'gradlew test',
+		'gradle test',
+		'mvn test',
+	]) {
+		assert.equal(inferBashActivity(command), 'checking', command);
+	}
+	// The neighbours beside them build or prepare, and `mix format` rewrites, so none of
+	// them is a check.
+	for (const command of ['dotnet build', 'gradle build', 'mvn package']) {
+		assert.notEqual(inferBashActivity(command), 'checking', command);
+	}
+	assert.equal(inferBashActivity('mix format'), 'formatting');
+});
+
+// A test recipe must be a whole argument: `gradle test-fixtures:publish` runs a recipe whose
+// name merely starts with `test`, and a prefix is not the check.
+test('a recipe whose name starts with test is not the test recipe', () => {
+	for (const command of ['gradle test-fixtures:publish', 'mvn test-report:publish', 'mix test-helper', 'dotnet test-tools:run']) {
+		assert.equal(inferBashActivity(command), undefined, command);
+	}
+});
+
+// A project runner hands the segment to the tool it names after supplying the
+// environment, so a checker behind `uv run` or `poetry run` is the check the bare
+// checker already is; a program the tables never called a check still names nothing.
+test('a project runner naming a checker names the checking activity', () => {
+	for (const command of [
+		'uv run pytest',
+		'uv run pytest -q tests/',
+		'uv run vitest run',
+		'uv run jest',
+		'uv run ruff check .',
+		'uv run mypy src',
+		'uv run tsc --noEmit',
+		'uv run eslint .',
+		'poetry run pytest',
+		'poetry run mypy .',
+		// `ruff format --check` reports, so the wrapped form verifies like the bare one.
+		'uv run ruff format --check .',
+	]) {
+		assert.equal(inferBashActivity(command), 'checking', command);
+	}
+	for (const command of ['uv run python x.py', 'poetry run python x.py', 'uv run ruff format .']) {
+		assert.equal(inferBashActivity(command), undefined, command);
+	}
+});
+
+// The wrapped checker must be a whole argument too: `uv run pytest-deploy` runs a program
+// whose name starts with a checker's, so it names nothing.
+test('a program whose name starts with a checker is not the checker', () => {
+	for (const command of ['uv run pytest-deploy', 'poetry run jest-reporter', 'uv run mypy-extensions', 'poetry run tsc-watch']) {
+		assert.equal(inferBashActivity(command), undefined, command);
+	}
+});
+
 // A monorepo flags the workspace before the script, and every value option's value
 // must be read as the value it is, or `npm --prefix pkg test` would look like the
 // script `pkg`.
@@ -390,6 +453,20 @@ test('installations, scaffolding and stored configuration name the preparing act
 	}
 });
 
+// A container image the call builds is one this machine now has, the build-up `docker`
+// shares with the installers; running, pulling or just looking at one names nothing.
+test('a container image build prepares the machine', () => {
+	for (const command of ['docker build .', 'docker build -t app:dev .', 'docker build --file Dockerfile.dev .']) {
+		assert.equal(inferBashActivity(command), 'preparing', command);
+	}
+	for (const command of ['docker ps', 'docker images', 'docker version']) {
+		assert.equal(inferBashActivity(command), 'exploring', command);
+	}
+	for (const command of ['docker run app:dev', 'docker pull app:dev']) {
+		assert.equal(inferBashActivity(command), undefined, command);
+	}
+});
+
 // An installer told to report prepares nothing: `cargo install --list` lists what is
 // already installed and `--dry-run` resolves a tree without writing it, so neither
 // names an identity — and a report-shaped argument never hides the writing form.
@@ -484,6 +561,39 @@ test('remote writes name the publishing activity', () => {
 	}
 });
 
+// A package manager's `version` subcommand does two different things: given a bump or a
+// version it rewrites the manifest and the tag, while the bare form and `--version`
+// only print. Only the rewriting form is local history.
+test('a package version bump names the versioning activity while the printing forms inspect', () => {
+	for (const command of [
+		'npm version patch',
+		'npm version minor',
+		'npm version major',
+		'npm version 1.2.3',
+		'npm version patch --no-git-tag-version',
+		'pnpm version patch',
+		'yarn version minor',
+		'bun version 1.2.3',
+	]) {
+		assert.equal(inferBashActivity(command), 'versioning', command);
+	}
+	for (const command of ['npm version', 'pnpm version', 'yarn version', 'bun version', 'npm version --version', 'pnpm version --version']) {
+		assert.equal(inferBashActivity(command), 'exploring', command);
+	}
+});
+
+// Publishing a package uploads it to a registry: a remote write from the package
+// manager's own subcommand position, whatever flags the registry needs. Installing
+// and testing beside it keep the families they already wear.
+test('a package publish names the publishing activity', () => {
+	for (const command of ['npm publish', 'pnpm publish', 'yarn publish', 'bun publish', 'npm publish --access public', 'yarn publish --tag next']) {
+		assert.equal(inferBashActivity(command), 'publishing', command);
+	}
+	for (const command of ['npm install', 'npm test']) {
+		assert.notEqual(inferBashActivity(command), 'publishing', command);
+	}
+});
+
 // Moving between branches, aliasing a command and the rest of the stack subcommands
 // publish nothing and read nothing, so they name no activity at all; viewing a stack
 // is inspection.
@@ -527,25 +637,54 @@ test('reading or waiting on CI results names the checking activity', () => {
 	}
 });
 
-// `gh api` writes whenever it is given a method, a field, or an input body, so only
-// the plain GET form is a query — and every writing form is a name this classifier
-// will not guess at, which leaves the card generic rather than claiming an identity.
-test('a gh api call that writes names nothing while the plain GET inspects', () => {
+// `gh api` writes whenever it is given a writing method, a field, or an input body, so
+// only the plain GET form is a query: the writing forms are the remote write they
+// perform, and the GET the call spells out with `-X` reads nothing either way.
+test('a gh api call that writes names the publishing activity while the plain GET inspects', () => {
 	for (const command of [
 		'gh api repos/owner/name/pulls',
 		'gh api --paginate repos/owner/name/commits',
+		'gh api repos/o/n --jq .state',
 	]) {
 		assert.equal(inferBashActivity(command), 'exploring', command);
 	}
 	for (const command of [
 		'gh api repos/o/n -X POST',
 		'gh api repos/o/n --method POST',
+		'gh api --method=PUT repos/o/n/merge',
+		'gh api repos/o/n -X DELETE',
 		'gh api repos/o/n/issues -f title=x',
 		'gh api repos/o/n/issues --raw-field title=x',
 		'gh api graphql -F query=@q.graphql',
 		'gh api repos/o/n/issues --input body.json',
 	]) {
+		assert.equal(inferBashActivity(command), 'publishing', command);
+	}
+});
+
+// A `gh api` argument that proves no payload is not a write: a method that reads, spelled
+// with quotes or with an `=`; a field flag with no value; and a header VALUE that merely
+// looks like the `-f` flag. None of them may claim the remote write.
+test('a gh api argument that proves no payload stays unnamed', () => {
+	for (const command of [
+		'gh api repos/x/y -X "GET"',
+		"gh api repos/x/y --method='HEAD'",
+		'gh api repos/x/y -X GET -f per_page=1',
+		'gh api repos/x/y -H "X-Custom: -filename"',
+		'gh api repos/x/y -f',
+	]) {
 		assert.equal(inferBashActivity(command), undefined, command);
+	}
+});
+
+// Running a workflow, or enabling and disabling one, moves work on the remote; listing
+// and viewing one only reads it.
+test('a workflow run or toggle names the publishing activity', () => {
+	for (const command of ['gh workflow run ci.yml', 'gh workflow run ci.yml --ref main', 'gh workflow enable ci.yml', 'gh workflow disable ci.yml']) {
+		assert.equal(inferBashActivity(command), 'publishing', command);
+	}
+	for (const command of ['gh workflow list', 'gh workflow view ci.yml']) {
+		assert.equal(inferBashActivity(command), 'exploring', command);
 	}
 });
 

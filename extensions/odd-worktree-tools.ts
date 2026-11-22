@@ -6816,6 +6816,33 @@ function registerOddCommand(pi) {
 }
 
 // ---------------------------------------------------------------------------
+// `/depth <request>` (depth-command S1-S8): the fifth command. It starts ONE background
+// `gentle-ai-explore` through the host's own `subagent_run` tool, with the Depth
+// instructions of `lib/depth-prompt/depth.md` and the request verbatim, and answers with
+// one notice. Everything after the start is gentle-agents' — the progress, the cancel and
+// the handoff that lands in the session — so the command draws nothing, keeps no state,
+// registers no key and spawns no child of its own (`lib/depth-launch.js`).
+// ---------------------------------------------------------------------------
+
+function registerDepthCommand(pi) {
+  if (typeof pi?.registerCommand !== "function") return;
+  pi.registerCommand("depth", {
+    description: "Understand a request in depth and explore it in the background; the handoff arrives in this session",
+    handler: async (args, ctx) => {
+      let outcome;
+      try {
+        outcome = await libRequire("depth-launch.js").launchDepth(typeof args === "string" ? args : "", ctx);
+      } catch (error) {
+        outcome = { level: "error", message: `/depth failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      try {
+        if (ctx && ctx.ui && typeof ctx.ui.notify === "function") ctx.ui.notify(outcome.message, outcome.level);
+      } catch {}
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // `/files` (T7: S9, S14, S17): the file picker over one checkout of this clone.
 //
 // The command JOINS the modules that already own each half and decides nothing
@@ -9738,6 +9765,8 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // picker's — bound after its command exists, and therefore never when the
   // `gh`-absent gate left that command unregistered.
   bindIssuesShortcut(pi);
+  // depth-command S6: the fifth command, `/depth`.
+  registerDepthCommand(pi);
   pi.registerTool(worktreeCreateTool);
   pi.registerTool(worktreeListTool);
   if (typeof pi?.on !== "function") return;

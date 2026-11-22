@@ -6,7 +6,8 @@ starts, which rule each change must preserve, and where to begin.
 ## What This Codebase Owns
 
 One Pi extension package, `pi-odd-worktree`: two agent tools (`worktree_create`,
-`worktree_list`), four panels (`/warp`, `/odd`, `/files`, `/issues`), one
+`worktree_list`), four panels (`/warp`, `/odd`, `/files`, `/issues`), one background-explorer
+command (`/depth`), one
 optional sidebar section and two tool designs on the bridge — the `activity`
 value of its `Card tags` line (`bash`, the read-only shell tools `grep`, `find`,
 `ls`, and `read`, `write` and `edit`, the last two through a scope limited to
@@ -59,7 +60,7 @@ never added — every other surface keeps working.
 ## Main Flow
 
 1. `extensions/odd-worktree-tools.ts` — the only entry point the host loads:
-   behind the bridge gate it registers the four commands (`/issues` only when the
+   behind the bridge gate it registers the five commands (`/issues` only when the
    local `gh` probe finds the CLI), the two tools, the message renderer, the file
    card, the rail section (also `gh` only), the two tool designs and the hooks —
    deferred until gentle-shell-bridge is present, and nothing at all without it.
@@ -106,7 +107,7 @@ for each is in [`invariants.md`](invariants.md).
 | --- | --- |
 | [1](invariants.md) | One extension entry point: `pi.extensions` is exactly `["./extensions/odd-worktree-tools.ts"]` and `extensions/` holds no other file. |
 | [2](invariants.md) | No customize command, plugin-tools toggle or Herdr panel surface; CodeGraph only as 18 and 19 allow. |
-| [3](invariants.md) | The shipped surface is exactly four commands, two tools, one sidebar section and two tool designs. |
+| [3](invariants.md) | The shipped surface is exactly five commands, two tools, one sidebar section and two tool designs. |
 | [4](invariants.md) | Deletion refuses on a live session and discloses every caveat it could not resolve. |
 | [5](invariants.md) | Deletion is git only: `git worktree remove <absolute path>`, branch kept. |
 | [6](invariants.md) | `/issues` keeps repository identity pinning, and refuses a mutation after the remote moves. |
@@ -132,6 +133,7 @@ for each is in [`invariants.md`](invariants.md).
 | [26](invariants.md) | The rail's timed refresh exists only while the section is drawn. |
 | [27](invariants.md) | A forced refresh happens only after a mutating `bash`, behind its cap. |
 | [28](invariants.md) | The `gh`-absent and non-repository states are settled, so nothing retries them. |
+| [29](invariants.md) | `/depth` only launches: one background explorer through `subagent_run`, no state, no hook, no input mutation. |
 
 ## Common Change Paths
 
@@ -142,6 +144,7 @@ Work on a branch, never on `main`: an ODD gets its own checkout at
 
 | Change | Start here |
 | --- | --- |
+| `/depth`'s instructions, its task or its launch | `lib/depth-prompt/depth.md`, `lib/depth-task.js`, `lib/depth-launch.js` |
 | Add or change a command, a tool or a hook | `extensions/odd-worktree-tools.ts`, then the `lib/` module behind it |
 | A create, its refusals or its output lines | `lib/worktree-create.js`, `lib/worktree-hooks.js`, `lib/worktree-setup.js` |
 | A listing's rows, order or footer | `lib/worktree-list.js` |

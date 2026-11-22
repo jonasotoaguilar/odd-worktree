@@ -1532,10 +1532,47 @@ keeps that row alone and its index facts wait for the expansion. A `codegraph �
 it, and [the design](#the-cards-the-activity-design-paints) may head it with the
 classifier's `codegraph` identity.
 
+## `/depth`: a request understood and explored in one background pass
+
+`/depth <request>` is for a request you want understood before anything is built: it starts
+one background `gentle-ai-explore` on it and answers with one notice. When the explorer
+finishes, its handoff arrives in the session as a message that starts a turn. The progress,
+the cancel and that delivery are gentle-agents', so this package adds no widget, no key and
+no cancel command.
+
+**What the explorer is told** (`lib/depth-prompt/depth.md`, then your request verbatim, last).
+Felix Rieseberg's four "Depth" questions — what a top professional would do that you did not
+ask for, the rawest material they would start from, the methods and tools, and what other
+than the model or you would show the result is right — answered from the code, files and docs
+it reads, never from a summary. It asks you nothing and carries nothing out.
+
+**What comes back** opens with one fixed line, `/depth handoff: read-only exploration, nothing was implemented.`, then eight fixed headings, in the language of the request:
+`## Original request` (your text, unchanged), `## Understood` (adds nothing you did not say),
+`## Questions` (only when the request reads two materially different ways), `## Map`
+(`path:line`), `## Not requested` (proposals, each tagged `[evidencia: path:line]` or
+`[inferido]`), `## How it would be verified` (only oracles something outside the model can
+run), `## Uncertainty` and `## For the parent`, which tells the main session not to
+implement, to ask the questions first and to show `## Not requested` to you. The opening line and that paragraph say the same thing at both ends because the main session wakes on the handoff alone, and a real run on the economical explorer once translated the headings and dropped the closing section. What a top
+professional would add is a proposal for you to accept or drop; it never becomes a
+requirement by itself.
+
+**Refusals**, each one sentence and nothing started: `/depth needs a request: /depth
+<request>. The explorer does not see this chat, so put everything it needs in the request.`;
+`/depth starts a gentle-ai-explore subagent through the subagent_run tool, and this session
+does not offer it.`; and `/depth couldn't start the explorer: <the host tool's own words>`
+(a background subagent needs an interactive session, for one).
+
+**Limits.** The explorer has no chat, so anything it should know goes in the request. It
+cannot run commands: where the raw material needs a test or a reproduction it gives the
+command and says it was not run. It runs on the agent's economical model, which is better at
+search than at the judgement behind `## Not requested`, so read that section as proposals.
+Edit `lib/depth-prompt/depth.md` to change what it is told; the next `/depth` reads it, with
+no reload, and a test holds the eight headings in order.
+
 ## Deliberately absent
 
 This package is the worktree / ODD / files / issues surface only: two agent
-tools, four panels, one optional rail section and two tool designs on the bridge,
+tools, four panels, the `/depth` command, one optional rail section and two tool designs on the bridge,
 no preference of its own, no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. Its
@@ -1545,7 +1582,7 @@ the `Card diff` line — which the skill/ODD file cards obey as well. It adds no
 or row of its own, and the file
 picker's `alt+p` and the issues panel's `alt+i` are bound on the host directly
 rather than contributed to any shell surface. There is
-nothing to configure here, and `/warp`, `/odd`, `/files` and `/issues` are always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
+nothing to configure here, and `/warp`, `/odd`, `/files`, `/issues` and `/depth` are always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 
 ## Tests

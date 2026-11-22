@@ -83,11 +83,11 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd, /files, /issues and the two worktree tools', async () => {
+  test('registers /warp, /odd, /files, /issues, /depth and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['files', 'issues', 'odd', 'warp'], 'the command list is exactly the four panels');
+    assert.deepEqual(registered, ['depth', 'files', 'issues', 'odd', 'warp'], 'the command list is exactly the four panels and /depth');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });

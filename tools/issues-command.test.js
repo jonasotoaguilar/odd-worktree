@@ -1925,7 +1925,13 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
       schema: 'gentle-shell-bridge/api',
       version: 1,
       registerRows: () => {},
-      registerSection: (section) => { registered.push(section); return () => {}; },
+      // T5 of odd-rail-section: the bridge carries TWO sections now, so this double
+      // records the `GITHUB` one it is about. Every registration still receives a
+      // disposer, so the `ODD` rail registers alongside rather than being refused.
+      registerSection: (section) => {
+        if (section && section.id === 'odd-worktree.issues') registered.push(section);
+        return () => {};
+      },
       createStore: () => ({}),
       requestRepaint: () => {},
     };
@@ -2550,7 +2556,12 @@ describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)
       schema: 'gentle-shell-bridge/api',
       version: 1,
       registerRows: () => {},
-      registerSection: (section) => { registered.push(section); return () => {}; },
+      // T5 of odd-rail-section: record the `GITHUB` section this case is about; the
+      // `ODD` rail registers on the same double and is simply not what is read here.
+      registerSection: (section) => {
+        if (section && section.id === 'odd-worktree.issues') registered.push(section);
+        return () => {};
+      },
       createStore: () => ({}),
       requestRepaint: () => {},
     };

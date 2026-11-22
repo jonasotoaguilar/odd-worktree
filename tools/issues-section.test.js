@@ -1132,8 +1132,17 @@ function installBridge() {
     version: 1,
     registerRows: () => {},
     registerSection: (section) => {
-      registered.push(section);
-      return () => { released.push(section); };
+      // T5 of odd-rail-section: the bridge now carries TWO sidebar sections — this
+      // package's `GITHUB` one and its `ODD` one — so a double that recorded every
+      // registration would answer "two sections" to a suite that asserts exactly one
+      // and would hand back the ODD rail wherever it reads the recorded section.
+      // Only what this suite is about is recorded; every registration still receives
+      // its own disposer, so the ODD rail registers and unregisters alongside.
+      if (section && section.id === 'odd-worktree.issues') {
+        registered.push(section);
+        return () => { if (section && section.id === 'odd-worktree.issues') released.push(section); };
+      }
+      return () => {};
     },
     createStore: () => ({}),
     requestRepaint: () => { repaints.push(1); },

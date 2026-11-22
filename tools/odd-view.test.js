@@ -2326,3 +2326,97 @@ describe('createOddView two-step listing (S21)', () => {
     assert.equal(closed, null, 'esc still closes the view');
   });
 });
+
+// S6: a sidebar row clicks into the viewer, so the panel can be OPENED on one
+// requested document instead of always on the newest one. The request is a
+// STRING: an absolute `path` first (the document may live in ANY checkout), then
+// the name the list paints, and today's first-document open when nothing matches.
+describe('createOddView positional open (S6)', () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const listCells = (lines) => lines.slice(2, -2).map((line) => strip(line).split('│')[1] || '');
+  const filled = (lines) => listCells(lines).filter((cell) => cell.trim() !== '');
+  const rowName = (cell) => cell.trim().replace(/^▸\s*/, '');
+  const focusedName = (lines) => {
+    const cell = filled(lines).find((entry) => entry.includes('▸'));
+    return cell === undefined ? null : rowName(cell);
+  };
+  const bodyOf = (lines) => strip(lines.join('\n'));
+
+  // These documents do not all live in one checkout: the viewer is handed a
+  // path from somebody else's worktree, which is the shape the rail produces.
+  const docs = [
+    doc('alpha'),
+    { name: 'bravo', file: 'bravo.md', path: '/other-worktree/odd/tasks/bravo.md' },
+    doc('charlie'),
+  ];
+
+  function build({ initialDoc } = {}) {
+    const reads = [];
+    const options = {
+      docs,
+      loadDoc: (entry) => {
+        reads.push(entry.path || entry.name);
+        return { ok: true, text: `# ${entry.name}\n\nbody of ${entry.name}\n` };
+      },
+      helpers,
+      theme: plainTheme,
+      rowsAvailable: () => 20,
+      requestRender: () => {},
+      done: () => {},
+    };
+    if (initialDoc !== undefined) options.initialDoc = initialDoc;
+    const view = createOddView(options);
+    return { view, reads };
+  }
+
+  test('opens on the document whose absolute path is requested, loaded before any key press', async () => {
+    const { view, reads } = build({ initialDoc: '/other-worktree/odd/tasks/bravo.md' });
+    // The body is read while the view is mounted, not on the first render.
+    assert.deepEqual(reads, ['/other-worktree/odd/tasks/bravo.md'], 'the requested document is the one loaded on open');
+    await tick();
+    assert.equal(view.state.index, 1, 'the selection starts on the requested document');
+    const lines = view.render(80);
+    assert.equal(focusedName(lines), 'bravo', 'the highlight is on the requested document row');
+    assert.match(bodyOf(lines), /body of bravo/, 'the right pane starts on the requested document');
+    assert.equal(view.state.scroll, 0, 'and at the top of it');
+  });
+
+  test('falls back to the document name when no path matches the request', async () => {
+    const { view, reads } = build({ initialDoc: 'charlie' });
+    assert.deepEqual(reads, ['/checkout/odd/tasks/charlie.md'], 'the named document is the one loaded on open');
+    await tick();
+    assert.equal(view.state.index, 2, 'the selection starts on the named document');
+    const lines = view.render(80);
+    assert.equal(focusedName(lines), 'charlie', 'the highlight is on the named row');
+    assert.match(bodyOf(lines), /body of charlie/, 'the right pane shows the named document');
+  });
+
+  test('an unknown request opens on the first document, exactly like no request at all', async () => {
+    const requested = build({ initialDoc: '/somewhere/else/odd/tasks/november.md' });
+    const plain = build();
+    assert.deepEqual(requested.reads, plain.reads, 'the same document is loaded on open');
+    await tick();
+    assert.equal(requested.view.state.index, 0, 'an unknown request selects the first document');
+    assert.equal(requested.view.state.index, plain.view.state.index, 'the same index as today');
+    const lines = requested.view.render(80);
+    assert.equal(focusedName(lines), 'alpha', 'the highlight is on the first row');
+    assert.match(bodyOf(lines), /body of alpha/, 'the right pane shows the first document');
+    assert.equal(requested.view.state.scroll, 0);
+  });
+
+  test('no initialDoc keeps today\'s open: the first document, at the top, highlighted first', async () => {
+    const { view, reads } = build();
+    assert.deepEqual(reads, ['/checkout/odd/tasks/alpha.md'], 'the first document is still the one loaded on open');
+    await tick();
+    assert.equal(view.state.index, 0, 'the selection is still the first document');
+    assert.equal(view.state.scroll, 0, 'the pane is still at the top');
+    const lines = view.render(80);
+    assert.deepEqual(filled(lines).map(rowName), ['alpha', 'bravo', 'charlie'], 'the list is unchanged');
+    assert.equal(focusedName(lines), 'alpha', 'the highlight is still on the first row');
+    assert.match(bodyOf(lines), /body of alpha/, 'the right pane still starts on the first document');
+    // Byte-identical to the same view opened with an explicitly empty request.
+    const empty = build({ initialDoc: '' });
+    await tick();
+    assert.deepEqual(empty.view.render(80), lines, 'an empty request paints the very same frame');
+  });
+});

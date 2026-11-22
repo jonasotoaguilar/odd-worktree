@@ -417,6 +417,16 @@ test('a new session start re-arms it, and a /reload is not a new session', async
   assert.ok(await run('tool_result', readEvent('src/a.ts')), 'a new session forgets it');
 });
 
+test('a new request re-arms the reminder once a request has spent its three', async () => {
+  const { run } = setup({ toplevel: checkoutMap() });
+  await run('before_agent_start', SESSION_TOOLS);
+  // One first-search reminder plus two rows of eight are the three reminders one request may hear.
+  for (let call = 0; call < 1 + 8 * 2; call += 1) await run('tool_result', readEvent('src/a.ts'));
+  assert.equal(await run('tool_result', readEvent('src/a.ts')), undefined, 'this request has heard its three');
+  await run('before_agent_start', SESSION_TOOLS);
+  assert.ok(await run('tool_result', readEvent('src/a.ts')), 'the next request hears it again');
+});
+
 test('a worker child is told to call the MCP tool, and a review agent is told nothing', async () => {
   const worker = setup({
     env: { GENTLE_PI_AGENTS_CHILD: '1', GENTLE_PI_AGENTS_REQUESTED_TOOLS: 'read,bash,mcp__codegraph__codegraph_explore' },
@@ -447,7 +457,7 @@ test('a git read that throws never fails the tool result', async () => {
 });
 
 test('the guard is one injected collaborator, driven by the host events', async () => {
-  const seen = { tools: [], results: [], compacted: 0, sessions: 0 };
+  const seen = { tools: [], results: [], compacted: 0, sessions: 0, requests: 0 };
   const { run } = setup({
     impl: {
       createCodegraphGuard: (options) => {
@@ -464,6 +474,9 @@ test('the guard is one injected collaborator, driven by the host events', async 
           onNewSession: () => {
             seen.sessions += 1;
           },
+          onNewRequest: () => {
+            seen.requests += 1;
+          },
         };
       },
     },
@@ -476,8 +489,32 @@ test('the guard is one injected collaborator, driven by the host events', async 
   assert.deepEqual(seen.tools, [SESSION_TOOLS.systemPromptOptions.selectedTools]);
   assert.equal(seen.compacted, 1);
   assert.equal(seen.sessions, 2, 'the startup and the new session both reset');
+  assert.equal(seen.requests, 1, 'one new request, no more');
   assert.deepEqual(seen.results, ['grep']);
   assert.deepEqual(patch.content, [{ type: 'text', text: 'REMINDER' }], 'the reminder rides the result as one more part');
+});
+
+test('S7: every new request re-arms guard 2, and a finished call does not', async () => {
+  let requests = 0;
+  const { run } = setup({
+    impl: {
+      createCodegraphGuard: () => ({
+        observeTools: () => {},
+        onToolResult: async () => undefined,
+        onCompacted: () => {},
+        onNewSession: () => {},
+        onNewRequest: () => {
+          requests += 1;
+        },
+      }),
+    },
+  });
+  await run('tool_result', { toolName: 'grep', input: { pattern: 'x' }, isError: false, content: [] });
+  assert.equal(requests, 0, 'a finished tool call is no new request');
+  await run('before_agent_start', SESSION_TOOLS);
+  assert.equal(requests, 1, 'the prompt of a new request re-arms it');
+  await run('before_agent_start', SESSION_TOOLS);
+  assert.equal(requests, 2, 'each new request, not each session');
 });
 
 // ---- S2: the bounded join on the pre-execution hook (T6) ----

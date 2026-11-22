@@ -462,10 +462,13 @@ The question this page answers: which rules must every change preserve, and what
     last compaction.
     **Guard 2** is the primary session's and every child's except a `review-*` agent.
     It fires on the first search of the session's own checkout while CodeGraph is
-    unused (keyed by the checkout, so a `/warp` re-arms it), and again after 8
-    qualifying searches in a row without a use of `codegraph` or the MCP tool, at most
-    3 times per session across checkouts; any use of either restarts the row, and a
-    compaction or a new session forgets the row and the cap. The primary session and
+    unused in that request (keyed by the checkout, so a `/warp` re-arms it), and again
+    after 8 qualifying searches in a row without a use of `codegraph` or the MCP tool,
+    at most 3 times per request across checkouts; any use of either restarts the row.
+    Its row, its cap, its first-search slot and its `used` flag are per request: every
+    new request (`before_agent_start`) forgets them, while guard 1's slots and the
+    explored checkouts stay per session, and a compaction or a new session forgets
+    everything. The primary session and
     the explore agent get `Follow the CodeGraph rule: run codegraph query or explore
     first.` (`codegraph`, `query` and `explore` in backticks, the native wording only
     for a role that holds the native tool), every other role `Follow the CodeGraph

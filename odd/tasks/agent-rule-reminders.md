@@ -60,7 +60,7 @@ primary checkout on the default branch with a one-line reminder. Nothing else ch
 - [x] T2: the CodeGraph reminder repeats, with tests (S3). Commit f90ca1a.
 - [x] T3: the `edit`/`write` guard and the child block, with tests (S4, S5). Commit 8001db1; verifier fixes (`@` prefix, live owner read, temp-portable suite) in the closing commit.
 - [x] T4: invariants and reference follow (S6). Commit e250099 and the closing commit.
-- [ ] T5: guard 2 forgets its row, cap, slots and `used` flag at each new request, with tests, invariant 21 and the reference (S7).
+- [x] T5: guard 2 forgets its row, cap, slots and `used` flag at each new request, with tests, invariant 21 and the reference (S7). Commit: the closing commit of this ODD.
 
 Slice boundary: ~1.3k changed lines across four commits, each one reviewable alone (texts; reminder; guard; docs).
 

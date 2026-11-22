@@ -1,9 +1,9 @@
 'use strict';
 // T1 (S1, S2, S5, S6, S7) and T2 (S3): the decision core of the two CodeGraph reminders. From one
-// finished tool call, the session's own checkout, the role and what the session already used, it decides
-// one text or none, keeps the once-per-key state and guard 2's row of searches, and forgets it all on a
-// compaction or a new session. Git is a fake toplevel map here: no child, no network, no real agent
-// directory.
+// finished tool call, the session's own checkout, the role and what the request already used, it decides
+// one text or none, keeps the once-per-key state and guard 2's row of searches, re-arms guard 2 at every
+// new request, and forgets everything on a compaction or a new session. Git is a fake toplevel map here:
+// no child, no network, no real agent directory.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createCodegraphGuard } = require('../lib/codegraph-guard.js');
@@ -245,6 +245,57 @@ test('a compaction and a new session forget the row and the cap too (S3)', async
   guard.onNewSession();
   assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'and so is a new session in the same process');
   assert.deepEqual(await row(guard, ctx, THRESHOLD - 1), silent(THRESHOLD - 1), 'whose row counts from its own first search');
+});
+
+// ---- a new request re-arms guard 2 (S7) ----
+//
+// Each new request forgets guard 2's row, its cap, its first-search slots and its `used` flag, so a long
+// session is reminded again; guard 1's slots and the explored checkouts stay per session.
+
+test('a new request reminds again on its first search once the cap is spent (S7)', async () => {
+  const { guard, ctx } = setup();
+  const spent = await row(guard, ctx, 1 + THRESHOLD * 2);
+  assert.equal(spent.filter((text) => text !== undefined).length, CAP, 'the request spent its three reminders');
+  assert.deepEqual(await row(guard, ctx, THRESHOLD), silent(THRESHOLD), 'and no fourth arrives in it');
+  guard.onNewRequest();
+  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'the next request is reminded on its first search');
+  assert.deepEqual(await row(guard, ctx, THRESHOLD - 1), silent(THRESHOLD - 1), 'its own row starts there');
+  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'and it earns reminders of its own');
+});
+
+test('a CodeGraph use in the previous request does not silence the first search of the next (S7)', async () => {
+  const { guard, ctx } = setup();
+  await guard.onToolResult(use('codegraph'), ctx);
+  assert.equal(await guard.onToolResult(grep(), ctx), undefined, 'the graph was already used in this request');
+  guard.onNewRequest();
+  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'a new request starts with the graph unused');
+});
+
+test('the row of the previous request does not carry over (S7)', async () => {
+  const { guard, ctx } = setup();
+  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'the first search of the request reminds');
+  assert.deepEqual(await row(guard, ctx, THRESHOLD - 1), silent(THRESHOLD - 1), 'its row is seven searches long');
+  guard.onNewRequest();
+  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'the next request reminds on its first search again');
+  assert.deepEqual(await row(guard, ctx, THRESHOLD - 1), silent(THRESHOLD - 1), 'and counts its row from that reminder');
+  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'the eighth search of its own row reminds');
+});
+
+test('a new request keeps guard 1 once per other checkout across requests (S7)', async () => {
+  const { guard, ctx } = setup();
+  assert.equal(await guard.onToolResult(read('/other/a.ts'), ctx), ANOTHER('/other'));
+  guard.onNewRequest();
+  assert.equal(await guard.onToolResult(read('/other/b.ts'), ctx), undefined, 'a new request is no new checkout');
+  assert.equal(await guard.onToolResult(read('/third/a.ts'), ctx), ANOTHER('/third'), 'an unseen checkout still gets its reminder');
+  guard.onNewRequest();
+  assert.equal(await guard.onToolResult(read('/other/a.ts'), ctx), undefined, 'and it stays once per session');
+});
+
+test('a new request does not forget the checkouts the session already explored (S7)', async () => {
+  const { guard, ctx } = setup();
+  assert.equal(await guard.onToolResult(explore('/other'), ctx), undefined, 'an explore call is no search call');
+  guard.onNewRequest();
+  assert.equal(await guard.onToolResult(read('/other/a.ts'), ctx), undefined, 'guard 1 stays satisfied by that explore');
 });
 
 // ---- precision (S5) ----

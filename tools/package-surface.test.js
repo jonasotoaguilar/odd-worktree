@@ -73,7 +73,7 @@ describe('manifest', () => {
     // their own four modules — a classifier, the card, its resolver and the document
     // body Pi's Markdown draws — and own no preference at all (S1): they are gated by
     // the bridge's `Card tags` line, which is the bridge's, not ours.
-    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'bash-activity.js', 'bash-design.js', 'bash-frame.js', 'diff-design.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js']) {
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'skill-read-guard.js', 'bash-activity.js', 'bash-inline-script.js', 'bash-design.js', 'bash-frame.js', 'diff-design.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
     for (const gone of ['card-files-mode.js', 'cards-customize.js']) {
@@ -134,6 +134,20 @@ describe('registration', () => {
     for (const gone of ['bash-card', 'card-bash', 'bash']) {
       assert.equal(commands.has(gone), false, `the design adds no /${gone} command`);
       assert.equal(tools.has(gone), false, `the design adds no ${gone} tool`);
+    }
+  });
+
+  test('the skill-read guard is one more bash hook and adds no name (invariant 22)', async () => {
+    // invariant 22: the skill-read guard is one more `bash` observation, so the `tool_call`
+    // hooks stay the naming handler, the worktree bash and write guards and this one — a
+    // fifth would be a surface nobody asked for.
+    const source = stubbedSource();
+    assert.equal(source.split('pi.on("tool_call"').length - 1, 4, 'the naming handler, the worktree bash and write guards and the skill-read guard');
+    assert.ok(source.includes('libRequire("skill-read-guard.js")'), 'the decision comes from lib/skill-read-guard.js');
+    const { commands, tools } = await loadExtension({});
+    for (const gone of ['skill-read', 'skill_read', 'skill-read-guard']) {
+      assert.equal(commands.has(gone), false, `the guard adds no /${gone} command`);
+      assert.equal(tools.has(gone), false, `the guard adds no ${gone} tool`);
     }
   });
 

@@ -916,6 +916,37 @@ generic word of their own. A tool the line does not cover (every MCP tool) is
 returned untouched, and so are `read`, `write` and `edit`, which the line declares for the file
 card's question alone and this design draws nothing for.
 
+**What the classifier reads, and in what order.** One call can name several families; the card
+wears the most consequential one: `destructive`, then `codegraph`, `publishing`, `versioning`,
+`checking`, `formatting`, `preparing`, and `exploring` as the base. A deletion wins even beside
+a segment nothing can name (`rm -rf dist && ./scripts/unknown.sh` is `destructive`); below it, a
+segment nothing can name keeps the whole call generic, except that a call which runs CodeGraph
+stays `codegraph` whatever else it carries. Beyond the program tables, the reading is
+of text it can follow:
+
+- A heredoc with a quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) hands its body to the program as
+  data: a backtick, an `->` or a `--help` inside a commit message or a PR body is that text. An unquoted
+  delimiter still expands `$(…)` and backticks, so a body that uses them keeps the segment that
+  carries it generic. What follows the header on its own line (`| head x`) is read as commands; only the
+  body is data, and a second heredoc on the same line is one segment this reader does not follow. A `#`
+  comment runs to its line's end and is never a command.
+- A redirect (`>`, `>>`) into a file, or `tee file`, from a read or from plain text (`cat`, `echo`,
+  `printf`, `git show`, `gh pr view`, `curl`) is `preparing`: the call creates a file. A mutation beside
+  a redirect (`git push > out`) stays generic. `sed -i` and `perl -pi` are `preparing` too.
+- An inline script (`python3 -c`, `python3 - <<'PY'`, `node -e`, `node -p`) is named by what its own text
+  proves: a deleting call (`os.remove`, `shutil.rmtree`, `fs.rmSync`, `.unlink(`) is `destructive`; a write,
+  `mkdir`, rename or copy is `preparing`; a script that imports only read-only standard modules and writes
+  nothing is `exploring`. A shell-out (`subprocess`, `child_process`), `eval`, the network, another module
+  or file, an alias that hides `os`/`shutil`, or an `import()`/`require()` of anything but a listed builtin
+  or a JSON file leaves it generic. A word inside a string or a comment is not a call. A script file (`node build.mjs`, `python3 run.py`)
+  is never read.
+- `bash -c '…'` and `ssh host '…'` are named by the command line they carry; `bash script.sh` is not.
+- `timeout N cmd` is `cmd`; `curl` reads a URL (`exploring`), keeps it in a file with `-o`/`-O`/`-D`
+  (`preparing`) and stays generic when it sends a body, a form, an upload, a config file or a method other than GET or HEAD.
+- Syntax and config validators (`node --check`, `bash -n`, `biome check`, `shellcheck`, `herdr config
+  check`, `niri validate`) are `checking`; version probes, host-state probes (`ss`, `ip addr`, `niri msg
+  outputs`, `dconf dump`) and a plain `<tool> [subcommand] --help` are `exploring`.
+
 Colour is a theme role, never a palette (`ctx.theme`): the label wears its family's role
 (`exploring` `mdLink`, `checking` `mdHeading`, `formatting`/`preparing` `syntaxFunction`,
 `publishing` `success`, `versioning` `warning`, `destructive` `error`, generic `bashMode`),
@@ -1198,10 +1229,10 @@ Shell's own `card-style.json` is read here, never written.
 
 ## The `bash` guards
 
-The extension watches every `bash` tool call and refuses three things before the command
+The extension watches every `bash` tool call and refuses four things before the command
 runs. The refusal is the call's result: it says the command did not run and names the
-single tool that replaces it, `worktree_list` for a listing and `worktree_create` for
-the other two. The prompt block above is what is meant to keep the agent from ever
+single tool that replaces it, `worktree_list` for a listing, `worktree_create` for
+a creation, the ODD's checkout for a branch switch, and `read` for a skill file. The prompt block above is what is meant to keep the agent from ever
 reaching them.
 
 | Refused | Where |
@@ -1242,6 +1273,13 @@ reaching them.
 - **Everything else passes**: `git status`, every `git branch` form — creating, moving,
   copying, deleting or listing a branch changes no checkout — `git restore`,
   `git worktree remove|prune|move`, and every tool but `bash`.
+- **A skill is read with `read`, not bash.** A second refusal on the same path, decided in
+  `lib/skill-read-guard.js`: a `bash` call whose reader (`cat`, `head`, `tail`, `less`, `more`, `bat`,
+  `batcat`, `nl`, `awk`, `sed` without `-i`, also behind `timeout`/`sudo`/`env`, and including a `< file` input redirect) takes a skill file — a path below a `skills` folder, the file
+  card's own identity — is refused whole with: ``This bash call was not run: it reads the skill file
+  <path> — read skill files with the `read` tool instead.`` Not refused: general `*.md` and `docs/**`, ODD
+  artifacts, a skill path inside quoted text (`echo`, `git commit -m`), a heredoc body, `grep`/`rg` over
+  skills, writes (`sed -i`, `cat >`, `tee`) and `ls skills/`. The worktree guard decides first.
 - `ODD_WORKTREE_GUARD=0` turns them off for the process, like `ODD_WORKTREE_PROMPT=0`
   for the prompt blocks. No other value does, and nothing else configures them.
 

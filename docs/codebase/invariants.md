@@ -428,7 +428,15 @@ The question this page answers: which rules must every change preserve, and what
     only when the heading provably shows the WHOLE text — no `…` abbreviation, no
     `… +N lines` fold, no continuation row, nothing after it but the host's fill and
     hint — and the classifier (`lib/bash-activity.js`) names exactly one family for
-    it. The three read-only shell tools the same design paints (`grep`, `find`, `ls`)
+    it. The classifier decides by text and by one order: a deletion outranks everything,
+    even a segment nothing can name (the heading claims only what the call provably did);
+    below it a segment nothing can name keeps the call generic (a call that runs CodeGraph
+    stays `codegraph`), and among the named
+    families `codegraph`, `publishing`, `versioning`, `checking`, `formatting`,
+    `preparing` and `exploring` rank in that order. What it reads is text it can follow:
+    a quoted heredoc body is data (never a flag, a redirect or a substitution), a redirect
+    into a file from a read or from plain text is `preparing`, and an inline script is
+    named only by what its own text proves (`lib/bash-inline-script.js`). The three read-only shell tools the same design paints (`grep`, `find`, `ls`)
     are headed `exploring` whatever they read, and a read-only heading that cannot be
     proved is returned unchanged: those three have no generic word of their own. The
     line also declares `read` and `write` (`lib/bash-design.js`) even though the design draws
@@ -494,9 +502,9 @@ The question this page answers: which rules must every change preserve, and what
     advice, so no test may assert it blocks, refuses or notifies.
 
 22. **The tool guards read text and paths, fail open and add no surface.** The
-    extension's `tool_call` handlers decide only two things, both in
-    `lib/worktree-guard.js` as pure functions over injected seams, and a call they
-    cannot judge passes.
+    extension's `tool_call` handlers decide three things — two in
+    `lib/worktree-guard.js`, one in `lib/skill-read-guard.js` — as pure functions, and a
+    call they cannot judge passes.
 
     **`bash`** (`decideBashGuard`): a call whose command contains `git … worktree
     add` or `git … worktree list` in any cwd is refused, and, only when the command
@@ -520,10 +528,18 @@ The question this page answers: which rules must every change preserve, and what
     HEAD, another branch, an unresolvable default branch and a bare or separate git
     dir. A temp path is settled before any git read.
 
-    Neither guard ever throws (a throwing `tool_call` handler blocks the tool), an
+    **A skill read** (`decideSkillReadGuard`, registered after the worktree guard's so that
+    one decides first): a `bash` call whose reader (`cat`, `head`, `tail`, `less`, `more`,
+    `bat`, `batcat`, `nl`, `awk`, `sed` without in-place, also behind `timeout`, `sudo`,
+    `env`, `command` or `bash -c`) takes a skill file — a path below a `skills` folder, by
+    the file card's own identity (invariant 23) — is refused whole, naming the first such
+    path and the `read` tool. It reads no file and spawns no child; a quoted mention, a
+    heredoc body, `grep`, `rg`, a write and a `$VAR` path pass.
+
+    No guard ever throws (a throwing `tool_call` handler blocks the tool), an
     unreadable repository leaves only the `bash` worktree refusals active, and the
     default branch is resolved lazily and memoized per checkout.
-    `ODD_WORKTREE_GUARD=0` is the one way to turn both off, like
+    `ODD_WORKTREE_GUARD=0` is the one way to turn all of them off, like
     `ODD_WORKTREE_PROMPT=0` for the prompt blocks; no other value, option or config
     file does, and they register no command or tool name (invariant 3). Each refusal
     names the tool that replaces the blocked action, and the prompt block (invariant

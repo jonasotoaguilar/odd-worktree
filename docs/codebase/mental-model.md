@@ -148,14 +148,14 @@ Work on a branch, never on `main`: an ODD gets its own checkout at
 | Removal, or the deletion guard | `lib/worktree-remove.js`, `lib/worktree-session-guard.js` |
 | A queued warp or the busy evidence | `lib/worktree-warp-busy.js`, `lib/worktree-warp-sessions.js` |
 | How a card draws | `lib/shell-card.js` for the substrate, `lib/worktree-cards.js` |
-| The bash heading design | `lib/bash-design.js`, `lib/bash-frame.js`, `lib/bash-activity.js` |
+| The bash heading design | `lib/bash-design.js`, `lib/bash-frame.js`, `lib/bash-activity.js`, `lib/bash-inline-script.js` |
 | A file card or the bridge gate it obeys | `lib/file-card.js`, `lib/skill-odd-card.js`, `lib/file-card-markdown.js`, `lib/file-card-resolver.js` |
 | Prompt text the model reads | `lib/odd-prompt/odd-worktrees.md`, `lib/codegraph-prompt/*.md` via `lib/odd-worktrees-prompt.js` and `lib/codegraph-rules.js` |
 | `/issues`, its tabs or its capabilities | `lib/gh-issues.js`, `lib/issues-view.js` |
 | The rail section or its cache | `lib/issues-section.js`, `lib/related-issues-cache.js`, `lib/issues-cache-store.js` |
 | A `bash` command that should force a rail read | `lib/issues-bash-mutation.js` |
 | CodeGraph indexing, daemon or MCP entry | `lib/codegraph-session.js`, `lib/codegraph-index.js`, `lib/codegraph-mcp-config.js` |
-| The `bash` guards | `lib/worktree-guard.js` |
+| The `bash` guards | `lib/worktree-guard.js`, `lib/skill-read-guard.js` |
 
 ## Related Decisions / Contracts
 

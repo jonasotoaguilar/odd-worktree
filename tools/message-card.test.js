@@ -457,7 +457,7 @@ test('a mid-session flip repaints a card already on screen, in both directions',
 
 // ---- the palette (S5) ----
 
-test('each card wears its own tone: info for the budget, warning for the reminder', () => {
+test('both cards are informational and wear the accent on the frame and the name', () => {
   const outcome = registered();
   const budget = designFor(outcome, EXPLORATION).apply(plainBody(EXPLORATION, STARTED), { width: 70, customType: EXPLORATION, theme: taggedTheme, render: { expanded: false, outputPad: 1, message: {} } });
   // Both cards name ONE theme role for the frame and the name, so an informational card is never the
@@ -466,9 +466,11 @@ test('each card wears its own tone: info for the budget, warning for the reminde
   assert.ok(budget[0].includes('<accent>╭'), 'the frame wears the identity role, not the plain border');
   assert.ok(budget[0].includes('<muted>'), 'the detail stays the muted subtitle');
   const reminder = designFor(outcome, VERIFIER).apply(plainBody(VERIFIER, VERIFIER_TEXT), { width: 70, customType: VERIFIER, theme: taggedTheme, render: { expanded: false, outputPad: 1, message: {} } });
-  // WARNING owns the box: frame and name both carry the warning role.
-  assert.ok(reminder[0].includes('<warning>⚑</warning>'), reminder[0]);
-  assert.ok(reminder[0].includes('<warning>╭'), 'the frame carries the tone');
+  // A reminder is not an alert: it wears the same accent, never the amber a warning tone owns the
+  // whole box with.
+  assert.ok(reminder[0].includes('<accent>⚑</accent>'), reminder[0]);
+  assert.ok(reminder[0].includes('<accent>╭'), 'the frame wears the identity role');
+  assert.ok(!reminder[0].includes('<warning>'), 'nothing on a reminder card is painted as a warning');
 });
 
 test('every row fits the width the host asked for, at narrow and wide terminals, in both styles', () => {

@@ -251,3 +251,75 @@ describe('the preview title follows the shared palette (S13)', () => {
       'a ready read paints no pending word');
   });
 });
+
+// S6 (prs cross-links): the pane's `linked PRs:` row is a set of INDEPENDENT
+// click ranges the caller owns. The formatter reports each number it printed
+// with the row it landed on (wrapping included) and its own plain columns, so a
+// click can never open the whole line, a separator, or the truncation ellipsis.
+// The collector is optional: without it the returned rows are byte for byte the
+// ones this preview always produced.
+describe('linked PR click ranges (S6)', () => {
+  function rangesOf(detail, options = {}) {
+    const ranges = [];
+    const lines = issueDetailLines(detail, [], {
+      width: 80,
+      paint: plain,
+      emphasis: bold,
+      now: NOW,
+      ranges,
+      ...options,
+    });
+    return { lines, ranges };
+  }
+
+  test('each linked PR number is one range, on the row that carries it', () => {
+    const { lines, ranges } = rangesOf(FULL);
+    assert.deepEqual(ranges.map((range) => range.number), [69, 77], 'every number, in print order');
+    assert.ok(ranges.every((range) => range.kind === 'pullRequest'), 'the range names the relation it opens');
+    for (const range of ranges) {
+      assert.equal(lines[range.line].slice(range.start, range.end), `#${range.number}`,
+        `the range covers exactly #${range.number} and nothing else`);
+    }
+    assert.equal(ranges[0].line, ranges[1].line, 'the wide pane prints both numbers on their one row');
+  });
+
+  test('the truncation ellipsis is not a range', () => {
+    const { lines, ranges } = rangesOf({
+      ...FULL,
+      linkedPullRequests: [69],
+      linkedPullRequestsTruncated: true,
+    });
+    assert.deepEqual(ranges.map((range) => range.number), [69], 'only the number is clickable');
+    const row = lines[ranges[0].line];
+    assert.match(row, /, …$/, 'the capped page still ends with the ellipsis');
+    assert.ok(ranges.every((range) => !row.slice(range.start, range.end).includes('…')), 'the ellipsis carries no range');
+  });
+
+  test('a wrapped row keeps each range on the row its own number landed on', () => {
+    const { lines, ranges } = rangesOf(FULL, { width: 6 });
+    assert.equal(ranges.length, 2);
+    assert.notEqual(ranges[0].line, ranges[1].line, 'the narrow pane wraps the two numbers onto two rows');
+    for (const range of ranges) {
+      assert.equal(lines[range.line].slice(range.start, range.end), `#${range.number}`,
+        `#${range.number} is range-mapped on the row it was printed on`);
+    }
+  });
+
+  test('the body, the title and a pending read carry no range', () => {
+    const withBody = rangesOf({ ...FULL, title: '#69 title', body: 'linked PRs: #69, #77' });
+    assert.deepEqual(withBody.ranges.map((range) => range.number), [69, 77],
+      'only the linked row produces ranges, never the title or the body text');
+    assert.ok(
+      withBody.ranges.every((range) => withBody.lines[range.line].startsWith('linked PRs:')),
+      'every range lives on the one relation row',
+    );
+    const pending = rangesOf(FULL, { pending: true });
+    assert.deepEqual(pending.ranges, [], 'a pending read has not painted the relation row yet');
+  });
+
+  test('a caller that passes no collector gets exactly the rows it always did', () => {
+    const collected = rangesOf(FULL);
+    const plainRows = issueDetailLines(FULL, [], { width: 80, paint: plain, emphasis: bold, now: NOW });
+    assert.deepEqual(collected.lines, plainRows, 'the collector changes nothing about the painted rows');
+  });
+});

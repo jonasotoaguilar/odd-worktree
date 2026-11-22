@@ -44,6 +44,7 @@ palette, no raw escape sequence, no second card grammar.
 | T2 | S1, S3, S4 | inline (parent) | item 3 (`extensions/odd-worktree-tools.ts` is a host registration surface other extensions load) | `8ca153a` ✅ — the registration beside the jobs card, same bridge-ready path and measurement seam |
 | T3 | S4 | inline (parent) | none (removes a path) | `29ba811` ✅ — the capability probe removed; registration depends on the published release alone, failing closed; width guard; docs no longer overstate the cost |
 | T4 | S1, S4 | inline (parent) | none (one constant + docs) | `4630d37` ✅ — the floor is `0.12.1`: `0.12.0` has `follows` but let a stored message id veto it, so it cannot keep S1 |
+| T5 | S4 | inline (parent) | none (one parser + docs) | `ffbe478` ✅ — only a clean numeric release is trusted; suffixed, trailing-text and four-part strings are unreadable. Docs corrected on the inactive cost and on what a below-floor bridge actually does |
 
 T1 builds `lib/message-card.js` + `tools/message-card.test.js` + the docs. T2 wires the registration in
 `extensions/odd-worktree-tools.ts` and commits both slices. Suite after T2: 2623 pass, 0 fail.
@@ -73,6 +74,15 @@ claimed "no extra work per pass" when a claimed-but-inactive alert still paid a 
 T3 answers both. It also could not execute anything — its preparer refuses a linked worktree
 (`unsupported repository: ordinary single-root Git directory required`), so its findings are source-level
 and the suite evidence is this document's own.
+
+L8 — second verification round (read-only, real runs this time: its own probe scripts against bridge tags
+v0.12.0 and v0.12.1). It confirmed S1, S2, S3 and the host wiring, and rejected S4 and the docs:
+`releaseAtLeast` returned on a higher numeric component before looking at the string, so `0.12.2-rc.1`,
+`0.12.2+build.7`, `0.12.2garbage` and `1.0.0.0` all registered (40a6a03-era code); and the docs claimed
+no store read for an inactive claim (real 0.12.1 costs one tool-document read per alert when the followed
+line exists) and claimed every pre-`0.12.1` bridge ignores `follows` (0.12.0 honours it and lets a stored
+id veto it). T5 answers all three. Its scratch probe lives outside the repo and is not committed: a
+committed test may not read a bridge tag source.
 
 L7 — bridge `0.12.1` released (tag `v0.12.1`, merge `dd7292d`, release `76b77f6`): a stored message-side id
 is never consulted for a follow now (the follow is answered before the message document is opened), and an

@@ -846,7 +846,7 @@ describe('the Card tags line', () => {
     // answers `undefined` for both (`computeActivity` knows only bash and the three read-only
     // shell marks), so their rows come back byte for byte and the host's own card is never lost.
     const design = designFor('0.6.0');
-    assert.deepEqual(design.tools, ['bash', 'grep', 'find', 'ls', 'read', 'write']);
+    assert.deepEqual(design.tools, ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list']);
     const answer = (tool) => (design.tools.includes(tool) ? { kind: 'design', design } : { kind: 'not-covered' });
     assert.equal(answer('write').kind, 'design', 'a write is covered by the line');
     assert.equal(answer('write').design.id, BASH_DESIGN_ID);
@@ -866,7 +866,7 @@ describe('the Card tags line', () => {
   test('a 0.6.0 bridge gets ONE grouped registration over bash and the read-only tools', () => {
     const design = designFor('0.6.0');
     assert.equal(design.line, 'tags', 'the row the bridge derives is `Card tags` (S10)');
-    assert.deepEqual(design.tools, ['bash', 'grep', 'find', 'ls', 'read', 'write']);
+    assert.deepEqual(design.tools, ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list']);
     assert.equal(Object.hasOwn(design, 'tool'), false, 'never both shapes');
     assert.equal(design.id, BASH_DESIGN_ID);
     assert.equal(design.label, BASH_DESIGN_LABEL);
@@ -1239,7 +1239,7 @@ describe('the scoped claim', () => {
 
   test('the line gains edit, and every other tool keeps its whole claim', () => {
     const design = toolsActivityDesign();
-    assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'edit']);
+    assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list', 'edit']);
     for (const tool of ['bash', 'grep', 'find', 'ls', 'read']) {
       assert.equal(Object.hasOwn(design.scopes, tool), false, `${tool} is claimed for every call`);
     }
@@ -1273,7 +1273,7 @@ describe('the scoped claim', () => {
         assert.equal(design.scopes.write, design.scopes.edit, version);
         continue;
       }
-      assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write'], `${version}: today's tools`);
+      assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list'], `${version}: today's tools`);
       assert.deepEqual(
         Object.keys(design).sort(),
         ['apply', 'description', 'id', 'label', 'line', 'name', 'preview', 'tools'],
@@ -1293,7 +1293,7 @@ describe('the scoped claim', () => {
       const design = calls.at(-1);
       assert.equal(design.line, 'tags', version);
       assert.equal(design.scopes, undefined, `${version}: a prerelease of 0.9.0 does not meet the 0.9.0 cutoff`);
-      assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write'], version);
+      assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list'], version);
     }
   });
 
@@ -1303,7 +1303,7 @@ describe('the scoped claim', () => {
     assert.equal(calls[0].id, 'odd-worktree.capability-probe', 'the grouped shape is still probed');
     const design = calls.at(-1);
     assert.equal(design.scopes, undefined, 'an unreadable release never takes a scoped registration');
-    assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write']);
+    assert.deepEqual([...design.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list']);
   });
 });
 
@@ -1331,7 +1331,7 @@ describe('the release rule is semver order, on both lines at once (S6)', () => {
       try {
         assert.deepEqual(registration.seen.map((design) => design.line), ['tags'], `${version}: the grouped line, and no diff line`);
         assert.equal(registration.tags.scopes, undefined, `${version}: below 0.9.0, so no scope`);
-        assert.deepEqual([...registration.tags.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write'], `${version}: six tools, no edit`);
+        assert.deepEqual([...registration.tags.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list'], `${version}: ten tools, no edit`);
         assert.equal(registration.diff, undefined, `${version}: nothing is offered for a row the bridge would refuse`);
       } finally {
         registration.dispose();
@@ -1345,7 +1345,7 @@ describe('the release rule is semver order, on both lines at once (S6)', () => {
       try {
         assert.deepEqual(registration.seen.map((design) => design.line), ['tags', 'diff'], `${version}: both lines`);
         assert.equal(registration.tags.scopes.write, registration.tags.scopes.edit, `${version}: the scope is on the line`);
-        assert.deepEqual([...registration.tags.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'edit'], `${version}: seven tools`);
+        assert.deepEqual([...registration.tags.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list', 'edit'], `${version}: eleven tools`);
         assert.equal(registration.diff.id, 'odd-worktree.diff', version);
         assert.equal(registration.diff.label, 'color', version);
         assert.deepEqual([...registration.diff.tools], ['write', 'edit'], version);

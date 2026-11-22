@@ -1146,21 +1146,178 @@ test('a failed call and a non-Markdown file keep their plain rows (S8)', () => {
   assert.deepEqual(json.slice(0, -1).map(bodyText), ['{"a":1}'], 'a non-Markdown file is drawn as it is');
 });
 
-test('an edit draws its diff and is never rendered as a document', () => {
-  const resolver = fileResolver();
-  const diff = ['@@ -1,2 +1,2 @@', '-**old**', '+**new**'].join('\n');
-  const args = { path: ODD, old_string: '**old**', new_string: '**new**' };
-  const collapsed = resultRows(resolver, 'edit', args, textResult('Edited', { details: { diff } }), { isPartial: false }, plainTheme, 60);
-  assert.deepEqual(collapsed.slice(0, -1).map(bodyText), ['@@ -1,2 +1,2 @@', '-**old**', '+**new**'], 'the diff is the edit\'s rows');
+// ---- S1/S2/S3/S4/S5/S6: an edit states the fragment it leaves, drawn as a document ----
 
-  const expanded = resultRows(resolver, 'edit', args, textResult('Edited', { details: { diff } }), { expanded: true, isPartial: false }, plainTheme, 60);
-  const body = expanded.slice(0, -1).map(bodyText).join('\n');
-  assert.equal(body, diff, 'expanding an edit shows the whole diff, not a document');
-  assert.doesNotMatch(body, /▌/u, 'a Markdown path does not turn an edit into a document');
+// The two shapes an `edit` call arrives in: the `edits` array the harness folds a legacy
+// pair into (one entry per replacement), and the flat top-level pair itself.
+const EDITS = [{ oldText: '# Old heading', newText: '# Handoff\n\nBody text' }, { oldText: 'x', newText: '```\nconst a = 1;\n```' }];
+const FRAGMENT = ['# Handoff', '', 'Body text', '```', 'const a = 1;', '```'].join('\n');
+// The host's own rows for that call: a hunk header, the removed lines and the added ones.
+const EDIT_DIFF = ['@@ -2,3 +2,3 @@', '-# Old heading', '-removed line', '+# Handoff', '+Body text'].join('\n');
+const editResult = () => textResult('Edited', { details: { diff: EDIT_DIFF } });
 
-  // A result that carries no diff is its own text.
-  const plain = resultRows(resolver, 'edit', args, textResult('Edited 2 lines'), { isPartial: false }, plainTheme, 60);
-  assert.deepEqual(plain.slice(0, -1).map(bodyText), ['Edited 2 lines']);
+test('an edit of a Markdown skill or ODD artifact draws the fragment it leaves (S1)', () => {
+  const resolver = documentResolver();
+  const rows = resultRows(resolver, 'edit', { path: ODD, edits: EDITS }, editResult(), { expanded: true, isPartial: false }, taggedTheme, 60);
+  const body = rows.slice(0, -1).join('\n');
+  // The fragment is a document, drawn in the renderer's own roles.
+  assert.equal(body.includes('<mdHeading>Handoff</mdHeading>'), true, `the fragment's heading is drawn as a heading: ${body}`);
+  assert.equal(body.includes('<mdCodeBlock>const a = 1;</mdCodeBlock>'), true, 'so is its fenced block');
+  // None of the host's diff rows are left: no hunk header, no gutter, no `+`/`-` marker,
+  // and no line the edit removed.
+  const text = unpaint(body);
+  assert.equal(text.includes('@@'), false, 'no hunk header');
+  assert.equal(text.includes('removed line'), false, 'a line the edit removed is never shown');
+  assert.equal(text.includes('-# Old heading'), false, 'no removed marker');
+  assert.equal(text.includes('+# Handoff'), false, 'no added marker');
+  assert.doesNotMatch(text, /^\s*\d+ │/mu, 'no line-number gutter');
+  // A host diff that carries a gutter row of its own reaches the body no more than the
+  // rest of it does: no digit ever stands beside the diff's own bar.
+  const gutted = resultRows(
+    resolver,
+    'edit',
+    { path: ODD, edits: EDITS },
+    textResult('Edited', { details: { diff: ['@@ -1,1 +1,1 @@', ' 12 │ -old line', ' 12 │ +new line'].join('\n') } }),
+    { expanded: true, isPartial: false },
+    taggedTheme,
+    60,
+  );
+  assert.doesNotMatch(unpaint(gutted.slice(0, -1).join('\n')), /\d+\s*│|│\s*\d+/u, 'a gutter row is never drawn');
+  // The same rows a read of the resulting text draws, exactly.
+  const read = resultRows(resolver, 'read', { path: ODD }, textResult(FRAGMENT), { expanded: true, isPartial: false }, taggedTheme, 60);
+  assert.deepEqual(rows, read, 'the fragment is drawn exactly as a read of it is');
+
+  // The legacy flat shape is the same call, so it draws the same fragment.
+  const flat = resultRows(
+    resolver,
+    'edit',
+    { path: ODD, oldText: '# Old heading', newText: FRAGMENT },
+    editResult(),
+    { expanded: true, isPartial: false },
+    taggedTheme,
+    60,
+  );
+  assert.deepEqual(flat, rows, 'either call shape states the same fragment');
+
+  // A skill's Markdown file is the same card: the claim is the identity, not the tool. The
+  // rows must be the ones a read of that same fragment on that same skill path draws, so a
+  // skill card that fell back to its raw source, or to the diff, cannot pass.
+  const skillEdit = resultRows(resolver, 'edit', { path: SKILL, edits: EDITS }, editResult(), { expanded: true, isPartial: false }, taggedTheme, 60);
+  const skillRead = resultRows(resolver, 'read', { path: SKILL }, textResult(FRAGMENT), { expanded: true, isPartial: false }, taggedTheme, 60);
+  assert.deepEqual(skillEdit, skillRead, 'a skill edit draws exactly a read of its fragment');
+  const skillBody = skillEdit.slice(0, -1).join('\n');
+  const skillText = unpaint(skillBody);
+  assert.equal(skillBody.includes('<mdHeading>Handoff</mdHeading>'), true, 'in the renderer\'s own roles');
+  assert.equal(skillBody.includes('<mdCodeBlock>const a = 1;</mdCodeBlock>'), true, 'fenced block included');
+  assert.equal(skillText.includes('@@'), false, 'and never the diff');
+  assert.equal(skillText.includes('-# Old heading'), false, 'no removed marker');
+  assert.equal(skillText.includes('+# Handoff'), false, 'no added marker');
+  assert.doesNotMatch(skillText, /\d+\s*│|│\s*\d+/u, 'no line-number gutter');
+});
+
+// The array is the whole source when it is present: only an ABSENT or non-array `edits`
+// falls back to the legacy pair, so a pair beside an empty array states nothing.
+test('an `edits` array, even an empty one, is the whole source (S2)', () => {
+  const resolver = documentResolver();
+  const args = { path: ODD, edits: [], newText: '# Competing legacy text' };
+  const rows = resultRows(resolver, 'edit', args, editResult(), { expanded: true, isPartial: false }, taggedTheme, 60);
+  assert.deepEqual(rows.slice(0, -1).map(bodyText), EDIT_DIFF.split('\n'), 'the diff rows, not the legacy fragment beside the array');
+  assert.equal(rows.slice(0, -1).join('\n').includes('Competing legacy text'), false, 'the pair is not drawn at all');
+});
+
+test('a pure deletion keeps the edit\'s rows, with no invented placeholder (S3)', () => {
+  const resolver = documentResolver();
+  // Longer than the preview budget, so the collapsed and the expanded case draw different
+  // amounts of the same diff.
+  const lines = ['@@ -1,4 +1,0 @@', '-# Design', '-Body text', '-More body', '-Last body'];
+  const result = textResult('Edited', { details: { diff: lines.join('\n') } });
+  for (const edits of [[{ oldText: '# Design\nBody text', newText: '' }], [{ oldText: 'a', newText: '   \n ' }]]) {
+    const collapsed = resultRows(resolver, 'edit', { path: ODD, edits }, result, { isPartial: false }, taggedTheme, 60);
+    assert.deepEqual(collapsed.slice(0, -1).map(bodyText), lines.slice(0, PREVIEW_ROWS), 'collapsed: the first rows of the diff, capped as any body is');
+    const expanded = resultRows(resolver, 'edit', { path: ODD, edits }, result, { expanded: true, isPartial: false }, taggedTheme, 60);
+    assert.deepEqual(expanded.slice(0, -1).map(bodyText), lines, 'expanded: the whole diff, row for row, never a document');
+    assert.equal(bodyPaint(expanded.slice(0, -1).join('\n')).includes('<mdHeading>'), false, 'and none of it is drawn as Markdown');
+  }
+  // A result that carries no diff is its own text, exactly as before.
+  const plain = resultRows(resolver, 'edit', { path: ODD, edits: [{ newText: '' }] }, textResult('Edited 2 lines'), { isPartial: false }, plainTheme, 60);
+  assert.deepEqual(plain.slice(0, -1).map(bodyText), ['Edited 2 lines'], 'no wording is invented for the deleted fragment');
+});
+
+test('a failed edit keeps its error rows, and no other path becomes a document (S4)', () => {
+  const resolver = documentResolver();
+  const failed = resultRows(resolver, 'edit', { path: ODD, edits: EDITS }, textResult('ENOENT: no such file', { isError: true }), { expanded: true, isPartial: false }, taggedTheme, 60);
+  assert.deepEqual(failed.slice(0, -1).map(bodyText), ['ENOENT: no such file'], 'exactly the error, with no body row of its own');
+  const failedBody = failed.slice(0, -1).join('\n');
+  assert.equal(failedBody.includes('<mdHeading>'), false, 'a failed edit is never a document');
+  assert.match(failed[0], /^<error>│/u, 'and it wears the error role');
+
+  // A non-Markdown ODD artifact keeps its diff.
+  const json = resultRows(resolver, 'edit', { path: 'odd/tasks/data.json', edits: [{ newText: '## Handoff' }] }, editResult(), { isPartial: false }, plainTheme, 60);
+  assert.deepEqual(json.slice(0, -1).map(bodyText), ['@@ -2,3 +2,3 @@', '-# Old heading', '-removed line'], 'a non-Markdown path keeps its diff rows');
+
+  // A path with no skill or ODD identity is no row of this card at all: the chain keeps it.
+  const forwarded = resolver('edit', () => HOST_EDIT)
+    .renderResult(editResult(), { isPartial: false }, plainTheme, { args: { path: 'docs/notes.md', edits: EDITS } })
+    .render(60);
+  assert.deepEqual(forwarded, ['host edit result'], 'an ordinary Markdown file is the chain\'s row');
+});
+
+test('without a Markdown renderer the edit body is the same fragment, never the diff (S6)', () => {
+  const drawsNothing = class { render() { return []; } invalidate() {} };
+  const throws = class { render() { throw new Error('renderer exploded'); } invalidate() {} };
+  const cases = [['no renderer', null], ['a renderer that throws', throws], ['a renderer that draws nothing', drawsNothing]];
+  // The fragment's own lines are all such a host can draw: its first PREVIEW_ROWS collapsed,
+  // every one of them expanded. Asserted exactly, so a dropped heading or fence row fails.
+  const lines = FRAGMENT.split('\n');
+  for (const [label, markdownClass] of cases) {
+    const resolver = fileResolver({ markdownClass });
+    const args = { path: ODD, edits: EDITS };
+    for (const options of [{ isPartial: false }, { expanded: true, isPartial: false }]) {
+      const rows = resultRows(resolver, 'edit', args, editResult(), options, taggedTheme, 60);
+      const expected = options.expanded === true ? lines : lines.slice(0, PREVIEW_ROWS);
+      assert.deepEqual(rows.slice(0, -1).map(bodyText), expected, `${label}: every fragment row it draws, in order`);
+      assert.match(unpaint(rows.at(-1)), /^╰.*╯$/u, `${label}: and its own closing rule`);
+      assert.equal(bodyPaint(rows.slice(0, -1).join('\n')).includes('<mdHeading>'), false, `${label}: as plain source, in no Markdown role`);
+    }
+  }
+});
+
+test('a collapsed edit previews the fragment exactly like a write of it (S5)', () => {
+  const resolver = documentResolver();
+  const args = { path: ODD, edits: [{ newText: DOCUMENT }] };
+  const collapsed = resultRows(resolver, 'edit', args, editResult(), { isPartial: false }, taggedTheme, 60);
+  const write = resultRows(resolver, 'write', { path: ODD, content: DOCUMENT }, textResult('Wrote 42 bytes'), { isPartial: false }, taggedTheme, 60);
+  assert.equal(collapsed.length, PREVIEW_ROWS + 1, 'three preview rows and the closing rule');
+  assert.deepEqual(collapsed.slice(0, PREVIEW_ROWS), write.slice(0, PREVIEW_ROWS), 'the same preview a write of the document draws');
+  const preview = collapsed.slice(0, PREVIEW_ROWS).join('\n');
+  assert.equal(preview.includes('<mdHeading>Design</mdHeading>'), true, `the preview starts at the fragment's top: ${preview}`);
+  assert.equal(preview.includes('<mdCodeBlock>const a = 1;</mdCodeBlock>'), false, 'the preview stops at its budget');
+
+  // Expanded, all of it: exactly the rows a write of the same document draws, so a row
+  // dropped from the middle cannot pass, and every drawn row of the document is there.
+  const expanded = resultRows(resolver, 'edit', args, editResult(), { expanded: true, isPartial: false }, taggedTheme, 60);
+  const expandedWrite = resultRows(resolver, 'write', { path: ODD, content: DOCUMENT }, textResult('Wrote 42 bytes'), { expanded: true, isPartial: false }, taggedTheme, 60);
+  assert.deepEqual(expanded, expandedWrite, 'expanding an edit is the whole document, row for row');
+  assert.ok(expanded.length > PREVIEW_ROWS + 1, 'and it is more than the collapsed preview draws');
+  assert.equal(unpaint(expanded.slice(0, -1).join('\n')).includes('@@'), false, 'and no diff row anywhere');
+
+  // `minimal` draws the call alone: the heading above it is still the call's, and the
+  // result is its closing rule with no body under it.
+  globalThis[CARD_CONTENT_SLOT] = 'minimal';
+  try {
+    const call = callRows(resolver, 'edit', args, taggedTheme, 60);
+    assert.equal(call.length, 1, 'the call is its one heading row at either level');
+    assert.match(unpaint(call[0]), /📑 odd/u, 'and it still heads as the ODD artifact');
+    assert.match(unpaint(call[0]), /edit/u, 'naming the tool');
+    assert.match(unpaint(call[0]), /cards-skill-odd\.md/u, 'and the file');
+    const minimal = resultRows(resolver, 'edit', args, editResult(), { isPartial: false }, taggedTheme, 60);
+    assert.equal(minimal.length, 1, 'the closing rule alone');
+    assert.match(unpaint(minimal[0]), /^╰.*╯$/u, 'with no body above it');
+    assert.doesNotMatch(unpaint(minimal[0]), /Design|quoted|```/u, 'and nothing of the document on it');
+    assertFramed(minimal, 60);
+  } finally {
+    delete globalThis[CARD_CONTENT_SLOT];
+  }
 });
 
 test('a failed result keeps its error rows and the error tone', () => {

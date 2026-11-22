@@ -14,6 +14,7 @@ const {
 	FILE_CARD_IDENTITY,
 	ODD_FILE_CARD,
 	SKILL_FILE_CARD,
+	editedFragment,
 	fileCardIdentity,
 	fileCardLineRange,
 	fileCardName,
@@ -175,19 +176,31 @@ test('a read names the line range it asked for, and no other tool states one', (
 	assert.equal(fileCardLineRange('read', undefined), undefined);
 });
 
+// The fragment source itself, as the one answer both the document and its plain fallback
+// are drawn from.
+test('the fragment an edit leaves is every `newText` it states, and nothing else', () => {
+	assert.equal(editedFragment({ edits: [{ newText: 'a' }, { newText: 'b' }] }), 'a\nb');
+	assert.equal(editedFragment({ newText: 'a' }), 'a');
+	assert.equal(editedFragment({ edits: [{ oldText: 'gone', newText: '' }] }), undefined);
+	assert.equal(editedFragment(undefined), undefined);
+});
+
 // A Markdown document is drawn as a document only when expanded and successful; a read
-// draws what it returned, a write what its call carried, and nothing to draw keeps the rows.
-test('only an expanded, successful read or write of a Markdown file draws a document', () => {
+// draws what it returned, a write what its call carried, an edit the fragment it leaves
+// behind, and nothing to draw keeps the rows.
+test('an expanded, successful read, write or edit of a Markdown file draws a document', () => {
 	const markdown = '## Handoff\n\nBody.';
 	const draw = (tool, args, result, options = {}) =>
 		markdownDocumentSource(tool, args, result, { expanded: true, ...options });
 	assert.equal(draw('read', { path: 'docs/a.md' }, markdown), markdown);
 	assert.equal(draw('write', { path: 'docs/a.md', content: markdown }, 'Successfully wrote 20 bytes'), markdown);
+	// An edit's document is the text it leaves behind, never what it removed or its diff.
+	assert.equal(draw('edit', { path: 'docs/a.md', oldText: 'a', newText: markdown }, 'Applied'), markdown);
 	// Collapsed, failed, non-Markdown and every other tool keep their rows.
 	assert.equal(draw('read', { path: 'docs/a.md' }, markdown, { expanded: false }), undefined);
 	assert.equal(draw('read', { path: 'docs/a.md' }, markdown, { isError: true }), undefined);
 	assert.equal(draw('write', { path: 'docs/a.md', content: markdown }, 'ok', { isError: true }), undefined);
-	assert.equal(draw('edit', { path: 'docs/a.md', oldText: 'a', newText: markdown }, 'Applied'), undefined);
+	assert.equal(draw('edit', { path: 'docs/a.md', oldText: 'a', newText: markdown }, 'Applied', { isError: true }), undefined);
 	assert.equal(draw('grep', { path: 'docs/a.md' }, markdown), undefined);
 	assert.equal(draw('read', { path: 'docs/a.txt' }, markdown), undefined);
 	assert.equal(draw('write', { path: 'lib/x.ts', content: markdown }, 'ok'), undefined);
@@ -197,4 +210,33 @@ test('only an expanded, successful read or write of a Markdown file draws a docu
 	assert.equal(draw('write', { path: 'docs/a.md', content: '' }, 'Successfully wrote 0 bytes'), undefined);
 	assert.equal(draw('write', { path: 'docs/a.md' }, 'Successfully wrote 0 bytes'), undefined);
 	assert.equal(draw('read', undefined, markdown), undefined);
+});
+
+// An edit's document is the fragment its call leaves behind: every `newText` it states, in
+// the call's own order, and nothing it removed.
+test('an edit draws the fragment it leaves behind, in either call shape', () => {
+	const draw = (args, options = {}) => markdownDocumentSource('edit', args, 'Applied', { expanded: true, ...options });
+	// The shape the harness hands over: one `edits` array, joined in its own order.
+	assert.equal(
+		draw({ path: 'odd/a.md', edits: [{ oldText: 'one', newText: '# One' }, { oldText: 'two', newText: '## Two' }] }),
+		'# One\n## Two',
+	);
+	assert.equal(draw({ path: 'odd/a.md', edits: [{ newText: 'b' }, { newText: 'a' }] }), 'b\na', 'the array order, never a sort');
+	// The legacy flat shape: the one pair at the top level.
+	assert.equal(draw({ path: 'odd/a.md', oldText: 'one', newText: '# One' }), '# One');
+	assert.equal(draw({ path: 'odd/a.md', edits: 'not an array', newText: '# One' }), '# One', 'an `edits` that is not an array is the flat shape');
+	// An entry that states no string is skipped, never stringified: the fragment is text.
+	assert.equal(
+		draw({ path: 'odd/a.md', edits: [{ newText: 7 }, null, 'text', { newText: '# One' }, {}, { newText: ['x'] }] }),
+		'# One',
+	);
+	// A pure deletion leaves no fragment, so there is no document and the rows stay.
+	assert.equal(draw({ path: 'odd/a.md', edits: [{ oldText: '# Gone', newText: '' }] }), undefined);
+	assert.equal(draw({ path: 'odd/a.md', edits: [{ oldText: '# Gone', newText: '  \n ' }] }), undefined);
+	assert.equal(draw({ path: 'odd/a.md', oldText: '# Gone' }), undefined, 'no newText states nothing');
+	// A collapsed or failed edit, and a path that is no Markdown, keep their rows too.
+	assert.equal(draw({ path: 'odd/a.md', edits: [{ newText: '# One' }] }, { expanded: false }), undefined);
+	assert.equal(draw({ path: 'odd/a.json', edits: [{ newText: '# One' }] }), undefined);
+	// Nothing to read is no document, and no throw either.
+	assert.equal(draw(undefined), undefined);
 });

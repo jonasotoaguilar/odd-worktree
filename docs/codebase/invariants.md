@@ -611,6 +611,19 @@ The question this page answers: which rules must every change preserve, and what
     with no TUI package, a renderer that throws and a document that draws no row
     all fall back to the wrapped plain source, unstyled.
 
+    **What document a call draws is its own answer.** A `read` draws the text it
+    returned, a `write` the content its call carried, and an `edit` the fragment it
+    leaves behind (`editedFragment`, `lib/skill-odd-card.js`): its `edits[].newText`
+    in the call's own array order, joined with one newline, or the legacy top-level
+    `newText` when the call states no array, with no non-string entry stringified.
+    `oldText` is never read, because the removed text is exactly what that document
+    must not show — no hunk header, no gutter, no `+`/`-` marker. That fragment is
+    also the edit's plain fallback, so a host without the renderer is answered by the
+    same text rather than by the diff. An edit that leaves no non-whitespace text (a
+    pure deletion) draws no document at all: it keeps the rows it has, the diff the
+    host carries (`details.diff`) — its own text when it carries none — with no
+    invented placeholder, and a failed edit keeps its error rows.
+
 24. **No session path waits on `gh`, and every `gh` reach is deferred.**
     `session_start` DISPATCHES the issues gate as tracked startup work under the
     generation the dispatch captured and never awaits it, so opening a session or

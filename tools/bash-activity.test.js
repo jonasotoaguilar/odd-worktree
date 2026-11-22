@@ -1590,6 +1590,91 @@ test('a quoted heredoc body is data, whatever characters it carries', () => {
 	assert.equal(inferBashActivity("git commit -F - <<'MSG' > out.txt\nfix\nMSG"), undefined);
 });
 
+// A `--body` written from a quoted heredoc hands the program the body as data: the
+// backticks inside it are the prose the PR carries, never a substitution this reader has
+// to follow, so the call is the remote write it performs.
+test('a PR body written from a quoted heredoc names the publishing activity', () => {
+	const command = `gh pr create --base main --head feat/jobs-activity-card --title "feat(cards): draw background-job tools in the active card style" --body "$(cat <<'EOF'\n## What\n- \`bash_background\`, \`monitor\`, \`job_stop\` and \`job_list\` are now drawn on the card.\nEOF\n)" 2>&1 | tail -3`;
+	assert.equal(inferBashActivity(command), 'publishing');
+});
+
+// The audit's own real command (a session's `gh pr create` with a 20-line body): the body of
+// a quoted heredoc nested inside `$( … )` is data, and an apostrophe in it is not the shell's
+// own quote. The scan that finds the end of a substitution reads quotes but not heredoc
+// bodies, so an ODD number of body apostrophes left it inside a quote and it never found the
+// `)` that closes the substitution: the gh segment stayed one piece of text with the body
+// (backticks and all) still in it, and the hidden-substitution veto made the call generic.
+test('the audit\'s real PR command names the publishing activity', () => {
+	const command = `cd /home/jona/dev/projects/odd-worktree-worktrees/jobs-activity-card && git push -q origin feat/jobs-activity-card 2>&1 | tail -3; gh pr create --base main --head feat/jobs-activity-card --title "feat(cards): draw background-job tools in the active card style" --body "$(cat <<'EOF'
+## What
+
+\`bash_background\`, \`monitor\`, \`job_stop\` and \`job_list\` are registered with no renderer of their own, so Pi draws them in a plain box and neither \`neon\` nor \`float\` ever reaches them. While the bridge's \`Card tags\` line answers with this package's \`activity\` design for the tool, they are now drawn on the card substrate in the shell's chosen style.
+
+- Call: the tool's mark and word (\`⧗ background\`, \`◉ monitor\`, \`■ stop\`, \`≡ jobs\`) plus the job's label, else the first line of its command; the whole command when expanded.
+- Result: the job's own answer, first rows collapsed and everything expanded, closing the frame with the call's duration.
+- \`minimal\`: the call alone while collapsed; a failure still says why.
+- Any other answer on \`Card tags\` — \`native\`, \`not-covered\`, \`missing\`, another plugin's design, no bridge, a bridge older than the reader — leaves Pi's own drawing untouched.
+
+The four tools are declared on the \`tags\` line so the bridge can answer for them; the activity design itself returns their rows exactly as drawn.
+
+## Limitation
+
+The gate is read when a job card is built, not on every paint: these tools have no host renderer to forward to, so a switch made mid-session reaches the next job card.
+
+## Tests
+
+\`node --test tools/*.test.js\` → 2561 pass, 0 fail (2547 before, 14 new).
+
+\`chore(release): 3.4.0\` is in this PR, as the release commit the tag will be cut from.
+EOF
+)" 2>&1 | tail -3`;
+	assert.equal(inferBashActivity(command), 'publishing');
+	// The same call as the card reads it when only the `gh` side is replayed, which is how
+	// the audit found it: one segment, body included.
+	assert.equal(inferBashActivity(command.slice(command.indexOf('gh pr create'))), 'publishing');
+});
+
+// `<<<` is a herestring, not a heredoc: its second `<` opens no header, so nothing after it
+// is a body this reader may skip. Reading it as one ate the `)` that closes the `$( … )`,
+// left the call unsplit and named the write it only wrapped.
+test('a herestring is not a heredoc header', () => {
+	const command = 'gh pr create --body "$(cat <<<date)" && ./unclassified.sh\ndate';
+	assert.equal(inferBashActivity(command), undefined);
+	assert.equal(inferBashActivity('gh pr create --body "$(cat <<<date)"'), 'publishing');
+});
+
+// A heredoc's header line is still text the shell acts on: the `)` that closes the inner
+// subshell sits on it, and only the body after the newline is data. Skipping to the body's
+// end ate that `)` and left the substitution unclosed, so the whole call was named after
+// the text it could not split.
+test('a heredoc header line is text the shell acts on', () => {
+	const command = "gh pr create --body \"$( (cat <<'X')\nplain\nX\n)\" && ./unclassified.sh";
+	assert.equal(inferBashActivity(command), undefined);
+	assert.equal(inferBashActivity("gh pr create --body \"$( (cat <<'X')\nplain\nX\n)\""), 'publishing');
+});
+
+// The substitution veto is not weakened: a command hidden where this reader cannot follow
+// it — a backtick in the text the shell acts on, a `<(...)` process substitution, a heredoc
+// whose delimiter is UNQUOTED and therefore expands its body — still keeps the whole card
+// generic. A `$(...)` is a different shape: the segmenter DOES follow it, so
+// `--body "$(git log --oneline -1)"` is read as the `git log` it runs beside the
+// `gh pr create` write, and names that write.
+test('a substitution the reader cannot follow still keeps the call generic', () => {
+	for (const command of [
+		'gh pr create --body "see `date` now"',
+		'gh pr create --body <(date)',
+		'gh pr create --title "`git rev-parse HEAD`" --body x',
+		// A real backtick beside a named write still leaves the whole call unnamed.
+		'git push && cat `ls`',
+		'echo "a `b` c"',
+		// An unquoted delimiter expands its body, so a substitution there may run anything.
+		"gh pr create --body \"$(cat <<EOF\nsee `date`\nEOF\n)\"",
+	]) {
+		assert.equal(inferBashActivity(command), undefined, command);
+	}
+	assert.equal(inferBashActivity('gh pr create --body "$(git log --oneline -1)"'), 'publishing');
+});
+
 // A redirect that only CREATES a file from a read or from text is the build-up the
 // `preparing` family already names for `mkdir`, `touch` and `cp`; it is never a mutation
 // of anything else, so a mutating command beside a redirect stays generic.

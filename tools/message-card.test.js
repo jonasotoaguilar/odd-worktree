@@ -128,7 +128,7 @@ function publishBridge(options = {}) {
 
 /** The module's own report, plus the bridge it registered on. */
 function registered(options = {}) {
-  const bridge = publishBridge({ version: '0.12.0', toolLine: ACTIVITY, validatesFollows: true, ...options });
+  const bridge = publishBridge({ version: '0.12.1', toolLine: ACTIVITY, validatesFollows: true, ...options });
   const outcome = registerMessageCards({ metrics, theme: plainTheme });
   return { ...outcome, bridge };
 }
@@ -283,8 +283,9 @@ test('a bridge that cannot express the follow gets NO registration, never a Mess
   for (const [name, version] of [
     ['the release before it', '0.11.0'],
     ['a much older one', '0.7.0'],
-    ['the cutoff with a prerelease suffix', '0.12.0-rc.1'],
-    ['the cutoff with a build suffix', '0.12.0+build.7'],
+    ['the release that has follows but not the order', '0.12.0'],
+    ['the cutoff with a prerelease suffix', '0.12.1-rc.1'],
+    ['the cutoff with a build suffix', '0.12.1+build.7'],
   ]) {
     const bridge = publishBridge({ version, toolLine: ACTIVITY, validatesFollows: false });
     assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined }, name);
@@ -293,7 +294,7 @@ test('a bridge that cannot express the follow gets NO registration, never a Mess
 });
 
 test('a release that cannot be read registers nothing at all: no probe, no api call, no store read', () => {
-  for (const [name, version] of [['no release member', undefined], ['a release that cannot be read', 'v0.12'], ['a prerelease of the floor', '0.12.0-rc.1'], ['a build suffix on the floor', '0.12.0+build.7']]) {
+  for (const [name, version] of [['no release member', undefined], ['a release that cannot be read', 'v0.12'], ['the release before the floor', '0.12.0'], ['a prerelease of the floor', '0.12.1-rc.1'], ['a build suffix on the floor', '0.12.1+build.7']]) {
     for (const validatesFollows of [false, true]) {
       const bridge = publishBridge({ version, toolLine: ACTIVITY, validatesFollows });
       assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined }, name);
@@ -320,16 +321,17 @@ test('a width too narrow for one body row hands the rows straight back', () => {
 });
 
 test('a later release registers, and a bridge with no message-design surface registers nothing', () => {
-  for (const version of ['0.12.0', '0.12.1', '0.13.0', '1.0.0']) {
+  for (const version of ['0.12.1', '0.12.2', '0.13.0', '1.0.0']) {
     assert.equal(registered({ version }).registered, true, version);
   }
   // The capability itself, asked of two bridges: the release string decides, and nothing is asked of
-  // the bridge when it cannot be read as at least 0.12.0 (fail closed, never a probe).
-  assert.equal(bridgeTakesFollows({ VERSION: '0.12.0' }), true);
+  // the bridge when it cannot be read as at least 0.12.1 (fail closed, never a probe).
+  assert.equal(bridgeTakesFollows({ VERSION: '0.12.1' }), true);
+  assert.equal(bridgeTakesFollows({ VERSION: '0.12.0' }), false, 'the follow exists there, but a stale message id could veto it');
   assert.equal(bridgeTakesFollows({ VERSION: '0.11.9' }), false);
-  assert.equal(bridgeTakesFollows({ VERSION: '0.12.0-rc.1' }), false);
+  assert.equal(bridgeTakesFollows({ VERSION: '0.12.1-rc.1' }), false);
   assert.equal(bridgeTakesFollows({}), false, 'an unreadable release is not asked and not used');
-  const bare = publishBridge({ version: '0.12.0' });
+  const bare = publishBridge({ version: '0.12.1' });
   delete globalThis[BRIDGE_API_SLOT].registerMessageDesign;
   assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined });
   assert.equal(bare.calls.length, 0);
@@ -338,7 +340,7 @@ test('a later release registers, and a bridge with no message-design surface reg
 });
 
 test('a refused registration is a no-registration, never a throw', () => {
-  const bridge = publishBridge({ version: '0.12.0', toolLine: ACTIVITY, validatesFollows: true });
+  const bridge = publishBridge({ version: '0.12.1', toolLine: ACTIVITY, validatesFollows: true });
   const api = globalThis[BRIDGE_API_SLOT];
   api.registerMessageDesign = () => { bridge.calls.push('refused'); throw new Error('refused'); };
   assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined });

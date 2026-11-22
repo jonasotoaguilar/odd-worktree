@@ -1166,6 +1166,80 @@ substrate (`lib/shell-card.js`) through the host's `registerToolRenderer` hook, 
   registered, executed or shadowed here: the arguments are only read, and every model-written string is drawn without
   terminal sequences.
 
+## The message cards
+
+Two Pi custom messages Gentle Shell sends carry no renderer anywhere: `gentle-pi.exploration-budget` and
+`gentle-pi.verifier-settle-reminder`. Pi draws both in its default box, and the shell's card-style pass is
+positional, so neither ever reaches `float` or `neon`. This package paints them through
+`gentle-shell-bridge`'s message-design surface (`lib/message-card.js`), the bridge's one registration point
+for a custom message's rows — the same kind of design as the `activity` and `color` tool designs, for a
+message instead of a tool.
+
+| Alert | What it draws |
+| --- | --- |
+| `gentle-pi.exploration-budget` | `⌕ Exploration budget` in the `info` tone, with the numbers the message states — `1,234 tracked lookups · 56,789 text bytes` — as the heading's detail |
+| `gentle-pi.verifier-settle-reminder` | `⚑ Verifier reminder` in the `warning` tone, with the risk item the message states — `Risk: item 3` — as the detail |
+
+The two registrations are ungrouped (`customType` each) and both FOLLOW the switch this package already
+owns: `follows: { line: tags, id: odd-worktree.bash-activity }` — the `tags` line `lib/bash-design.js`
+registers its tool design on, and the design id that line answers with (the value a user reads as
+`activity`). There is therefore **no second switch**: `activity` on `Card tags` paints both alerts, and
+nothing new appears in `/gentle:customize` → `Cards`, because a following design contributes no value of its
+own and a line made only of following designs has no row. A message that states none of those numbers is
+headed by its name alone — no invented detail, no empty separator.
+
+- **The body is never clipped.** Both alerts are instructions the agent must read, so **every** row of the
+  message is drawn at any card content level: no three-row preview, no `minimal` withholding, no expand
+  hint — nothing is hidden, so a hint would lie. That is the exact opposite of the jobs card's result body,
+  and it is this card's decision: the bridge clips nothing, re-wraps nothing and reads no content level. A
+  body wider than the card is wrapped by the substrate, never cut.
+- **The bridge's own decorations are dropped.** For a type with no host renderer the bridge hands a design
+  the message's plain body — its `[customType]` label, a blank row and its text — and the design owns the
+  frame. The label row and the blank row after it are the bridge's plain-body decoration, not the message, so
+  they are removed: the card's heading already names the alert, and the body starts at the message's first
+  row. Everything the message states is kept, blank rows between paragraphs included.
+- **Style and measurement are the host's.** The card composes its heading, body and closing rule on the
+  substrate (`lib/shell-card.js`) and hands them to `floatRows`, which reads the shell's `float`/`neon`
+  choice once per paint (`lib/card-style.js`) and measures with the injected helpers. `ctx.cardStyle` is not
+  read for the palette: it is the bridge's own Card style selection, not the host's chrome. A mid-session
+  flip repaints a message already on screen, because the design is asked again on every pass.
+- **The switch is `Card tags` → `activity`, resolved live.** The bridge answers the follow on every pass,
+  reading the tool document and never writing it, so flipping `Card tags` repaints a message already on
+  screen and turns it off again — no re-registration, no session reload, no seed and no message store to
+  keep in step. While the line answers anything else — `native`, another plugin's design, a value naming a
+  design that is gone, or a line that does not exist — the bridge hands the message back byte-identical to
+  what Pi drew, and this card is never asked.
+- **It needs gentle-shell-bridge `0.12.1`, and an older bridge gets nothing.** `follows` arrived at
+  `0.12.0`, but there a value left in the message document could VETO a follow — the one switch promised
+  here turning back into a silent second one — so `0.12.1` (which answers the follow before opening that
+  document) is the first release that keeps the promise, and it is the floor. Below it the field is either
+  absent and IGNORED while the registration is still accepted (`0.11.x`, which would silently mint the very
+  `Message <type>` switch this card must not have) or present and lettable-to-be-vetoed (`0.12.0`). The
+  published release string is the ONLY answer accepted, and only a **clean numeric** one: `0.12.1`,
+  `0.12.2`, `1.0.0`. Everything else registers **nothing** — `0.12.0` and anything below the cutoff, any
+  prerelease or build suffix anywhere (`0.12.1-rc.1`, `0.12.2+build.7`), trailing text (`0.12.2garbage`), a
+  four-part string (`1.0.0.0`) and an absent or unreadable value. Refusing the suffixed and malformed forms
+  is this package's fail-closed policy, not a SemVer ranking: an unreadable release loses the card rather
+  than risk registering where the follow is not honoured. There is deliberately **no capability probe**: a probe cannot tell a bridge that
+  refuses it for an unrelated reason (`0.11.0` refuses a competing type claim long before it ever looks at
+  `follows`) from one that validates the field, and an accepted-then-withdrawn probe can leave the bridge's
+  row provider installed. The trade is the safe side of it — an unreadable release keeps Pi's own box, never
+  a parallel switch.
+- **Fail-open, and what an inactive claim still costs.** No bridge, a bridge without the message-design
+  member, a release below `0.12.1` and a registration the bridge refuses are all "register nothing": Pi's
+  own output stays byte-identical. Once registered, a pass where `Card tags` answers something else costs a
+  registry walk and **at most one tool-document read per alert** when the followed line exists — the message
+  document is never opened for a follow — and paints nothing. A
+  message or a context the design cannot measure through (no helpers, no positive width) throws instead of
+  answering rows Pi would have to refuse, and the bridge's documented fallback draws Pi's own box; a width
+  too narrow for one body row (below 6 columns) hands the bridge's own rows straight back instead of
+  painting a heading over nothing. The rows the design is handed are never mutated, and every row it
+  answers is a string.
+- **Tests.** `tools/message-card.test.js` drives the public surface — the registration on a fake bridge, the
+  follow it carries, the two designs and the rows `apply` answers for a width — and asserts the exact heading
+  bytes of both cards, the whole body at `minimal`, the style flip repainting, the live `Card tags` flip on
+  and off, the `0.12.0` gate and the tone roles.
+
 ## The diff card
 
 A second design, `lib/diff-design.js`, registers on the line `diff` through the same

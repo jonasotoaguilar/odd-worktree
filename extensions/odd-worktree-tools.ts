@@ -10031,6 +10031,18 @@ function registerOddWorktreeSurfaceEntries(pi) {
   } catch {
     // The card is cosmetic.
   }
+  // The two ODD advisory MESSAGES, on the bridge's message-design surface: `gentle-pi.exploration-budget`
+  // and `gentle-pi.verifier-settle-reminder` are custom messages no extension renders, so Pi draws its
+  // default box. Each design FOLLOWS the `Card tags` line above, so the `activity` value that already
+  // paints the jobs card paints both alerts too: no second switch, no row added to `Cards`, and the
+  // follow is resolved on every pass, so a flip repaints — and turns off — what is already on screen.
+  // A bridge that cannot express a follow registers nothing at all: an older one would create a
+  // `Message <type>` switch of its own, which is the parallel switch this package refuses to add.
+  try {
+    libRequire("message-card.js").registerMessageCards({ metrics: () => resolveWorktreeToolCardMetrics() });
+  } catch {
+    // The card is cosmetic.
+  }
   // The live-checkout scan is DISPATCHED and never awaited. Its only product is
   // `warpDiscoveryCache`, which nothing reads — every warp lists fresh before
   // acting — so the old "startup barrier" awaited three git reads for a result the

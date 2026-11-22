@@ -537,8 +537,9 @@ hint, no editor, no merge step and no write.
 
 | Action | Needs |
 | --- | --- |
-| Comment | read access — deliberately ungated, because GitHub lets anyone with read access comment |
+| Comment | read access — deliberately ungated, in every pull request state (a merged or closed one included), because GitHub lets anyone with read access comment; a comment goes to the number its composer was opened for |
 | Labels, assignees | `TRIAGE` or above |
+| Creating a label from the label picker | `WRITE`, `MAINTAIN` or `ADMIN` (`canCreateLabels`, re-checked when the editor saves) |
 | Close, merge, linked issues | `WRITE`, `MAINTAIN` or `ADMIN` |
 | Merge, in addition | a pull request that is not a draft, and at least one merge method the repository allows |
 

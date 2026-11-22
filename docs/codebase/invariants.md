@@ -216,7 +216,7 @@ The question this page answers: which rules must every change preserve, and what
    reads its own map the same way (`pullRequestPermissions` in `lib/gh-prs.js`, into
    the view's `permissions`): labels and assignees need one of
    `TRIAGE|WRITE|MAINTAIN|ADMIN`, closing, merging and editing the linked issues
-   need `WRITE|MAINTAIN|ADMIN`, commenting stays ungated, and `canMerge` is only
+   need `WRITE|MAINTAIN|ADMIN` (so does creating a label, `canCreateLabels`, re-checked at the save), commenting stays ungated in every pull request state, every write re-reads the role and writes under the ONE scope that read resolved, and `canMerge` is only
    true for a pull request that is not a draft in a repository that allows at least
    one merge method. A refused key paints no hint and reaches no seam;
    `tools/prs-view.test.js` pins every refusal sentence and that no seam is called.

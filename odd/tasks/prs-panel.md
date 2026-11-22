@@ -27,8 +27,8 @@ Feature: a `/prs` panel cloned from `/issues` for pull requests, joined to the G
 | T8b | S4, S5 | writer, rail + extension defects D8-D10 below | done, `1e2ee7d` |
 | T6 | all | docs | done, `343dbf0` |
 | T9 | all | second independent verification of the final state | FAIL on S2, S4 (new D11-D17); D4, D7, D9 partly open |
-| T10a | S2 | writer, view + client D4, D11-D15 | pending |
-| T10b | S4 | writer, rail D9, D16-D17 | pending |
+| T10a | S2 | writer, view + client D4, D11-D14 | done, `0d8fc22` |
+| T10b | S4 | writer, rail D9 repaint, D15 totals | done, `d78633c` |
 | T11 | all | third verification, scoped to D4, D9, D11-D17 and a regression sweep | pending |
 
 ## Contract (fixed before T1-T4 start; the four units are parallel and share no file)

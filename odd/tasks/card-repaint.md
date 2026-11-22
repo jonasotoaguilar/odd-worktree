@@ -28,8 +28,8 @@ test fails does this task change them.
 
 ## Tasks
 
-- [ ] T1 (S1-S3) per-paint gate for the jobs card and the CodeGraph card, with the host's own default box when off. writer.
-- [ ] T2 (S4, S5) prove the message cards follow per pass, and update the docs that describe the build-time limit. writer.
+- [x] T1 (S1-S3) per-paint gate for the jobs card and the CodeGraph card, with the host's own default box when off. writer.
+- [x] T2 (S4, S5) prove the message cards follow per pass, and update the docs that describe the build-time limit. writer.
 
 ## Log
 

@@ -310,6 +310,30 @@ test('a captured renderer that throws falls back to the host\'s own drawing', ()
   }
 });
 
+test('ordinary bash keeps the same clickable child while activity is off', () => {
+  // The verifier's own dispatch check, kept here so a future wrapper cannot silently swallow a
+  // click: with the line off the host mounts the child's component ITSELF, and its mouse handler
+  // is the one that runs.
+  publishBridge({ kind: 'native' });
+  try {
+    let clicks = 0;
+    const child = {
+      render: () => ['ordinary bash'],
+      invalidate() {},
+      handleMouse() { clicks += 1; return { handled: true }; },
+    };
+    const chain = { renderShell: 'self', renderCall: () => child };
+    const resolved = cardFor({ cwd: '/work/repo' })('bash', () => chain);
+    assert.equal(resolved, chain);
+    const mounted = resolved.renderCall({ command: 'printf ordinary' }, plainTheme, {});
+    assert.equal(mounted, child);
+    assert.deepEqual(mounted.handleMouse({ type: 'click', button: 'left' }), { handled: true });
+    assert.equal(clicks, 1);
+  } finally {
+    publishBridge(ACTIVITY_ON);
+  }
+});
+
 test('with the line off a bash row is handed back untouched, never wrapped', () => {
   // A bash call's own component is what the host mounts, so its rows, its mouse handling and
   // every other behaviour stay exactly as Pi resolved them: off, this card adds no wrapper.

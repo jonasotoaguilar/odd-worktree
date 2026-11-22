@@ -60,7 +60,7 @@ primary checkout on the default branch with a one-line reminder. Nothing else ch
 - [x] T3: the `edit`/`write` guard and the child block, with tests (S4, S5). Commit 8001db1; verifier fixes (`@` prefix, live owner read, temp-portable suite) in the closing commit.
 - [x] T4: invariants and reference follow (S6). Commit e250099 and the closing commit.
 - [x] T5: guard 2 forgets its row, cap, slots and `used` flag at each new request, with tests, invariant 21 and the reference (S7). Commit: the closing commit of this ODD.
-- [ ] T6: drop the 8-search repeat and the cap of 3: guard 2 reminds once per checkout per request, with tests, invariant 21, the reference and the README (S3, S7).
+- [x] T6: drop the 8-search repeat and the cap of 3: guard 2 reminds once per checkout per request, with tests, invariant 21, the reference and the README (S3, S7).
 
 Slice boundary: ~1.3k changed lines across four commits, each one reviewable alone (texts; reminder; guard; docs).
 

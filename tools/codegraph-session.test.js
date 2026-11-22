@@ -417,14 +417,19 @@ test('a new session start re-arms it, and a /reload is not a new session', async
   assert.ok(await run('tool_result', readEvent('src/a.ts')), 'a new session forgets it');
 });
 
-test('a new request re-arms the reminder once a request has spent its three', async () => {
+test('a new request re-arms the one reminder of the checkout (S3, S7)', async () => {
   const { run } = setup({ toplevel: checkoutMap() });
   await run('before_agent_start', SESSION_TOOLS);
-  // One first-search reminder plus two rows of eight are the three reminders one request may hear.
-  for (let call = 0; call < 1 + 8 * 2; call += 1) await run('tool_result', readEvent('src/a.ts'));
-  assert.equal(await run('tool_result', readEvent('src/a.ts')), undefined, 'this request has heard its three');
+  const texts = [];
+  for (let call = 0; call < 17; call += 1) {
+    const patch = await run('tool_result', readEvent('src/a.ts'));
+    texts.push(patch === undefined ? undefined : patch.content[1].text);
+  }
+  assert.deepEqual(texts.filter((text) => text !== undefined), [NATIVE_REMINDER], '17 searches of one request hear it once');
+  assert.equal(texts[0], NATIVE_REMINDER, 'and on the first of them, not at 8, 9 or 17');
   await run('before_agent_start', SESSION_TOOLS);
-  assert.ok(await run('tool_result', readEvent('src/a.ts')), 'the next request hears it again');
+  const next = await run('tool_result', readEvent('src/a.ts'));
+  assert.equal(next.content[1].text, NATIVE_REMINDER, 'the first search of the next request hears it again');
 });
 
 test('a worker child is told to call the MCP tool, and a review agent is told nothing', async () => {

@@ -1371,13 +1371,12 @@ native tool), and
 Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first.
 ```
 
-for every other role. It comes back after 8 searches in a row without a use of `codegraph` or the MCP
-tool, at most 3 times per request (the cap is shared across checkouts), and any use of either tool
-restarts the row. Its row, its cap, its first-search slot and its "already used" flag are per request:
-every new request re-arms guard 2 with all four, while guard 1's slots and the explored checkouts stay
-per session, and a compaction or a new session still forgets everything. The first reminder is keyed by
-the checkout, so a `/warp` re-arms it, and it stays silent while CodeGraph has been used in that request
-and the row is short.
+for every other role. It fires once per checkout per request, on that checkout's first search while the
+graph is unused: no later search of the same request repeats it, and using `codegraph` or the MCP tool
+after it changes nothing. Its first-search slot and its "already used" flag are per request: every new
+request re-arms guard 2 with both, while guard 1's slots and the explored checkouts stay per session,
+and a compaction or a new session still forgets everything. The reminder is keyed by the checkout, so a
+`/warp` re-arms it, and it stays silent while CodeGraph has been used in that request.
 
 **What is "another checkout".** A different git toplevel (`git -C <dir> rev-parse --show-toplevel`),
 read once per directory and cached for the session. It comes from a tool's own path, or from a `cd`

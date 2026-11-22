@@ -461,11 +461,11 @@ The question this page answers: which rules must every change preserve, and what
     a checkout this session already explored with that tool's `projectPath` since the
     last compaction.
     **Guard 2** is the primary session's and every child's except a `review-*` agent.
-    It fires on the first search of the session's own checkout while CodeGraph is
-    unused in that request (keyed by the checkout, so a `/warp` re-arms it), and again
-    after 8 qualifying searches in a row without a use of `codegraph` or the MCP tool,
-    at most 3 times per request across checkouts; any use of either restarts the row.
-    Its row, its cap, its first-search slot and its `used` flag are per request: every
+    It fires once per checkout per request, on the first search of the session's own
+    checkout while CodeGraph is unused in that request (keyed by the checkout, so a
+    `/warp` re-arms it); no later search of the same request repeats it, and a use of
+    `codegraph` or the MCP tool after it changes nothing.
+    Its first-search slot and its `used` flag are per request: every
     new request (`before_agent_start`) forgets them, while guard 1's slots and the
     explored checkouts stay per session, and a compaction or a new session forgets
     everything. The primary session and

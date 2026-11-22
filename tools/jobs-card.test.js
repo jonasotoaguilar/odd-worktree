@@ -193,6 +193,18 @@ test('both job tools wear one mark and one role, so a monitor reads as a backgro
   assert.match(unpaint(monitor), /⧗ bash monitor ·/u);
 });
 
+test('the two bash tools keep the role on the frame and the name, and mute the input text', () => {
+  publishBridge(ACTIVITY);
+  const resolver = jobsResolver();
+  const background = callRows(resolver, 'bash_background', { command: COMMAND, label: LABEL }, taggedTheme)[0];
+  const monitor = callRows(resolver, 'monitor', { command: COMMAND, label: LABEL, timeout_seconds: 60 }, taggedTheme)[0];
+  for (const row of [background, monitor]) {
+    assert.ok(row.includes('<bashMode>'), 'the frame and the mark keep the identity role');
+    assert.ok(row.includes('<muted>'), 'the input text — the label — is muted');
+    assert.ok(!row.includes('<accent>'), 'and it is not the accent the other two tools keep');
+  }
+});
+
 test('expanded, the whole command is stated below the heading, every line of it', () => {
   publishBridge(ACTIVITY);
   const rows = callRows(jobsResolver(), 'bash_background', { command: 'sleep 20\n\ngh run list --repo acme/api', label: LABEL }, plainTheme, 70, { isPartial: false, expanded: true }).map(unpaint);

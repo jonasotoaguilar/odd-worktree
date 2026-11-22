@@ -460,9 +460,11 @@ test('a mid-session flip repaints a card already on screen, in both directions',
 test('each card wears its own tone: info for the budget, warning for the reminder', () => {
   const outcome = registered();
   const budget = designFor(outcome, EXPLORATION).apply(plainBody(EXPLORATION, STARTED), { width: 70, customType: EXPLORATION, theme: taggedTheme, render: { expanded: false, outputPad: 1, message: {} } });
-  // INFO: the rounded frame keeps the theme's plain border role while the name carries the accent.
+  // Both cards name ONE theme role for the frame and the name, so an informational card is never the
+  // theme's plain border with no colour of its own: `accent` for the budget.
   assert.ok(budget[0].includes('<accent>⌕</accent>'), budget[0]);
-  assert.ok(budget[0].includes('<border>╭'), 'the frame keeps the plain border role');
+  assert.ok(budget[0].includes('<accent>╭'), 'the frame wears the identity role, not the plain border');
+  assert.ok(budget[0].includes('<muted>'), 'the detail stays the muted subtitle');
   const reminder = designFor(outcome, VERIFIER).apply(plainBody(VERIFIER, VERIFIER_TEXT), { width: 70, customType: VERIFIER, theme: taggedTheme, render: { expanded: false, outputPad: 1, message: {} } });
   // WARNING owns the box: frame and name both carry the warning role.
   assert.ok(reminder[0].includes('<warning>⚑</warning>'), reminder[0]);

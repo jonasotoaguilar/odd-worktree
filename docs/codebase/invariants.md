@@ -10,7 +10,7 @@ The question this page answers: which rules must every change preserve, and what
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
    `herdr-gentle:` command name. This package owns NO preference of its own: its
    customize-side contribution is the two DESIGNS (`activity` and `color`) on
-   gentle-shell-bridge's own `Cards` page — a `Card tags` line, or its `Card bash`
+   gentle-shell-bridge's own `Cards` page — a `Card activity` line, or its `Card bash`
    line on a bridge older than 0.6.0, and a `Card diff` line on 0.9.0 and later
    (invariant 3). The skill/ODD file cards obey the `activity` design's line
    (invariant 23) and contribute no row of their own, and never the `color` one; neither design is a
@@ -29,7 +29,7 @@ The question this page answers: which rules must every change preserve, and what
    surface, a sidebar section (`lib/issues-section.js`) that is neither a command nor a tool and
    registers no name the host or the agent can call; the two designs
    (`lib/bash-design.js`, `lib/diff-design.js`) on the two lines the bridge owns, one
-   `Card tags` line over `bash`, `read`, `write`, `edit` and the three
+   `Card activity` line over `bash`, `read`, `write`, `edit` and the three
    read-only shell tools `grep`, `find`, `ls` (the single `tool: "bash"` design on a bridge older
    than 0.6.0) and one `Card diff` line over `write` and `edit`, the first claiming `write` and
    `edit` through a scope limited to skill and ODD paths so the file card's question is
@@ -42,6 +42,15 @@ The question this page answers: which rules must every change preserve, and what
    `ctrl+d` for removing). That is a rule about this package's surface, not about
    what an agent may run itself — invariant 5 says how a merged checkout is
    removed. Each command and tool keeps its declared name and label.
+
+   **Two halves are optional, and nothing else is.** The `Tools` page of
+   `/gentle:customize` (`lib/modules.js`, a plain `registerRows` provider) holds the
+   `Codegraph+` and `Worktrees+` Off/On lines. They are read once, when the surface
+   registers, from the package's own store; `Worktrees+` Off leaves out `/warp`, its
+   card, the two tools, the worktree guards and prompt text, and `Codegraph+` Off leaves
+   out the CodeGraph wiring, prompt text and reminders. The CodeGraph CARD is not one of
+   these: it is a design of the `Card activity` line and follows that switch. A change lands on
+   the next load, so each one says so. Neither adds a command or a tool name.
 
    **The section reaches the host only through gentle-shell-bridge.** It is
    published through that package's sidebar-section API alone: the object read from
@@ -59,7 +68,7 @@ The question this page answers: which rules must every change preserve, and what
    which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the bridge, not by this package (invariant 2 keeps every customize
    surface out of it except the two tool-design rows this package puts on the bridge's
-   own `Card tags` and `Card diff` lines), and the section declares NO
+   own `Card activity` and `Card diff` lines), and the section declares NO
    preview: every `Sections` row draws the host's one shared list of active sections
    and the bridge adds this section's `rowLabel` to it itself, shown or left out
    with the row's own hypothetical (`registerSection` has no `preview` field — do
@@ -103,7 +112,7 @@ The question this page answers: which rules must every change preserve, and what
    older — no throw, no command, no warning beyond the section's own discoverability one.
    The shape follows the bridge's own `VERSION` and is decided BEFORE anything is
    registered: one line over `bash`, `grep`, `find`, `ls`, `read` and `write` on `0.6.0` and
-   later (one `Card tags` row), gaining `edit`, and the scope on `write` and `edit` limited to skill
+   later (one `Card activity` row), gaining `edit`, and the scope on `write` and `edit` limited to skill
    and ODD paths, from `0.9.0` on — six tools there, seven here — and the single `tool: "bash"` design on anything older (one
    `Card bash` row) or on a release it cannot read — never a grouped registration an older
    bridge would refuse. A second design (`lib/diff-design.js`, id `odd-worktree.diff`, label
@@ -164,7 +173,7 @@ The question this page answers: which rules must every change preserve, and what
    the generation and the normalization.
 
    **The file cards add no surface and own no switch.** They obey the bridge's own
-   `Card tags` line: the card is painted while that line answers with this
+   `Card activity` line: the card is painted while that line answers with this
    package's activity design (`odd-worktree.bash-activity`), so the file cards
    contribute no `Cards` row, no preference and no document of their own, and they
    are read through the same published object the design registers through. The
@@ -216,9 +225,9 @@ The question this page answers: which rules must every change preserve, and what
 11. **The listing is read-only and has no state.** `worktree_list` reads Git's own
     worktree set and writes nothing, prunes nothing and reads no document: the main
     checkout prints first and unnumbered, then the checkouts under
-    `<repo-name>-worktrees` by name, and `all: true` adds the worktrees Git knows
-    outside that directory. A row is its directory's basename — which IS the ODD —
-    and its branch; there is no `odd:` field, no date, no setup or hooks line and no
+    `<repo-name>-worktrees` in name order, and `all: true` adds the worktrees Git knows
+    outside that directory. A row is the checkout's absolute path — whose last segment
+    IS the ODD — and its branch; there is no `odd:` field, no date, no setup or hooks line and no
     state vocabulary. A directory that exists is a worktree and one that does not is
     simply not listed; nothing is reported as `gone` or `missing`, because nothing
     was stored to go stale. The footer counts the outside worktrees it hides.
@@ -247,11 +256,8 @@ The question this page answers: which rules must every change preserve, and what
     the model only through `systemPromptOptions.appendSystemPrompt`; no handler
     returns a replacement `systemPrompt` (the bridge drops it) and no existing
     text is removed. The primary session gets one text
-    (`lib/odd-prompt/odd-worktrees.md`); a child gets the one-line
-    `lib/odd-prompt/odd-worktrees-child.md` only when it writes — `gentle-ai-worker`,
-    `jd-fix-agent` and any other child (an agent name that is unknown or cannot be read) — and explore, verify,
-    the judges and every `review-*` get none. Both are idempotent by content and
-    `ODD_WORKTREE_PROMPT=0` suppresses them.
+    (`lib/odd-prompt/odd-worktrees.md`); a child and a named agent get none. It is
+    idempotent by content and `ODD_WORKTREE_PROMPT=0` suppresses it.
 15. **A warp waits for this session's own tools, agent tasks AND background
     jobs, and it is queued, never thrown away.** While
     `lib/worktree-warp-busy.js` reports a tool still executing, a running or
@@ -446,7 +452,8 @@ The question this page answers: which rules must every change preserve, and what
     other case, a row with no fill to pay for the word included, keeps the host's `$`
     or its own `<glyph> <tool>` exactly as drawn, and a tool the design does not cover
     is returned untouched. The design never throws and never mutates its input. The
-    CodeGraph card (invariant 19) keeps its own resolver for `codegraph …` rows;
+    CodeGraph card (invariant 19) keeps its own resolver for `codegraph …` rows and follows
+    this same line, never a module switch;
     this package registers no other tool-renderer resolver for `bash`.
 
 21. **The two CodeGraph reminders advise; they never block and never add a surface.**
@@ -507,7 +514,7 @@ The question this page answers: which rules must every change preserve, and what
     call they cannot judge passes.
 
     **`bash`** (`decideBashGuard`): a call whose command contains `git … worktree
-    add` or `git … worktree list` in any cwd is refused, and, only when the command
+    add` in any cwd is refused, and, only when the command
     runs in the principal checkout (its root is the parent of the git common dir) AND
     that checkout is on the repository's default branch, so is a switch that leaves
     that branch. Detection is text only: no script, alias or file is read. Seams:
@@ -537,11 +544,12 @@ The question this page answers: which rules must every change preserve, and what
     heredoc body, `grep`, `rg`, a write and a `$VAR` path pass.
 
     No guard ever throws (a throwing `tool_call` handler blocks the tool), an
-    unreadable repository leaves only the `bash` worktree refusals active, and the
+    unreadable repository leaves only the `bash` worktree refusal active, and the
     default branch is resolved lazily and memoized per checkout.
     `ODD_WORKTREE_GUARD=0` is the one way to turn all of them off, like
-    `ODD_WORKTREE_PROMPT=0` for the prompt blocks; no other value, option or config
-    file does, and they register no command or tool name (invariant 3). Each refusal
+    `ODD_WORKTREE_PROMPT=0` for the prompt blocks, and the `Worktrees+` switch
+    leaves the worktree guards out at registration (the skill-read guard stays); no
+    other value, option or config file does, and they register no command or tool name (invariant 3). Each refusal
     names the tool that replaces the blocked action, and the prompt block (invariant
     14) is what keeps the agent from reaching them, so a change to one is read
     against the other.

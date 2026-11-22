@@ -8,13 +8,13 @@ starts, which rule each change must preserve, and where to begin.
 One Pi extension package, `pi-odd-worktree`: two agent tools (`worktree_create`,
 `worktree_list`), four panels (`/warp`, `/odd`, `/files`, `/issues`), one
 optional sidebar section and two tool designs on the bridge — the `activity`
-value of its `Card tags` line (`bash`, the read-only shell tools `grep`, `find`,
+value of its `Card activity` line (`bash`, the read-only shell tools `grep`, `find`,
 `ls`, and `read`, `write` and `edit`, the last two through a scope limited to
 skill and ODD paths, which is what lets the file cards ask about them) and the
 `color` value of its `Card diff` line (`write` and `edit`, drawn as an IDE pane
 in the active theme's own syntax roles) — and no preference of its own: the
-skill/ODD file cards obey that same `Card tags` value. On a bridge that can put
-several tools on one line the `Card tags` row was `Card tools` until this
+skill/ODD file cards obey that same `Card activity` value. On a bridge that can put
+several tools on one line the `Card activity` row was `Card tools` until this
 release (the older single row was `Card bash`), and a choice stored under the old
 key is carried over to `tags` before the design registers — only when the bridge
 reads it as a choice at all — so nobody loses the choice they made. It owns

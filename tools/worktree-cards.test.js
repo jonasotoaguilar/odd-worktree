@@ -342,7 +342,7 @@ test("a result body is the tool's own text, wrapped, padded and closed by one ru
 	assert.equal(listBody[0], 'project: gentle-shell');
 	assert.equal(listBody[1], 'path: /clone');
 	assert.equal(listBody[2], 'base: main@1a2b3c4', 'the main row names its base and carries no stored state suffix');
-	assert.equal(listBody[3], '1 cards-v2 · feat/cards-v2', 'the row carries the checkout name and its branch');
+	assert.equal(listBody.slice(3).join(' ').replace(/\s+/g, ' ').trim(), '1 /clone-worktrees/cards-v2 · feat/cards-v2', 'the row carries the checkout path and its branch, wrapped');
 });
 
 test('a collapsed result shows at most three body rows and marks what it hides', () => {

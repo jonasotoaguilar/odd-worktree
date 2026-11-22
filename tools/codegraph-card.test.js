@@ -18,7 +18,7 @@ const { join } = require('node:path');
 const { after, before, test } = require('node:test');
 const { pathToFileURL } = require('node:url');
 
-const { LIB_DIR, stubbedSource, installDefaultBridge } = require('./fixtures/load-extension.js');
+const { LIB_DIR, defaultBridge, stubbedSource } = require('./fixtures/load-extension.js');
 
 const {
   CARD_CONTENT,
@@ -180,6 +180,35 @@ function withContent(content, run) {
     delete globalThis[CARD_CONTENT_SLOT];
   }
 }
+
+// ---- the switch: the bridge's `Card activity` line (S11) ----
+
+// S11 (modular-tools): the card is a DESIGN, so it paints only while the bridge's `Card activity` line
+// answers with this package's activity design. The slot is published here exactly as the host
+// publishes it; `selection` is an answer or a function of the tool being drawn, and `asked`
+// collects every question.
+const BRIDGE_API_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+const ACTIVITY_DESIGN_ID = 'odd-worktree.bash-activity';
+
+function publishBridge(selection, asked = []) {
+  globalThis[BRIDGE_API_SLOT] = {
+    schema: 'gentle-shell-bridge/api',
+    version: 1,
+    VERSION: '0.12.1',
+    resolveToolDesignSelection(tool) {
+      asked.push(tool);
+      return typeof selection === 'function' ? selection(tool) : selection;
+    },
+  };
+  return asked;
+}
+
+/** Every tool the card paints wears the activity design: the switch is ON. */
+const ACTIVITY_ON = (tool) => (isCodeGraphCardTool(tool) || tool === 'bash' ? { kind: 'design', design: { id: ACTIVITY_DESIGN_ID } } : { kind: 'not-covered', id: ACTIVITY_DESIGN_ID });
+publishBridge(ACTIVITY_ON);
+after(() => {
+  delete globalThis[BRIDGE_API_SLOT];
+});
 
 // ---- the resolver under test ----
 
@@ -927,6 +956,59 @@ test('an unreadable call or output draws nothing instead of throwing', () => {
   assert.deepEqual(codegraphShape('read', { command: 'codegraph init' }), undefined);
 });
 
+// ---- S11: the switch is the bridge's `Card activity` line ----
+//
+// The card paints a CALL; it does not run CodeGraph. So no module switch decides it: the line
+// the activity design owns does, asked on every paint. `activity` selected claims it, and every
+// other answer — `native`, `not-covered`, `missing`, another plugin's design, a reader that
+// throws, or no reader at all — hands the chain's own rows back without asking one slot.
+
+test('S11: `activity` selected claims the CodeGraph tools and a bash call that runs the program', () => {
+  publishBridge(ACTIVITY_ON);
+  const resolver = cardFor();
+  for (const tool of [CODEGRAPH_TOOL, CODEGRAPH_MCP_TOOL]) {
+    const slot = resolver(tool, () => HOST_BASH);
+    assert.equal(slot?.renderShell, 'self', `${tool} is drawn as a self-framed card`);
+    assert.equal(typeof slot.renderCall, 'function', `${tool}: the card draws the call`);
+    assert.equal(typeof slot.renderResult, 'function', `${tool}: the card draws the result`);
+  }
+  const bash = resolver('bash', () => HOST_BASH);
+  assert.equal(bash?.renderShell, 'self', 'a bash call on a self-framed chain is the card’s');
+});
+
+test('S11: `native`, `not-covered`, `missing`, another design and a throwing reader hand every row back', () => {
+  const answers = [
+    { kind: 'native' },
+    { kind: 'not-covered', id: ACTIVITY_DESIGN_ID },
+    { kind: 'missing', id: 'gone.design' },
+    { kind: 'design', design: { id: 'someone.else' } },
+    { kind: 'design' },
+    { kind: 'design', design: null },
+    undefined,
+    null,
+  ];
+  for (const answer of answers) {
+    publishBridge(() => answer);
+    const resolver = cardFor();
+    for (const tool of [CODEGRAPH_TOOL, CODEGRAPH_MCP_TOOL, 'bash']) {
+      assert.equal(resolver(tool, () => HOST_BASH), HOST_BASH, `${tool} under ${JSON.stringify(answer)}`);
+    }
+  }
+  publishBridge(() => { throw new Error('bridge exploded'); });
+  assert.equal(cardFor()(CODEGRAPH_TOOL, () => HOST_BASH), HOST_BASH, 'a throwing reader is a no');
+  publishBridge(ACTIVITY_ON);
+});
+
+test('S11: with no reader at all the card claims nothing, and a host without the hook registers nothing', () => {
+  globalThis[BRIDGE_API_SLOT] = { schema: 'gentle-shell-bridge/api', version: 1 };
+  assert.equal(cardFor()(CODEGRAPH_TOOL, () => HOST_BASH), HOST_BASH, 'an older bridge has no switch to follow');
+  delete globalThis[BRIDGE_API_SLOT];
+  assert.equal(cardFor()(CODEGRAPH_TOOL, () => HOST_BASH), HOST_BASH, 'no bridge, no switch, no card');
+  publishBridge(ACTIVITY_ON);
+  const { registerCodegraphCard } = require('../lib/codegraph-card.js');
+  assert.deepEqual(registerCodegraphCard({}, {}), { registered: false, resolver: undefined }, 'no host hook, no registration');
+});
+
 // ---- purity ----
 
 test('the modules carry no colour, no escape and no host package', () => {
@@ -936,8 +1018,9 @@ test('the modules carry no colour, no escape and no host package', () => {
     assert.doesNotMatch(source, /\\u001b|\\x1b|String\.fromCharCode\(27\)/, `${file} writes no escape sequence down`);
     assert.doesNotMatch(source, /#[0-9a-fA-F]{6}\b/, `${file} writes no hexadecimal colour`);
     assert.doesNotMatch(source, /require\(['"](?!\.\/|node:)/, `${file} imports only its own modules and Node builtins`);
-    // S1: no model-facing tool is registered, executed or shadowed — the card only draws.
-    assert.doesNotMatch(source, /registerTool\(|\.execute\b|registerCommand\(|registerToolRenderer\(/, `${file} registers and runs nothing`);
+    // S1: no model-facing tool is registered, executed or shadowed — the card only draws. The
+    // one host seam it touches is the renderer hook, through `registerCodegraphCard`.
+    assert.doesNotMatch(source, /registerTool\(|\.execute\b|registerCommand\(/, `${file} registers and runs nothing`);
   }
 });
 
@@ -994,9 +1077,16 @@ async function loadComposedExtension() {
     await withCodegraphCli(() => {
       // S18 (T14): the extension registers nothing without gentle-shell-bridge, so
       // this file's own host publishes the shared fixture's bridge before the factory
-      // runs.
-      installDefaultBridge();
-      mod.default(host);
+      // runs. This load's bridge also answers the `Card activity` reader with the activity
+      // design (S11), which is the switch the CodeGraph card follows.
+      const previous = globalThis[BRIDGE_API_SLOT];
+      globalThis[BRIDGE_API_SLOT] = { ...defaultBridge().api, resolveToolDesignSelection: ACTIVITY_ON };
+      try {
+        mod.default(host);
+      } finally {
+        if (previous === undefined) delete globalThis[BRIDGE_API_SLOT];
+        else globalThis[BRIDGE_API_SLOT] = previous;
+      }
     });
     // The cards measure text through the extension's own injected seam, so the test
     // supplies it after the load — the way the other card suites inject theirs.
@@ -1013,20 +1103,6 @@ async function loadComposedExtension() {
 function hostChain(resolvers, toolName, base = HOST_BASH) {
   const resolve = (index) => (index < resolvers.length ? resolvers[index](toolName, () => resolve(index + 1)) : base);
   return resolve(0);
-}
-
-/** A resolver wrapped so a case can state whether its slots were ever asked for a row. */
-function countedResolver(resolver, asked = []) {
-  const wrapped = (toolName, next) => {
-    const renderers = resolver(toolName, next);
-    if (renderers === undefined || renderers === null) return renderers;
-    const observe = (name) => (...args) => {
-      asked.push(name);
-      return renderers[name](...args);
-    };
-    return { ...renderers, renderCall: observe('renderCall'), renderResult: observe('renderResult') };
-  };
-  return { asked, resolver: wrapped };
 }
 
 /** One bash row down a chain, as the host drives it: its call and its result, as drawn lines. */

@@ -5,7 +5,7 @@
 // paints them on its own card substrate (`lib/shell-card.js`) through gentle-shell-bridge's
 // message-design surface, in whichever style the host has chosen and always in full.
 //
-// Both designs FOLLOW the `Card tags` line this package's tool design is selected on, so the
+// Both designs FOLLOW the `Card activity` line this package's tool design is selected on, so the
 // human picks `activity` once and these paint with it — live, per pass, with no switch of their
 // own. Every case below goes through the public surface: `registerMessageCards` (the wire), the
 // designs it registers, and the rows `apply` answers for a width. The text seam and the themes
@@ -85,7 +85,7 @@ const validFollow = (follow) => follow !== null
  * The published bridge object (gentle-shell-bridge@0.12.0's shape, and the older one it replaced).
  * `validatesFollows` is the 0.12.0 discipline — a registration whose `follows` is malformed is
  * refused whole; without it, the object is a pre-0.12.0 bridge that ignores the unknown field.
- * `toolLine` is the `Card tags` line's live value: `undefined` means the line does not exist.
+ * `toolLine` is the `Card activity` line's live value: `undefined` means the line does not exist.
  */
 function publishBridge(options = {}) {
   const settings = options !== null && typeof options === 'object' ? options : {};
@@ -227,7 +227,7 @@ test('each design FOLLOWS the line and the design id this package already regist
   assert.notEqual(outcome.bridge.designs[0].follows, outcome.bridge.designs[1].follows, 'one follow object per design');
 });
 
-test('while Card tags answers activity the message is the card', () => {
+test('while Card activity answers activity the message is the card', () => {
   const wire = registered({ toolLine: ACTIVITY });
   const rows = renderMessage(wire.bridge, EXPLORATION, plainBody(EXPLORATION, STARTED));
   assert.equal(unpaint(rows[0]), headOf(EXPLORATION_HEADING, 70));

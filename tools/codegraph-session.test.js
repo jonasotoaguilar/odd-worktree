@@ -50,10 +50,6 @@ function setup(overrides = {}) {
       },
     }),
     warmUpDaemon: async () => true,
-    createCodegraphCardResolver: (options) => {
-      calls.card.push(options);
-      return { registered: true };
-    },
     ...(overrides.impl || {}),
   };
   const result = registerCodegraph(pi, {
@@ -86,34 +82,6 @@ test('without the CodeGraph CLI nothing is registered at all', () => {
   assert.equal(pi.handlers.size, 0);
 });
 
-test('the CodeGraph card is registered once through the host hook, with the extension\'s own text metrics', () => {
-  const registered = [];
-  const { calls, pi } = setup();
-  assert.equal(calls.card.length, 1);
-  assert.deepEqual(calls.card[0].metrics(), { metrics: true });
-  assert.equal(typeof calls.card[0].registerToolRenderer, 'function');
-  pi.registerToolRenderer = (resolver) => registered.push(resolver);
-  calls.card[0].registerToolRenderer('resolver');
-  assert.deepEqual(registered, ['resolver'], 'the hook is looked up when it is used');
-});
-
-test('S6: the CodeGraph card gets the session cwd through a live seam', async () => {
-  const { calls, run } = setup();
-  assert.equal(typeof calls.card[0].cwd, 'function', 'the card factory is handed a cwd seam');
-  assert.equal(calls.card[0].cwd(), undefined, 'unknown until the session says');
-  await run('session_start', { reason: 'startup' });
-  assert.equal(calls.card[0].cwd(), '/work/repo', 'the seam answers with the session checkout');
-});
-
-test('a host without the renderer hook is given no registration to call', () => {
-  const { calls } = setup();
-  assert.equal(calls.card[0].registerToolRenderer('x'), undefined, 'a missing hook is a no-op, never a throw');
-});
-
-test('without the CLI the card is not registered either', () => {
-  const { calls } = setup({ hasBinary: () => false });
-  assert.equal(calls.card.length, 0);
-});
 
 test('a primary session start ensures the MCP entry once, prepares the index and reports the change', async () => {
   const { calls, run } = setup();

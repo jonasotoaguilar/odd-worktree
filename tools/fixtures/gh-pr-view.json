@@ -1,0 +1,159 @@
+{
+  "number": 87,
+  "title": "feat: the prs panel",
+  "state": "OPEN",
+  "isDraft": false,
+  "author": {
+    "id": "U_kgDOBXYt8A",
+    "is_bot": false,
+    "login": "jonasotoaguilar",
+    "name": "Jonathan Soto"
+  },
+  "assignees": [
+    {
+      "id": "U_kgDOBXYt8B",
+      "login": "octocat",
+      "name": "The Octocat"
+    }
+  ],
+  "labels": [
+    {
+      "color": "a2eeef",
+      "description": "New feature or request",
+      "name": "enhancement"
+    }
+  ],
+  "createdAt": "2026-10-18T04:21:27Z",
+  "updatedAt": "2026-10-19T08:00:00Z",
+  "comments": [
+    {
+      "id": "IC_kwDOA1",
+      "author": {
+        "login": "reviewer-one"
+      },
+      "authorAssociation": "MEMBER",
+      "createdAt": "2026-10-18T05:00:00Z",
+      "body": "Looks good to me",
+      "reactionGroups": [
+        {
+          "content": "THUMBS_UP",
+          "users": {
+            "totalCount": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "IC_kwDOA2",
+      "author": {
+        "login": "reviewer-two"
+      },
+      "authorAssociation": "CONTRIBUTOR",
+      "createdAt": "2026-10-19T06:00:00Z",
+      "body": "One question about the merge flow",
+      "reactionGroups": []
+    }
+  ],
+  "reactionGroups": [
+    {
+      "content": "HEART",
+      "users": {
+        "totalCount": 3
+      }
+    }
+  ],
+  "url": "https://github.com/jonasotoaguilar/herdr-gentle-shell/pull/87",
+  "body": "## Summary\n\nAdds the `/prs` panel.\n\nCloses #63\n\nRisk: item 1 (the merge is an irreversible effect)",
+  "baseRefName": "main",
+  "headRefName": "feat/prs-panel",
+  "headRepositoryOwner": {
+    "id": "O_kgDOA1",
+    "login": "jonasotoaguilar"
+  },
+  "additions": 412,
+  "deletions": 31,
+  "changedFiles": 9,
+  "commits": [
+    {
+      "oid": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+      "committedDate": "2026-10-18T04:10:00Z",
+      "messageHeadline": "feat: scaffold the prs client"
+    },
+    {
+      "oid": "b2c3d4e5f60718293a4b5c6d7e8f90123456789",
+      "committedDate": "2026-10-19T07:30:00Z",
+      "messageHeadline": "test: pin the merge argv"
+    }
+  ],
+  "reviewDecision": "REVIEW_REQUIRED",
+  "reviewRequests": [
+    {
+      "requestedReviewer": {
+        "__typename": "User",
+        "login": "reviewer-two"
+      }
+    },
+    {
+      "requestedReviewer": {
+        "__typename": "Team",
+        "name": "core"
+      }
+    }
+  ],
+  "latestReviews": [
+    {
+      "author": {
+        "login": "reviewer-one"
+      },
+      "state": "APPROVED",
+      "submittedAt": "2026-10-19T06:30:00Z"
+    }
+  ],
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "name": "build",
+      "status": "COMPLETED",
+      "conclusion": "FAILURE"
+    },
+    {
+      "__typename": "CheckRun",
+      "name": "lint",
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS"
+    },
+    {
+      "__typename": "CheckRun",
+      "name": "types",
+      "status": "COMPLETED",
+      "conclusion": "SKIPPED"
+    },
+    {
+      "__typename": "CheckRun",
+      "name": "tests",
+      "status": "IN_PROGRESS",
+      "conclusion": null
+    },
+    {
+      "__typename": "StatusContext",
+      "context": "ci/coverage",
+      "state": "SUCCESS"
+    }
+  ],
+  "mergeable": "MERGEABLE",
+  "mergeStateStatus": "BLOCKED",
+  "closingIssuesReferences": [
+    {
+      "number": 63,
+      "title": "linked issue"
+    },
+    {
+      "number": 63,
+      "title": "the same issue twice"
+    },
+    {
+      "number": 14,
+      "title": "another linked issue"
+    }
+  ]
+}

@@ -67,7 +67,7 @@ Tech: Node CJS `lib/*.js` + `tools/*.test.js`, Pi extension `extensions/odd-work
 | T2 | S1, S5 | `lib/files-picker-view.js`: the badge map `A`/`M`/`U`; `tools/files-picker-view.test.js` | done — the vocabulary table plus one painted-`A` test, RED first |
 | T3 | S1, S2 | `extensions/odd-worktree-tools.ts`: the scope's `kind` decides the comparison, and a worktree scope carries the principal checkout's own branch in `base` (`filesComparison()`) | done — `tools/files-command.test.js` drives the real command over real repos: `A`/`M`/`U` in a worktree after committing, none in `main`, and `A` in a `master` repository |
 | T4 | S7 | `docs/reference.md`, `docs/codebase/code-map.md` | done — both name the two sources and the three badge letters |
-| T5 | S6, S7 | full suite, independent verification, the work-unit commit | independent verification (Risk item 3) found 3 defects (F1-F3 in L8), each fixed and pinned; suite after the fixes: `node --test tools/*.test.js` 2559 tests, 2559 pass, 0 fail, 0 skipped |
+| T5 | S6, S7 | full suite, independent verification, the work-unit commit | landed at `793deea`; independent verification (Risk item 3) found 3 defects (F1-F3 in L8), each fixed and pinned; suite on the committed tree: `node --test tools/*.test.js` 2559 tests, 2559 pass, 0 fail, 0 skipped |
 
 ## Log
 
@@ -132,3 +132,11 @@ Tech: Node CJS `lib/*.js` + `tools/*.test.js`, Pi extension `extensions/odd-work
   failed entirely. The principal checkout's branch now travels on the scope as `base`,
   read from Git's own checkout listing, with `LOCAL_MAIN` only as the fallback for a
   detached principal.
+- L10 (parent, evidence and review shape): the whole feature is `793deea` on
+  `feat/files-worktree-tags` — 678 insertions, 41 deletions across 11 files, of which
+  roughly 300 lines are the tests that pin S1-S7 and 350 the code, docs and this document.
+  That is one slice past the ~400-line target: the slice boundary is declared here rather
+  than split, because the change cannot be landed half-way (the vocabulary rename and the
+  commit read are one contract) and the tests are what make the 2559-test suite prove it.
+  The delivery shape is therefore ONE pull request; if a reviewer wants it smaller, the
+  split that keeps every commit green is tests-plus-docs on top of the two lib reads.

@@ -167,7 +167,7 @@ test('a background job heads with its mark, its label and nothing it did not sta
   const rows = callRows(jobsResolver(), 'bash_background', { command: COMMAND, label: LABEL }, taggedTheme);
   assert.equal(rows.length, 1, 'collapsed, a finished call is one rule');
   const text = unpaint(rows[0]);
-  assert.match(text, /^╭─ ⧗ background · Release runs for 1\.9\.1 /u, text);
+  assert.match(text, /^╭─ ⧗ bash background · Release runs for 1\.9\.1 /u, text);
   assert.match(text, /╮$/u);
   assert.ok(rows[0].includes('<bashMode>⧗</bashMode>'), 'the mark wears the identity role');
   assert.doesNotMatch(text, /sleep 20/u, 'the command waits for the expanded view');
@@ -177,10 +177,20 @@ test('a background job heads with its mark, its label and nothing it did not sta
 test('without a label the first line of the command names the job; the other tools name their target', () => {
   publishBridge(ACTIVITY);
   const resolver = jobsResolver();
-  assert.match(unpaint(callRows(resolver, 'bash_background', { command: '\n  npm test --silent\nnpm run lint' }, plainTheme)[0]), /⧗ background · npm test --silent/u);
-  assert.match(unpaint(callRows(resolver, 'monitor', { command: 'tail -f app.log', label: 'app log', timeout_seconds: 60 }, plainTheme)[0]), /◉ monitor · app log/u);
+  assert.match(unpaint(callRows(resolver, 'bash_background', { command: '\n  npm test --silent\nnpm run lint' }, plainTheme)[0]), /⧗ bash background · npm test --silent/u);
+  assert.match(unpaint(callRows(resolver, 'monitor', { command: 'tail -f app.log', label: 'app log', timeout_seconds: 60 }, plainTheme)[0]), /⧗ bash monitor · app log/u);
   assert.match(unpaint(callRows(resolver, 'job_stop', { job_id: 'job-2' }, plainTheme)[0]), /■ stop · job-2/u);
   assert.match(unpaint(callRows(resolver, 'job_list', {}, plainTheme)[0]), /≡ jobs · this session/u);
+});
+
+test('both job tools wear one mark and one role, so a monitor reads as a background job', () => {
+  publishBridge(ACTIVITY);
+  const resolver = jobsResolver();
+  const background = callRows(resolver, 'bash_background', { command: COMMAND, label: LABEL }, taggedTheme)[0];
+  const monitor = callRows(resolver, 'monitor', { command: COMMAND, label: LABEL, timeout_seconds: 60 }, taggedTheme)[0];
+  for (const row of [background, monitor]) assert.ok(row.includes('<bashMode>⧗</bashMode>'), 'the mark wears the identity role');
+  assert.match(unpaint(background), /⧗ bash background ·/u);
+  assert.match(unpaint(monitor), /⧗ bash monitor ·/u);
 });
 
 test('expanded, the whole command is stated below the heading, every line of it', () => {

@@ -137,13 +137,14 @@ describe('registration', () => {
     }
   });
 
-  test('the skill-read guard is one more bash hook and adds no name (invariant 22)', async () => {
-    // invariant 22: the skill-read guard is one more `bash` observation, so the `tool_call`
-    // hooks stay the naming handler, the worktree bash and write guards and this one — a
-    // fifth would be a surface nobody asked for.
+  test('the skill rules are two more hooks and add no name (invariant 22)', async () => {
+    // invariant 22 (S5 of skill-read-full): the `tool_call` hooks are the naming handler, the
+    // worktree bash and write guards, the skill-read bash guard and the whole-read rule, all of
+    // them under `Worktrees+` — a sixth would be a surface nobody asked for.
     const source = stubbedSource();
-    assert.equal(source.split('pi.on("tool_call"').length - 1, 4, 'the naming handler, the worktree bash and write guards and the skill-read guard');
+    assert.equal(source.split('pi.on("tool_call"').length - 1, 5, 'the naming handler, the two worktree guards, the skill-read guard and the whole-read rule');
     assert.ok(source.includes('libRequire("skill-read-guard.js")'), 'the decision comes from lib/skill-read-guard.js');
+    assert.ok(source.includes('libRequire("artifact-read-full.js")'), 'the whole-read decision comes from lib/artifact-read-full.js');
     const { commands, tools } = await loadExtension({});
     for (const gone of ['skill-read', 'skill_read', 'skill-read-guard']) {
       assert.equal(commands.has(gone), false, `the guard adds no /${gone} command`);

@@ -544,7 +544,11 @@ The question this page answers: which rules must every change preserve, and what
     `env`, `command` or `bash -c`) takes a skill file — a path below a `skills` folder, by
     the file card's own identity (invariant 23) — is refused whole, naming the first such
     path and the `read` tool. It reads no file and spawns no child; a quoted mention, a
-    heredoc body, `grep`, `rg`, a write and a `$VAR` path pass.
+    heredoc body, `grep`, `rg`, a write and a `$VAR` path pass. **And the same rule's other half**
+    (`lib/artifact-read-full.js`): a `read` of a `.md` below a `skills/` or an `odd/` folder has its
+    `offset` and `limit` DELETED from the host's `event.input` before the tool runs, so a skill or an
+    ODD is delivered whole and never half a procedure. It blocks nothing and answers nothing. Both
+    observations follow the `Worktrees+` module switch with the guards above.
 
     No guard ever throws (a throwing `tool_call` handler blocks the tool), an
     unreadable repository leaves only the `bash` worktree refusal active, and the

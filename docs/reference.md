@@ -1453,6 +1453,12 @@ sentence that is a reminder and not a copy of the rule:
   owns the path's directory must be that principal, so a linked worktree or a nested
   repository inside it passes. The branch the checkout is on is read fresh each time
   and must be the default branch (resolved as above).
+- **A skill's or an ODD's Markdown is read WHOLE.** A `read` of a `.md` below a `skills/` or an
+  `odd/` folder has its `offset` and `limit` dropped before the tool runs, so the call delivers
+  the file from its first line to its last: half a skill states an incomplete procedure. The
+  folders decide, by the file card's own identity, and the host's own read budget (2000 lines or
+  50 KB) still applies. It blocks nothing and adds no name. Like the other guards, it exists only
+  while `Worktrees+` is on.
 - **An `odd/` path always passes.** A path below an `odd/` folder is never refused, on any
   branch: that folder is where an ODD is written down, so the branch a checkout happens to
   stand on cannot be a reason to block it. The folders decide, by the same identity the

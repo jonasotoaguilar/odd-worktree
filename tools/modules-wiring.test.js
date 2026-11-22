@@ -75,9 +75,12 @@ describe('Worktrees+', () => {
     assert.equal(off.commands.has('warp'), false);
     assert.equal(off.messageRenderers.has('worktree-warp'), false);
     assert.doesNotMatch(await promptOf(off, []), /## ODD worktrees/);
-    // the naming handler, the bash guard and the write guard go; the skill-read guard stays
-    assert.equal(toolCallHandlers(on) - toolCallHandlers(off), 3);
-    assert.ok(toolCallHandlers(off) >= 1, 'the skill-read guard is transversal');
+    // the naming handler, the bash guard, the write guard, the skill-read bash guard and the
+    // whole-read rule go: every ``tool_call`` observation of the worktree half
+    assert.equal(toolCallHandlers(on) - toolCallHandlers(off), 5);
+    // The CodeGraph wiring adds ONE `tool_call` observation of its own, and only where its CLI is
+    // installed — so a host without it leaves zero, and neither answer is this half's.
+    assert.ok(toolCallHandlers(off) <= 1, `at most the CodeGraph observation is left, got ${toolCallHandlers(off)}`);
     for (const name of ['odd', 'files']) assert.ok(off.commands.has(name), `${name} stays`);
     assert.equal(off.hooks.some(([hook]) => hook === 'agent_settled'), false, 'the warp settle tick goes');
   });

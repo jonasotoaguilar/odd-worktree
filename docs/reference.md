@@ -518,9 +518,14 @@ never prefetched, so it is not a fourth tab and the prefetch never reads it.
   proved, so its first frame is not behind a fresh probe; a typed plain `/prs`
   keeps the fresh proof, and a cached pin that cannot be read falls back to it
   once. Nothing that mutates rides a pin. A write with no checkout and no pin
-  keeps the host the environment named: the role read and the write run in the
-  ambient host-qualified `GH_REPO` (`github.company.example/amber/widget` stays
-  itself), never a bare `owner/name` re-qualified as github.com.
+  resolves the ambient repository ONCE and pins it host-qualified for the role
+  read and the write alike, so a default that moves mid-action cannot authorize
+  one repository and write under another (`github.company.example/amber/widget`
+  stays itself), never a bare `owner/name` re-qualified as github.com. The API
+  host travels with the call too: `gh api`/GraphQL never read it from `GH_REPO`,
+  so every `api` child of a non-github.com scope carries `--hostname <host>`
+  (after its own flags, so the query slot is unchanged) and every child of that
+  scope carries `GH_HOST`; a github.com scope adds neither.
 - **The `o` key opens it on GitHub.** `gh pr view <n> --web -R
   <host>/<owner>/<repo>` — the pinned identity, normalized the same way, never a
   raw value.
@@ -551,20 +556,29 @@ cannot be edited: this repository permission is missing`, `assignees cannot be
 edited: this repository permission is missing`, `pull requests cannot be closed:
 this repository permission is missing`, `pull requests cannot be merged: this
 repository permission is missing`, `linked issues cannot be edited: this
-repository permission is missing`. The capability is resolved again at the
-write — and, for close, merge and the linked-issue body edit, the captured
-number's OWN detail is re-read first, capabilities and state together, so a role
-withdrawn (or a row substituted by a reload) while an editor or the confirmation
-is on screen never reaches GitHub. A pull request that is no longer OPEN is
-refused there too, with its own sentence and no child: `pull request #69 is not
-open; it cannot be closed`, `pull request #69 is not open; it cannot be merged`,
-`pull request #69 is not open; its linked issues cannot be edited`. The client
-enforces the same rule for the same three writes, reading the state in the round
-trip that proves the role.
+repository permission is missing`. Every editor save re-reads the captured
+number's OWN detail first — capabilities and state together, and the NEWEST read
+for that number wins, so a positive answer that settles after a newer negative
+one can never revive the write. A role withdrawn (or a row substituted by a
+reload) while an editor or the confirmation is on screen therefore never reaches
+GitHub, and neither does a label created without the creation capability
+(`new labels cannot be created: this repository permission is missing`). A pull
+request that is no longer OPEN is refused there too, with its own sentence and
+no child: `pull request #69 is not open; it cannot be closed`, `pull request #69
+is not open; it cannot be merged`, `pull request #69 is not open; its linked
+issues cannot be edited`, `pull request #69 is not open; its labels cannot be
+edited`, `pull request #69 is not open; its assignees cannot be edited`. The
+client enforces the same rule for close, merge and the linked-issue body edit,
+reading the state in the round trip that proves the role.
 
 Every confirmation and the comment composer keep their pull request in view: the
-list follows the captured number when a reload moves it out of the window, and a
-row the list no longer holds is still named on the step's own line.
+list follows the captured number when a reload moves it out of the window, a row
+the list no longer holds is still named on the step's own line, and that line
+(`Confirm merge #69`, `Confirm close #69`, `Comment on #69`) is reserved a pane
+row no scroll window can clip. A frame too short to hold it — under seven rows —
+refuses to confirm instead of acting on a line the reader cannot see: `the
+terminal is too short to confirm this pull request; enlarge it and press the key
+again`.
 
 - **Merge is a step of its own.** `m` opens it and the pane reads `Merge` over
   five rows: `Type:` (only the methods the repository allows — `◂ merge ▸` when
@@ -602,12 +616,18 @@ row the list no longer holds is still named on the step's own line.
   request body through `gh pr edit --body` and preserves every other byte of it
   — line endings included. A body that already declares the number, and a
   removal of a number it never declared, change nothing at all, and a number
-  that is not one refuses with `a linked issue needs a number`. A `Closes #N`
-  inside a fenced block is an example, never a declaration, whatever container
-  indented the fence — a list item's own margin included; a body that ENDS inside
-  a fence nothing closed refuses the add with `the pull request body ends inside
-  an unclosed code fence`, because the line would land in the code block. The
-  outcome reads `linked issues updated`.
+  that is not one refuses with `a linked issue needs a number`. The fence rule
+  is conservative on purpose: only a COLUMN-0 `Closes #N` line is ever added,
+  counted or removed, a fence opens at up to three leading spaces and closes with
+  the same character at least as long, and every line between the two is code —
+  so a `Closes #N` inside a fenced example (a list item's own margin and an
+  indented block included) is never touched. A body that ENDS inside a fence
+  nothing closed refuses the add with `the pull request body ends inside an
+  unclosed code fence`, because the line would land in the code block; a fence
+  marker the rule cannot read (a backtick fence whose info string carries a
+  backtick) refuses both directions with `the pull request body has code fences
+  this edit cannot read safely` and writes nothing. The outcome reads `linked
+  issues updated`.
 - **Any write owns the keyboard until it settles.** A save in flight paints its
   own note and ignores every key, so a second save, a navigation or a keystroke
   can never race it, and a rejected save stays visible with its draft intact.

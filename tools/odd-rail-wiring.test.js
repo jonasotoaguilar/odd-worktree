@@ -153,10 +153,19 @@ async function load(options = {}) {
         appendEntry: () => {},
         sendUserMessage: (text, options) => { messages.push({ text, options }); },
         on: (event, handler) => { hooks.push([event, handler]); },
+      };
+      // A host without the event seam: the rail still registers, and the TTL stays
+      // its only refresh.
+      if (opts.noEvents !== true) {
         // The bridge announces its publication on ONE event; a host without the
         // seam never subscribes, so the fallback below needs it to exist.
-        events: { on: (event, handler) => { ready.push({ event, handler }); } },
-      };
+        host.events = {
+          on: (event, handler) => {
+            if (opts.eventsOnThrows === true) throw new Error('no listeners on this host');
+            ready.push({ event, handler });
+          },
+        };
+      }
       mod.default(host);
       return { mod, host, bridge, sections, disposers, repaints, commands, tools, hooks, ready, messages };
     } finally {
@@ -207,8 +216,8 @@ function noteWrite(loaded, ctx, file) {
 }
 
 // The rows the rail drew, as the host reads them: label, right-hand meta.
-async function waitForRows(section, ctx, count) {
-  const deadline = Date.now() + 20_000;
+async function waitForRows(section, ctx, count, budgetMs = 20_000) {
+  const deadline = Date.now() + budgetMs;
   let rows = [];
   while (Date.now() < deadline) {
     rows = section.lines(ctx) || [];
@@ -437,6 +446,74 @@ describe('attribution and the click (S6, S9)', () => {
     // refused target answers the sentence every unknown argument has always got.
     assert.equal(notify.some((line) => /^Unknown option "/.test(line)), false,
       `the command accepted the spaced path instead of refusing it: ${JSON.stringify(notify)}`);
+  });
+});
+
+// A host event the extension subscribed to, fired the way the host fires it.
+function fireEvent(loaded, event) {
+  const listeners = loaded.ready.filter((entry) => entry.event === event);
+  for (const entry of listeners) entry.handler();
+  return listeners.length;
+}
+
+// S13: a session boundary must not leave the previous session's rows on the rail
+// until the one-minute TTL happens to expire.
+describe('the rail follows its session (S13)', () => {
+  test('a session_start drops the previous rows, so the next frame reloads', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    const ctx = ctxFor(repo, []);
+    startSession(loaded, ctx);
+    const section = sectionOf(loaded);
+    const first = await waitForRows(section, ctx, 2);
+    assert.deepEqual(first.map((row) => row.label), ['first', 'second']);
+
+    // A document that exists only NOW: nothing but a reload can list it, because
+    // the section's TTL makes `lines()` schedule nothing for another minute.
+    writeTask(repo, 'third', '# body of third\n');
+    startSession(loaded, ctx);
+    const refreshed = await waitForRows(section, ctx, 3, 3000);
+    assert.deepEqual(refreshed.map((row) => row.label), ['third', 'first', 'second'],
+      'the new session reads the rail again instead of keeping the old rows');
+  });
+
+  test('a fired worktree-registration event forces a refresh', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    const ctx = ctxFor(repo, []);
+    startSession(loaded, ctx);
+    const section = sectionOf(loaded);
+    await waitForRows(section, ctx, 2);
+
+    writeTask(repo, 'third', '# body of third\n');
+    assert.equal(fireEvent(loaded, 'gentle-pi:session-worktree-changed'), 1,
+      'the extension listens for the host\u2019s worktree-registration event');
+    const rows = await waitForRows(section, ctx, 3, 3000);
+    assert.deepEqual(rows.map((row) => row.label), ['third', 'first', 'second'],
+      'the event asks the section for one read');
+  });
+
+  test('a host without pi.events still registers the rail and draws its rows', async () => {
+    const loaded = await load({ noEvents: true });
+    const repo = makeRepo();
+    const ctx = ctxFor(repo, []);
+    startSession(loaded, ctx);
+    const section = sectionOf(loaded);
+    assert.ok(section, 'the rail registers on a host with no event seam');
+    const rows = await waitForRows(section, ctx, 2);
+    assert.deepEqual(rows.map((row) => [row.label, row.meta]), [['first', 'main'], ['second', 'main']],
+      'and the TTL keeps it fresh on its own');
+  });
+
+  test('a host whose event seam throws still registers the rail', async () => {
+    const loaded = await load({ eventsOnThrows: true });
+    const repo = makeRepo();
+    const ctx = ctxFor(repo, []);
+    startSession(loaded, ctx);
+    const section = sectionOf(loaded);
+    assert.ok(section, 'a throwing listener registration costs only the listener');
+    const rows = await waitForRows(section, ctx, 2);
+    assert.deepEqual(rows.map((row) => row.label), ['first', 'second']);
   });
 });
 

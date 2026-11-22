@@ -667,8 +667,14 @@ if the host never ran it. A path holding spaces is one argument, exactly as type
 - **A frame never runs `git`.** `lines()` reads one in-process snapshot and only ever
 SCHEDULES the read: the grouped model (`git worktree list`, then one comparison per
 worktree with something to compare) is read off the frame, behind the section's own
-TTL, and again — immediately — when the session records a touch. Nothing is read at
-`session_start` and nothing at all while the section is hidden.
+TTL, and again — immediately — when the session records a touch or the host announces
+that a worktree was registered. A `session_start` does not read anything itself: it drops
+the previous session's rows, so the next drawn frame schedules the read instead of
+waiting out the TTL. Nothing is read at all while the section is hidden. The
+registration announcement is the host event `gentle-pi:session-worktree-changed`, an
+observed seam that gentle-shell does not document as a contract: if it is renamed or
+never arrives, the TTL is the floor and a worktree registered mid-session appears at the
+next refresh, up to a minute later.
 - **It does not depend on `Worktrees+`.** The rail is not one of the worktree
 surfaces: with that module Off the worktree tools, `/warp` and the guards are gone
 and this section is still registered, because what scopes it is the session's

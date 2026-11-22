@@ -209,8 +209,15 @@ function observeGit(mod) {
   const real = gitLib.runArgvAsync;
   const calls = [];
   gitLib.runArgvAsync = (bin, argv, options) => {
-    calls.push({ argv: [...argv], cwd: options && options.cwd });
-    return real.call(gitLib, bin, argv, options);
+    const call = { argv: [...argv], cwd: options && options.cwd, settled: false };
+    calls.push(call);
+    const pending = real.call(gitLib, bin, argv, options);
+    // Settlement is recorded, so a test can wait for the RANKED listing (the
+    // one that lands after the first frame) instead of guessing at a delay.
+    return Promise.resolve(pending).then(
+      (value) => { call.settled = true; return value; },
+      (err) => { call.settled = true; throw err; },
+    );
   };
   return {
     calls,
@@ -223,6 +230,39 @@ function observeGit(mod) {
         || (call.argv.includes('status') && call.argv.includes('--porcelain=v1')))),
     listing: () => calls.filter((call) => call.argv.includes('worktree') && call.argv.includes('list')),
     restore: () => { gitLib.runArgvAsync = real; },
+  };
+}
+
+// The git-ranked listing that replaces the first frame: `listOddDocsAsync` ends
+// its walk with `status --porcelain -z` in the checkout it listed, so a SETTLED
+// call of that shape is the proof the ranked order has arrived. One short tick
+// afterwards lets the promise chain apply it and repaint.
+async function waitForRankedListing(observed, roots) {
+  await waitFor(() => observed.calls.some((call) => call.settled === true
+    && roots.includes(call.cwd)
+    && call.argv.includes('status')
+    && call.argv.includes('--porcelain')), 'the ranked listing settles');
+  await new Promise((resolve) => setTimeout(resolve, 80));
+}
+
+// S11/S13: the grouped READ, held open. The extension reaches the model through
+// this one module instance, so replacing its `groupOddDocs` with a queue of
+// promises is exactly the two reloads a human can start faster than the disk
+// answers them — and the test decides which one lands first.
+function deferGroups(mod) {
+  const group = mod.libModule('odd-group.js');
+  const real = group.groupOddDocs;
+  const pending = [];
+  let armed = false;
+  group.groupOddDocs = (input) => {
+    if (!armed) return real.call(group, input);
+    return new Promise((resolve, reject) => { pending.push({ input, resolve, reject }); });
+  };
+  return {
+    real: (input) => real.call(group, input),
+    arm: () => { armed = true; },
+    pending,
+    restore: () => { group.groupOddDocs = real; },
   };
 }
 
@@ -354,6 +394,209 @@ describe('the grouped listing the panel draws (S10, S13)', () => {
   });
 });
 
+describe('main is the checkout the panel ranks (S6, S10, S12, S13)', () => {
+  test('a click on a main-only ODD keeps it selected after the ranked refresh settles', async () => {
+    const loaded = await load();
+    const observed = observeGit(loaded.mod);
+    try {
+      const repo = makeRepo();
+      // The session runs INSIDE a linked worktree, and that worktree is not
+      // registered: main is the only loaded group, so main's documents are the
+      // only documents the panel may draw.
+      const worktree = addWorktree(repo, 'wt-a');
+      // The session's checkout holds ONE document of its own and none of main's,
+      // so a main-only ODD has nowhere to be found in it.
+      fs.rmSync(path.join(worktree, 'odd'), { recursive: true, force: true });
+      writeTask(worktree, 'a-only', '# body of a-only\n');
+      const target = path.join(repo, 'odd', 'tasks', 'main-one.md');
+      const host = mountHost();
+      const ctx = ctxFor(worktree, host, []);
+
+      const pending = loaded.commands.get('odd').handler(target, ctx);
+      pending.catch(() => {});
+      await waitFor(() => host.mounts.length === 1, 'the panel mounts');
+      const component = host.mounts[0].component;
+      assert.match(frameText(component), /body of main-one/, 'the target opens on its own document');
+
+      await waitForRankedListing(observed, [repo, worktree]);
+      const text = frameText(component);
+      assert.match(text, /body of main-one/,
+        `the ranked refresh keeps the document the target opened\n${text}`);
+      assert.ok(!text.includes('a-only'),
+        `the session checkout's documents never become main's\n${text}`);
+
+      await closePanel(host, pending);
+    } finally {
+      observed.restore();
+    }
+  });
+
+  test('bare /odd in an empty session worktree mounts when main has documents', async () => {
+    const loaded = await load();
+    const observed = observeGit(loaded.mod);
+    try {
+      const repo = makeRepo();
+      const worktree = addWorktree(repo, 'wt-a');
+      // Nothing of its own in the session's checkout: the worktree checks out
+      // main's tree, so its `odd/tasks` is removed to make the session checkout
+      // the empty one.
+      fs.rmSync(path.join(worktree, 'odd'), { recursive: true, force: true });
+      assert.equal(fs.existsSync(path.join(worktree, 'odd', 'tasks')), false,
+        'the session checkout holds no odd/tasks of its own');
+      const host = mountHost();
+      const ctx = ctxFor(worktree, host, []);
+
+      const pending = loaded.commands.get('odd').handler('', ctx);
+      pending.catch(() => {});
+      await waitFor(() => host.mounts.length === 1 || host.notifications.length > 0,
+        'the command answers the empty session checkout');
+      assert.deepEqual(host.notifications, [],
+        'a non-empty main is not "nothing under odd/tasks"');
+      assert.equal(host.mounts.length, 1, 'the panel mounts over main\u2019s documents');
+      const text = frameText(host.mounts[0].component);
+      assert.match(text, /main-one/);
+      assert.match(text, /main-two/);
+      assert.match(text, /2 documents/, 'main’s own two documents');
+
+      await closePanel(host, pending);
+    } finally {
+      observed.restore();
+    }
+  });
+
+  test('`r` never lists a document no loaded group carries', async () => {
+    const loaded = await load();
+    const observed = observeGit(loaded.mod);
+    try {
+      const repo = makeRepo();
+      const worktree = addWorktree(repo, 'wt-a');
+      writeTask(worktree, 'a-only', '# body of a-only\n');
+      const host = mountHost();
+      const ctx = ctxFor(worktree, host, []);
+
+      const pending = loaded.commands.get('odd').handler('', ctx);
+      pending.catch(() => {});
+      await waitFor(() => host.mounts.length === 1, 'the panel mounts');
+      const component = host.mounts[0].component;
+      const before = renderedRows(component).join('\n');
+      assert.ok(!before.includes('a-only'), `the mount lists only the loaded group\n${before}`);
+
+      // `r` reloads from the session's checkout: whatever it answers, the panel
+      // draws the loaded model, so a worktree the session never registered can
+      // never appear in it.
+      observed.clear();
+      component.handleInput('r');
+      await waitForRankedListing(observed, [repo, worktree]);
+      const after = renderedRows(component).join('\n');
+      assert.ok(!after.includes('a-only'),
+        `a document no loaded group carries is never listed\n${after}`);
+      assert.match(after, /main-one/);
+      assert.match(after, /main-two/);
+
+      await closePanel(host, pending);
+    } finally {
+      observed.restore();
+    }
+  });
+});
+
+describe('`a` applies only the latest reload (S11, S13)', () => {
+  test('a stale toggle result resolved last never lands on top', async () => {
+    const loaded = await load();
+    const observed = observeGit(loaded.mod);
+    const deferred = deferGroups(loaded.mod);
+    try {
+      const repo = makeRepo();
+      const registered = addWorktree(repo, 'wt-a');
+      const other = addWorktree(repo, 'wt-b');
+      writeTask(registered, 'a-only', '# body of a-only\n');
+      // The unregistered worktree is the ONE thing `a` adds to the listing.
+      writeTask(other, 'b-only', '# body of b-only\n');
+      const host = mountHost();
+      const ctx = ctxFor(repo, host, [registered]);
+
+      const pending = loaded.commands.get('odd').handler('', ctx);
+      pending.catch(() => {});
+      await waitFor(() => host.mounts.length === 1, 'the panel mounts');
+      const component = host.mounts[0].component;
+
+      // Two presses, both reloads held open: the second press is back in the
+      // session's mode, so its answer is the ONLY one the drawn listing may carry.
+      deferred.arm();
+      component.handleInput('a');
+      await waitFor(() => deferred.pending.length === 1, 'the first toggle reload starts');
+      component.handleInput('a');
+      await waitFor(() => deferred.pending.length === 2, 'the second toggle reload starts');
+
+      // The LATEST request settles first…
+      deferred.pending[1].resolve(await deferred.real(deferred.pending[1].input));
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      assert.ok(!frameText(component).includes('wt-b'), 'the latest answer is what is drawn');
+      assert.match(frameText(component), /a all worktrees/, 'and the mode is back to the session\u2019s');
+
+      // …and the OLD one settles last: it is dropped, never applied.
+      deferred.pending[0].resolve(await deferred.real(deferred.pending[0].input));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const text = frameText(component);
+      assert.ok(!text.includes('wt-b'), `a stale toggle result never lands on top\n${text}`);
+      assert.ok(!text.includes('b-only'), 'nor any of its documents');
+      assert.match(text, /a all worktrees/,
+        'the footer still names the mode the key really switched to');
+
+      await closePanel(host, pending);
+    } finally {
+      deferred.restore();
+      observed.restore();
+    }
+  });
+
+  test('a stale `r` result resolved last never replaces the drawn listing', async () => {
+    const loaded = await load();
+    const observed = observeGit(loaded.mod);
+    const deferred = deferGroups(loaded.mod);
+    try {
+      const repo = makeRepo();
+      const other = addWorktree(repo, 'wt-b');
+      writeTask(other, 'b-only', '# body of b-only\n');
+      const host = mountHost();
+      const ctx = ctxFor(repo, host, []);
+
+      const pending = loaded.commands.get('odd').handler('', ctx);
+      pending.catch(() => {});
+      await waitFor(() => host.mounts.length === 1, 'the panel mounts');
+      const component = host.mounts[0].component;
+
+      deferred.arm();
+      component.handleInput('r');
+      await waitFor(() => deferred.pending.length === 1, 'the first reload starts');
+      component.handleInput('r');
+      await waitFor(() => deferred.pending.length === 2, 'the second reload starts');
+
+      // The second `r` answers first, in the session's own scope: its flat listing
+      // is the awaited git read, so the rendered outcome is what proves it landed.
+      observed.clear();
+      deferred.pending[1].resolve(await deferred.real(deferred.pending[1].input));
+      await waitForRankedListing(observed, [repo]);
+      assert.ok(!frameText(component).includes('wt-b'));
+
+      // The first `r` answers last with a listing that includes every worktree:
+      // its request is superseded, so its model is dropped.
+      const everyWorktree = await deferred.real({ repoRoot: repo });
+      assert.ok(Array.isArray(everyWorktree) && everyWorktree.length > 1,
+        'the stale fixture really carries a second group');
+      deferred.pending[0].resolve(everyWorktree);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const text = frameText(component);
+      assert.ok(!text.includes('wt-b'), `a superseded reload is dropped\n${text}`);
+
+      await closePanel(host, pending);
+    } finally {
+      deferred.restore();
+      observed.restore();
+    }
+  });
+});
+
 describe('`/odd <target>` (S6)', () => {
   test('an absolute target inside a registered worktree opens the panel on it', async () => {
     const loaded = await load();
@@ -380,7 +623,7 @@ describe('`/odd <target>` (S6)', () => {
     }
   });
 
-  test('an absolute target in a worktree the session did not register still opens the panel', async () => {
+  test('an absolute target no loaded group lists is refused, not silently ignored', async () => {
     const loaded = await load();
     const observed = observeGit(loaded.mod);
     try {
@@ -391,17 +634,19 @@ describe('`/odd <target>` (S6)', () => {
       const host = mountHost();
       const ctx = ctxFor(repo, host, []);
 
-      const pending = loaded.commands.get('odd').handler(target, ctx);
-      pending.catch(() => {});
-      await waitFor(() => host.mounts.length === 1, 'the panel mounts');
+      let settled = false;
+      loaded.commands.get('odd').handler(target, ctx).then(
+        () => { settled = true; },
+        () => { settled = true; },
+      );
+      await waitFor(() => settled || host.mounts.length > 0 || host.notifications.length > 0,
+        'the command answers the target');
 
-      // A valid target is never a refusal; the view answers a document it cannot
-      // select with its own first row, and the panel still opens.
-      assert.deepEqual(host.notifications, [], 'the target is accepted');
-      assert.match(frameText(host.mounts[0].component), /body of main-two/,
-        'the panel falls back to its own first document');
-
-      await closePanel(host, pending);
+      // S6: a document in a worktree the session never registered is in no
+      // loaded group, so the target is the unknown option it always was — the
+      // panel never opens on some other document instead.
+      assert.deepEqual(host.notifications, [['error', `Unknown option "${target}". Use /odd.`]]);
+      assert.equal(host.mounts.length, 0, 'nothing is mounted for a refused target');
     } finally {
       observed.restore();
     }

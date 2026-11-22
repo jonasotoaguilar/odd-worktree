@@ -22,7 +22,9 @@ Feature: a `/prs` panel cloned from `/issues` for pull requests, joined to the G
 | T4 | S4-S5 | writer, rail library: `lib/issues-section.js` + `lib/prs-rail-store.js` + their tests | done, `e1cfa57` |
 | T5 | S1, S4-S7 | inline/writer, `extensions/odd-worktree-tools.ts` wiring + `tools/package-surface.test.js` + extension tests (after T1-T4) | pending |
 | T6 | all | docs: README, `docs/reference.md`, `docs/codebase/*` (after T5) | pending |
-| T7 | all | independent `gentle-ai-verify` (merge/close are irreversible effects: Risk items 1 and 2) | pending |
+| T7 | all | independent `gentle-ai-verify` (merge/close are irreversible effects: Risk items 1 and 2) | FAIL on S2, S4, S5, S6; defects in T8 |
+| T8a | S2, S6 | writer, view + client defects D1-D7 below | pending |
+| T8b | S4, S5 | writer, rail + extension defects D8-D10 below | pending |
 
 ## Contract (fixed before T1-T4 start; the four units are parallel and share no file)
 
@@ -55,6 +57,21 @@ Everything mirrors `/issues`: same invariants (6 repository identity pinning, 7 
 5. `tools/package-surface.test.js`: the closed command list becomes `['files','issues','odd','prs','warp']` and its wording; the section count stays ONE section (PRs are a count, not a second section).
 6. New `tools/prs-command.test.js` mirroring `tools/issues-command.test.js` / `tools/issues-open-guard.test.js`.
 7. A READ-ONLY live smoke of the T1 reads (page per bucket, `all`, detail of a real PR, the rail read) against the repository this checkout points at with the real authenticated `gh`: the fixtures were shaped from the schema, not captured. Fix any query the API rejects in `lib/gh-prs.js` and pin it in its tests. NO live mutation of any kind (no merge, close, comment, label, assign, body edit).
+
+### T7 verdict: defects to fix (T8)
+
+Durable RED tests from the verifier: `/tmp/gpEJ5rnt/ga0XS4eS/tmp.oW3V5SKa6E/work/tools/prs-t7-safety.test.js` (new `tools/prs-t7-safety.test.js`, S2/S6, 1 pass/10 fail) and `.../prs-t7-integration.test.js` (four `T7 independent` tests, to append to `tools/prs-command.test.js` from line 1008, 1 pass/3 fail).
+
+- **D1 (S2, wrong-target close)** `lib/prs-view.js:1540,786,1769,1785`: the confirm step must capture the PR number it showed; Enter acts on THAT number whatever a reload did to the rows (same for the merge confirm).
+- **D2 (S2)** `lib/gh-prs.js:1254,1325,1367,1445,1466`: close, createLabel, editLabels, editLinkedIssues dispatch with no client-side capability recheck (READ permission still emits write argv). Fail closed in the client like assignee and merge already do; comments stay ungated.
+- **D3 (S2)** `lib/prs-view.js:1667,1702,1855`: `applyLabels/applyAssignees/applyLinkedIssues` call the write seam after a pending reload revoked the capability; re-check at save time.
+- **D4 (S2, body corruption)** `lib/gh-prs.js:894-910`: removing `#12` deletes the `Closes #12` inside a Markdown fence as well as the real closing line; only real closing lines outside fenced code may change.
+- **D5 (S2, merge)** `lib/gh-prs.js:1122,1396-1413`: a missing `isDraft` becomes false (must fail closed: refuse); a cleared field is silently dropped (an empty description is sent empty, an empty commit message is refused with a sentence).
+- **D6 (S2, merge editor)** `lib/prs-view.js:2229-2269`: typing `j`/`k` in the merge fields navigates the form instead of entering text.
+- **D7 (S5/S6, PR by number)** `lib/prs-view.js:840-890`: `/prs N` for a PR outside mine/review/open-All (a merged PR, or an open PR of someone else) never fetches by number and shows another PR; fetch the PR by number and show it (state shown, no write action on a non-open PR).
+- **D8 (S4)** `extensions/odd-worktree-tools.ts:8554-8559`, `lib/issues-section.js:555-563`: the exact counts are dropped: `issueCount=51` with 50 nodes and an empty review gives `2 issues · 50 pr`. `M` = distinct fetched numbers + the unfetched remainder of each total (they cannot be deduped), never less than what is known.
+- **D9 (S4 cold start)** `extensions/odd-worktree-tools.ts:8533-8552`: the persisted `prs-rail.json` count is used only after a live failure; a cold start must paint `2 issues · 1 pr` from the store at once (hydrated from the async loader) and the live read then replaces it.
+- **D10 (S2)** the remote-moved refusal for `/prs` says to reopen `/issues`; it must say `/prs`.
 
 ## Log
 

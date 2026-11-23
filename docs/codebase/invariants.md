@@ -786,10 +786,12 @@ The question this page answers: which rules must every change preserve, and what
     throws, is re-installed on `session_start` and restored to the original `render`
     by reference on `session_shutdown`, and its memo is keyed on everything that
     changes a row (the width the frame really draws at, the resolved paint, the
-    rendered Markdown rows), so a style change always recomposes. A paint pays two live
-    reads and nothing else: the gate itself — the live `Card activity` answer — and the
-    shell's style (the published slot, or `<home>/card-style.json` when none is
-    published), which is the price of a prompt that repaints the moment either changes;
+    rendered Markdown rows), so a style change always recomposes. An ACTIVE card paint
+    pays two live reads and nothing else: the gate itself — the live `Card activity`
+    answer, asked on every paint including the native one — and, only while the card
+    actually draws, the shell's style (the published slot, or `<home>/card-style.json`
+    when none is published), which is the price of a prompt that repaints the moment
+    either changes;
     the drawing
     recomputes nothing on a steady frame. `tools/user-prompt-card.test.js` pins the
     gate and its live flip on

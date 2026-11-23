@@ -617,6 +617,11 @@ async function loadExtensionModule(loader, events = {}) {
   }
 }
 
+/** Every hook the extension registered for one event, emitted the way the host would. */
+const extensionSession = (hooks) => (event) => Promise.all(hooks.filter(([name]) => name === event).map(([, handler]) => handler({}, {})));
+
+const drain = () => new Promise((resolve) => setImmediate(resolve));
+
 test('an install whose import resolves after shutdown patches nothing', async () => {
   // `installUserPromptCard()` awaits a dynamic import; a session that ends inside that window
   // must not be patched afterwards, or the prototype stays wrapped into the next session.
@@ -635,11 +640,14 @@ test('an install whose import resolves after shutdown patches nothing', async ()
   });
   try {
     const { hooks } = await loadExtensionModule(() => gate);
+    const emit = extensionSession(hooks);
     const shutdowns = hooks.filter(([event]) => event === 'session_shutdown').map(([, handler]) => handler);
     assert.ok(shutdowns.length > 0, 'the session boundary is registered');
+    await emit('session_start');
+    await drain();
+    assert.equal(LateHost.prototype.render, native, 'nothing is patched while the import is pending');
     // The session ends BEFORE Pi's package resolves.
     for (const handler of shutdowns) await handler({}, {});
-    assert.equal(LateHost.prototype.render, native, 'nothing was patched while the import was pending');
     release();
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(LateHost.prototype.render, native, 'a late install patches nothing after shutdown');
@@ -650,9 +658,6 @@ test('an install whose import resolves after shutdown patches nothing', async ()
 });
 
 // ---- S7: the install lifecycle survives the epoch it belongs to ----
-
-/** Register the ready-announcement bus and the session hooks the extension asks for. */
-const extensionSession = (hooks) => (event) => Promise.all(hooks.filter(([name]) => name === event).map(([, handler]) => handler({}, {})));
 
 test('S7: a pending install from a closed session cannot suppress the next install', async () => {
   globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
@@ -669,10 +674,10 @@ test('S7: a pending install from a closed session cannot suppress the next insta
   let calls = 0;
   const { hooks } = await loadExtensionModule(() => (++calls === 1 ? pending : { UserMessageComponent: Host }));
   const emit = extensionSession(hooks);
-  const drain = () => new Promise((resolve) => setImmediate(resolve));
   try {
+    await emit('session_start');
     await drain();
-    assert.equal(calls, 1, 'the load-time install armed one import');
+    assert.equal(calls, 1, 'the session start armed one import');
     await emit('session_shutdown');
     await emit('session_start');
     release({ UserMessageComponent: Host });
@@ -706,8 +711,74 @@ test('S7: bridge readiness after shutdown cannot arm a host import', async () =>
   globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
   listeners.get('gentle-shell-bridge:ready')?.();
   release({ UserMessageComponent: Host });
-  await new Promise((resolve) => setImmediate(resolve));
+  await drain();
   assert.equal(Host.prototype.render, native);
+});
+
+test('S7: factory load does not arm a host import before session_start', async () => {
+  // Pi loads the factory before any session exists, and caches it across sessions. A load may
+  // neither arm the host import nor patch the class until a `session_start` opens the session
+  // that owns the card.
+  const previousBridge = globalThis[BRIDGE_API_SLOT];
+  globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
+  class Host {
+    render() {
+      return ['native'];
+    }
+  }
+  const native = Host.prototype.render;
+  let calls = 0;
+  const { hooks } = await loadExtensionModule(() => {
+    calls += 1;
+    return { UserMessageComponent: Host };
+  });
+  const emit = extensionSession(hooks);
+  try {
+    // A macrotask: every microtask of the load has run by now.
+    await drain();
+    assert.equal(calls, 0, 'no loader call before a session exists');
+    assert.equal(Host.prototype.render, native, 'and an untouched prototype');
+    await emit('session_start');
+    await drain();
+    assert.equal(calls, 1, 'the first session drives exactly one install');
+    assert.notEqual(Host.prototype.render, native, 'and the class is patched then');
+    await emit('session_shutdown');
+    assert.equal(Host.prototype.render, native, 'and its shutdown restores it');
+  } finally {
+    await emit('session_shutdown');
+    if (previousBridge === undefined) delete globalThis[BRIDGE_API_SLOT];
+    else globalThis[BRIDGE_API_SLOT] = previousBridge;
+  }
+});
+
+test('S7: silent publication on a host without a bus acquires a shutdown owner', async () => {
+  // The gate observer is a WAKE-UP path, not a session: a bridge published silently wakes the
+  // surface from a `session_start`, and that same load must then own the shutdown that unwraps
+  // it. With no event bus the observer is the only way in.
+  const previousBridge = globalThis[BRIDGE_API_SLOT];
+  delete globalThis[BRIDGE_API_SLOT];
+  class Host {
+    render() {
+      return ['native'];
+    }
+  }
+  const native = Host.prototype.render;
+  const { hooks } = await loadExtensionModule(() => ({ UserMessageComponent: Host }));
+  const emit = extensionSession(hooks);
+  try {
+    assert.deepEqual(hooks.map(([event]) => event), ['session_start'], 'a gate-closed load keeps its ONE observer');
+    // A SILENT publication: nothing announces it, so `session_start` is what wakes the surface.
+    globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
+    await emit('session_start');
+    await drain();
+    assert.notEqual(Host.prototype.render, native, 'the waking session draws the card');
+    await emit('session_shutdown');
+    assert.equal(Host.prototype.render, native, 'and it owns the shutdown that unwraps it');
+  } finally {
+    await emit('session_shutdown');
+    if (previousBridge === undefined) delete globalThis[BRIDGE_API_SLOT];
+    else globalThis[BRIDGE_API_SLOT] = previousBridge;
+  }
 });
 
 // ---- S5/S6: one wrapper per process, torn down on demand ----

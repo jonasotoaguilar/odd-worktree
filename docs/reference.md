@@ -1283,7 +1283,7 @@ function BY REFERENCE on `session_shutdown`.
   same three markers the same way — once each, never appended (Pi's own screen filters strip
   OSC 133 prefixes only, so a suffix would survive where Pi's own would not) — and the native
   path stays byte-identical, so click-to-jump and shell integration keep working.
-- **Cost.** A paint pays two live reads and nothing else: the gate (`Card activity`, one
+- **Cost.** An active card paint pays two live reads and nothing else: the gate (`Card activity`, one
   selection read of the bridge's own store, which is what makes the flip instant) and the
   shell's style (`lib/card-style.js`, the published slot, or `<home>/card-style.json` when no
   live slot is published — so a style picked by hand repaints too). Everything about the

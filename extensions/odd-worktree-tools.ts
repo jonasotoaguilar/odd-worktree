@@ -9287,11 +9287,15 @@ let bashActivityRegistered = false;
 // install. (Pi caches this factory, so this state outlives a session boundary.)
 let userPromptCardEpoch = 0;
 let userPromptCardPendingEpoch;
-// Whether the session that owns this shim is still the live one. `session_shutdown` closes it,
-// `session_start` opens it, and every path into the host package — the design registration, a
-// `gentle-shell-bridge:ready` announcement that arrives during or after a shutdown, a load that
-// resolved late — checks it before arming and again before patching.
-let userPromptCardSessionLive = true;
+// Whether the session that owns this shim is the live one. It starts CLOSED — Pi loads the
+// factory before any session exists — and `session_start` opens it. Every path into the host
+// package (the design registration, a `gentle-shell-bridge:ready` announcement, a gate observer
+// woken by a silent publication, a load that resolved late) checks it before arming and again
+// before patching.
+let userPromptCardSessionLive = false;
+// Whether this load already owns the session boundary (the pair below). A load may arm an
+// install only once it owns the shutdown that unwraps it, whichever path got there first.
+let userPromptCardLifecycleRegistered = false;
 
 // The host package the shim needs (`UserMessageComponent`), resolved lazily through the same
 // injectable seam every other host-package loader here uses (`warpTuiLoader`, `oddTuiLoader`):
@@ -9338,15 +9342,20 @@ function installUserPromptCard() {
 }
 
 /**
- * The prompt card's session boundary, registered by the factory BEFORE the bridge gate.
+ * The prompt card's session boundary — registered ONCE per load, by whichever path can first arm
+ * an install: the factory when a bridge is already published, the ready subscription, or the gate
+ * observer when a silent publication wakes it.
  *
- * S7: a bridge announced while the gate is closed — or during a shutdown — must find a session
- * that is already closed, so this pair may not live behind the surface's own registration: that
- * path has no shutdown hook at all, which is exactly how a ready handler armed an install after
- * teardown.
+ * S7: the boundary may not live behind the surface's own registration (a gate-closed load with no
+ * bus registered no surface and therefore no shutdown hook at all, so a session that woke the
+ * surface left the class wrapped), and a bridge announced during a shutdown must find a session
+ * that is already closed. Registering the pair is not a SURFACE registration — it contributes no
+ * command, tool, section, design or card — so a gate-closed load still ships nothing.
  */
 function registerUserPromptCardLifecycle(pi) {
+  if (userPromptCardLifecycleRegistered) return;
   if (typeof pi?.on !== "function") return;
+  userPromptCardLifecycleRegistered = true;
   try {
     pi.on("session_start", () => {
       userPromptCardSessionLive = true;
@@ -9357,6 +9366,7 @@ function registerUserPromptCardLifecycle(pi) {
       uninstallUserPromptCard();
     });
   } catch {
+    userPromptCardLifecycleRegistered = false;
     // A host that refuses the observer keeps Pi's own prompt rows on every paint.
   }
 }
@@ -9876,12 +9886,18 @@ function holdSurfaceForBridge(pi) {
   }
   // S7: with a bus, the bridge's announcement can wake the surface at ANY moment — a shutdown
   // included — so the prompt card's session boundary has to exist from here on, even though no
-  // surface registered yet. A host with no bus has no such path: there the gate opens at a
-  // `session_start`, which is a live session by definition, and the load registers nothing else.
+  // surface registered yet.
   if (announced === true) registerUserPromptCardLifecycle(pi);
   if (typeof pi?.on !== "function") return;
   try {
     const dispose = pi.on("session_start", (event, ctx) => {
+      // S7: the observer is a WAKE-UP path, not a session. The moment it wakes the surface it
+      // owns the session too — the boundary is acquired here and the session opened — so a
+      // silent publication on a host with no bus cannot leave the class wrapped after shutdown.
+      // Registering this pair is session bookkeeping, not a surface: a gate-closed load still
+      // registers no command, tool, section, design or card.
+      registerUserPromptCardLifecycle(pi);
+      userPromptCardSessionLive = true;
       // A bridge that was there all along, or arrived without an announcement,
       // makes the notice untrue: register instead of warning.
       if (issuesSidebarBridge() !== null) {

@@ -1622,9 +1622,10 @@ headed by its name alone — no invented detail, no empty separator.
 
 ## The user prompt card
 
-`lib/user-prompt-card.js` draws the message you sent as a card in the transcript — `✿ You`,
-no subtitle and no clock (a timestamp belongs to whoever owns the clock, not to this card),
-tone `info` with the title AND the whole frame in the accent role, the body your own text
+`lib/user-prompt-card.js` draws the message you sent as a card in the transcript — `✿ You · 14:32`,
+the name and the whole frame in the accent role and the clock in `muted` beside it (the message's own
+`timestamp` when Pi restored it from a session entry, else the clock captured at the prompt's first
+paint, else nothing: no clock is invented), the body your own text
 rendered by Pi's Markdown with the user-message background dropped. It obeys the shell's
 card style on every paint, so `float` draws its rail and `neon` its closed frame, and a
 style switch repaints the prompts already on screen.
@@ -1642,6 +1643,11 @@ function BY REFERENCE on `session_shutdown`.
   `activity` design, asked INSIDE the patched `render` on every paint and never cached — that
   is what repaints a prompt already on screen when the line changes. It registers nothing, so
   `Cards` grows no row and there is no second switch.
+- **A restored session repaints.** The transcript a session restores is built before the deferred
+  host import resolves, so the install asks the bridge for ONE repaint when it succeeds — the
+  bridge's optional `requestRepaint`, one differential frame — and the prompts already on screen
+  come back as cards instead of waiting for unrelated input. A refused install, a closed session
+  and a bridge without that member request nothing.
 - **Switch it off and Pi owns the prompt again.** `default` (stored `native`), another design
   on the line, an absent or throwing bridge, a width below six columns, or a Markdown shape
   that is not Pi's all hand the host's own rows back BYTE FOR BYTE. Unlike the file cards —

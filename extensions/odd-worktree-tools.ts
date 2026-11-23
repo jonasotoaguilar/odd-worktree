@@ -7722,8 +7722,12 @@ function issuesScopeLabel(name) {
   return typeof name === "string" && name.length > 0 ? name : "gh's default repository";
 }
 
-function issuesScopeDriftLine(currentName, pinnedName) {
-  return `the checkout's repository changed since this issue list loaded (now ${issuesScopeLabel(currentName)} instead of ${issuesScopeLabel(pinnedName)}); reopen /issues`;
+function issuesScopeDriftLine(currentName, pinnedName, command = "/issues") {
+  // D10 (S2): the refusal names the panel whose rows moved, so a `/prs` action
+  // is never told to reopen `/issues`. Both sentences are built here so the two
+  // panels cannot drift apart.
+  const what = command === "/prs" ? "pull request list" : "issue list";
+  return `the checkout's repository changed since this ${what} loaded (now ${issuesScopeLabel(currentName)} instead of ${issuesScopeLabel(pinnedName)}); reopen ${command}`;
 }
 
 // The TUI hands the terminal to another program: a browser open must give it
@@ -7776,7 +7780,11 @@ function withSuspendedTerminal(hostTui, run) {
 // is normalized with the same function every pinned read uses before it reaches
 // `-R`, so no raw value can ever move this open: a value that does not normalize
 // is not an identity, and the opener keeps its own "nothing loaded yet" refusal.
-function issuesOpenInBrowser(hostTui, cwd, number, pinnedIdentity) {
+// The `o` opener, one fixed argv per kind: `gh issue view <n> --web -R <pinned>`
+// or `gh pr view <n> --web -R <pinned>`, never a shell and never an invented
+// opener, with `-R` the identity the LIST was read from.
+function githubItemOpenInBrowser(hostTui, cwd, kind, number, pinnedIdentity) {
+  const label = kind === "pr" ? "pr" : "issue";
   try {
     const gh = libRequire("gh-issues.js");
     const git = libRequire("worktree-git.js");
@@ -7792,20 +7800,28 @@ function issuesOpenInBrowser(hostTui, cwd, number, pinnedIdentity) {
       return Promise.resolve({ ok: false, error: "the issue list has not loaded a repository yet" });
     }
     const bin = gh && typeof gh.ghBinary === "function" ? gh.ghBinary({}) : "gh";
-    const argv = ["issue", "view", String(number), "--web", "-R", normalized.identity];
+    const argv = [label, "view", String(number), "--web", "-R", normalized.identity];
     return withSuspendedTerminal(hostTui, async () => {
       const res = await git.runArgvAsync(bin, argv, { cwd, timeoutMs: 30000 });
-      if (!res) return { ok: false, error: `cannot open issue #${number} in the browser` };
+      if (!res) return { ok: false, error: `cannot open ${label} #${number} in the browser` };
       if (res.error) return { ok: false, error: res.error };
       if (typeof res.status === "number" && res.status !== 0) {
         const stderr = (res.stderr || "").trim().split("\n")[0];
-        return { ok: false, error: stderr || `cannot open issue #${number} in the browser (gh exited with status ${res.status})` };
+        return { ok: false, error: stderr || `cannot open ${label} #${number} in the browser (gh exited with status ${res.status})` };
       }
       return { ok: true };
     });
   } catch (err) {
-    return Promise.resolve({ ok: false, error: (err && err.message) || `cannot open issue #${number} in the browser` });
+    return Promise.resolve({ ok: false, error: (err && err.message) || `cannot open ${label} #${number} in the browser` });
   }
+}
+
+function issuesOpenInBrowser(hostTui, cwd, number, pinnedIdentity) {
+  return githubItemOpenInBrowser(hostTui, cwd, "issue", number, pinnedIdentity);
+}
+
+function prsOpenInBrowser(hostTui, cwd, number, pinnedIdentity) {
+  return githubItemOpenInBrowser(hostTui, cwd, "pr", number, pinnedIdentity);
 }
 
 function issuesWrapFailure(promise, what) {
@@ -7917,14 +7933,14 @@ async function issuesBrowserRepoIdentity(gh, checkoutRoot, fresh) {
 // where `openIssuesPanel` releases it, before the human is looking at it). The
 // release is scoped to the token captured HERE, so a typed `/issues` (which owns
 // no token) releases nothing and can never clear a newer click's guard.
-async function executeIssues(rawArgs, ctx, checkoutRoot) {
+async function executeIssues(rawArgs, ctx, checkoutRoot, pi) {
   const openToken = issuesPanelOpenToken;
   const releaseOpen = () => {
     if (openToken === null) return;
     releaseIssuesPanelOpen(openToken);
   };
   try {
-    return await openIssuesPanel(rawArgs, ctx, releaseOpen, checkoutRoot);
+    return await openIssuesPanel(rawArgs, ctx, releaseOpen, checkoutRoot, pi);
   } finally {
     releaseOpen();
   }
@@ -7934,7 +7950,7 @@ async function executeIssues(rawArgs, ctx, checkoutRoot) {
 // command's own gate ALREADY performed (one `git rev-parse` pair) — handed over so
 // the open never pays for a second one. Absent, the open resolves it itself exactly
 // as before.
-async function openIssuesPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot) {
+async function openIssuesPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, pi) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
   // S7: `/issues <number>` (also `#<number>`) opens the same panel on one
@@ -8114,6 +8130,10 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot) 
   // The overlay factory's own host object is what the browser opener suspends.
   // Set just before the factory runs so no action can reach a stale host.
   let hostTuiRef = null;
+  // S6 (prs): the panel's own close, captured from the host's factory, so a
+  // cross-panel click can end this panel before opening the other one.
+  let closePanel = () => {};
+  let panelClosed = false;
   const actions = {
     // Created names go through `gh label create` first, then the whole delta
     // through `gh issue edit`. A failure at either step returns honestly and
@@ -8161,6 +8181,11 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot) 
       }
       return issuesOpenInBrowser(hostTuiRef, checkoutRoot, number, pinnedRepo.identity);
     },
+    // S7 (prs): `enter` inserts `ISSUE #N` into the chat input and the view
+    // closes itself; the text is never sent.
+    insert: (text) => panelInsert(ctx, "issues", text),
+    // S6 (prs): a click on one linked pull request opens `/prs N` in its place.
+    openLinked: (link) => openLinkedPanel(pi, link, () => closePanel()),
   };
   // S8 (T4): the identity the panel just proved is the ONLY key that may seed
   // the first frame. Read ONCE, here, so every page of this mount comes from the
@@ -8179,6 +8204,15 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot) 
     await ctx.ui.custom(
       (hostTui, theme, _keybindings, done) => {
         hostTuiRef = hostTui;
+        closePanel = () => {
+          if (panelClosed) return;
+          panelClosed = true;
+          try {
+            done(null);
+          } catch {
+            // A host that refuses the close is still the host's own decision.
+          }
+        };
         return libRequire("issues-view.js").createIssuesView({
           // Bucket metadata only: the rows arrive page by page through
           // `loadIssuePage`, so no accumulated list is handed over. The three
@@ -8233,6 +8267,7 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot) 
           theme,
           rowsAvailable: () => oddTerminalRows(hostTui),
           requestRender: () => {
+            if (panelClosed) return;
             try {
               if (hostTui && typeof hostTui.requestRender === "function") hostTui.requestRender();
             } catch {
@@ -8250,6 +8285,752 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot) 
     // A host that rejects the overlay degrades to one muted line.
     if (typeof notify === "function") notify("issues: the viewer could not open in this session", "info");
   }
+}
+
+// ---------------------------------------------------------------------------
+// S1, S4-S7 (prs panel): `/prs`, the pull-request sibling of `/issues`.
+//
+// Every mechanism here is the issues one, deliberately: the SAME `gh` gate and
+// session probe (invariant 24 — nothing on a session path waits on `gh`), the
+// same full-screen overlay, the same single-flight open with its one-shot hint,
+// the same pinned repository identity (invariant 6), the same fail-closed
+// capabilities (invariant 7 — the view reads them from the pull request's own
+// `permissions`, which T1 attaches with `includeMetadata`), the same `o` opener
+// through one fixed argv (invariant 9), and the same `enter` insert / linked
+// click seams the two views already implement.
+//
+// Cross-panel opening (S6): a click on a linked number CLOSES the panel it was
+// clicked in and dispatches the other command through the SAME single-flight
+// path a rail click uses, so two panels never stack. A dispatch that cannot
+// happen (a host without `sendUserMessage`, one that throws) is refused
+// visibly, exactly like a rail click's refusal.
+// ---------------------------------------------------------------------------
+
+// The four buckets the reader's tabs and its lazy `g` view name. The client
+// derives the search qualifier from the bucket id (`author:@me`,
+// `review-requested:@me`, `involves:@me`) and reads the repository's own
+// pull-request connection for an unfiltered `all`, exactly like the issues
+// client. `lazy` keeps `all` out of the tab bar, the tab cycle and the prefetch.
+const PRS_INTERACTIVE_BUCKETS = [
+  { id: "mine", label: "My Pull Request" },
+  { id: "review", label: "Needs My Review" },
+  { id: "involved", label: "Involved" },
+  { id: "all", label: "All", connection: true, lazy: true },
+];
+const PRS_FETCH_PAGE_SIZE = 30;
+// The client fills one GraphQL request with at most this many rows; asking for
+// more is a bug here, not a bigger read.
+const PRS_PAGE_MAX = 100;
+
+const PRS_PANEL_DISPATCH_FAILED = "the host cannot dispatch the /prs command here";
+// One rail open at a time, the same bounded backstop the issues panel keeps:
+// `pi.sendUserMessage` returns `void`, so a command the host never runs must not
+// leave the rail dead. A token from a previous session generation is inert.
+const PRS_PANEL_OPEN_GUARD_MS = 10000;
+let prsPanelOpenToken = null;
+let prsPanelOpenTimer = null;
+// S5 (T4): the bucket the rail's click named, for the ONE numbered open it
+// dispatches. Cleared with the token it belongs to.
+let prsPanelOpenHint = null;
+
+// The pull-request client is built ONCE per extension load and keeps the issue
+// client INJECTED: `lib/gh-prs.js` refuses to require it (package-surface pins
+// that), and the injected instance is the one whose runner seam and scope cache
+// every read here shares with `/issues`.
+let prsBoundClient = null;
+let prsBoundIssues = null;
+
+// S4 (T4): the rail's stored pull-request read, built lazily like the issues
+// cache store so a host that never draws the rail never touches the file. A
+// mutation the panel makes marks its identity here, so the stored entry is never
+// offered back as if nothing had changed.
+let prsRailDiskStore = null;
+const prsRailStaleIdentities = new Set();
+// S4 (D9): ONE disk read serves BOTH halves of a flight — the section's cold
+// start hydration (which paints the stored count while `gh` answers) and the
+// loader's own fallback for a failed live read. The entry is remembered for the
+// identity it was read for, so a second read of the same identity costs no file.
+let prsRailStoredIdentity = null;
+let prsRailStoredEntry = null;
+
+function clearPrsRailStoredEntry(identity) {
+  if (typeof identity !== "string" || identity.length === 0) {
+    prsRailStoredIdentity = null;
+    prsRailStoredEntry = null;
+    return;
+  }
+  if (prsRailStoredIdentity !== identity) return;
+  prsRailStoredIdentity = null;
+  prsRailStoredEntry = null;
+}
+
+// The stored entry for ONE identity: `{ mine, review, counts, syncedAt }`, or
+// `null` for an identity a panel write invalidated, a document that is missing,
+// malformed, of a previous version or unreadable, and a host with no store at
+// all. The `counts` are the bucket totals that slept beside the rows (T10b, S4,
+// D15), already normalized by the store: a total it could not prove is `null`. It
+// is read at most once per identity (a `null` is remembered too, so a machine with
+// no cache file never asks the disk again), which is the same cost the loader
+// paid before the cold start needed it: no flight reads this file twice.
+async function loadStoredRailPullRequests(identity) {
+  if (typeof identity !== "string" || identity.length === 0) return null;
+  if (prsRailStaleIdentities.has(identity)) return null;
+  if (prsRailStoredIdentity === identity) return prsRailStoredEntry;
+  const store = prsRailStore();
+  if (store === null) return null;
+  let stored = null;
+  try {
+    stored = await store.load(identity);
+  } catch {
+    stored = null;
+  }
+  // A write made while the disk was answering owns the answer: it is never
+  // remembered, so nothing paints an entry the panel just invalidated.
+  if (prsRailStaleIdentities.has(identity)) return null;
+  prsRailStoredIdentity = identity;
+  prsRailStoredEntry = stored && Array.isArray(stored.mine) && Array.isArray(stored.review) ? stored : null;
+  return prsRailStoredEntry;
+}
+
+// T10b (S4, D15): the bucket totals a stored entry carries, or `null` when it
+// carries none. The store already dropped every total it could not prove (one
+// below its own rows, one that is not a count), so what arrives here is exactly
+// what the section's own count may add to the rows it paints.
+function storedRailCounts(stored) {
+  if (!stored || typeof stored !== "object") return null;
+  const counts = stored.counts;
+  if (!counts || typeof counts !== "object" || Array.isArray(counts)) return null;
+  return {
+    mine: counts.mine === undefined ? null : counts.mine,
+    review: counts.review === undefined ? null : counts.review,
+  };
+}
+
+function prsClient() {
+  const issues = libRequire("gh-issues.js");
+  if (prsBoundClient !== null && prsBoundIssues === issues) return prsBoundClient;
+  const factory = libRequire("gh-prs.js");
+  if (!factory || typeof factory.createPrsClient !== "function") {
+    throw new Error("the pull-request client is unavailable");
+  }
+  prsBoundIssues = issues;
+  prsBoundClient = factory.createPrsClient({ issues });
+  return prsBoundClient;
+}
+
+function prsRailStore() {
+  if (prsRailDiskStore !== null) return prsRailDiskStore;
+  try {
+    const factory = libRequire("prs-rail-store.js");
+    if (!factory || typeof factory.createPrsRailStore !== "function") return null;
+    prsRailDiskStore = factory.createPrsRailStore();
+  } catch {
+    prsRailDiskStore = null;
+  }
+  return prsRailDiskStore;
+}
+
+function clearPrsPanelOpenTimer() {
+  if (prsPanelOpenTimer === null) return;
+  const timer = prsPanelOpenTimer;
+  prsPanelOpenTimer = null;
+  try {
+    clearTimeout(timer);
+  } catch {
+    // A host timer that cannot be cancelled still fires into a released guard.
+  }
+}
+
+// Idempotent, and scoped to one token when one is named, so a release can never
+// clear a NEWER open's guard.
+function releasePrsPanelOpen(token) {
+  if (token !== undefined && prsPanelOpenToken !== token) return;
+  clearPrsPanelOpenTimer();
+  prsPanelOpenToken = null;
+  prsPanelOpenHint = null;
+}
+
+function prsPanelOpenBlocked() {
+  if (prsPanelOpenToken === null) return false;
+  return prsPanelOpenToken.generation === issuesSidebarCacheGeneration;
+}
+
+// The bucket a rail click left for the numbered open it dispatches. It applies
+// to the SAME number only, and only in the generation it was recorded under;
+// taking it consumes it. A hint for another number is left alone.
+function takePrsPanelOpenBucketHint(number) {
+  const hint = prsPanelOpenHint;
+  if (hint === null) return null;
+  if (!Number.isInteger(number) || hint.number !== number) return null;
+  if (hint.generation !== issuesSidebarCacheGeneration) return null;
+  prsPanelOpenHint = null;
+  return hint.bucket;
+}
+
+function prsBucketHint(bucket) {
+  return bucket === "mine" || bucket === "review" || bucket === "involved" || bucket === "all"
+    ? bucket
+    : null;
+}
+
+function armPrsPanelOpenGuard(token) {
+  clearPrsPanelOpenTimer();
+  let timer = null;
+  try {
+    timer = setTimeout(() => {
+      releasePrsPanelOpen(token);
+    }, PRS_PANEL_OPEN_GUARD_MS);
+  } catch {
+    timer = null;
+  }
+  // Unref'd: the interval is a safety net for the rail, never a reason for the
+  // process to stay alive.
+  if (timer && typeof timer.unref === "function") {
+    try {
+      timer.unref();
+    } catch {
+      // A host timer without a working unref still bounds the wait.
+    }
+  }
+  prsPanelOpenTimer = timer;
+}
+
+// A missing binary needs an install plus login; anything else already carries
+// gh's own `gh auth login` wording. The note says the command cannot OPEN,
+// never that it is unregistered, because registration is eager.
+function prsGateMessage(error) {
+  const text = String(error || "gh check failed");
+  if (/ENOENT|not available|not found/i.test(text)) {
+    return "prs: the gh CLI is not available; install it (https://cli.github.com) and run `gh auth login` — /prs cannot open until then";
+  }
+  return `prs: ${text} — /prs cannot open until then`;
+}
+
+// S7 (both panels): `enter` hands one line to the host's own insertion seam and
+// NOTHING is sent. `ctx.ui.pasteToEditor` is the seam the file picker's insert
+// already uses, so the chat input is the same editor and the fallback line is
+// the same honest one.
+function panelInsert(ctx, label, text) {
+  const value = typeof text === "string" ? text : "";
+  if (value.length === 0) return;
+  try {
+    if (ctx && ctx.ui && typeof ctx.ui.pasteToEditor === "function") {
+      ctx.ui.pasteToEditor(value);
+      return;
+    }
+  } catch {
+    // Fall through to the honest line: the text never reached the editor.
+  }
+  const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
+  if (typeof notify === "function") notify(`${label}: the editor did not accept the insertion: ${value}`, "warning");
+}
+
+// S6 (both panels): one linked number opens the OTHER panel on that number. The
+// current panel is closed FIRST (never stacked), and the other one is dispatched
+// through the same single-flight path a rail click uses. While that other open is
+// already in flight the click changes nothing and the panel stays where it is,
+// instead of closing onto a dispatch that would be dropped.
+function openLinkedPanel(pi, link, closePanel) {
+  const kind = link && (link.kind === "issue" || link.kind === "pullRequest") ? link.kind : null;
+  const number = link ? Number(link.number) : NaN;
+  if (kind === null || !Number.isInteger(number) || number <= 0) return;
+  if (kind === "issue" ? issuesPanelOpenBlocked() : prsPanelOpenBlocked()) return;
+  try {
+    closePanel();
+  } catch {
+    // A host that refuses the close still gets the dispatch below.
+  }
+  if (kind === "issue") dispatchIssuesPanel(pi, number);
+  else dispatchPrsPanel(pi, number);
+}
+
+// S4 (T4): a panel write changed the repository's pull requests, so the rail's
+// count is no longer what its read said. The identity is marked so the disk half
+// cannot hand the old rows back, and the rail reads NOW when it is on screen (a
+// human's save is one action, so it is neither a script that needs the bash
+// anti-storm cap nor something to wait a floor for). Nothing here starts a read
+// for a section nobody is drawing (S11).
+function invalidatePrsRail(identity) {
+  if (typeof identity === "string" && identity.length > 0) prsRailStaleIdentities.add(identity);
+  // D9: the entry remembered for a cold start is gone with it.
+  clearPrsRailStoredEntry(identity);
+  const handle = issuesSidebarHandle;
+  if (!handle) return;
+  try {
+    if (typeof handle.drawnWithin !== "function") return;
+    if (handle.drawnWithin(ISSUES_SIDEBAR_DRAWN_WINDOW_MS) !== true) return;
+    // FORCED, not merely refreshed: the section's pull-request read holds its own
+    // TTL, so a plain `refresh()` would leave the stale count on screen after the
+    // write the human just made. `forceRefresh(0)` reads both halves now (a
+    // human's save is one action, so no anti-storm cap applies).
+    if (typeof handle.forceRefresh === "function") {
+      handle.forceRefresh(0);
+      return;
+    }
+    if (typeof handle.refresh !== "function") return;
+    const pending = handle.refresh();
+    if (pending && typeof pending.catch === "function") pending.catch(() => {});
+  } catch {
+    // The rail is optional: a failed refresh never breaks the panel's write.
+  }
+}
+
+// S4 (T4): the rail's second read. ONE aliased GraphQL answers both counted
+// buckets; the identity is proved with the SAME composition the issues read and
+// the panel pin use, so the count and the click's routing belong to one
+// repository. The disk entry is a FALLBACK for a failed live read only — the rail
+// never paints a stored count as if the network had answered — and the entry is
+// written only from here, after a successful read in the generation that asked.
+// No session context reads nothing, and a missing `gh` costs no child.
+async function loadIssuesRailPullRequests() {
+  const generation = issuesSidebarCacheGeneration;
+  if (issuesGhCliMissing()) {
+    return { ok: false, error: ISSUES_GH_CLI_MISSING_RAIL, errorTone: "dim" };
+  }
+  if (issuesSidebarCtx === null) {
+    return { ok: false, error: "cannot read pull requests: the session has ended" };
+  }
+  const cwd = toolCwd(issuesSidebarCtx);
+  let issues;
+  let prs;
+  try {
+    issues = libRequire("gh-issues.js");
+    prs = prsClient();
+  } catch (err) {
+    return { ok: false, error: `pull requests: cannot load the gh client: ${issuesSidebarError(err, "unknown error")}` };
+  }
+  const checkoutRoot = await oddCheckoutRootAsync(cwd);
+  if (!checkoutRoot) return { ok: false, error: ISSUES_SIDEBAR_NOT_REPOSITORY, errorTone: "dim" };
+  let resolved = null;
+  try {
+    resolved = await issuesBrowserRepoIdentity(issues, checkoutRoot);
+  } catch (err) {
+    resolved = { ok: false, error: issuesSidebarError(err, "cannot resolve this checkout's own repository") };
+  }
+  if (!resolved || resolved.ok !== true) {
+    if (resolved && resolved.noRemote === true) {
+      return { ok: false, error: ISSUES_SIDEBAR_NOT_GITHUB, errorTone: "dim" };
+    }
+    return { ok: false, error: (resolved && resolved.error) || "cannot resolve this checkout's own repository" };
+  }
+  const identity = resolved.identity;
+  const store = prsRailStore();
+  // D9: the stored entry is the SAME one the section's cold-start hydration asks
+  // for, so a flight reads the document once and both halves agree on it.
+  const stored = await loadStoredRailPullRequests(identity);
+  let read = null;
+  try {
+    read = await prs.listRailPullRequests({}, { cwd: checkoutRoot, scope: identity });
+  } catch (err) {
+    read = { ok: false, error: issuesSidebarError(err, "GitHub query failed") };
+  }
+  if (!read || read.ok !== true) {
+    // A failed live read paints the last SUCCESSFUL one when the disk has it, so
+    // a cold start is not blank; nothing else is written from a failure.
+    if (stored && Array.isArray(stored.mine) && Array.isArray(stored.review)) {
+      // T10b (S4, D15): the fallback carries the bucket totals too, so the number
+      // the last read painted survives the failure as well as the rows do.
+      return {
+        ok: true,
+        identity,
+        mine: stored.mine,
+        review: stored.review,
+        counts: storedRailCounts(stored),
+        cached: true,
+      };
+    }
+    return { ok: false, error: (read && read.error) || "GitHub query failed" };
+  }
+  prsRailStaleIdentities.delete(identity);
+  // D8 (S4): the buckets' EXACT totals travel with their rows — the section
+  // counts what the window cut as well as the numbers it carried. T10b (S4, D15):
+  // they are also what the entry keeps, so a restart paints the same number.
+  const counts = read.counts && typeof read.counts === "object" ? read.counts : null;
+  if (store !== null && issuesSidebarCacheGeneration === generation) {
+    const snapshot = {
+      mine: read.mine,
+      review: read.review,
+      ...(counts === null ? {} : { counts }),
+      syncedAt: Date.now(),
+    };
+    // The live answer IS what the entry now holds, so a later cold start paints
+    // it without another read of the file.
+    prsRailStoredIdentity = identity;
+    prsRailStoredEntry = { ...snapshot };
+    // Fire and forget: the answer is already visible, and a slow disk must not
+    // hold the rail's next read.
+    Promise.resolve().then(() => store.save(identity, snapshot)).catch(() => {});
+  }
+  return { ok: true, identity, mine: read.mine, review: read.review, ...(counts === null ? {} : { counts }) };
+}
+
+// D9 (S4): the stored entry, asked BESIDE the live read by the section's own
+// dispatched pull-request read, so a cold start paints `N issues · M pr` while
+// `gh` is still answering. It is the same document `loadIssuesRailPullRequests`
+// writes, read for the identity the issues read just PROVED — so no entry is ever
+// painted under another repository's name — and it answers `null` for anything
+// that must not hydrate: no session, no `gh` CLI (a settled `dim` state reads no
+// disk at all, invariant 28), an identity a panel write invalidated (invariant
+// 25), or a document that is missing or unreadable. Nothing here is awaited by a
+// frame or a session path: only the section's async loader calls it.
+async function hydrateIssuesRailPullRequests(identity) {
+  if (typeof identity !== "string" || identity.length === 0) return null;
+  if (issuesGhCliMissing()) return null;
+  if (issuesSidebarCtx === null) return null;
+  if (prsRailStaleIdentities.has(identity)) return null;
+  const stored = await loadStoredRailPullRequests(identity);
+  if (!stored) return null;
+  return { mine: stored.mine, review: stored.review, counts: storedRailCounts(stored), syncedAt: stored.syncedAt };
+}
+
+function registerPrsCommand(pi) {
+  if (typeof pi?.registerCommand !== "function") return;
+  // S13 (T11) parity: without the `gh` CLI this command could do nothing, so it
+  // is never registered — the same registration-time decision `/issues` makes.
+  if (ISSUES_GH_CLI_ABSENT) return;
+  const handler = async (args, ctx) => {
+    const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
+    const gate = await probeIssuesGate(ctx);
+    if (gate.ok !== true) {
+      releasePrsPanelOpen();
+      if (gate.notRepository === true) {
+        if (typeof notify === "function") notify(notGitRepositoryLine(toolCwd(ctx)), "info");
+        return;
+      }
+      if (typeof notify === "function") notify(prsGateMessage(gate.error), "error");
+      return;
+    }
+    await executePrs(args, ctx, gate.checkoutRoot, pi);
+  };
+  pi.registerCommand("prs", {
+    description: "Browse fresh GitHub pull request pages and details; comment, label, assign, link, merge or close when permitted",
+    handler,
+  });
+}
+
+// The rail click that dispatched this command owns the single-flight guard, and
+// EVERY exit of the open releases it, exactly like `executeIssues`. The release
+// is scoped to the token captured HERE, so a typed `/prs` releases nothing and
+// can never clear a newer click's guard.
+async function executePrs(rawArgs, ctx, checkoutRoot, pi) {
+  const openToken = prsPanelOpenToken;
+  const releaseOpen = () => {
+    if (openToken === null) return;
+    releasePrsPanelOpen(openToken);
+  };
+  try {
+    return await openPrsPanel(rawArgs, ctx, releaseOpen, checkoutRoot, pi);
+  } finally {
+    releaseOpen();
+  }
+}
+
+// The no-UI fallback: the three scoped reads happen together; partial failure
+// keeps what answered and reports the first error, and a total failure claims no
+// rows.
+async function prsFetchPages(prs, cwd, scope) {
+  const specs = PRS_INTERACTIVE_BUCKETS.filter((spec) => spec.lazy !== true);
+  const outcomes = await Promise.all(specs.map(async (spec) => {
+    try {
+      const res = await prs.getPullRequestPage(
+        { bucket: spec.id, pageSize: PRS_FETCH_PAGE_SIZE },
+        { cwd, scope },
+      );
+      if (res && res.ok === true) {
+        return { ok: true, rows: Array.isArray(res.rows) ? res.rows : [] };
+      }
+      return { ok: false, error: (res && res.error) || "gh pr list failed", rows: [] };
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || "gh pr list failed", rows: [] };
+    }
+  }));
+  const firstError = outcomes.find((outcome) => outcome.ok !== true);
+  if (!outcomes.some((outcome) => outcome.ok === true)) {
+    return { ok: false, error: (firstError && firstError.error) || "gh pr list failed", pages: outcomes.length };
+  }
+  return {
+    ok: true,
+    rows: outcomes.flatMap((outcome) => outcome.rows),
+    pages: outcomes.length,
+    loadError: firstError ? firstError.error : null,
+  };
+}
+
+async function openPrsPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, pi) {
+  const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
+  const raw = String(rawArgs ?? "").trim();
+  // `/prs <number>` (also `#<number>`) opens the same panel on one pull request.
+  // ONLY a bare positive integer is accepted; every other argument keeps this
+  // command's refusal, so a typo and a second argument behave exactly as before.
+  let initialPullRequest = null;
+  if (raw !== "") {
+    const match = /^#?(\d+)$/.exec(raw);
+    const number = match ? Number(match[1]) : NaN;
+    if (!match || !Number.isInteger(number) || number <= 0) {
+      if (typeof notify === "function") notify(`Unknown option "${raw}". Use /prs.`, "error");
+      return;
+    }
+    initialPullRequest = number;
+  }
+  const cwd = toolCwd(ctx);
+  const checkoutRoot = typeof resolvedCheckoutRoot === "string" && resolvedCheckoutRoot.length > 0
+    ? resolvedCheckoutRoot
+    : await oddCheckoutRootAsync(cwd);
+  if (!checkoutRoot) {
+    if (typeof notify === "function") notify(notGitRepositoryLine(cwd), "info");
+    return;
+  }
+  let issues = null;
+  let prs = null;
+  try {
+    issues = libRequire("gh-issues.js");
+    prs = prsClient();
+  } catch (err) {
+    if (typeof notify === "function") notify(`prs: cannot load the gh client: ${(err && err.message) || err}`, "error");
+    return;
+  }
+  // S5 (T4): a rail click leaves the bucket its row belonged to as a one-shot
+  // hint, so the panel opens on the list that actually holds the pull request.
+  // A typed `/prs N` has no hint and the view's own fallback decides.
+  const hintedBucket = initialPullRequest === null ? null : takePrsPanelOpenBucketHint(initialPullRequest);
+  const effectiveRepo = async (fresh) => issuesBrowserRepoIdentity(issues, checkoutRoot, fresh);
+  const pinIdentity = (fresh) => effectiveRepo(fresh)
+    .catch(() => ({ ok: false, error: "cannot resolve this checkout's own repository" }));
+  let pinnedRepo;
+  let pinnedPromise = null;
+  const pinRepo = async () => {
+    if (pinnedRepo !== undefined) return pinnedRepo;
+    if (pinnedPromise === null) {
+      // A numbered open — the form the rail dispatches — pins the scope the
+      // checkout already proved, so its first frame is not behind a fresh probe;
+      // a plain `/prs` keeps the fresh proof, and a cached pin that cannot be
+      // read falls back to it ONCE. Nothing that mutates rides the pin: every
+      // action still re-proves the checkout in `scopeDrift`.
+      const pin = initialPullRequest === null
+        ? pinIdentity(true)
+        : pinIdentity(false).then((cached) => (cached && cached.ok === true ? cached : pinIdentity(true)));
+      pinnedPromise = pin.then((pinned) => {
+        pinnedRepo = pinned;
+        return pinned;
+      });
+    }
+    return pinnedPromise;
+  };
+  const pinnedReadArgs = async () => {
+    const pinned = await pinRepo();
+    if (!pinned || pinned.ok !== true) {
+      return { ok: false, error: (pinned && pinned.error) || "cannot resolve this checkout's own repository" };
+    }
+    return { ok: true, args: { cwd: checkoutRoot, scope: pinned.identity } };
+  };
+  // An action runs only while the checkout still resolves to the displayed
+  // repository and then BINDS the pinned identity, so a displayed number can
+  // never be sent to another repository (invariant 6).
+  const scopeDrift = async () => {
+    const pinned = await pinRepo();
+    if (!pinned || pinned.ok !== true) {
+      return { ok: false, error: (pinned && pinned.error) || "cannot resolve this checkout's own repository" };
+    }
+    const current = await effectiveRepo(true);
+    if (!current || current.ok !== true) {
+      return { ok: false, error: (current && current.error) || "cannot verify this checkout's own repository" };
+    }
+    if (current.identity !== pinned.identity) {
+      // D10 (S2): a `/prs` action tells the human to reopen `/prs`.
+      return { ok: false, error: issuesScopeDriftLine(current.identity, pinned.identity, "/prs") };
+    }
+    return { ok: true, scope: pinned.identity };
+  };
+  // One page per request through the real client: `mine`, `review` and
+  // `involved` are repository searches with the reader's text appended, and an
+  // unfiltered `all` is the repository connection with an exact total. A typed
+  // query inside `all` stays a capped search, exactly like issues.
+  const loadPullRequestPage = (request = {}) => {
+    const spec = PRS_INTERACTIVE_BUCKETS.find((bucket) => bucket.id === request.bucketId);
+    if (!spec) return { ok: false, error: `unknown prs bucket "${String(request.bucketId)}"` };
+    const asked = Number(request.limit);
+    const limit = Number.isFinite(asked) ? Math.min(PRS_PAGE_MAX, Math.max(1, Math.floor(asked))) : 1;
+    const cursor = request.cursor == null || request.cursor === "" ? null : String(request.cursor);
+    const typed = typeof request.query === "string" ? request.query.trim() : "";
+    return issuesWrapFailure((async () => {
+      const pinned = await pinnedReadArgs();
+      if (pinned.ok !== true) return pinned;
+      if (spec.connection === true && typed === "") {
+        if (typeof prs.getPullRequestConnectionPage !== "function") {
+          return { ok: false, error: "cannot read pull requests: the gh client has no unfiltered pull request connection reader" };
+        }
+        return await prs.getPullRequestConnectionPage({ cursor, pageSize: limit }, pinned.args);
+      }
+      return await prs.getPullRequestPage({ bucket: spec.id, cursor, pageSize: limit, query: typed }, pinned.args);
+    })(), "cannot read pull requests");
+  };
+  const loadLabels = async () => {
+    const pinned = await pinnedReadArgs();
+    if (pinned.ok !== true) return pinned;
+    return await prs.listLabels(pinned.args);
+  };
+  const loadAssignees = async () => {
+    const pinned = await pinnedReadArgs();
+    if (pinned.ok !== true) return pinned;
+    return await prs.listAssignableUsers(pinned.args);
+  };
+  const helpersPromise = Promise.resolve()
+    .then(() => issuesTuiLoader())
+    .catch(() => null);
+  const [helpers] = await Promise.all([helpersPromise, pinRepo()]);
+  if (!helpers || !ctx || !ctx.ui || typeof ctx.ui.custom !== "function") {
+    const pinned = await pinnedReadArgs();
+    const loaded = pinned.ok === true
+      ? await prsFetchPages(prs, checkoutRoot, pinned.args.scope)
+      : { ok: false, error: pinned.error, rows: [] };
+    if (typeof notify === "function") {
+      if (loaded.ok !== true) notify(`prs: ${loaded.error || "gh pr list failed"}`, "info");
+      else notify(`prs: ${loaded.rows.length} pull request(s) across ${loaded.pages} pages (the viewer needs an interactive session)`, "info");
+    }
+    return;
+  }
+  // The overlay factory's own host object is what the browser opener suspends.
+  let hostTuiRef = null;
+  // S6: the panel's own close, captured from the host's factory, so a cross-panel
+  // click can end it before opening the other one.
+  let closePanel = () => {};
+  let panelClosed = false;
+  // S4: every successful write invalidates the rail's count for THIS repository.
+  const afterRailMutation = (result) => {
+    if (result && result.ok === true) {
+      invalidatePrsRail(pinnedRepo && pinnedRepo.ok === true ? pinnedRepo.identity : null);
+    }
+    return result;
+  };
+  const mutate = (what, run) => issuesWrapFailure((async () => {
+    const gate = await scopeDrift();
+    if (gate.ok !== true) return gate;
+    return afterRailMutation(await run({ cwd: checkoutRoot, scope: gate.scope }));
+  })(), what);
+  const actions = {
+    // Created names go through `gh label create` first, then the whole delta
+    // through `gh pr edit`; a failure at either step returns honestly and the
+    // view keeps the editor open with local state unchanged.
+    editLabels: (number, add, remove, created) => mutate("cannot edit labels", async (args) => {
+      for (const name of Array.isArray(created) ? created : []) {
+        if (typeof name !== "string" || name === "") continue;
+        const made = await prs.createLabel({ name }, args);
+        if (!made || made.ok !== true) return { ok: false, error: (made && made.error) || `cannot create label ${name}` };
+      }
+      return await prs.editLabels(number, { add, remove }, args);
+    }),
+    commentPullRequest: (number, text) => mutate("cannot comment", (args) => prs.commentPullRequest(number, text, args)),
+    editAssignees: (number, changes) => mutate("cannot edit assignees", (args) => prs.editAssignees(number, changes, args)),
+    closePullRequest: (number) => mutate("cannot close the pull request", (args) => prs.closePullRequest(number, args)),
+    mergePullRequest: (number, entry) => mutate("cannot merge the pull request", (args) => prs.mergePullRequest(number, entry, args)),
+    editLinkedIssues: (number, changes) => mutate("cannot edit the linked issues", (args) => prs.editLinkedIssues(number, changes, args)),
+    // S7: `enter` inserts `PR #N` into the chat input and the view closes itself.
+    insert: (text) => panelInsert(ctx, "prs", text),
+    // S6: a click on one linked issue opens `/issues N` in its place.
+    openLinked: (link) => openLinkedPanel(pi, link, () => closePanel()),
+    openBrowser: (number) => {
+      if (pinnedRepo === undefined) return { ok: false, error: "the pull request list has not loaded a repository yet" };
+      if (pinnedRepo.ok !== true) {
+        return { ok: false, error: pinnedRepo.error || "cannot resolve this checkout's own repository" };
+      }
+      return prsOpenInBrowser(hostTuiRef, checkoutRoot, number, pinnedRepo.identity);
+    },
+  };
+  // S1 (issues-sidebar-click T1): the open is over the moment the panel mounts,
+  // so the rail's clicks take effect again from the next frame on.
+  releaseOpen();
+  try {
+    await ctx.ui.custom(
+      (hostTui, theme, _keybindings, done) => {
+        hostTuiRef = hostTui;
+        closePanel = () => {
+          if (panelClosed) return;
+          panelClosed = true;
+          try {
+            done(null);
+          } catch {
+            // A host that refuses the close is still the host's own decision.
+          }
+        };
+        return libRequire("prs-view.js").createPrsView({
+          pages: PRS_INTERACTIVE_BUCKETS.map((spec) => ({
+            id: spec.id,
+            label: spec.label,
+            rows: null,
+            lazy: spec.lazy === true,
+          })),
+          loadPullRequestPage,
+          // S1/T4: a numbered open starts on the bucket the rail's click named,
+          // with that pull request pending selection; the command already
+          // refused anything that is not a positive integer.
+          ...(initialPullRequest === null
+            ? {}
+            : { initialPullRequest, ...(hintedBucket === null ? {} : { initialBucket: hintedBucket }) }),
+          loadLabels,
+          loadAssignees,
+          prefetchBuckets: true,
+          // `includeMetadata` is what carries the permissions, the merge methods
+          // and the linked issues into the pane: without it the view sees no
+          // confirmed capability and offers no editor or merge step (invariant 7).
+          loadPullRequest: async (number) => {
+            const pinned = await pinnedReadArgs();
+            if (pinned.ok !== true) return pinned;
+            return await prs.getPullRequest(number, { includeMetadata: true }, pinned.args);
+          },
+          actions,
+          helpers,
+          theme,
+          rowsAvailable: () => oddTerminalRows(hostTui),
+          requestRender: () => {
+            if (panelClosed) return;
+            try {
+              if (hostTui && typeof hostTui.requestRender === "function") hostTui.requestRender();
+            } catch {
+              // A repaint failure never breaks navigation.
+            }
+          },
+          done,
+        });
+      },
+      // Full screen like the odd viewer and the issues reader.
+      { overlay: true, overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%", margin: 0 } },
+    );
+  } catch {
+    if (typeof notify === "function") notify("prs: the viewer could not open in this session", "info");
+  }
+}
+
+// The rail's PR open: one token, one dispatch, and the bucket its row named as a
+// one-shot hint for the command the host runs next. Refusals are the issues
+// panel's (one transcript entry, else the notice seam), because there is one
+// visible surface for a rail click that cannot be dispatched at all.
+function dispatchPrsPanel(pi, number, bucket) {
+  // S1: a click while a rail open is in flight has no effect at all.
+  if (prsPanelOpenBlocked()) return { ok: true };
+  const token = { generation: issuesSidebarCacheGeneration };
+  prsPanelOpenToken = token;
+  const asked = Number(number);
+  const namesPullRequest = Number.isInteger(asked) && asked > 0;
+  const bucketHint = namesPullRequest ? prsBucketHint(bucket) : null;
+  prsPanelOpenHint = namesPullRequest
+    ? { number: asked, bucket: bucketHint, generation: token.generation }
+    : null;
+  armPrsPanelOpenGuard(token);
+  const command = namesPullRequest ? `/prs ${asked}` : "/prs";
+  if (!pi || typeof pi.sendUserMessage !== "function") {
+    releasePrsPanelOpen(token);
+    announceIssuesPanelRefusal(pi, PRS_PANEL_DISPATCH_FAILED);
+    return { ok: false, error: PRS_PANEL_DISPATCH_FAILED };
+  }
+  try {
+    pi.sendUserMessage(command, { expandPromptTemplates: true });
+  } catch (err) {
+    releasePrsPanelOpen(token);
+    const message = `the /prs command could not be dispatched: ${issuesSidebarError(err, "unknown error")}`;
+    announceIssuesPanelRefusal(pi, message);
+    return { ok: false, error: message };
+  }
+  return { ok: true };
 }
 
 // A missing binary needs an install plus login; anything else already carries
@@ -8488,7 +9269,7 @@ function registerIssuesCommand(pi) {
       if (typeof notify === "function") notify(issuesGateMessage(gate.error), "error");
       return;
     }
-    await executeIssues(args, ctx, gate.checkoutRoot);
+    await executeIssues(args, ctx, gate.checkoutRoot, pi);
   };
   pi.registerCommand("issues", {
     description: "Browse fresh GitHub issue pages and details; edit labels/assignees, comment or close when permitted",
@@ -9166,6 +9947,7 @@ function mountIssuesSidebar(pi, api) {
   // single-flight guard instead of leaving it to its timer.
   issuesSidebarCacheGeneration += 1;
   releaseIssuesPanelOpen();
+  releasePrsPanelOpen();
   const onRefreshed = typeof api.requestRepaint === "function"
     ? () => {
       try {
@@ -9179,6 +9961,18 @@ function mountIssuesSidebar(pi, api) {
   try {
     handle = factory.createIssuesSection({
       load: () => loadIssuesSidebar(),
+      // S4 (T4): the second read — the viewer's own pull requests and the ones
+      // awaiting their review — paints the header's `· N pr` and routes a row's
+      // click to its linked pull request. The section starts it only after the
+      // issues read proved a repository, and it keeps the `github` row label the
+      // human named in customize.
+      loadPullRequests: () => loadIssuesRailPullRequests(),
+      // D9 (S4): the persisted count paints a cold start while that read is in
+      // flight. Hydration belongs to the read alone — this seam is reached only
+      // from the section's async loader, never from a frame or a session path —
+      // and the live answer always replaces what it painted.
+      hydratePullRequests: (identity) => hydrateIssuesRailPullRequests(identity),
+      rowLabel: "github",
       // S10 (T8, L9): the rail re-reads on TIME, not on the session's activity.
       // The section owns the timer (armed by a draw, unref'd, cleared by
       // `invalidate()`/`dispose()`) and stops it once the section leaves the
@@ -9191,7 +9985,16 @@ function mountIssuesSidebar(pi, api) {
       // path (`dispatchIssuesPanel` is synchronous). `openIssuesSidebarIssue` (the
       // browser opener this seam used to run) is gone with its only caller —
       // `issuesOpenInBrowser` survives for `/issues`' own `o` key.
-      open: (number, identity, bucket, generation) => dispatchIssuesPanel(pi, number, identity, bucket, generation),
+      // S5 (T4): a row whose issue links a pull request carries the routed
+      // destination instead of a click identity — the PR panel opens on THAT
+      // number with the bucket its row belonged to. Every other row keeps the
+      // old call, and the overflow row still opens the issues reader.
+      open: (number, identity, bucket, generation) => {
+        if (identity && typeof identity === "object" && Number.isInteger(identity.pullRequest)) {
+          return dispatchPrsPanel(pi, identity.pullRequest, identity.pullRequestBucket);
+        }
+        return dispatchIssuesPanel(pi, number, identity, bucket, generation);
+      },
       openAll: () => dispatchIssuesPanel(pi),
       onRefreshed,
     });
@@ -9755,6 +10558,35 @@ function refreshIssuesSidebarIfDrawn() {
   }
 }
 
+// S5 (T4/S5): was the rail on screen in the session a boundary is replacing? A
+// hidden section answers false and keeps costing nothing (invariant 28); the
+// answer is taken BEFORE the boundary drops the drawn stamp.
+function issuesSidebarWasDrawn() {
+  const handle = issuesSidebarHandle;
+  if (!handle || typeof handle.drawnWithin !== "function") return false;
+  try {
+    return handle.drawnWithin(ISSUES_SIDEBAR_DRAWN_WINDOW_MS) === true;
+  } catch {
+    return false;
+  }
+}
+
+// S5 (T4/S5): the start-of-session preload — the issues and pull-request reads
+// the rail would otherwise start on its first drawn frame. It is DISPATCHED and
+// never awaited (the host awaits every `session_start` handler, invariant 24's
+// sibling rule for the rail), and it runs only for the SAME section the host was
+// actually painting: a hidden, brand-new or re-mounted section starts its read
+// on the first DRAW, exactly as before, so nothing here spawns a child for a
+// section nobody sees, and a teardown-and-remount (a republished bridge) never
+// adds a second read behind the replacement's own first draw.
+function preloadIssuesSidebar(handleBefore, wasDrawn) {
+  if (handleBefore === null || wasDrawn !== true) return;
+  const handle = issuesSidebarHandle;
+  if (handle === null || handle !== handleBefore) return;
+  if (typeof handle.refreshIfStale !== "function") return;
+  trackStartupTask(Promise.resolve().then(() => handle.refreshIfStale(ISSUES_SIDEBAR_ACTIVITY_FLOOR_MS)));
+}
+
 // S10 (T9): the result of a `bash` call whose COMMAND mutates a GitHub issue or
 // pull request is the one moment the plugin knows something changed, so it forces
 // ONE read right after that tool ends. The decision is the classifier's
@@ -9982,6 +10814,9 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // bound once — `alt+p` (S41) unless `GENTLE_PI_FILES_KEY` says otherwise.
   bindFilesShortcut(pi);
   registerIssuesCommand(pi);
+  // S1 (prs): the pull-request sibling, behind the SAME `gh` gate and the same
+  // session probe — absent `gh` means it is never registered either.
+  registerPrsCommand(pi);
   // S5 (issues-linked-prs-and-alt-i T2): the issues panel's key, beside the
   // picker's — bound after its command exists, and therefore never when the
   // `gh`-absent gate left that command unregistered.
@@ -10030,11 +10865,19 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // session is over — released here, and inert anyway through the generation
     // above.
     releaseIssuesPanelOpen();
+    releasePrsPanelOpen();
+    // S5 (T4/S5): the drawn stamp is read BEFORE the boundary clears it, and the
+    // binding is remembered, because only a rail the host was painting — and that
+    // is still the same section afterwards — earns the background preload below.
+    const railHandleBefore = issuesSidebarHandle;
+    const railWasDrawn = issuesSidebarWasDrawn();
     invalidateIssuesSidebar();
     // T18 (S11): a shutdown disposed the section, and a republished bridge is a
     // new binding. This is the moment both are picked up again; with a live
     // section on the same bridge it is a no-op.
     registerIssuesSidebar(pi);
+    // S5 (T4/S5): dispatched, never awaited, and only while the rail is active.
+    preloadIssuesSidebar(railHandleBefore, railWasDrawn);
     // S7: the prompt card's install belongs to the lifecycle pair the factory registers
     // BEFORE the bridge gate (it must exist on a load that registered no surface), so this
     // boundary leaves it alone: one owner for one session state.
@@ -10075,6 +10918,10 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // S1 (issues-sidebar-click T1): an open the ended session dispatched never
     // blocks the next one.
     releaseIssuesPanelOpen();
+    releasePrsPanelOpen();
+    // S4 (T4): a mutation mark belongs to the session that made it; a new session
+    // reads the repository fresh and may trust its stored fallback again.
+    prsRailStaleIdentities.clear();
     invalidateIssuesSidebar();
     clearIssuesSidebarCache();
     // S5 (T8): the gate's own state is session state too. The generation moves on,

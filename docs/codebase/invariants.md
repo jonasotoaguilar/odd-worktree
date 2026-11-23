@@ -848,9 +848,16 @@ The question this page answers: which rules must every change preserve, and what
     patches — because Pi publishes no extension seam for a `role: "user"` entry: the
     class is handed in from the extension's lazy `import()`, so `lib/` imports no Pi
     package and a host without the export installs nothing. The card it draws is a
-    `✿ You` card on the card substrate (`float`/`neon` read live, tone `info`, the
-    whole frame and the title in `accent`, the body Pi's own Markdown clone with the
+    `✿ You · HH:MM` card on the card substrate (`float`/`neon` read live, tone `info`,
+    the whole frame and the title in `accent`, the separator and the clock in
+    `muted` — the component's own `timestamp` when Pi restored the prompt, else the
+    clock captured once at its first paint, else no subtitle at all — and the body
+    Pi's own Markdown clone with the
     user-message background dropped and its painted rows placed, never repainted).
+    A successful install asks the bridge for ONE `requestRepaint` (a differential
+    frame) so a transcript restored before the deferred host import resolves comes
+    back as cards instead of waiting for unrelated input; a refused install, a
+    closed session and a bridge without that member request nothing.
     It adds NO row, command, setting or design, so invariant 3's surface is
     unchanged. The gate is `Card activity` answering this package's `activity`
     design, asked INSIDE the patched `render` on every paint and never cached, which

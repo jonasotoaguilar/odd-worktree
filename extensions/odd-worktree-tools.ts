@@ -6865,6 +6865,10 @@ async function oddGroupsFor(repoRoot, roots, all = false) {
     const grouped = await libRequire("odd-group.js").groupOddDocs({
       repoRoot,
       runAsync: libRunner(git),
+      // S13 (T13): a listing Git cannot answer is NO model, never a synthetic
+      // main made of this checkout — inside a linked worktree that would show
+      // its private documents under main's name on both surfaces.
+      failClosed: true,
       ...scope,
     });
     if (Array.isArray(grouped)) return grouped;
@@ -6912,18 +6916,23 @@ function oddModelIsEmpty(groups) {
   return groups.every((group) => !Array.isArray(group && group.docs) || group.docs.length === 0);
 }
 
-// S6 (T10): is this absolute document one a loaded group carries? A target the
-// model does not list belongs to no group the panel may draw, so the view could
-// not place it and would open main's first document instead. A model that could
-// not be read proves nothing either way, so the target stands as it did before.
-function oddModelLists(groups, target) {
-  if (!Array.isArray(groups)) return true;
+// S6 (T10): the document a loaded group carries at this absolute target, as the
+// LISTED spelling — the group's own `docPath`, so the view matches by identity
+// instead of by whatever string the reader typed (a `.` component resolves to
+// the same document, not to another one). A model that could not be read proves
+// nothing either way, so it answers the resolved target. `null` means the loaded
+// model does NOT list it.
+function oddListedDocPath(groups, target) {
+  if (!Array.isArray(groups)) return path.resolve(target);
   const wanted = path.resolve(target);
-  return groups.some((group) => Array.isArray(group && group.docs) && group.docs.some((entry) => {
-    const listed = entry && (typeof entry.docPath === "string" ? entry.docPath
-      : (typeof entry.path === "string" ? entry.path : ""));
-    return typeof listed === "string" && listed.length > 0 && path.resolve(listed) === wanted;
-  }));
+  for (const group of groups) {
+    for (const entry of Array.isArray(group && group.docs) ? group.docs : []) {
+      const listed = entry && (typeof entry.docPath === "string" ? entry.docPath
+        : (typeof entry.path === "string" ? entry.path : ""));
+      if (typeof listed === "string" && listed.length > 0 && path.resolve(listed) === wanted) return listed;
+    }
+  }
+  return null;
 }
 
 // S13 (T12): the DEGRADED menu draws the SAME scope the panel draws. When the
@@ -6933,12 +6942,19 @@ function oddModelLists(groups, target) {
 // documents into the menu. Only a model that could not be read at all (`null`)
 // falls back to the session checkout's flat listing, which is what the menu has
 // always shown.
+//
+// S6/S13 (T13): the menu's choices are built from these entries, so each one
+// carries the checkout it belongs to. A name that appears once keeps that name
+// as its label; a name TWO checkouts carry is labelled `name (main)` /
+// `name (<worktree>)`, so the reader can tell the copies apart and the selection
+// maps back to the entry it names.
 function oddFallbackDocs(groups) {
   if (!Array.isArray(groups)) return null;
   const main = groups.filter((group) => group && group.isMain === true);
   const worktrees = groups.filter((group) => !(group && group.isMain === true));
   const docs = [];
   const seen = new Set();
+  const names = new Map();
   for (const group of [...main, ...worktrees]) {
     for (const entry of Array.isArray(group && group.docs) ? group.docs : []) {
       const location = entry && typeof entry.docPath === "string" && entry.docPath.length > 0
@@ -6951,10 +6967,20 @@ function oddFallbackDocs(groups) {
       const key = location.length > 0 ? path.resolve(location) : `name:${name}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      docs.push({ name, path: location });
+      const checkout = group && group.isMain === true
+        ? "main"
+        : (group && typeof group.checkoutName === "string" && group.checkoutName.length > 0
+          ? group.checkoutName
+          : "");
+      names.set(name, (names.get(name) || 0) + 1);
+      docs.push({ name, path: location, checkout });
     }
   }
-  return docs;
+  // Only a name that really repeats is disambiguated: a unique one keeps the
+  // exact label the menu has always offered.
+  return docs.map((doc) => (names.get(doc.name) > 1 && doc.checkout.length > 0
+    ? { ...doc, label: `${doc.name} (${doc.checkout})` }
+    : doc));
 }
 
 async function runOddFallback(ctx, listing) {
@@ -6970,14 +6996,19 @@ async function runOddFallback(ctx, listing) {
     }
     return;
   }
+  // S6/S13 (T13): the choices are the exact list offered and the selection maps
+  // back by INDEX, never by a name another checkout may also carry.
+  const labels = listing.docs.map((doc) => (typeof doc.label === "string" && doc.label.length > 0 ? doc.label : doc.name));
   let picked = null;
   try {
-    picked = await select("Odd documents", listing.docs.map((doc) => doc.name));
+    picked = await select("Odd documents", labels);
   } catch {
     picked = undefined;
   }
   if (picked === undefined || picked === null) return;
-  const doc = listing.docs.find((entry) => entry.name === picked);
+  const index = labels.indexOf(picked);
+  if (index < 0) return;
+  const doc = listing.docs[index];
   if (!doc) return;
   if (typeof notify === "function") notify(doc.path, "info");
 }
@@ -7050,11 +7081,15 @@ async function executeOdd(rawArgs, ctx) {
   // document instead of refusing.
   let initialDoc = null;
   if (request.kind === "path") {
-    if (!oddModelLists(groups, request.target)) {
+    // S6 (T13): the view matches a target by the LISTED identity, so a path with a
+    // `.` component (or any other spelling that resolves to the same document)
+    // must open the document the model lists, never whatever the raw string names.
+    const listedPath = oddListedDocPath(groups, request.target);
+    if (listedPath === null) {
       if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
       return;
     }
-    initialDoc = request.target;
+    initialDoc = listedPath;
   }
   if (request.kind === "name") {
     const known = Array.isArray(groups) && groups.some((group) => Array.isArray(group && group.docs)
@@ -7081,8 +7116,10 @@ async function executeOdd(rawArgs, ctx) {
   let liveView = null;
   let liveGroups = Array.isArray(groups) ? groups : null;
   // S11: the reader's current mode. `false` is the session's registered set, read
-  // from the register each time a reload needs it (S13).
+  // from the register each time a reload needs it (S13). `appliedAll` is the scope
+  // of the last APPLIED load, which is where a failed toggle rolls back to.
   let showAll = false;
+  let appliedAll = false;
   // S11/S13/D2 (T12): ONE generation counter orders EVERY load that can land on
   // this view — the startup ranking, each `a` toggle and each `r` reload. A load
   // takes its number when it STARTS and applies only while that number is still the
@@ -7094,17 +7131,24 @@ async function executeOdd(rawArgs, ctx) {
   let oddGeneration = 0;
   const beginOddLoad = () => (oddGeneration += 1);
   const oddLoadIsLatest = (generation) => generation === oddGeneration;
-  // T12 (S11): `applied` is the scope the answer was read in, handed to the view so
-  // its footer hint moves when the DATA moves — and only then. The startup ranking
-  // and `r` keep the mode the reader is in, so they pass nothing.
-  const applyOddGroups = (next, applied) => {
-    if (!Array.isArray(next)) return;
-    liveGroups = next;
-    if (liveView && typeof liveView.applyGroups === "function") liveView.applyGroups(next, applied);
-  };
-  const applyOddGroupsIfLatest = (generation, next, applied) => {
+  // T13/S11: ONE shape for every load and ONE place that applies it.
+  //
+  //   { groups, scope: { all } }  a load that carries the scope it was read in
+  //   { groups, scope: null }     the startup rank: new order, no mode published
+  //   null                        the load FAILED: nothing lands
+  //
+  // Applying drops anything but the latest generation, never applies a model on
+  // `null` (the drawn rows and the applied mode stay), and hands the scope to the
+  // view so its footer hint moves WITH the data instead of with the request.
+  const applyOddLoad = (generation, load) => {
     if (!oddLoadIsLatest(generation)) return;
-    applyOddGroups(next, applied);
+    if (!load || !Array.isArray(load.groups)) return;
+    liveGroups = load.groups;
+    const applied = load.scope === null || load.scope === undefined
+      ? undefined
+      : { all: load.scope.all === true };
+    if (applied !== undefined) appliedAll = applied.all;
+    if (liveView && typeof liveView.applyGroups === "function") liveView.applyGroups(load.groups, applied);
   };
   // S13 (T12): what the DEGRADED menu lists — the documents of the loaded model
   // when the model loaded, the checkout's flat listing otherwise. It is built at
@@ -7168,9 +7212,22 @@ async function executeOdd(rawArgs, ctx) {
                 checkoutRoot,
                 scope ? undefined : registeredRootsNow(),
                 scope,
-              ))
-                .then((next) => applyOddGroupsIfLatest(generation, next, { all: scope }))
-                .catch(() => {});
+              )).then((next) => {
+                // T13/S11: the load's own scope travels with it, so the hint can
+                // only ever describe the data that was actually applied.
+                const load = Array.isArray(next) ? { groups: next, scope: { all: scope } } : null;
+                if (!oddLoadIsLatest(generation)) return undefined;
+                applyOddLoad(generation, load);
+                if (load !== null) return true;
+                // The view rolls its REQUESTED mode back when this answers
+                // `false`; the extension asks in the applied scope from now on.
+                showAll = appliedAll;
+                return false;
+              }, () => {
+                if (!oddLoadIsLatest(generation)) return undefined;
+                showAll = appliedAll;
+                return false;
+              });
             },
             // S21: the reload is the awaited reader too, so `r` never freezes
             // the frame on a slow history walk. S10/S11 (T4): the GROUPS are the
@@ -7182,23 +7239,30 @@ async function executeOdd(rawArgs, ctx) {
               // S11/S13 (T6): the model is reloaded in the reader's own mode —
               // `all: true` in the all-worktrees mode, the session's registered
               // set (read NOW) otherwise.
+              const scopeAll = showAll;
               const next = await oddGroupsFor(
                 checkoutRoot,
-                showAll ? undefined : registeredRootsNow(),
-                showAll,
+                scopeAll ? undefined : registeredRootsNow(),
+                scopeAll,
               );
               // D2 (T6): a reload the generation has already superseded answers
               // with the documented sentinel, so it is INERT — the view ignores it
               // and nothing of it lands: not the listing, not the preview scroll,
-              // not the footer's reload state. (Its groups are already dropped by
-              // `applyOddGroupsIfLatest`, and no further read is spent on it.)
+              // not the footer's reload state.
               if (!oddLoadIsLatest(generation)) return oddReloadSuperseded();
+              // T13/S11: a Git read that failed is NOT a model. Answering `null`
+              // is the view's failure branch, which keeps the drawn rows and the
+              // applied mode exactly as they were.
+              if (!Array.isArray(next)) return null;
               // S10/S12 (T10): the ranked listing ranks MAIN's documents, so it is
               // read from main's own root — never from the session's checkout.
               const flat = await oddDocsFor(oddMainRoot(next, oddMainRoot(liveGroups, checkoutRoot)));
               if (!oddLoadIsLatest(generation)) return oddReloadSuperseded();
               if (flat && flat.ok === true) {
-                applyOddGroupsIfLatest(generation, oddGroupsWithRankedMain(next, flat.docs));
+                applyOddLoad(generation, {
+                  groups: oddGroupsWithRankedMain(next, flat.docs),
+                  scope: { all: scopeAll },
+                });
               }
               return flat;
             },
@@ -7230,7 +7294,12 @@ async function executeOdd(rawArgs, ctx) {
             if (!oddLoadIsLatest(rankGeneration)) return;
             if (!next || next.ok !== true || !Array.isArray(next.docs)) return;
             if (Array.isArray(liveGroups)) {
-              applyOddGroups(oddGroupsWithRankedMain(liveGroups, next.docs));
+              // T13/S11: the rank publishes NO mode (`scope: null`); it only
+              // replaces main's order through the same one apply.
+              applyOddLoad(rankGeneration, {
+                groups: oddGroupsWithRankedMain(liveGroups, next.docs),
+                scope: null,
+              });
               return;
             }
             if (typeof view.applyDocs === "function") view.applyDocs(next.docs);
@@ -9952,9 +10021,13 @@ async function loadOddRailRows() {
   const repoRoot = await oddCheckoutRootAsync(toolCwd(ctx));
   if (!repoRoot) return [];
   const groups = await oddGroupsFor(repoRoot, filesSessionWorktreeRoots(ctx));
+  // S13 (T13): a listing Git could not read is no model at all. REJECT instead of
+  // drawing an unregistered checkout's private documents under main: the
+  // section's failure branch keeps its previous rows and marks them stale.
+  if (!Array.isArray(groups)) throw new Error("cannot read the ODDs");
   const model = libRequire("odd-rail-model.js");
   return model.railRows({
-    groups: Array.isArray(groups) ? groups : [],
+    groups,
     touched: oddSession === null ? [] : oddSession.touched(),
   });
 }

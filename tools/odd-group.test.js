@@ -776,6 +776,27 @@ describe('fail closed, never throw', () => {
     assert.deepEqual(groups[0].docs.map((doc) => doc.name), ['mine']);
   });
 
+  test('S13: `failClosed` answers no model where the default answers a synthetic main', async () => {
+    const box = machine('list-fails-closed');
+    const worktree = box.worktree('odd-rail');
+    writeDoc(box.mainRoot, 'mine', { at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(worktree, 'theirs', { at: '2020-02-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, worktree], fail: ['worktree'] });
+
+    // The default is the documented degradation, unchanged: the caller's own
+    // root is the only checkout there is, reported as main.
+    const degraded = await groupOddDocs({ repoRoot: worktree, runAsync: git.runAsync });
+    assert.deepEqual(degraded.map((group) => group.checkoutName), ['main']);
+    assert.deepEqual(degraded[0].docs.map((doc) => doc.name), ['theirs'],
+      'the default still answers the session checkout as main');
+
+    // `failClosed` is S13's strict reading: a listing that cannot be read is no
+    // model, never a linked checkout dressed as main.
+    assert.equal(await groupOddDocs({ repoRoot: worktree, runAsync: git.runAsync, failClosed: true }), null);
+    // False (and absent) are the default, byte for byte.
+    assert.deepEqual(await groupOddDocs({ repoRoot: worktree, runAsync: git.runAsync, failClosed: false }), degraded);
+  });
+
   test('a git seam that throws is the same silence', async () => {
     const box = machine('git-throws');
     writeDoc(box.mainRoot, 'mine', { at: '2020-01-01T00:00:00.000Z' });

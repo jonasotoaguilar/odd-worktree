@@ -542,3 +542,31 @@ describe('teardown (S6, S9)', () => {
     }
   });
 });
+
+test('T6 round 4: a failed worktree-list refresh never labels an unregistered checkout as main (S13)', async () => {
+  const e = await load();
+  const repo = makeRepo();
+  const linked = addWorktree(repo, 'linked');
+  writeTask(linked, 'linked-private', '# Never in session scope\n');
+  const ctx = ctxFor(linked, []);
+  startSession(e, ctx);
+  const section = sectionOf(e);
+  const gitLib = e.mod.libModule('worktree-git.js');
+  const real = gitLib.runArgvAsync;
+  let failedRead;
+  try {
+    assert.deepEqual((await waitForRows(section, ctx, 2)).map(r => r.label), ['first', 'second']);
+    gitLib.runArgvAsync = (bin, args, opts) => args.includes('worktree') && args.includes('list')
+      ? (failedRead = real(bin, ['worktree', 'list', '--t6-invalid-option'], opts))
+      : real(bin, args, opts);
+    assert.equal(fireEvent(e, 'gentle-pi:session-worktree-changed'), 1);
+    for (let i = 0; !failedRead && i < 200; i += 1) await offset(10);
+    assert.ok(failedRead, 'the forced refresh reached its Git read');
+    assert.notEqual((await failedRead).status, 0);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(!(section.lines(ctx) || []).some(r => r.label === 'linked-private'));
+  } finally {
+    gitLib.runArgvAsync = real;
+    shutdown(e, ctx);
+  }
+});

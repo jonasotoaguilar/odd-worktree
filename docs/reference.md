@@ -654,9 +654,10 @@ behind "the rest". Exactly four ODDs paint four rows and no elision line.
 - **The ODDs this session wrote or edited come first.** A `write` or an `edit` whose
 target is an `odd/tasks/*.md` document is recorded against the session, and that
 record ORDERS the rail and asks for an immediate re-read; it never adds a row, never
-removes one and never decides where an ODD lives. After an exact tie on touch time,
-and for everything untouched, the order is recency (`mtimeMs` descending) and then
-the name in code units, so the sequence is the same on every host.
+removes one and never decides where an ODD lives. Touched names come first, by their
+own touch instant; an exact tie on touch time follows the order the touches were
+recorded. For everything untouched the order is recency (`mtimeMs` descending) and
+then the name in code units, so the sequence is the same on every host.
 - **A click opens `/odd` on that document; it does not mount a panel itself.**
 Clicking a row sends `/odd <absolute document path>` to the host at once, so the
 viewer opens on that ODD — the copy the row's `meta` named — and the panel decides
@@ -670,7 +671,9 @@ worktree with something to compare) is read off the frame, behind the section's 
 TTL, and again — immediately — when the session records a touch or the host announces
 that a worktree was registered. A `session_start` does not read anything itself: it drops
 the previous session's rows, so the next drawn frame schedules the read instead of
-waiting out the TTL. Nothing is read at all while the section is hidden. The
+waiting out the TTL. A hidden section schedules no read of its own — a drawn frame
+is what owns the timer and the staleness path — but the session's own recorded touch
+asks for one immediate read even with no frame drawn. The
 registration announcement is the host event `gentle-pi:session-worktree-changed`, an
 observed seam that gentle-shell does not document as a contract: if it is renamed or
 never arrives, the TTL is the floor and a worktree registered mid-session appears at the

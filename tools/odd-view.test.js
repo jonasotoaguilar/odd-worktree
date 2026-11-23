@@ -2605,6 +2605,54 @@ describe('createOddView grouped listing (T9: S10,S11,S13)', () => {
     assert.match(footerOf(view.render(200)), /a all worktrees/, 'and the hint comes back');
   });
 
+  test('S11: a failed async toggle rolls the request back, so the next press asks the same scope', async () => {
+    const asked = [];
+    const view = build({
+      groups: [MAIN, RAIL],
+      onToggleAll: (all) => {
+        asked.push(all);
+        return Promise.resolve(false);
+      },
+    });
+    await tick();
+    const sessionFooter = footerOf(view.render(200));
+    assert.match(sessionFooter, /a all worktrees/, 'the premise: the session mode is applied');
+
+    // The load resolves `false`: nothing was applied, so the hint may not move.
+    view.handleInput('a');
+    await tick();
+    assert.equal(footerOf(view.render(200)), sessionFooter, 'a failed load never moves the hint');
+
+    // The request was rolled back, so pressing again asks for the SAME scope.
+    view.handleInput('a');
+    await tick();
+    assert.deepEqual(asked, [true, true], 'the retry asks for the scope the failed press asked for');
+    assert.equal(footerOf(view.render(200)), sessionFooter, 'and the hint still describes the drawn mode');
+
+    // A load the caller really applied is what moves the mode and its hint.
+    view.applyGroups([MAIN, RAIL], { all: true });
+    assert.match(footerOf(view.render(200)), /a session only/, 'the applied scope is the one named');
+  });
+
+  test('S11: a rejected toggle load also rolls the request back', async () => {
+    const asked = [];
+    const view = build({
+      groups: [MAIN, RAIL],
+      onToggleAll: (all) => {
+        asked.push(all);
+        return Promise.reject(new Error('read failed'));
+      },
+    });
+    await tick();
+    const sessionFooter = footerOf(view.render(200));
+    view.handleInput('a');
+    await tick();
+    assert.equal(footerOf(view.render(200)), sessionFooter, 'a rejection leaves the hint alone');
+    view.handleInput('a');
+    await tick();
+    assert.deepEqual(asked, [true, true], 'the retry asks for the same scope again');
+  });
+
   test('S11: without onToggleAll the key does nothing and its hint is never listed', async () => {
     const view = build({ groups: [MAIN, RAIL] });
     await tick();

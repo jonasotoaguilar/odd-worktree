@@ -929,3 +929,205 @@ test('T6 independent: the select fallback excludes a document in the unregistere
   assert.equal(menus[0][0], 'Odd documents');
   assert.deepEqual(menus[0][1].slice().sort(), ['main-one', 'main-two']);
 });
+
+test('T6 round 4: latest r publishes the hint with the pending a scope (S11)', async () => {
+  const e = await load();
+  const repo = makeRepo();
+  const linked = addWorktree(repo, 'linked');
+  writeTask(linked, 'all-witness', '# All-worktree witness\n');
+  const host = mountHost();
+  const d = deferGroups(e.mod);
+  const pending = e.commands.get('odd').handler('', ctxFor(linked, host, []));
+  try {
+    await waitFor(() => host.mounts.length, 'mount');
+    const v = host.mounts[0].component;
+    d.arm();
+    v.handleInput('a');
+    v.handleInput('r');
+    await waitFor(() => d.pending.length === 2, 'both requests held');
+    d.pending[1].resolve(await d.real(d.pending[1].input));
+    await waitFor(() => /all-witness/.test(frameText(v)), 'latest r result');
+    assert.match(frameText(v), /a session only/);
+  } finally {
+    for (const read of d.pending) read.resolve(null);
+    d.restore();
+    await closePanel(host, pending);
+  }
+});
+
+test('T6 round 4: a failed all-worktree Git read keeps drawn rows and hint (S11/S13)', async () => {
+  const e = await load();
+  const repo = makeRepo();
+  const linked = addWorktree(repo, 'linked');
+  const registered = addWorktree(repo, 'registered');
+  writeTask(linked, 'linked-private', '# Private\n');
+  writeTask(registered, 'session-witness', '# Registered\n');
+  const g = e.mod.libModule('worktree-git.js');
+  const run = g.runArgvAsync;
+  let failedRead;
+  const host = mountHost();
+  const observed = observeGit(e.mod);
+  const pending = e.commands.get('odd').handler('', ctxFor(linked, host, [registered]));
+  try {
+    await waitFor(() => host.mounts.length, 'mount');
+    await waitForRankedListing(observed, [repo]);
+    const v = host.mounts[0].component;
+    const before = frameText(v);
+    assert.match(before, /session-witness/);
+    g.runArgvAsync = (bin, args, opts) => args.includes('worktree') && args.includes('list')
+      ? (failedRead = run(bin, ['worktree', 'list', '--t6-invalid-option'], opts))
+      : run(bin, args, opts);
+    v.handleInput('a');
+    await waitFor(() => Boolean(failedRead), 'worktree list started');
+    assert.notEqual((await failedRead).status, 0);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(frameText(v), before);
+  } finally {
+    g.runArgvAsync = run;
+    await closePanel(host, pending);
+  }
+});
+
+test('T6 round 4: a listed absolute target with a dot component opens that document (S6)', async () => {
+  const e = await load();
+  const repo = makeRepo();
+  const linked = addWorktree(repo, 'linked');
+  writeTask(linked, 'precise target', '# Precisely selected body\n');
+  const host = mountHost();
+  const pending = e.commands.get('odd').handler(`${linked}/./odd/tasks/precise target.md`, ctxFor(repo, host, [linked]));
+  try {
+    await waitFor(() => host.mounts.length, 'mount');
+    assert.deepEqual(host.notifications, []);
+    assert.match(frameText(host.mounts[0].component), /Precisely selected body/);
+  } finally {
+    await closePanel(host, pending);
+  }
+});
+
+test('T6 round 4: selecting a registered duplicate-name fallback entry identifies its path (S6/S13)', async () => {
+  const e = await load();
+  const repo = makeRepo();
+  const linked = addWorktree(repo, 'linked');
+  const target = writeTask(linked, 'main-one', '# Linked copy\n');
+  const host = mountHost();
+  host.ui.custom = () => Promise.reject(new Error('no overlay'));
+  host.ui.select = (_title, choices) => choices[choices.length - 1];
+  await e.commands.get('odd').handler('', ctxFor(linked, host, [linked]));
+  assert.deepEqual(host.notifications, [['info', target]]);
+});
+
+// T13 (S11/S13/D2): the ONE-load/ONE-apply invariant, sampled exhaustively
+// instead of by hand. Every load the panel can land — the startup rank, an `a`, an
+// `r`, a second `a` — is held, then released in EVERY order. After each release
+// the drawn rows, the footer hint and the applied scope must describe the same
+// LATEST applied load, and a superseded answer must change nothing at all.
+test('T6 round 4: every release order leaves the latest applied load (S11/S13/D2)', async () => {
+  const e = await load();
+  const repo = makeRepo();
+  const registered = addWorktree(repo, 'registered');
+  const other = addWorktree(repo, 'other');
+  writeTask(registered, 'registered-only', '# Registered delta\n');
+  writeTask(other, 'other-only', '# Other delta\n');
+
+  // The two models the panel can apply: the session's registered set and every
+  // worktree. They really differ, so a stale all-mode answer is visible.
+  const model = deferGroups(e.mod);
+  const sessionModel = await model.real({ repoRoot: repo, roots: [registered] });
+  const allModel = await model.real({ repoRoot: repo, all: true });
+  model.restore();
+  assert.equal(sessionModel.length, 2, 'main plus the registered worktree');
+  assert.equal(allModel.length, 3, 'main plus every worktree');
+
+  const permutationsOf = (items) => (items.length <= 1 ? [items] : items.flatMap((item, index) => (
+    permutationsOf([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [item, ...rest])
+  )));
+  const plans = [
+    { order: ['rank', 'a1', 'r', 'a2'], latest: 'a2' },
+    { order: ['rank', 'a1', 'r'], latest: 'r' },
+  ].flatMap((plan) => permutationsOf(plan.order).map((order) => ({ order, latest: plan.latest })));
+
+  const started = Date.now();
+  let releases = 0;
+  for (const plan of plans) {
+    const label = plan.order.join('>');
+    const host = mountHost();
+    const deferred = deferGroups(e.mod);
+    const docs = e.mod.libModule('odd-docs.js');
+    const realList = docs.listOddDocsAsync;
+    let releaseRank = null;
+    let rankHeld = true;
+    // The startup rank is the ONE flat listing held; an `r` that survives its
+    // generation must be allowed to finish its own read.
+    docs.listOddDocsAsync = async (...args) => {
+      const result = await realList(...args);
+      if (rankHeld) {
+        rankHeld = false;
+        await new Promise((resolve) => { releaseRank = resolve; });
+      }
+      return result;
+    };
+    const pending = e.commands.get('odd').handler('', ctxFor(repo, host, [registered]));
+    pending.catch(() => {});
+    try {
+      await waitFor(() => host.mounts.length === 1 && releaseRank !== null, `${label}: mount and held rank`);
+      const view = host.mounts[0].component;
+      deferred.arm();
+      view.handleInput('a');
+      await waitFor(() => deferred.pending.length === 1, `${label}: the first a is held`);
+      view.handleInput('r');
+      await waitFor(() => deferred.pending.length === 2, `${label}: the r is held`);
+      if (plan.order.includes('a2')) {
+        view.handleInput('a');
+        await waitFor(() => deferred.pending.length === 3, `${label}: the second a is held`);
+      }
+
+      const release = (kind) => {
+        if (kind === 'rank') {
+          releaseRank();
+          return;
+        }
+        if (kind === 'a1') deferred.pending[0].resolve(allModel);
+        else if (kind === 'r') deferred.pending[1].resolve(allModel);
+        else deferred.pending[2].resolve(sessionModel);
+      };
+
+      let expectedAll = false;
+      for (const kind of plan.order) {
+        const before = frameText(view);
+        release(kind);
+        if (kind === plan.latest) {
+          expectedAll = kind === 'r';
+          await waitFor(() => {
+            const text = frameText(view);
+            return expectedAll
+              ? /other-only/.test(text) && /a session only/.test(text)
+              : !/other-only/.test(text) && /a all worktrees/.test(text);
+          }, `${label}: ${kind} applied`);
+        } else {
+          await new Promise((resolve) => setImmediate(resolve));
+          assert.equal(frameText(view), before, `${label}: the superseded ${kind} changed nothing`);
+        }
+        const text = frameText(view);
+        assert.equal(/other-only/.test(text), expectedAll,
+          `${label}: the drawn rows follow the latest applied load`);
+        assert.match(text, expectedAll ? /a session only/ : /a all worktrees/,
+          `${label}: the hint describes that same applied load`);
+        assert.match(text, /registered-only/, `${label}: the session delta is drawn in both modes`);
+        releases += 1;
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      const settled = frameText(view);
+      assert.equal(/other-only/.test(settled), expectedAll, `${label}: nothing stale lands afterwards`);
+      assert.match(settled, expectedAll ? /a session only/ : /a all worktrees/, `${label}: the final hint`);
+    } finally {
+      for (const read of deferred.pending) read.resolve(sessionModel);
+      if (releaseRank !== null) releaseRank();
+      deferred.restore();
+      docs.listOddDocsAsync = realList;
+      await closePanel(host, pending);
+    }
+  }
+  const elapsed = Date.now() - started;
+  assert.equal(releases, 114, 'every release of both event sets was checked (24×4 + 6×3)');
+  assert.ok(elapsed < 120_000, `bounded permutations stay fast (${elapsed} ms)`);
+});

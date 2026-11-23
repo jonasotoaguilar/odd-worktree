@@ -292,7 +292,7 @@ describe('worktree_create', () => {
       `project: ${path.basename(repo)}`,
       `path: ${fs.realpathSync(repo)}`,
       `base: main@${shortHead(repo)}`,
-      '1 odd-x · feat/x',
+      `1 ${target} · feat/x`,
     ]);
     assert.equal(listed.details.worktrees[1].name, 'odd-x', 'the ODD is the directory basename');
     assert.equal('odd' in listed.details.worktrees[1], false, 'the output carries no odd field');

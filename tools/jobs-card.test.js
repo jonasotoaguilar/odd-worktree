@@ -1,14 +1,25 @@
 'use strict';
 // The jobs card: `bash_background`, `monitor`, `job_stop` and `job_list` are registered by
 // Gentle Shell with no renderer of their own, so Pi draws its plain default box and the
-// conversation's card style never reaches them. While the bridge's `Card tags` line answers
+// conversation's card style never reaches them. While the bridge's `Card activity` line answers
 // `activity` for the tool being drawn, this package draws them on its own card substrate
 // (`lib/shell-card.js`), in whichever style the shell has chosen. Any other answer — and the
-// absence of an answer — leaves Pi's own drawing exactly as it was.
+// absence of an answer — draws what Pi draws for a tool with no renderer, inside the card that
+// was already mounted.
+//
+// The answer is read on EVERY paint, inside the component the host already mounted, because Pi
+// resolves a tool's renderers once (`interactive-mode.js`: `getRegisteredToolDefinition` goes
+// into `ToolExecutionComponent` at construction) and never asks again. That is what makes a
+// flipped `Card activity` line repaint the cards already on screen, exactly as it does for
+// `bash`, and the cases below drive it that way: one mounted component, repainted.
 //
 // Every case goes through the public surface: the resolver, the slots it returns and the
 // rows a component draws for a width. The text seam and the themes are the fakes
 // `tools/file-card.test.js` uses; the bridge is the published object a process-wide slot holds.
+//
+// The rows the card hands back while the line says anything else are compared byte for byte
+// with Pi's own drawing, reproduced here from the host's source (`tool-execution.js`,
+// `render-utils.js`) and independently of this package's implementation.
 const assert = require('node:assert/strict');
 const { after, afterEach, beforeEach, test } = require('node:test');
 
@@ -115,9 +126,91 @@ function assertFramed(rows, width) {
   for (const row of rows) assert.equal(metrics.visibleWidth(unpaint(row)), width, `"${unpaint(row)}" is not ${width} wide`);
 }
 
+// ---- Pi's own drawing for a tool with a definition and no renderer ----
+//
+// Reproduced from the host's source and independently of this package: `contentBox` is
+// `new Box(1, 1, bgFn)` with the `outputPad` columns of horizontal padding, `addChild`s
+// `createCallFallback()` — `formatToolCallWithArgs(toolName, args, theme, expanded)` — and,
+// once the result exists, `createResultFallback()`; `Box.render` draws one painted blank row
+// above, the children at `width - pad * 2` padded to the full width, and one blank below.
+const hostTheme = {
+  fg: (role, value) => `<${role}>${value}</${role}>`,
+  bg: (role, value) => `<${role}>${value}</${role}>`,
+  bold: (value) => `<bold>${value}</bold>`,
+};
+
+/** `formatToolCallWithArgs`: the bold name, then `key=value` pairs — or one `key: value` row each. */
+function piCallText(tool, args, expanded) {
+  const header = hostTheme.fg('toolTitle', hostTheme.bold(tool));
+  if (args === null || args === undefined) return header;
+  const entries = typeof args === 'object' && !Array.isArray(args) ? Object.entries(args) : [['args', args]];
+  if (entries.length === 0) return header;
+  if (expanded) {
+    const lines = entries.map(([key, value]) => {
+      const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2) ?? String(value);
+      return `  ${key}: ${text.replace(/\t/g, '   ').replace(/\r/g, '').split('\n').join('\n    ')}`;
+    });
+    return `${header}\n${hostTheme.fg('muted', lines.join('\n'))}`;
+  }
+  const pairs = entries.map(([key, value]) => `${key}=${JSON.stringify(value) ?? String(value)}`).join(' ');
+  const preview = pairs.length > 100 ? `${pairs.slice(0, 97)}...` : pairs;
+  return `${header} ${hostTheme.fg('muted', preview)}`;
+}
+
+// The host's own readers for a result's text (`dist/utils/ansi.js`: `stripAnsi`;
+// `dist/utils/shell.js`: `sanitizeBinaryOutput`; then `\r` goes), transcribed from the host's
+// source so the fallback rows can be compared byte for byte. Note what the host KEEPS: DEL
+// (U+007F) is not in its list, and U+FFF9–U+FFFB are removed like binary controls.
+const PI_ANSI = /(?:\u001B\][\s\S]*?(?:\u0007|\u001B\\|\u009C))|(?:(?:\u001B\[|\u009B)[<=>]|[\u001B\u009B][[\]()#;?]*(?:\d{1,4}(?:[;:]\d{0,4})*)?)[\dA-PR-TZcf-nq-uy=><~]/g;
+const PI_BINARY = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFF9-\uFFFB]/g;
+const piText = (value) => value.replace(PI_ANSI, '').replace(PI_BINARY, '').replace(/\r/g, '');
+
+/** `createResultFallback`: the result's text, ten rows collapsed, and the host's own expand hint. */
+function piResultText(result, context) {
+  const output = result.content.filter((part) => part.type === 'text').map((part) => piText(part.text || '')).join('\n');
+  if (output === '') return undefined;
+  const lines = output.split('\n');
+  const shown = context.expanded === true ? lines : lines.slice(0, 10);
+  const remaining = lines.length - shown.length;
+  const text = shown.map((line) => hostTheme.fg('toolOutput', line)).join('\n');
+  if (remaining <= 0) return text;
+  return `${text}${hostTheme.fg('muted', `\n... (${remaining} more lines,`)} ${context.keyHint('app.tools.expand', 'to expand')}${hostTheme.fg('muted', ')')}`;
+}
+
+/** `Text(text, 0, 0).render(width)`: tabs are three spaces, wrapped, every row padded to the width. */
+function piTextRows(text, width) {
+  if (text.trim() === '') return [];
+  return metrics.wrapTextWithAnsi(text.replace(/\t/g, '   '), Math.max(1, width))
+    .map((row) => row + ' '.repeat(Math.max(0, width - metrics.visibleWidth(row))));
+}
+
+/** The host's box around the given children, exactly as `Box.render` draws it for this state. */
+function piBox(childTexts, width, context) {
+  const pad = context.outputPad ?? 1;
+  const role = context.isPartial !== false ? 'toolPendingBg' : context.isError === true ? 'toolErrorBg' : 'toolSuccessBg';
+  const contentWidth = Math.max(1, width - pad * 2);
+  const rows = childTexts.flatMap((text) => piTextRows(text, contentWidth));
+  if (rows.length === 0) return [];
+  const painted = (line) => hostTheme.bg(role, line + ' '.repeat(Math.max(0, width - metrics.visibleWidth(line))));
+  return [painted(''), ...rows.map((row) => painted(' '.repeat(pad) + row)), painted('')];
+}
+
+/** The key hint the host paints into a fallback result, the same seam the cards read. */
+const keyHint = (_id, text) => `[${text}]`;
+const settled = { isPartial: false, expanded: false, outputPad: 1, keyHint };
+
+/** What Pi draws for one settled job card: the call's fallback and the result's, in one box. */
+function piSettledRows(tool, args, text, context, width) {
+  const result = { content: [{ type: 'text', text }], details: {} };
+  const children = [piCallText(tool, args, context.expanded === true)];
+  const fallback = piResultText(result, context);
+  if (fallback !== undefined) children.push(fallback);
+  return piBox(children, width, context);
+}
+
 // ---- the one switch ----
 
-test('the card is drawn only while the Card tags line answers activity; every other answer leaves Pi\'s own drawing', () => {
+test('every answer but activity draws what Pi draws for a tool with no renderer, byte for byte', () => {
   const answers = [
     ['no bridge published', undefined],
     ['the bridge\'s native answer', { kind: 'native' }],
@@ -126,30 +219,133 @@ test('the card is drawn only while the Card tags line answers activity; every ot
     ['another plugin\'s design', { kind: 'design', design: { id: 'acme.tools' } }],
     ['an answer nothing can read', 'garbage'],
   ];
+  const args = { command: COMMAND, label: LABEL };
   for (const [name, answer] of answers) {
     if (answer !== undefined) publishBridge(answer);
-    for (const tool of JOB_TOOLS) assert.equal(slots(jobsResolver(), tool), PI_DEFAULT, `${name}: ${tool}`);
+    for (const tool of JOB_TOOLS) {
+      const callArgs = tool === 'job_stop' ? { job_id: 'job-2' } : tool === 'job_list' ? {} : args;
+      const resolver = jobsResolver();
+      const call = slots(resolver, tool).renderCall(callArgs, hostTheme, { args: callArgs, ...settled }).render(70);
+      const result = slots(resolver, tool)
+        .renderResult({ content: [{ type: 'text', text: STARTED }], details: {} }, settled, hostTheme, { args: callArgs, state: {}, ...settled })
+        .render(70);
+      assert.deepEqual([...call, ...result], piSettledRows(tool, callArgs, STARTED, settled, 70), `${name}: ${tool}`);
+    }
     delete globalThis[BRIDGE_API_SLOT];
   }
   // A bridge too old to carry the reader, and one whose reader throws, are no answer either.
   globalThis[BRIDGE_API_SLOT] = { schema: 'gentle-shell-bridge/api', version: 1, VERSION: '0.6.0', registerToolDesign: () => () => {} };
-  assert.equal(slots(jobsResolver(), 'bash_background'), PI_DEFAULT);
+  assert.deepEqual(
+    [...callRows(jobsResolver(), 'bash_background', args, hostTheme, 70, settled), ...resultRows(jobsResolver(), 'bash_background', args, STARTED, settled, hostTheme, 70, settled)],
+    piSettledRows('bash_background', args, STARTED, settled, 70),
+    'a bridge older than the reader',
+  );
   publishBridge(() => { throw new Error('boom'); });
-  assert.equal(slots(jobsResolver(), 'bash_background'), PI_DEFAULT);
+  assert.deepEqual(
+    [...callRows(jobsResolver(), 'bash_background', args, hostTheme, 70, settled), ...resultRows(jobsResolver(), 'bash_background', args, STARTED, settled, hostTheme, 70, settled)],
+    piSettledRows('bash_background', args, STARTED, settled, 70),
+    'a reader that throws',
+  );
 });
 
-test('while activity is selected the four job tools get a self-framed card and the bridge is asked per tool', () => {
+test('a call still running keeps the host\'s box closed below it, because no result follows yet', () => {
+  publishBridge({ kind: 'native' });
+  const args = { command: COMMAND };
+  const running = callRows(jobsResolver(), 'bash_background', args, hostTheme, 60, { isPartial: true, outputPad: 1 });
+  assert.deepEqual(running, piBox([piCallText('bash_background', args, false)], 60, { isPartial: true, outputPad: 1 }));
+  assert.equal(metrics.visibleWidth(unpaint(running[0])), 60, 'the box paints its blank rows to the whole width');
+});
+
+test('a result that states nothing leaves the host\'s box closed, with no row of its own', () => {
+  publishBridge({ kind: 'native' });
+  const args = { job_id: 'job-2' };
+  const resolver = jobsResolver();
+  const call = callRows(resolver, 'job_stop', args, hostTheme, 50, settled);
+  const result = resultRows(resolver, 'job_stop', args, '', settled, hostTheme, 50, settled);
+  assert.deepEqual([...call, ...result], piSettledRows('job_stop', args, '', settled, 50), 'the host draws the box around the call alone');
+  assert.deepEqual(result, [piBox([piCallText('job_stop', args, false)], 50, settled).at(-1)], 'the result half is that box\'s closing row');
+});
+
+/**
+ * One pass of Pi's own component: the result half is BUILT when its update arrives (before the
+ * pass), then the pass renders the call and the result inside the one box. The card is driven in
+ * that same order, so a mark made while painting cannot hide behind the next frame.
+ */
+function piPass(resolver, tool, args, text, context, width) {
+  const state = {};
+  const options = { isPartial: context.isPartial === true, expanded: context.expanded === true };
+  const result = slots(resolver, tool).renderResult({ content: [{ type: 'text', text }], details: {} }, options, hostTheme, { args, state, ...context });
+  const call = slots(resolver, tool).renderCall(args, hostTheme, { args, state, ...context });
+  return [...call.render(width), ...result.render(width)];
+}
+
+test('a PARTIAL result closes the host\'s box once, exactly as the host draws it', () => {
+  publishBridge({ kind: 'native' });
+  const partial = { isPartial: true, expanded: false, outputPad: 2, keyHint };
+  const args = { command: 'tail -f app.log', label: 'app log' };
+  const resolver = jobsResolver();
+  assert.deepEqual(piPass(resolver, 'monitor', args, STARTED, partial, 84), piSettledRows('monitor', args, STARTED, partial, 84), 'the call waits while its result streams');
+  // An empty partial result is no child at all: the box is the one around the call.
+  assert.deepEqual(piPass(resolver, 'monitor', args, '', partial, 84), piSettledRows('monitor', args, '', partial, 84));
+});
+
+test('the host\'s own reader sanitizes a result, byte for byte', () => {
+  publishBridge({ kind: 'native' });
+  // A CSI colour, a BEL, the interlinear annotations the host strips, a CR and a DEL — which
+  // the host's own list does NOT remove (`sanitizeBinaryOutput`).
+  const raw = 'first \u001B[31mred\u001B[0m\uFFFB row\u0007\r\nsecond\u007F row';
+  const args = { command: COMMAND };
+  const resolver = jobsResolver();
+  assert.deepEqual(piPass(resolver, 'bash_background', args, raw, settled, 70), piSettledRows('bash_background', args, raw, settled, 70));
+  const drawn = piPass(resolver, 'bash_background', args, raw, settled, 70).join('\n');
+  assert.doesNotMatch(unpaint(drawn), /\u001B|\uFFFB|\u0007/u, 'the host strips these');
+  assert.match(unpaint(drawn), /second\u007F row/u, 'and the host keeps DEL, so the card keeps it too');
+});
+
+test('the four job tools are always the card\'s, and the line is read on every paint, never at build time', () => {
   const asked = [];
   publishBridge(ACTIVITY, asked);
   const resolver = jobsResolver();
-  for (const tool of JOB_TOOLS) {
-    const drawn = slots(resolver, tool);
+  const slots_ = JOB_TOOLS.map((tool) => slots(resolver, tool));
+  assert.deepEqual(asked, [], 'building the card asks nothing: Pi would never ask again');
+  for (const [index, tool] of JOB_TOOLS.entries()) {
+    const drawn = slots_[index];
     assert.notEqual(drawn, PI_DEFAULT, tool);
     assert.equal(drawn.renderShell, 'self', `${tool} frames itself`);
     assert.equal(typeof drawn.renderCall, 'function');
     assert.equal(typeof drawn.renderResult, 'function');
   }
-  assert.deepEqual(asked, [...JOB_TOOLS]);
+  for (const [index, tool] of JOB_TOOLS.entries()) {
+    const args = tool === 'job_stop' ? { job_id: 'job-2' } : tool === 'job_list' ? {} : { command: COMMAND };
+    slots_[index].renderCall(args, plainTheme, { args, ...settled }).render(70);
+    assert.deepEqual(asked.at(-1), tool, `${tool} is asked on its own name`);
+    slots_[index].renderResult({ content: [{ type: 'text', text: STARTED }], details: {} }, settled, plainTheme, { args, state: {}, ...settled }).render(70);
+    assert.deepEqual(asked.at(-1), tool, `${tool}'s result asks the same question`);
+  }
+  assert.equal(asked.length, JOB_TOOLS.length * 2, 'one question per painted slot, and no other');
+});
+
+test('a mounted card repaints when the line flips, in both directions', () => {
+  const asked = [];
+  publishBridge(ACTIVITY, asked);
+  const resolver = jobsResolver();
+  const args = { command: COMMAND, label: LABEL };
+  // ONE card, mounted: the components the host built before any of this changed.
+  const call = slots(resolver, 'bash_background').renderCall(args, hostTheme, { args, ...settled });
+  const result = slots(resolver, 'bash_background')
+    .renderResult({ content: [{ type: 'text', text: STARTED }], details: {} }, settled, hostTheme, { args, state: {}, ...settled });
+  const on = { call: call.render(70), result: result.render(70) };
+  assert.match(unpaint(on.call[0]), /⧗ bash background · Release runs/u, 'the card is drawn while the line says activity');
+  // The line is turned off, and the SAME mounted components are repainted.
+  publishBridge({ kind: 'native' });
+  const off = { call: call.render(70), result: result.render(70) };
+  assert.deepEqual([...off.call, ...off.result], piSettledRows('bash_background', args, STARTED, settled, 70), 'flipped off, the rows are the host\'s own');
+  assert.doesNotMatch(unpaint(off.call.join('\n')), /⧗/u, 'the card\'s mark is gone');
+  // And back on, from the same two components.
+  publishBridge(ACTIVITY, asked);
+  assert.deepEqual(call.render(70), on.call, 'flipped back on, the card is drawn again, unchanged');
+  assert.deepEqual(result.render(70), on.result, 'the result half too');
+  assert.equal(asked.length, 4, 'each paint of each half asked the line once: two paints on, and two back on');
 });
 
 test('no other tool is ever claimed: bash, the file tools and an unknown tool come back as the chain resolved them', () => {
@@ -295,7 +491,7 @@ test('registerJobsCard hands one resolver to the host hook and reports a host th
   assert.deepEqual(registerJobsCard({}, { metrics }), { registered: false, resolver: undefined });
 });
 
-test('the Card tags line covers the four job tools, so the bridge can answer for them', () => {
+test('the Card activity line covers the four job tools, so the bridge can answer for them', () => {
   for (const scopes of [true, false]) {
     const design = toolsActivityDesign({ scopes });
     for (const tool of JOB_TOOLS) assert.ok(design.tools.includes(tool), `${tool} (scopes: ${scopes})`);

@@ -1212,7 +1212,7 @@ tool-renderer resolver, builds the host's own card (whatever `Card style` and
 `Card content` are chosen), reads its line in `/gentle:customize` → `Cards`
 (`default` | `activity`; the bridge stores `default` as `native`) on every render pass, and hands the design the rows the host
 drew. On a bridge that can put several tools on one line (`0.6.0` and later) that is ONE
-`Card tags` row covering `bash`, the three read-only shell tools `grep`, `find`, `ls`, and
+`Card activity` row covering `bash`, the three read-only shell tools `grep`, `find`, `ls`, and
 `read`, `write` and `edit`; on an older bridge the same design is registered for `bash` alone, the row is
 `Card bash` and those six are drawn by the host (or, for a read, a write or an edit on a skill or an ODD
 artifact, by the file card). `write` and `edit` are on that line through a SCOPE rather than a bare
@@ -1257,7 +1257,7 @@ render context (`ctx.render`: the arguments, `isPartial`, `isError`, `durationMs
 classify the REAL command, so a heading the host truncated, folded or wrapped is still
 named; for a read-only shell tool that render context is only the proof that the heading is not
 the whole evidence, since the word never depends on what it reads. That context is the
-bridge's, and it is handed on BOTH registration shapes — the grouped `Card tags` line and
+bridge's, and it is handed on BOTH registration shapes — the grouped `Card activity` line and
 the historical per-tool one — with the call's own `args` by reference, exactly as Pi passes
 them (`ToolRenderContext.args`); `ctx.render.args.command` is therefore the bash contract.
 A reproduction that nests that object one level deeper (`{ args: { args: { command } } }`)
@@ -1326,7 +1326,7 @@ afterwards would be missed, and the line would open on `default`. A choice alrea
 a failed write leaves no marker so the next load tries again.
 
 The row's own name is the bridge's: it is `Card ` + the line's key, a line carrying no label
-of its own, so `Card tools` became `Card tags` when this package renamed its line, and the bridge
+of its own, so `Card tools` became `Card activity` when this package renamed its line, and the bridge
 has no rename or alias path. That rename is carried over by this package and never left to the
 bridge's registration-time migration: that migration runs only while the line has no value of its
 own, and what it then copies is the legacy per-tool `bash` value — the `activity` this seed
@@ -1352,8 +1352,8 @@ The roles come from the theme, so the colours are the theme's. In `TokyoNight`, 
 so `exploring`, `formatting` and `preparing` read alike there; a theme that separates those roles
 separates the cards.
 
-The CodeGraph card is separate: with the `codegraph` CLI installed it still claims
-`codegraph …` bash rows through its own resolver (invariant 19).
+The CodeGraph card is separate: with the `codegraph` CLI installed and the `Card activity` line on
+`activity`, it still claims `codegraph …` bash rows through its own resolver (invariant 19).
 
 ## The file cards
 
@@ -1431,7 +1431,7 @@ rows it has, the diff the host carries (`details.diff`) — its own text when it
 none — and expanding it shows the whole diff.
 
 **The switch is the bridge's.** The card owns no preference of its own. It is
-painted while the bridge's `Card tags` line answers that this package's activity
+painted while the bridge's `Card activity` line answers that this package's activity
 design (`odd-worktree.bash-activity`) draws the tool being painted, and only then.
 
 - **The question** is `api.resolveToolDesignSelection(tool, args)` on the bridge's
@@ -1486,13 +1486,24 @@ substrate (`lib/shell-card.js`) through the host's `registerToolRenderer` hook, 
 | Call | the tool's mark and word (`⧗ bash background`, `⧗ bash monitor`, `■ stop`, `≡ jobs`) and what names the call: a job's label, else the first line of its command; a stop its job id; a listing "this session". Expanded, the whole command, every line |
 | Result | the job's own answer: the first rows collapsed, everything expanded, closing the frame with the call's duration |
 
-- **The switch** is the bridge's `Card tags` line, read through its published reader `resolveToolDesignSelection`. The line
+- **The switch** is the bridge's `Card activity` line, read through its published reader `resolveToolDesignSelection`. The line
   declares these four tools (`lib/bash-design.js`), and only the answer `design` carrying `odd-worktree.bash-activity`
   paints. `native`, `not-covered`, `missing`, another plugin's design, no bridge, a bridge older than the reader, a reader
   that throws and an answer nothing can read all leave Pi's own box exactly as it was.
-- **When it is read.** The file cards forward to the host's renderers while their switch is off, so they decide on every
-  paint. These four tools have no renderer to forward to, so the answer is read when the card is built: a switch made
-  mid-session reaches the next job card, not the one already on screen.
+- **When it is read.** On every paint, inside the component the host already mounted. Pi resolves a tool's renderers once
+  (`interactive-mode.js` hands the resolved definition to `ToolExecutionComponent` at construction) and never asks again, so a
+  gate read at resolver time could only reach the next card: the line is asked in the card's own `render(width)`, which is what
+  makes flipping `Card activity` repaint the job cards already on screen, exactly as it does for `bash`.
+- **Off, it draws exactly the host's own row.** These four tools have no renderer of their own, so `lib/file-card.js` reproduces
+  what Pi draws for one: the host's box — `Box(outputPad, 1, bgFn)` in `toolPendingBg` while the call streams, `toolErrorBg`
+  once it failed, `toolSuccessBg` otherwise — around the host's own fallback, `formatToolCallWithArgs` for the call and the
+  result's text in `toolOutput` (ten rows collapsed, with the host's expand hint) for the result. Nothing of this card's is
+  drawn: no mark, no frame, no tone. The box closes ONCE: the call carries its closing blank only while no result follows it,
+  and the result half carries it afterwards — a result the host builds marks the frame before the pass that paints it, so a
+  result still streaming is not boxed twice. The result's text is read with the host's own reader,
+  `sanitizeBinaryOutput(stripAnsi(text))` with carriage returns removed, so U+FFF9–U+FFFB and the binary controls go and DEL
+  stays, exactly as Pi reads it. The host still adds its one separator blank row above a self-framed tool, as it does for the
+  file card's forwarded rows.
 - **Content level.** Under `minimal` a collapsed card is the call alone; a failed result still says why.
 - **One family, two voices.** `bash_background` and `monitor` wear the same mark and the same role
   (`⧗`, `bashMode`), because they are the same tool with two timeouts; their words say which TOOL ran —
@@ -1519,7 +1530,7 @@ message instead of a tool.
 The two registrations are ungrouped (`customType` each) and both FOLLOW the switch this package already
 owns: `follows: { line: tags, id: odd-worktree.bash-activity }` — the `tags` line `lib/bash-design.js`
 registers its tool design on, and the design id that line answers with (the value a user reads as
-`activity`). There is therefore **no second switch**: `activity` on `Card tags` paints both alerts, and
+`activity`). There is therefore **no second switch**: `activity` on `Card activity` paints both alerts, and
 nothing new appears in `/gentle:customize` → `Cards`, because a following design contributes no value of its
 own and a line made only of following designs has no row. A message that states none of those numbers is
 headed by its name alone — no invented detail, no empty separator.
@@ -1539,8 +1550,8 @@ headed by its name alone — no invented detail, no empty separator.
   choice once per paint (`lib/card-style.js`) and measures with the injected helpers. `ctx.cardStyle` is not
   read for the palette: it is the bridge's own Card style selection, not the host's chrome. A mid-session
   flip repaints a message already on screen, because the design is asked again on every pass.
-- **The switch is `Card tags` → `activity`, resolved live.** The bridge answers the follow on every pass,
-  reading the tool document and never writing it, so flipping `Card tags` repaints a message already on
+- **The switch is `Card activity` → `activity`, resolved live.** The bridge answers the follow on every pass,
+  reading the tool document and never writing it, so flipping `Card activity` repaints a message already on
   screen and turns it off again — no re-registration, no session reload, no seed and no message store to
   keep in step. While the line answers anything else — `native`, another plugin's design, a value naming a
   design that is gone, or a line that does not exist — the bridge hands the message back byte-identical to
@@ -1563,7 +1574,7 @@ headed by its name alone — no invented detail, no empty separator.
   a parallel switch.
 - **Fail-open, and what an inactive claim still costs.** No bridge, a bridge without the message-design
   member, a release below `0.12.1` and a registration the bridge refuses are all "register nothing": Pi's
-  own output stays byte-identical. Once registered, a pass where `Card tags` answers something else costs a
+  own output stays byte-identical. Once registered, a pass where `Card activity` answers something else costs a
   registry walk and **at most one tool-document read per alert** when the followed line exists — the message
   document is never opened for a follow — and paints nothing. A
   message or a context the design cannot measure through (no helpers, no positive width) throws instead of
@@ -1573,7 +1584,7 @@ headed by its name alone — no invented detail, no empty separator.
   answers is a string.
 - **Tests.** `tools/message-card.test.js` drives the public surface — the registration on a fake bridge, the
   follow it carries, the two designs and the rows `apply` answers for a width — and asserts the exact heading
-  bytes of both cards, the whole body at `minimal`, the style flip repainting, the live `Card tags` flip on
+  bytes of both cards, the whole body at `minimal`, the style flip repainting, the live `Card activity` flip on
   and off, the `0.12.0` gate and the tone roles.
 
 ## The diff card
@@ -1627,7 +1638,7 @@ nothing. The columns come out of the rule that follows the path, so the heading 
 heading with no room for it, and a failed call, stay the host's.
 
 A call whose `args.path` is a skill or an ODD artifact comes back byte-identical, on both
-halves and for both tools: those rows belong to the file card, and the `Card tags` line claims
+halves and for both tools: those rows belong to the file card, and the `Card activity` line claims
 exactly those calls through its scope, so the specific claim wins and the two designs can never
 paint the same call. Choosing `default` keeps the host's own card for both tools and leaves
 every other surface exactly as it was.
@@ -1643,13 +1654,35 @@ registration is no design and never a throw; a bridge that cannot store the choi
 the row — `Card diff` IS registered and only the first-run seed writes nothing, so the line
 opens on the host's own card (`default`) until a choice is made.
 
+## The module switches
+
+`/gentle:customize` gains a `Tools` page when `gentle-shell-bridge` is installed, with two Off/On lines.
+Both are On by default, and everything not named here (the issues surfaces, `/odd`, `/files`, every
+card, the skill-read guard) is transversal and has no switch.
+
+The page sits right after the host's `Sections` page and before `Keymaps`: the provider asks for that
+position with `categoryPlacement: { after: "Sections" }`, because the bridge derives its page list from
+the order of the rows while it builds the menu. A bridge older than `0.16.1` ignores the field, and the
+page opens at the end instead — everything else works the same.
+
+| Switch | Off leaves out |
+| --- | --- |
+| `Codegraph+` | the `## CodeGraph` prompt text for every role, the two CodeGraph reminders and the whole CodeGraph session wiring (index, daemon, MCP entry, edit sync). The CodeGraph CARD is not here: it is a design, so it follows `Card activity` → `activity` |
+| `Worktrees+` | the `## ODD worktrees` prompt text, the tools `worktree_create` and `worktree_list`, `/warp` with its card, queue and bookkeeping, the bash and write guards and the ODD session naming |
+
+The choice is one document in the bridge's own store (`odd-worktree` → `modules`), read once when the
+extension registers. A change is saved at once and says so in one line — `Codegraph+ Off · run /reload
+and start a new session to apply` — because a reload alone is not enough: the session in progress already
+carries the prompt text and the registered guards. Choosing the value a line already has changes nothing
+and says nothing. A missing, malformed or unreadable document keeps both On.
+
 ## The list
 
 `worktree_list` prints the main checkout first and unnumbered, as the `base: <branch>@<sha>`
 line `worktree_create` also prints (the branch it stands on is always named), then one numbered
-row per checkout this package created under `<repo-name>-worktrees`, by name.
-A row is its directory's basename — which IS the ODD — then ` · ` and the branch Git
-reports. With `all: true`, the worktrees Git knows outside that directory follow,
+row per checkout this package created under `<repo-name>-worktrees`, in name order.
+A row is the checkout's absolute path — whose last segment IS the ODD — then ` · ` and the
+branch Git reports. With `all: true`, the worktrees Git knows outside that directory follow,
 and a footer counts them while they are hidden. The text is fixed-field and
 undecorated, so it reads the same on every run:
 
@@ -1657,8 +1690,8 @@ undecorated, so it reads the same on every run:
 project: repo
 path: /code/repo
 base: main@1a2b3c4
-1 worktree-tools · feat/worktree-tools
-2 billing · feat/billing
+1 /code/repo-worktrees/billing · feat/billing
+2 /code/repo-worktrees/worktree-tools · feat/worktree-tools
 ```
 
 There is no `odd:` field, no date, no setup line, no hooks line and no stored
@@ -1695,7 +1728,7 @@ write it cannot commit is silence rather than an error ([the rail
 section](#the-github-rail-section)).
 
 This package writes no preference document of its own: the file cards obey the
-bridge's `Card tags` choice, which belongs to the bridge and lives in its own
+bridge's `Card activity` choice, which belongs to the bridge and lives in its own
 store ([the cards](#the-cards-the-activity-design-paints)), and
 [the file cards](#the-file-cards) own no switch, no document and no customize
 row. Nothing else in user configuration is written by this package, except — with
@@ -1706,20 +1739,19 @@ Shell's own `card-style.json` is read here, never written.
 
 ## The `bash` guards
 
-The extension watches every `bash` tool call and refuses four things before the command
+The extension watches every `bash` tool call and refuses three things before the command
 runs. The refusal is the call's result: it says the command did not run and names the
-single tool that replaces it, `worktree_list` for a listing, `worktree_create` for
+single tool that replaces it, `worktree_create` for
 a creation, the ODD's checkout for a branch switch, and `read` for a skill file. The prompt block above is what is meant to keep the agent from ever
 reaching them.
 
 | Refused | Where |
 | --- | --- |
 | `git worktree add` | any cwd |
-| `git worktree list` | any cwd |
 | a command that leaves the branch the checkout is on (`checkout`/`switch <other>`, `-`, a detached checkout, `checkout -b/-B/--orphan`, `switch -c/-C/--create/--force-create`) | the principal checkout only, and only while that branch is the repository's default |
 
 - **Text only.** The guard reads the command string and nothing else: it finds the
-  `git` … `worktree` … `add|list` sequence anywhere in it, also after `&&`, `||`, `;`,
+  `git` … `worktree` … `add` sequence anywhere in it, also after `&&`, `||`, `;`,
   `|`, a newline, a subshell, a line continuation, inside `$(…)` or inside a quoted
   `bash -c '…'`, and tolerates git's global options (`-C <dir>`, `--no-pager`) and a
   `git` given by path. It never opens a script, an alias or a file, so a script that
@@ -1775,11 +1807,23 @@ sentence that is a reminder and not a copy of the rule:
   owns the path's directory must be that principal, so a linked worktree or a nested
   repository inside it passes. The branch the checkout is on is read fresh each time
   and must be the default branch (resolved as above).
+- **A skill's or an ODD's Markdown is read WHOLE.** A `read` of a `.md` below a `skills/` or an
+  `odd/` folder has its `offset` and `limit` dropped before the tool runs, so the call delivers
+  the file from its first line to its last: half a skill states an incomplete procedure. The
+  folders decide, by the file card's own identity, and the host's own read budget (2000 lines or
+  50 KB) still applies. It blocks nothing and adds no name. Like the other guards, it exists only
+  while `Worktrees+` is on.
+- **An `odd/` path always passes.** A path below an `odd/` folder is never refused, on any
+  branch: that folder is where an ODD is written down, so the branch a checkout happens to
+  stand on cannot be a reason to block it. The folders decide, by the same identity the
+  file card uses, so a nested `odd/` is one and a file whose own name is `odd` is not. It is
+  settled before any git read, like a temp path.
 - **What never blocks.** A path outside every git repository; a path under the OS temp
   directories (`os.tmpdir()`, `TMPDIR`, `/tmp`, `/var/tmp`) even when a scratch
-  repository lives there; a path in another repository; a path in a linked worktree; a
-  session cwd outside version control; an unreadable identity; a detached HEAD; another
-  branch; a default branch that does not resolve. Anything it cannot place passes.
+  repository lives there; a path below an `odd/` folder; a path in another repository; a
+  path in a linked worktree; a session cwd outside version control; an unreadable
+  identity; a detached HEAD; another branch; a default branch that does not resolve.
+  Anything it cannot place passes.
 - **No file content is read.** The guard only resolves a path's existing parent
   directory (so a new file is judged by its directory and a symlink spelling neither
   dodges nor false-trips it). `bash` redirects such as `sed -i` or `tee` are not
@@ -1811,11 +1855,9 @@ It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other
 extension) put there is preserved verbatim and our text lands after it. There is
 one text for the primary session, read from `lib/odd-prompt/odd-worktrees.md` at load.
-A child that writes — `gentle-ai-worker`, `jd-fix-agent` and any other child, whose agent name is unknown or cannot be read — gets one short line instead (`lib/odd-prompt/odd-worktrees-child.md`):
-work only under your workspace root's worktree, and stop and report if it is the primary
-checkout on the default branch. Explore, verify, the judges, every `review-*` and named
-agents get nothing, because their own instructions are already the bounded task they
-received. `ODD_WORKTREE_PROMPT=0` suppresses both.
+A child gets nothing, and neither does a named agent: they work where the primary
+session's handoff put them (its `workspace_root`), so the rule is the primary session's to
+apply. `ODD_WORKTREE_PROMPT=0` suppresses it.
 
 One limit, stated plainly: a string has no "must be last" flag, so the block's
 position follows extension load order. It can sit before a later extension's
@@ -1954,6 +1996,25 @@ package never stops a daemon it did not start.
 
 ## The CodeGraph card
 
+**Its switch is the `Card activity` line, not `Codegraph+`.** The card paints a call; it never runs
+CodeGraph, so it belongs with the other cards of the `activity` design: with `activity` selected it
+paints, and with `native` (or a line that no longer covers these tools) every row is handed back to
+the chain exactly as it resolved — asked on every paint, inside the component the host already
+mounted, so flipping the line repaints the cards already on screen. The host resolves a tool's
+renderers once and never asks again, so the card claims the native tool and both MCP spellings on
+every answer and the chain's own renderers, captured when it was built, draw the row while the line
+says anything else — including a renderer that throws, which falls back to the host's own fallback
+row exactly as the host catches it. When the chain resolved none (Pi's own `codegraph` ships a
+definition with no renderer) the host's own fallback is reproduced instead — `formatToolCallWithArgs`
+for the call and the result's text in `toolOutput` for the result, inside the host's box for a
+default-shell tool and bare for one that declares `renderShell: "self"`, which is what the host draws
+for a tool with no renderer at all. One surface is the exception: `bash` is decided per CALL, which a
+resolver never sees, so a bash row is only wrapped while the line already claims it (a bash row's own
+repaint is the bridge's design pass, not this card's) and a bash call that runs no CodeGraph keeps the
+host's component itself — its rows, its mouse handling and every other behaviour untouched, on
+every answer. `Codegraph+` off removes the CodeGraph wiring and its prompt text
+and leaves this card alone, and a bridge with no such reader at all paints nothing of it.
+
 With the CLI installed the package also draws CodeGraph's tool rows as a card on the same card
 substrate as the worktree tools: the native `codegraph` tool, the MCP `codegraph_explore` tool
 (bare or `mcp__codegraph__codegraph_explore`) and a `bash` call that runs CodeGraph: any
@@ -1982,9 +2043,10 @@ level (`minimal`) hides the result body while a failure still says why — excep
 init's one outcome row (`→ initialized` / `→ already initialized`), which is what
 the call did rather than its body and is drawn at BOTH levels; a minimized init
 keeps that row alone and its index facts wait for the expansion. A `codegraph …`
-`bash` call is that card's only while the CLI is installed; without it the host draws
-it, and [the design](#the-cards-the-activity-design-paints) may head it with the
-classifier's `codegraph` identity.
+`bash` call is that card's only while the CLI is installed and the `Card activity` line answers
+`activity`; without either, the host draws it, and
+[the design](#the-cards-the-activity-design-paints) may head it with the classifier's
+`codegraph` identity.
 
 ## Deliberately absent
 
@@ -1995,7 +2057,7 @@ no preference of its own, no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. Its
 customize-side contribution is the two values of the bridge's `Cards` page — `activity` on
-the `Card tags` line (or its `Card bash` line, on a bridge older than 0.6.0) and `color` on
+the `Card activity` line (or its `Card bash` line, on a bridge older than 0.6.0) and `color` on
 the `Card diff` line — which the skill/ODD file cards obey as well. It adds no command, tool
 or row of its own, and the file
 picker's `alt+p` and the issues panel's `alt+i` are bound on the host directly

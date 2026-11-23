@@ -28,12 +28,11 @@ const { spawnSync } = require('node:child_process');
 const { decideBashGuard } = require('../lib/worktree-guard.js');
 const { loadExtension } = require('./fixtures/load-extension.js');
 
-// The three refusals of S10, written out: a reworded sentence fails here.
+// The two refusals of S10, written out: a reworded sentence fails here.
 const WORKTREE_ADD_REFUSAL = '`git worktree add` did not run: create the ODD\'s checkout with `worktree_create`.';
-const WORKTREE_LIST_REFUSAL = '`git worktree list` did not run: use `worktree_list` (`all: true` also shows checkouts outside `<repo-name>-worktrees`).';
 const BRANCH_SWITCH_REFUSAL = 'The branch switch did not run: the principal checkout stays on its default branch. Create the ODD\'s checkout with `worktree_create`.';
 
-const REFUSALS = [WORKTREE_ADD_REFUSAL, WORKTREE_LIST_REFUSAL, BRANCH_SWITCH_REFUSAL];
+const REFUSALS = [WORKTREE_ADD_REFUSAL, BRANCH_SWITCH_REFUSAL];
 
 // The two checkouts one repository has: the principal (its root IS the common dir's
 // parent) and a linked worktree (it shares the principal's common dir).
@@ -95,7 +94,6 @@ describe('the refusals are one reminder each (S10)', () => {
   test('each one says its command did not run and names the tool that replaces it', () => {
     for (const [sentence, tool] of [
       [WORKTREE_ADD_REFUSAL, '`worktree_create`'],
-      [WORKTREE_LIST_REFUSAL, '`worktree_list`'],
       [BRANCH_SWITCH_REFUSAL, '`worktree_create`'],
     ]) {
       assert.equal(sentence.includes('!'), false, `no exclamation: ${sentence}`);
@@ -112,15 +110,9 @@ describe('the refusals are one reminder each (S10)', () => {
       assert.equal(named.length, 1, `exactly one tool is named: ${sentence}`);
     }
   });
-
-  test('the listing refusal names all: true for the worktrees outside the directory', () => {
-    assert.match(WORKTREE_LIST_REFUSAL, /`worktree_list`/);
-    assert.match(WORKTREE_LIST_REFUSAL, /`all: true`/);
-    assert.match(WORKTREE_LIST_REFUSAL, /outside `<repo-name>-worktrees`/);
-  });
 });
 
-// ---- S1 and S9: any cwd, text only ----
+// ---- S1: any cwd, text only ----
 
 const WORKTREE_ADD_COMMANDS = [
   'git worktree add ../odd-a',
@@ -151,7 +143,7 @@ const WORKTREE_LIST_COMMANDS = [
   'echo $(git worktree list --porcelain)',
 ];
 
-describe('S1 and S9: worktree commands are refused in every cwd', () => {
+describe('S1: the create command is refused in every cwd', () => {
   test('the add sequence is refused with the create refusal', () => {
     for (const command of WORKTREE_ADD_COMMANDS) {
       for (const [label, options] of [
@@ -165,12 +157,11 @@ describe('S1 and S9: worktree commands are refused in every cwd', () => {
     }
   });
 
-  test('the list sequence is refused with the listing refusal', () => {
+  test('listing worktrees with Git is never refused, in any cwd', () => {
     for (const command of WORKTREE_LIST_COMMANDS) {
       for (const options of [{ identity: PRINCIPAL }, { identity: LINKED }, { identity: new Error('not a git repository') }]) {
-        const { run, reads } = harness(options);
-        assert.deepEqual(run(command), { block: true, reason: WORKTREE_LIST_REFUSAL }, command);
-        assert.deepEqual(reads, { identity: 0, defaultBranch: 0, currentBranch: 0 }, `${command} reads no repository state`);
+        const { run } = harness(options);
+        assert.deepEqual(run(command), { block: false }, command);
       }
     }
   });
@@ -433,10 +424,10 @@ describe('S11: a cd moves the checkout the switch is judged in', () => {
     }
   });
 
-  test('S1 and S9 stay any-cwd: a cd never shelters a worktree command', () => {
+  test('S1 stays any-cwd: a cd never shelters a worktree command', () => {
     const { run } = harness({ identity: identityByCwd });
     assert.deepEqual(run(`cd ${LINKED.root} && git worktree add ../odd-b`), { block: true, reason: WORKTREE_ADD_REFUSAL });
-    assert.deepEqual(run('cd $HOME && git worktree list'), { block: true, reason: WORKTREE_LIST_REFUSAL });
+    assert.deepEqual(run('cd $HOME && git worktree list'), { block: false });
   });
 });
 
@@ -474,10 +465,10 @@ describe('S4: a slash-named ref is a branch, not a path', () => {
   });
 });
 
-describe('S1 and S9: the sequence is found wherever the text puts it', () => {
+describe('S1: the sequence is found wherever the text puts it', () => {
   test('a subshell, a quoted shell command and a line continuation still refuse', () => {
-    for (const verb of ['add ../odd-probe', 'list']) {
-      const reason = verb.startsWith('add') ? WORKTREE_ADD_REFUSAL : WORKTREE_LIST_REFUSAL;
+    for (const verb of ['add ../odd-probe']) {
+      const reason = WORKTREE_ADD_REFUSAL;
       for (const command of [
         `(git worktree ${verb})`,
         `bash -c 'git worktree ${verb}'`,
@@ -582,13 +573,13 @@ describe('S6: everything else passes', () => {
 // ---- S8: honest failure, never a false block ----
 
 describe('S8: an unreadable repository fails open, and nothing throws', () => {
-  test('without an identity only S1 and S9 apply', () => {
+  test('without an identity only S1 applies', () => {
     for (const identity of [new Error('not a git repository'), undefined, null, {}, { root: '/repo' }]) {
       const { run } = harness({ identity });
       assert.deepEqual(run('git checkout -b feat/odd-a'), { block: false }, String(identity));
       assert.deepEqual(run('git checkout develop'), { block: false }, String(identity));
       assert.deepEqual(run('git worktree add ../odd-a'), { block: true, reason: WORKTREE_ADD_REFUSAL }, String(identity));
-      assert.deepEqual(run('git worktree list'), { block: true, reason: WORKTREE_LIST_REFUSAL }, String(identity));
+      assert.deepEqual(run('git worktree list'), { block: false }, String(identity));
     }
   });
 
@@ -686,7 +677,7 @@ describe('the tool_call handler the extension registers', () => {
     }
   });
 
-  test('refuses worktree creation and listing in any cwd', async () => {
+  test('refuses worktree creation in any cwd and lets listing through', async () => {
     for (const cwd of [principal, linked, outside]) {
       assert.deepEqual(
         await callTool(loaded.hooks, bash('git worktree add ../odd-b'), cwd),
@@ -695,7 +686,7 @@ describe('the tool_call handler the extension registers', () => {
       );
       assert.deepEqual(
         await callTool(loaded.hooks, bash('git worktree list --porcelain'), cwd),
-        { block: true, reason: WORKTREE_LIST_REFUSAL },
+        undefined,
         `list in ${cwd}`,
       );
       assert.deepEqual(

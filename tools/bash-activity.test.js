@@ -1574,7 +1574,7 @@ test('a removed checkout wears the destructive family, a created one prepares', 
 // backtick or an `->` in a commit message is that message, not a hidden command and not
 // a redirect. Only an expanding body (unquoted delimiter) can still run something.
 test('a quoted heredoc body is data, whatever characters it carries', () => {
-	assert.equal(inferBashActivity("git commit -q -F - <<'MSG'\nfix(cards): repaint `Card tags` a -> b\n\nbody > more\nMSG"), 'versioning');
+	assert.equal(inferBashActivity("git commit -q -F - <<'MSG'\nfix(cards): repaint `Card activity` a -> b\n\nbody > more\nMSG"), 'versioning');
 	assert.equal(
 		inferBashActivity("cd /repo && set -e\ngit add a b\ngit commit -q -F - <<'MSG'\nfix: x `y`\nMSG\ngit log --oneline -5; git status --short | wc -l"),
 		'versioning',
@@ -1608,18 +1608,18 @@ test('the audit\'s real PR command names the publishing activity', () => {
 	const command = `cd /home/jona/dev/projects/odd-worktree-worktrees/jobs-activity-card && git push -q origin feat/jobs-activity-card 2>&1 | tail -3; gh pr create --base main --head feat/jobs-activity-card --title "feat(cards): draw background-job tools in the active card style" --body "$(cat <<'EOF'
 ## What
 
-\`bash_background\`, \`monitor\`, \`job_stop\` and \`job_list\` are registered with no renderer of their own, so Pi draws them in a plain box and neither \`neon\` nor \`float\` ever reaches them. While the bridge's \`Card tags\` line answers with this package's \`activity\` design for the tool, they are now drawn on the card substrate in the shell's chosen style.
+\`bash_background\`, \`monitor\`, \`job_stop\` and \`job_list\` are registered with no renderer of their own, so Pi draws them in a plain box and neither \`neon\` nor \`float\` ever reaches them. While the bridge's \`Card activity\` line answers with this package's \`activity\` design for the tool, they are now drawn on the card substrate in the shell's chosen style.
 
 - Call: the tool's mark and word (\`⧗ background\`, \`◉ monitor\`, \`■ stop\`, \`≡ jobs\`) plus the job's label, else the first line of its command; the whole command when expanded.
 - Result: the job's own answer, first rows collapsed and everything expanded, closing the frame with the call's duration.
 - \`minimal\`: the call alone while collapsed; a failure still says why.
-- Any other answer on \`Card tags\` — \`native\`, \`not-covered\`, \`missing\`, another plugin's design, no bridge, a bridge older than the reader — leaves Pi's own drawing untouched.
+- Any other answer on \`Card activity\` — \`native\`, \`not-covered\`, \`missing\`, another plugin's design, no bridge, a bridge older than the reader — leaves Pi's own drawing untouched.
 
 The four tools are declared on the \`tags\` line so the bridge can answer for them; the activity design itself returns their rows exactly as drawn.
 
-## Limitation
+## Repaint
 
-The gate is read when a job card is built, not on every paint: these tools have no host renderer to forward to, so a switch made mid-session reaches the next job card.
+The gate is read on every paint, inside the component the host already mounted, so flipping \`Card activity\` between \`default\` and \`activity\` repaints the job cards already on screen. Off, the card draws the host's own fallback row and box, reproduced, because these tools have no host renderer to hand the row back to.
 
 ## Tests
 
@@ -1910,7 +1910,7 @@ test('a shell or ssh handed a command line is named by that command line', () =>
 
 // Single quotes expand nothing, so a backtick inside them hides no command.
 test('a backtick inside single quotes is text', () => {
-	assert.equal(inferBashActivity("git commit -m 'fix `Card tags` row'"), 'versioning');
+	assert.equal(inferBashActivity("git commit -m 'fix `Card activity` row'"), 'versioning');
 	assert.equal(inferBashActivity('git commit -m "fix `date`"'), undefined);
 });
 

@@ -9308,6 +9308,9 @@ function setUserPromptCardHostLoader(loader) {
 }
 
 function installUserPromptCard() {
+  // S7: owning the teardown is a PRECONDITION of installing. A host that refused the shutdown
+  // hook owns no patch, so its prompt stays Pi's own.
+  if (!userPromptCardLifecycleRegistered) return;
   // S7: no install is armed for a session that is gone — whatever woke this path (the design
   // registration, a `ready` announcement, a session start).
   if (!bashActivityRegistered || !userPromptCardSessionLive) return;
@@ -9351,24 +9354,41 @@ function installUserPromptCard() {
  * surface left the class wrapped), and a bridge announced during a shutdown must find a session
  * that is already closed. Registering the pair is not a SURFACE registration — it contributes no
  * command, tool, section, design or card — so a gate-closed load still ships nothing.
+ *
+ * OWNING THE TEARDOWN IS A PRECONDITION OF INSTALLING, so the SHUTDOWN hook is registered FIRST
+ * and a host that refuses it (or has no `pi.on`) owns nothing: the start hook is never registered
+ * either, the session is never marked live, and `installUserPromptCard` refuses. A host that
+ * cannot give this package a shutdown gets no patch, so its prompt stays Pi's own.
+ *
+ * Answers whether this load OWNS the teardown.
  */
 function registerUserPromptCardLifecycle(pi) {
-  if (userPromptCardLifecycleRegistered) return;
-  if (typeof pi?.on !== "function") return;
-  userPromptCardLifecycleRegistered = true;
+  if (userPromptCardLifecycleRegistered) return true;
+  if (typeof pi?.on !== "function") return false;
   try {
-    pi.on("session_start", () => {
-      userPromptCardSessionLive = true;
-      installUserPromptCard();
-    });
     pi.on("session_shutdown", () => {
       userPromptCardSessionLive = false;
       uninstallUserPromptCard();
     });
   } catch {
-    userPromptCardLifecycleRegistered = false;
-    // A host that refuses the observer keeps Pi's own prompt rows on every paint.
+    // No teardown owner means no install, ever: nothing else of the pair is registered.
+    return false;
   }
+  try {
+    pi.on("session_start", () => {
+      // A start hook is only ever registered by a load that already owns a shutdown; the flag is
+      // checked anyway, because it is the one answer the install path trusts.
+      if (!userPromptCardLifecycleRegistered) return;
+      userPromptCardSessionLive = true;
+      installUserPromptCard();
+    });
+  } catch {
+    // An accepted shutdown is still ownership: the teardown exists, so a session opened by the
+    // gate observer (a `session_start` it accepted) is still unwrapped. Nothing installs without
+    // one of those paths opening the session.
+  }
+  userPromptCardLifecycleRegistered = true;
+  return true;
 }
 
 function uninstallUserPromptCard() {
@@ -9895,9 +9915,9 @@ function holdSurfaceForBridge(pi) {
       // owns the session too — the boundary is acquired here and the session opened — so a
       // silent publication on a host with no bus cannot leave the class wrapped after shutdown.
       // Registering this pair is session bookkeeping, not a surface: a gate-closed load still
-      // registers no command, tool, section, design or card.
-      registerUserPromptCardLifecycle(pi);
-      userPromptCardSessionLive = true;
+      // registers no command, tool, section, design or card. A host that refuses the teardown
+      // owns nothing, so the session is NOT opened for it: no install, no patch.
+      if (registerUserPromptCardLifecycle(pi) === true) userPromptCardSessionLive = true;
       // A bridge that was there all along, or arrived without an announcement,
       // makes the notice untrue: register instead of warning.
       if (issuesSidebarBridge() !== null) {

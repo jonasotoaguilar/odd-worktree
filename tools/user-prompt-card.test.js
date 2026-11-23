@@ -588,7 +588,7 @@ test('a theme switch repaints a mounted prompt body, never the theme it was clon
  * to make Pi's package resolve LATE, after the session ended. The bridge is published before the
  * factory runs, exactly as the fixture does, so the activity design registers.
  */
-async function loadExtensionModule(loader, events = {}) {
+async function loadExtensionModule(loader, events = {}, options = {}) {
   process.env.GENTLE_WORKTREE_LIB_DIR = fixture.LIB_DIR;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-worktree-upc-'));
   try {
@@ -609,6 +609,12 @@ async function loadExtensionModule(loader, events = {}) {
       // The host's event bus, when a test needs the bridge's ready announcement (`pi.events`).
       events,
     };
+    // A host SHAPE a test needs: an `on` that accepts some events and refuses others, or none at
+    // all (`null`), which is how a host that cannot own a teardown is modelled.
+    if (options.on !== undefined) {
+      if (options.on === null) delete host.on;
+      else host.on = options.on;
+    }
     namespace.setUserPromptCardHostLoader(loader);
     namespace.default(host);
     return { namespace, hooks };
@@ -776,6 +782,81 @@ test('S7: silent publication on a host without a bus acquires a shutdown owner',
     assert.equal(Host.prototype.render, native, 'and it owns the shutdown that unwraps it');
   } finally {
     await emit('session_shutdown');
+    if (previousBridge === undefined) delete globalThis[BRIDGE_API_SLOT];
+    else globalThis[BRIDGE_API_SLOT] = previousBridge;
+  }
+});
+
+// ---- S7: owning the teardown is a precondition of installing ----
+
+test('S7: a host that refuses the shutdown hook owns no patch', async () => {
+  // Owning a teardown is a PRECONDITION of installing (fail closed). A host that accepts
+  // `session_start` and refuses `session_shutdown` would otherwise leave the card installed with
+  // nobody to unwrap it, so it gets no patch at all: its prompt stays Pi's own.
+  const previousBridge = globalThis[BRIDGE_API_SLOT];
+  globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
+  class Host {
+    render() {
+      return ['native'];
+    }
+  }
+  const native = Host.prototype.render;
+  let calls = 0;
+  const accepted = [];
+  try {
+    await loadExtensionModule(
+      () => {
+        calls += 1;
+        return { UserMessageComponent: Host };
+      },
+      {},
+      {
+        on: (event, handler) => {
+          // The start hook is accepted; the shutdown hook is refused.
+          if (event === 'session_shutdown') throw new Error('this host refuses the shutdown hook');
+          accepted.push([event, handler]);
+        },
+      },
+    );
+    await drain();
+    assert.equal(calls, 0, 'the loader is never called: no teardown, no patch');
+    assert.equal(Host.prototype.render, native, 'and the prototype is never patched');
+    // A session that starts anyway cannot open a session this load does not own.
+    for (const [event, handler] of accepted) {
+      if (event === 'session_start') await handler({}, {});
+    }
+    await drain();
+    assert.equal(calls, 0, 'no session start arms an unowned install');
+    assert.equal(Host.prototype.render, native, 'and the class stays Pi\'s own');
+  } finally {
+    if (previousBridge === undefined) delete globalThis[BRIDGE_API_SLOT];
+    else globalThis[BRIDGE_API_SLOT] = previousBridge;
+  }
+});
+
+test('S7: a host with no session hooks owns no patch either', async () => {
+  const previousBridge = globalThis[BRIDGE_API_SLOT];
+  globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
+  class Host {
+    render() {
+      return ['native'];
+    }
+  }
+  const native = Host.prototype.render;
+  let calls = 0;
+  try {
+    await loadExtensionModule(
+      () => {
+        calls += 1;
+        return { UserMessageComponent: Host };
+      },
+      {},
+      { on: null },
+    );
+    await drain();
+    assert.equal(calls, 0, 'a host with no `on` owns no teardown, so the loader is never called');
+    assert.equal(Host.prototype.render, native, 'and the prototype stays untouched');
+  } finally {
     if (previousBridge === undefined) delete globalThis[BRIDGE_API_SLOT];
     else globalThis[BRIDGE_API_SLOT] = previousBridge;
   }

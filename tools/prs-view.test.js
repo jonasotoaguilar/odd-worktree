@@ -1682,3 +1682,126 @@ describe('prs view editors re-check their capability at save time (S2)', () => {
     });
   }
 });
+
+// S6 follow-up: the same link geometry answers the pointer. Pi's TUI delivers
+// `type: "move"` events to `handleMouse`, so hovering a linked issue number
+// paints exactly that number in the role the rail gives a hovered row, moving
+// off clears it, and a repaint happens only when the target actually changes.
+describe('S6: a move over a linked issue number highlights it', () => {
+  // A theme that RECORDS which role each string was painted with and paints
+  // every role with its own SGR code, so a frame can be read for the role
+  // behind a token instead of an eyeballed colour.
+  const ROLE_SGR = { accent: 96, customMessageLabel: 33, muted: 90, dim: 2, border: 34, error: 91, text: 39 };
+  function recordingTheme() {
+    const calls = [];
+    const code = (role) => ROLE_SGR[role] ?? 95;
+    return {
+      calls,
+      fg(role, text) {
+        calls.push({ role, text: String(text) });
+        return `\x1b[${code(role)}m${text}\x1b[0m`;
+      },
+      bold(text) {
+        calls.push({ role: 'bold', text: String(text) });
+        return `\x1b[1m${text}\x1b[22m`;
+      },
+      bg(role, text) {
+        calls.push({ role: `bg:${role}`, text: String(text) });
+        return String(text);
+      },
+    };
+  }
+
+  function moveMouse(view, cell, offset = 0) {
+    return view.handleMouse({
+      type: 'move',
+      button: 'none',
+      x: cell.x + offset,
+      y: cell.y,
+      width: cell.widthCells,
+      height: cell.rows,
+    });
+  }
+
+  function hoverView() {
+    const theme = recordingTheme();
+    const opened = [];
+    const source = pageSource({ mine: [pullRequest(87)], review: [], involved: [] });
+    const made = makeView({
+      loadPullRequestPage: source.load,
+      theme,
+      actions: { openLinked: (target) => opened.push(target) },
+    });
+    return { view: made.view, paints: made.paints, theme, opened };
+  }
+
+  // The roles the LAST render asked for, so an assertion is about this frame.
+  function hoveredNumbers(view, theme, width = 150) {
+    const mark = theme.calls.length;
+    const lines = view.render(width);
+    const roles = theme.calls.slice(mark)
+      .filter((call) => call.role === 'accent' && /^#\d+$/.test(call.text))
+      .map((call) => call.text);
+    return { roles, lines };
+  }
+
+  test('a move over one number paints exactly that range, and moving off clears it', async () => {
+    const { view, theme } = hoverView();
+    await tick();
+    const linked = paneCell(view, 150, '#12');
+    assert.deepEqual(moveMouse(view, linked), { handled: true, render: true },
+      'the move is consumed and asks for a repaint');
+
+    let hovered = hoveredNumbers(view, theme);
+    assert.deepEqual(hovered.roles, ['#12'], 'only the hovered number takes the hover role');
+    const row = hovered.lines.find((line) => strip(line).includes('linked issues:'));
+    assert.ok(row.includes('\x1b[96m#12'), 'the hovered number is painted with the accent role');
+    assert.ok(!row.includes('\x1b[96m#14'), 'the other number keeps its plain text');
+    assert.match(strip(row), /linked issues: #12, #14/, 'painting never changes the row the click expects');
+
+    const off = paneCell(view, 150, 'linked issues:');
+    assert.deepEqual(moveMouse(view, off), { handled: true, render: true },
+      'moving onto the row label is a change of target');
+    hovered = hoveredNumbers(view, theme);
+    assert.deepEqual(hovered.roles, [], 'nothing is highlighted once the pointer leaves the number');
+  });
+
+  test('a move to another number moves the highlight with it', async () => {
+    const { view, theme } = hoverView();
+    await tick();
+    assert.deepEqual(moveMouse(view, paneCell(view, 150, '#12')), { handled: true, render: true });
+    assert.deepEqual(hoveredNumbers(view, theme).roles, ['#12']);
+    assert.deepEqual(moveMouse(view, paneCell(view, 150, '#14')), { handled: true, render: true });
+    assert.deepEqual(hoveredNumbers(view, theme).roles, ['#14'], 'the highlight follows the pointer');
+  });
+
+  test('the same target twice does not repaint, and a move outside clears the hover', async () => {
+    const { view, theme, paints } = hoverView();
+    await tick();
+    const linked = paneCell(view, 150, '#12');
+    moveMouse(view, linked);
+    const painted = paints.length;
+    assert.deepEqual(moveMouse(view, linked), { handled: true, render: false },
+      'the hovered target did not change, so no repaint is asked for');
+    assert.equal(paints.length, painted, 'and none is issued');
+
+    assert.deepEqual(moveMouse(view, { ...linked, x: 3 }), { handled: true, render: true },
+      'a move onto the list column lands on no link and clears the hover');
+    assert.deepEqual(hoveredNumbers(view, theme).roles, []);
+    assert.deepEqual(view.handleMouse({
+      type: 'move', button: 'none', x: linked.x, y: linked.y, width: 100, height: linked.rows,
+    }), { handled: true, render: false }, 'a move from another frame geometry lands nowhere');
+  });
+
+  test('the same geometry serves the click and the hover', async () => {
+    const { view, opened } = hoverView();
+    await tick();
+    const linked = paneCell(view, 150, '#12');
+    assert.deepEqual(moveMouse(view, linked), { handled: true, render: true });
+    // The cell the pointer highlighted is exactly the cell that opens #12.
+    assert.deepEqual(click(view, linked), { handled: true, render: false });
+    assert.deepEqual(opened, [{ kind: 'issue', number: 12 }]);
+    assert.deepEqual(moveMouse(view, linked, 3), { handled: true, render: true },
+      'a move onto the separator clears the hover');
+  });
+});

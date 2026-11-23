@@ -498,6 +498,12 @@ never prefetched, so it is not a fourth tab and the prefetch never reads it.
   failed. A block is painted only when the read carried the numbers it
   summarises, so a repository without checks simply draws none. Then the body and
   every comment follow, ending with `(end of pull request)`.
+- **Both reading panes separate their blocks with one full-width rule.** The
+  metadata block (in `/prs`, the `Changes` and `Checks` summaries included) is
+  set off from the body, the body from the comments and each comment from the
+  next by a `─` line as wide as the pane and painted muted; no rule precedes the
+  first row, none follows the last, and a block the item does not have adds
+  none.
 - **Search is the server's, and it scrolls like `/issues`.** Every page request
   carries the query, a settled query is read after a short debounce, and the
   answer is never re-filtered as literal title text. The pane pages with the
@@ -685,6 +691,11 @@ reload did to the rows underneath it. The `/prs` pin-drift refusal names `/prs`
 (`…; reopen /prs`), the `/issues` one keeps naming `/issues`.
 
 Both panes publish one click target per relation number, never one per line.
+
+- **The same range answers the pointer.** A `move` over a linked number paints
+  exactly that number in the role a rail row takes when hovered (`accent`, in
+  bold), a move onto a cell that carries no range clears the highlight, and the
+  pane repaints only when the hovered target actually changes.
 
 - **A linked reference is identified by repository AND number.** The rail's read
   and the issue's metadata both ask the linked pull request for its

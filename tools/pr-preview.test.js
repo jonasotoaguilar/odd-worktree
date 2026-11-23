@@ -279,3 +279,137 @@ describe('linked issue click ranges (S6)', () => {
     assert.deepEqual(emptyLinks, []);
   });
 });
+
+// The reading pane separates its blocks with the horizontal rule the ODD reader
+// already draws (`lib/odd-markdown.js` paints `'─'.repeat(width)`), as wide as
+// the pane and in the muted role: the metadata block (the `Changes` and `Checks`
+// summaries included) from the body, the body from the comments and each
+// comment from the next. No rule before the first row, none after the last, and
+// none for a block the pull request does not have.
+describe('the pane separates its blocks with a full-width rule', () => {
+  const WIDTH = 40;
+  const RULE = '─'.repeat(WIDTH);
+
+  function painted(pullRequest, comments, options = {}) {
+    const calls = [];
+    const paint = (role, text) => {
+      calls.push({ role, text: String(text) });
+      return String(text);
+    };
+    const lines = pullRequestDetailLines(pullRequest, comments, {
+      width: WIDTH,
+      paint,
+      emphasis: bold,
+      now: NOW,
+      ...options,
+    });
+    return { lines, calls };
+  }
+
+  const ruleRows = (lines) => lines.reduce((found, line, at) => (line === RULE ? [...found, at] : found), []);
+
+  test('the metadata block, the body and each comment are separated by one rule', () => {
+    const { lines, calls } = painted(FULL, [
+      { author: 'ana', body: 'first comment', createdAt: '2026-02-28T00:00:00.000Z' },
+      { author: 'beto', body: 'second comment', createdAt: '2026-02-28T12:00:00.000Z' },
+    ]);
+    const at = (needle) => {
+      const index = lines.findIndex((line) => line.includes(needle));
+      assert.notEqual(index, -1, `not painted: ${needle}`);
+      return index;
+    };
+    assert.equal(lines[0], '#87 parity title', 'no rule before the first row');
+    assert.equal(lines.at(-1), '(end of pull request)', 'no rule after the last row');
+    assert.equal(lines[at('the body') - 1], RULE, 'the metadata block and the body are separated');
+    assert.equal(lines[at('─ ana') - 1], RULE, 'the body and the comments are separated');
+    assert.equal(lines[at('─ beto') - 1], RULE, 'each comment is separated from the next');
+    assert.deepEqual(ruleRows(lines), [at('the body') - 1, at('─ ana') - 1, at('─ beto') - 1],
+      'exactly those three rows carry a rule and no two rules are adjacent');
+    // The two summaries belong to the metadata block, so no rule splits them.
+    assert.ok(at('Changes') < ruleRows(lines)[0], 'Changes stays inside the metadata block');
+    assert.ok(at('Checks') < ruleRows(lines)[0], 'Checks stays inside the metadata block');
+    assert.ok(at('failing: build') < ruleRows(lines)[0], 'the last summary row stays above the rule');
+    const paintedRules = calls.filter((call) => call.text === RULE);
+    assert.equal(paintedRules.length, 3, 'each rule is painted through the caller seam');
+    assert.ok(paintedRules.every((call) => call.role === 'muted'), 'the rule takes the muted role');
+    assert.equal([...RULE].length, WIDTH, 'the rule spans the whole pane');
+  });
+
+  test('a comment-free pull request draws only the rule before the body', () => {
+    const { lines } = painted({ ...FULL, body: '' }, []);
+    const body = lines.indexOf('(no description)');
+    assert.notEqual(body, -1, 'the placeholder is still the body block');
+    assert.deepEqual(ruleRows(lines), [body - 1], 'nothing separates a body from no comments');
+    assert.equal(lines.at(-1), '(end of pull request)');
+  });
+
+  test('a pull request with neither summary block still draws that one rule', () => {
+    const bare = {
+      number: 5,
+      title: 'bare',
+      additions: undefined,
+      deletions: undefined,
+      changedFiles: undefined,
+      commits: undefined,
+      committedAt: undefined,
+      checks: undefined,
+      body: '',
+    };
+    const { lines } = painted(bare, []);
+    assert.deepEqual(ruleRows(lines), [lines.indexOf('(no description)') - 1],
+      'the absent summaries add no pair of rules');
+  });
+
+  test('a pending read separates nothing it has not painted', () => {
+    const { lines } = painted({ number: 12, title: 'pending read' }, [], { pending: true });
+    assert.ok(!lines.includes(RULE), 'a pane with no body and no comments draws no rule');
+  });
+
+  test('the rule is exactly the pane width at any width', () => {
+    for (const width of [12, 40, 121]) {
+      const rule = '─'.repeat(width);
+      const lines = linesOf(FULL, [], { width });
+      assert.deepEqual(lines.reduce((found, line, at) => (line === rule ? [...found, at] : found), []),
+        [lines.indexOf('the body') - 1], `one full-width rule at ${width}`);
+    }
+  });
+});
+
+// The hover highlight paints the linked issue the pointer is over, through the
+// same role the rail uses for a hovered row, and changes nothing about the
+// published click geometry.
+describe('the hovered linked issue is the one painted as the target', () => {
+  function paintedCalls(hover) {
+    const calls = [];
+    const links = [];
+    const paint = (role, text) => {
+      calls.push({ role, text: String(text) });
+      return String(text);
+    };
+    const lines = pullRequestDetailLines(FULL, [], {
+      width: 80,
+      paint,
+      emphasis: bold,
+      now: NOW,
+      links,
+      hover,
+    });
+    return { calls, lines, links };
+  }
+
+  test('only the hovered number takes the hover role', () => {
+    const { calls, lines } = paintedCalls(14);
+    const targets = calls.filter((call) => call.role === 'accent' && call.text.startsWith('#')).map((call) => call.text);
+    assert.deepEqual(targets, ['#14'], 'exactly the hovered number is painted as the target');
+    assert.match(lines.find((line) => line.includes('linked issues:')), /#12, #14/,
+      'the painted row still carries both numbers');
+  });
+
+  test('no hover paints no target, and the click geometry is identical either way', () => {
+    const hovered = paintedCalls(14);
+    const plainRun = paintedCalls(null);
+    assert.ok(!plainRun.calls.some((call) => call.role === 'accent' && call.text.startsWith('#')),
+      'without hover no number takes the switch role');
+    assert.deepEqual(hovered.links, plainRun.links, 'hover never moves a click range');
+  });
+});

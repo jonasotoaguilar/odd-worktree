@@ -23,11 +23,17 @@ The question this page answers: which rules must every change preserve, and what
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
-3. **The shipped surface is exactly five commands, two tools, one sidebar
-   section and two tool designs.** `/warp`, `/odd`,
+3. **The shipped surface is exactly five commands, two tools, TWO sidebar
+   sections and two tool designs.** `/warp`, `/odd`,
    `/files`, `/issues`, `/prs`; `worktree_create`, `worktree_list`; the one fourth kind of
-   surface, a sidebar section (`lib/issues-section.js`) that is neither a command nor a tool and
-   registers no name the host or the agent can call; the two designs
+   surface, a sidebar section — and there are TWO of them, each neither a command nor a
+   tool and each registering no name the host or the agent can call: the issues rail
+   (`lib/issues-section.js`, id `odd-worktree.issues`, headed `GITHUB`, `rowLabel`
+   `github`, mounted only where the `gh` probe found the CLI) and the ODD rail
+   (`lib/odd-rail-section.js` over the row model `lib/odd-rail-model.js`, id
+   `odd-worktree.odd-rail`, headed `ODD`, `rowLabel` `odd`, `placement: { after:
+   "agents" }`, scoped to the session's registered worktrees and therefore independent
+   of `Worktrees+`); the two designs
    (`lib/bash-design.js`, `lib/diff-design.js`) on the two lines the bridge owns, one
    `Card activity` line over `bash`, `read`, `write`, `edit` and the three
    read-only shell tools `grep`, `find`, `ls` (the single `tool: "bash"` design on a bridge older
@@ -52,8 +58,8 @@ The question this page answers: which rules must every change preserve, and what
    these: it is a design of the `Card activity` line and follows that switch. A change lands on
    the next load, so each one says so. Neither adds a command or a tool name.
 
-   **The section reaches the host only through gentle-shell-bridge.** It is
-   published through that package's sidebar-section API alone: the object read from
+   **The sections reach the host only through gentle-shell-bridge.** Both the issues
+   rail and the ODD rail are published through that package's sidebar-section API alone: the object read from
    its `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
    gate, or the one `gentle-shell-bridge:ready` announcement when the bridge
    publishes later. There is NO dependency on that package and no import of it

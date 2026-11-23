@@ -13,8 +13,8 @@
 // worktree↔issue association.
 //
 // The bash activity is not a preference here: it is a design on gentle-shell-bridge's
-// own `Card activity` line, so the shipped surface is exactly five commands, two tools, one
-// sidebar section, one tools design and the one `Cards` row group the two file-card
+// own `Card activity` line, so the shipped surface is exactly five commands, two tools, TWO
+// sidebar sections, one tools design and the one `Cards` row group the two file-card
 // switches carry.
 //
 // Everything here reads the observable surface: the registered command and
@@ -121,11 +121,25 @@ describe('registration', () => {
     }
   });
 
-  test('the bridge is never imported, and the surface reaches it through its published object', () => {
+  test('the bridge is never imported, and the surface reaches it through its published object', async () => {
     const source = stubbedSource();
     assert.equal(/from\s+["']gentle-shell-bridge/.test(source), false, 'no import of the bridge package anywhere');
     assert.equal(/require\(\s*["']gentle-shell-bridge/.test(source), false, 'no require of the bridge package anywhere');
-    assert.equal(source.split('api.registerSection(').length - 1, 1, 'exactly one sidebar section is contributed');
+    assert.equal(source.split('api.registerSection(').length - 1, 2, 'exactly two sidebar sections are contributed');
+    // T5 (S1): the count alone would drift silently, so the ids are asserted through
+    // the bridge that received them: one `GITHUB` and one `ODD`, and nothing else.
+    const bridge = defaultBridge();
+    const previous = globalThis[BRIDGE_SLOT];
+    globalThis[BRIDGE_SLOT] = bridge.api;
+    try {
+      await loadExtension({});
+      assert.deepEqual(bridge.sections.map((section) => section.id).sort(),
+        ['odd-worktree.issues', 'odd-worktree.odd-rail'],
+        'the two sections are the issues rail and the ODD rail');
+    } finally {
+      if (previous === undefined) delete globalThis[BRIDGE_SLOT];
+      else globalThis[BRIDGE_SLOT] = previous;
+    }
   });
 
   test('the bash design is wired through exactly one registration and adds no name', async () => {
@@ -333,8 +347,10 @@ describe('removed surface', () => {
     assert.ok(source.includes('createPrsClient'), 'the client is built with the issues client INJECTED');
     assert.ok(source.includes('libRequire("prs-view.js")'), 'the reader mounts the migrated pull-request view');
     // S4 (T5): the rail's pull-request count is a SECOND READ on the one
-    // GITHUB section, never a second section.
-    assert.equal(source.split('api.registerSection(').length - 1, 1, 'still exactly one sidebar section');
+    // GITHUB section, never a second section. The package's other section is the
+    // ODD rail (odd-rail-section T5, S1), so the count is two and the pull
+    // requests still add no third one.
+    assert.equal(source.split('api.registerSection(').length - 1, 2, 'the two sections are the GITHUB rail and the ODD rail, and the PR count is no third one');
     assert.ok(source.includes('loadPullRequests'), 'the one section reads pull requests for its header');
     assert.ok(source.includes('libRequire("prs-rail-store.js")'), 'the count is persisted by the loader');
   });

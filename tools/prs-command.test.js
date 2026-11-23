@@ -905,7 +905,7 @@ describe('S4/S5: the one section counts and routes pull requests', () => {
     // that answer lands, so the assertion waits for it instead of the first frame.
     await waitFor(() => section.meta(ctx) === '2 issues · 2 pr');
     assert.equal(section.meta(ctx), '2 issues · 2 pr', 'the distinct union of mine and review counts once');
-    assert.equal(registered.length, 1, 'the count is not a second section');
+    assert.equal(registered.filter((section) => section && section.id === 'odd-worktree.issues').length, 1, 'the count is not a second GITHUB section');
   });
 
   test('a row whose issue links a PR opens the PR panel with the review bucket hint', async () => {

@@ -13,7 +13,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createOddView } = require('../lib/odd-view.js');
+const { createOddView, RELOAD_SUPERSEDED } = require('../lib/odd-view.js');
 const layout = require('../lib/view-layout.js');
 
 function strip(value) {
@@ -2139,6 +2139,31 @@ describe('createOddView shortcut round (S8,S9,S10)', () => {
     assert.match(footerOf(lines), /(^|· )r failed( ·|$)/, `the failure is named in the footer: ${footerOf(lines)}`);
   });
 
+  // D2 (T6): a reload seam may answer RELOAD_SUPERSEDED for a request a later one
+  // has already replaced. That answer must be INERT — the frame, the reading
+  // position and the footer token stay exactly as the reader left them — and it is
+  // never a failure, because nothing was read: the answer belongs to a request the
+  // panel is no longer showing.
+  test('D2: a superseded reload answer changes nothing at all', async () => {
+    let answer = () => ({ ok: true, docs: [doc('alpha'), doc('beta')] });
+    const view = build({ reloadDocs: () => answer() });
+    await tick();
+    view.handleInput('end');
+    const before = view.render(80);
+    const scroll = view.state.scroll;
+    assert.ok(scroll > 0, 'the premise: the reading position is scrolled');
+    assert.match(footerOf(before), /(^|· )r( ·|$)/, 'the premise: the footer still offers the plain r');
+
+    answer = () => RELOAD_SUPERSEDED;
+    view.handleInput('r');
+    await tick();
+
+    const after = view.render(80);
+    assert.equal(view.state.scroll, scroll, 'the reading position does not move');
+    assert.deepEqual(after, before, 'the frame is byte-identical');
+    assert.equal(footerOf(after), footerOf(before), 'not even the reload token changes');
+  });
+
   // S9 at the reported width: the reader who saw `r` in the compact legend and
   // then reloaded is on a ~60-column terminal. The idle token fits there, so the
   // outcome must fit too instead of being pruned away as if nothing happened.
@@ -2325,4 +2350,385 @@ describe('createOddView two-step listing (S21)', () => {
     view.handleInput('escape');
     assert.equal(closed, null, 'esc still closes the view');
   });
+});
+
+// S6: a sidebar row clicks into the viewer, so the panel can be OPENED on one
+// requested document instead of always on the newest one. The request is a
+// STRING: an absolute `path` first (the document may live in ANY checkout), then
+// the name the list paints, and today's first-document open when nothing matches.
+describe('createOddView positional open (S6)', () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const listCells = (lines) => lines.slice(2, -2).map((line) => strip(line).split('│')[1] || '');
+  const filled = (lines) => listCells(lines).filter((cell) => cell.trim() !== '');
+  const rowName = (cell) => cell.trim().replace(/^▸\s*/, '');
+  const focusedName = (lines) => {
+    const cell = filled(lines).find((entry) => entry.includes('▸'));
+    return cell === undefined ? null : rowName(cell);
+  };
+  const bodyOf = (lines) => strip(lines.join('\n'));
+
+  // These documents do not all live in one checkout: the viewer is handed a
+  // path from somebody else's worktree, which is the shape the rail produces.
+  const docs = [
+    doc('alpha'),
+    { name: 'bravo', file: 'bravo.md', path: '/other-worktree/odd/tasks/bravo.md' },
+    doc('charlie'),
+  ];
+
+  function build({ initialDoc } = {}) {
+    const reads = [];
+    const options = {
+      docs,
+      loadDoc: (entry) => {
+        reads.push(entry.path || entry.name);
+        return { ok: true, text: `# ${entry.name}\n\nbody of ${entry.name}\n` };
+      },
+      helpers,
+      theme: plainTheme,
+      rowsAvailable: () => 20,
+      requestRender: () => {},
+      done: () => {},
+    };
+    if (initialDoc !== undefined) options.initialDoc = initialDoc;
+    const view = createOddView(options);
+    return { view, reads };
+  }
+
+  test('opens on the document whose absolute path is requested, loaded before any key press', async () => {
+    const { view, reads } = build({ initialDoc: '/other-worktree/odd/tasks/bravo.md' });
+    // The body is read while the view is mounted, not on the first render.
+    assert.deepEqual(reads, ['/other-worktree/odd/tasks/bravo.md'], 'the requested document is the one loaded on open');
+    await tick();
+    assert.equal(view.state.index, 1, 'the selection starts on the requested document');
+    const lines = view.render(80);
+    assert.equal(focusedName(lines), 'bravo', 'the highlight is on the requested document row');
+    assert.match(bodyOf(lines), /body of bravo/, 'the right pane starts on the requested document');
+    assert.equal(view.state.scroll, 0, 'and at the top of it');
+  });
+
+  test('falls back to the document name when no path matches the request', async () => {
+    const { view, reads } = build({ initialDoc: 'charlie' });
+    assert.deepEqual(reads, ['/checkout/odd/tasks/charlie.md'], 'the named document is the one loaded on open');
+    await tick();
+    assert.equal(view.state.index, 2, 'the selection starts on the named document');
+    const lines = view.render(80);
+    assert.equal(focusedName(lines), 'charlie', 'the highlight is on the named row');
+    assert.match(bodyOf(lines), /body of charlie/, 'the right pane shows the named document');
+  });
+
+  test('an unknown request opens on the first document, exactly like no request at all', async () => {
+    const requested = build({ initialDoc: '/somewhere/else/odd/tasks/november.md' });
+    const plain = build();
+    assert.deepEqual(requested.reads, plain.reads, 'the same document is loaded on open');
+    await tick();
+    assert.equal(requested.view.state.index, 0, 'an unknown request selects the first document');
+    assert.equal(requested.view.state.index, plain.view.state.index, 'the same index as today');
+    const lines = requested.view.render(80);
+    assert.equal(focusedName(lines), 'alpha', 'the highlight is on the first row');
+    assert.match(bodyOf(lines), /body of alpha/, 'the right pane shows the first document');
+    assert.equal(requested.view.state.scroll, 0);
+  });
+
+  test('no initialDoc keeps today\'s open: the first document, at the top, highlighted first', async () => {
+    const { view, reads } = build();
+    assert.deepEqual(reads, ['/checkout/odd/tasks/alpha.md'], 'the first document is still the one loaded on open');
+    await tick();
+    assert.equal(view.state.index, 0, 'the selection is still the first document');
+    assert.equal(view.state.scroll, 0, 'the pane is still at the top');
+    const lines = view.render(80);
+    assert.deepEqual(filled(lines).map(rowName), ['alpha', 'bravo', 'charlie'], 'the list is unchanged');
+    assert.equal(focusedName(lines), 'alpha', 'the highlight is still on the first row');
+    assert.match(bodyOf(lines), /body of alpha/, 'the right pane still starts on the first document');
+    // Byte-identical to the same view opened with an explicitly empty request.
+    const empty = build({ initialDoc: '' });
+    await tick();
+    assert.deepEqual(empty.view.render(80), lines, 'an empty request paints the very same frame');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T9 (S10,S11,S13): the panel groups its documents by checkout, like the
+// gentle-shell CHANGES panel. The loader hands it `groups` — one entry per
+// checkout, each carrying the documents that checkout owns — and the view
+// paints a header row per checkout followed by its documents. The main group is
+// always drawn; a worktree group is drawn ONLY when it has documents, and when
+// every worktree group is empty the panel is the ordinary main-only flat listing
+// with no header at all (S13: never an empty worktree group, never group chrome
+// that says nothing). A header is focusable: Enter toggles it. `a` flips the
+// listing between the session's checkouts and every worktree, and the CALLER
+// reloads the groups when it does.
+// ---------------------------------------------------------------------------
+describe('createOddView grouped listing (T9: S10,S11,S13)', () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  // The grouped model names a document's absolute location `docPath`
+  // (lib/odd-group.js); the older `path` spelling keeps working.
+  const groupDoc = (name, root = '/wt/main') => ({ name, docPath: `${root}/odd/tasks/${name}.md`, mtimeMs: 1 });
+  const checkout = (checkoutName, checkoutRoot, isMain, docs) => ({ checkoutName, checkoutRoot, isMain, docs });
+  const MAIN = checkout('main', '/wt/main', true, [groupDoc('alpha'), groupDoc('bravo')]);
+  const RAIL = checkout('odd-rail', '/wt/odd-rail', false, [groupDoc('delta', '/wt/odd-rail')]);
+  const listCells = (lines) => lines.slice(2, -2).map((line) => strip(line).split('│')[1] || '');
+  // The rows the list pane paints, with the focus cursor removed so a row reads
+  // the same whether the cursor is on it or not.
+  const rowsOf = (lines) => listCells(lines)
+    .map((cell) => cell.trim().replace(/^▸\s*/, ''))
+    .filter((cell) => cell !== '');
+  const focusedRow = (lines) => {
+    const cell = listCells(lines).map((value) => value.trim()).find((value) => value.startsWith('▸'));
+    return cell === undefined ? null : cell.replace(/^▸\s*/, '');
+  };
+  const bodyOf = (lines) => strip(lines.join('\n'));
+  const footerOf = (lines) => strip(lines[lines.length - 2]);
+
+  function build({ groups, docs, initialDoc, onToggleAll, rows = 14, load } = {}) {
+    const options = {
+      loadDoc: load || ((entry) => ({ ok: true, text: `# ${entry.name}\n\nbody of ${entry.name}\n` })),
+      helpers,
+      theme: plainTheme,
+      rowsAvailable: () => rows,
+      requestRender: () => {},
+      done: () => {},
+    };
+    if (docs !== undefined) options.docs = docs;
+    if (groups !== undefined) options.groups = groups;
+    if (initialDoc !== undefined) options.initialDoc = initialDoc;
+    if (onToggleAll !== undefined) options.onToggleAll = onToggleAll;
+    return createOddView(options);
+  }
+
+  // The pinned contract: with NO `groups` the panel is exactly the viewer of
+  // before this unit — one flat list from `docs`, the same order, the same keys
+  // and the same first frame. The literal below was captured from the viewer
+  // BEFORE grouping existed, so it proves the flat path did not move.
+  const FLAT_FRAME = [
+    '╭─ ✎ Odd · 2 documents ────────────────────────────────────────────────────────────────────────────╮',
+    '│ › Search                                                                                     3/3 │',
+    '│ ▸ alpha                       │ ▌ alpha                                                          │',
+    '│   beta                        │                                                                  │',
+    '│                               │ body of alpha                                                    │',
+    '│                               │                                                                  │',
+    '│                               │                                                                  │',
+    '│                               │                                                                  │',
+    '│                               │                                                                  │',
+    '│                               │                                                                  │',
+    '│                               │                                                                  │',
+    '│                               │                                                                  │',
+    '│ ↑↓ select · ctrl+j/k scroll · s sort: recent · t search · r reload · o open · esc close          │',
+    '╰──────────────────────────────────────────────────────────────────────────────────────────────────╯',
+  ];
+
+  test('no groups still paints today\'s exact flat frame', async () => {
+    const view = build({ docs: [doc('alpha'), doc('beta')] });
+    await tick();
+    assert.deepEqual(view.render(100), FLAT_FRAME, 'the flat listing is byte-identical to the pre-grouping frame');
+  });
+
+  test('S13: every worktree group empty keeps the ordinary main-only listing, with no header at all', async () => {
+    const flat = build({ docs: [doc('alpha'), doc('beta')] });
+    const grouped = build({
+      groups: [
+        checkout('main', '/wt/main', true, [groupDoc('alpha'), groupDoc('beta')]),
+        checkout('odd-fix', '/wt/odd-fix', false, []),
+      ],
+    });
+    await tick();
+    const flatFrame = flat.render(100);
+    const groupedFrame = grouped.render(100);
+    assert.deepEqual(groupedFrame, flatFrame, 'the very same frame: no header, no group chrome');
+    assert.ok(!bodyOf(groupedFrame).includes('odd-fix'), 'an empty worktree is never named');
+    assert.ok(!bodyOf(groupedFrame).includes('▾'), 'and no header is painted');
+  });
+
+  test('S10: a header row per checkout, in order, each followed by its own documents', async () => {
+    const view = build({ groups: [MAIN, RAIL] });
+    await tick();
+    const lines = view.render(100);
+    assert.deepEqual(rowsOf(lines), ['▾ main', 'alpha', 'bravo', '▾ odd-rail', 'delta'],
+      'the main group, its documents, then the worktree group and its documents');
+    assert.equal(focusedRow(lines), 'alpha', 'the first DOCUMENT is focused, not the header');
+    assert.match(bodyOf(lines), /body of alpha/, 'and its document is the one painted');
+    assert.match(bodyOf(lines), /✎ Odd · 3 documents/, 'the title counts the listed documents');
+  });
+
+  test('S13: a worktree group with no documents of its own is dropped', async () => {
+    const view = build({ groups: [MAIN, RAIL, checkout('odd-fix', '/wt/odd-fix', false, [])] });
+    await tick();
+    const lines = view.render(100);
+    assert.deepEqual(rowsOf(lines), ['▾ main', 'alpha', 'bravo', '▾ odd-rail', 'delta'],
+      'the empty worktree contributes neither header nor rows');
+    assert.ok(!bodyOf(lines).includes('odd-fix'), 'and it is never named');
+  });
+
+  test('S10: Enter on a header collapses the group, hides its documents and keeps the focus on it', async () => {
+    const view = build({ groups: [MAIN, RAIL] });
+    await tick();
+    // Rows: [header main, alpha, bravo, header odd-rail, delta]; the mount
+    // focuses alpha (index 1), so two steps reach the worktree header.
+    for (let step = 0; step < 2; step += 1) view.handleInput('down');
+    assert.equal(focusedRow(view.render(100)), '▾ odd-rail', 'the premise: the header is focused');
+    view.handleInput('enter');
+    const collapsed = view.render(100);
+    assert.deepEqual(rowsOf(collapsed), ['▾ main', 'alpha', 'bravo', '▸ odd-rail'],
+      'the header stays and its documents are gone');
+    assert.equal(focusedRow(collapsed), '▸ odd-rail', 'the focus stays on the header');
+    assert.equal(view.state.index, 3, 'and so does its row');
+    assert.ok(!bodyOf(collapsed).includes('delta'), 'the collapsed documents are hidden');
+    view.handleInput('enter');
+    assert.deepEqual(rowsOf(view.render(100)), ['▾ main', 'alpha', 'bravo', '▾ odd-rail', 'delta'],
+      'Enter again reopens it');
+  });
+
+  test('Enter on a document keeps today\'s no-op: nothing folds and nothing moves', async () => {
+    const view = build({ groups: [MAIN, RAIL] });
+    await tick();
+    view.handleInput('down');
+    const before = view.render(100);
+    assert.equal(focusedRow(before), 'bravo', 'the premise: a document is focused');
+    view.handleInput('enter');
+    const after = view.render(100);
+    assert.deepEqual(rowsOf(after), rowsOf(before), 'no group folded around the focused document');
+    assert.equal(view.state.index, 2, 'and the selection did not move');
+  });
+
+  test('S11: a flips the mode, tells the caller once with the new value and the hint names the mode', async () => {
+    const calls = [];
+    const view = build({ groups: [MAIN, RAIL], onToggleAll: (all) => calls.push(all) });
+    await tick();
+    const sessionFooter = footerOf(view.render(200));
+    assert.match(sessionFooter, /a all worktrees/, `the session mode offers every worktree: ${sessionFooter}`);
+    view.handleInput('a');
+    assert.deepEqual(calls, [true], 'the caller is told once, with the new value');
+    const allFooter = footerOf(view.render(200));
+    assert.match(allFooter, /a session only/, `the all-worktrees mode offers the session back: ${allFooter}`);
+    assert.notEqual(allFooter, sessionFooter, 'the hint changes with the mode');
+    view.handleInput('a');
+    assert.deepEqual(calls, [true, false], 'a again returns to the session checkouts');
+    assert.match(footerOf(view.render(200)), /a all worktrees/, 'and the hint comes back');
+  });
+
+  test('S11: a failed async toggle rolls the request back, so the next press asks the same scope', async () => {
+    const asked = [];
+    const view = build({
+      groups: [MAIN, RAIL],
+      onToggleAll: (all) => {
+        asked.push(all);
+        return Promise.resolve(false);
+      },
+    });
+    await tick();
+    const sessionFooter = footerOf(view.render(200));
+    assert.match(sessionFooter, /a all worktrees/, 'the premise: the session mode is applied');
+
+    // The load resolves `false`: nothing was applied, so the hint may not move.
+    view.handleInput('a');
+    await tick();
+    assert.equal(footerOf(view.render(200)), sessionFooter, 'a failed load never moves the hint');
+
+    // The request was rolled back, so pressing again asks for the SAME scope.
+    view.handleInput('a');
+    await tick();
+    assert.deepEqual(asked, [true, true], 'the retry asks for the scope the failed press asked for');
+    assert.equal(footerOf(view.render(200)), sessionFooter, 'and the hint still describes the drawn mode');
+
+    // A load the caller really applied is what moves the mode and its hint.
+    view.applyGroups([MAIN, RAIL], { all: true });
+    assert.match(footerOf(view.render(200)), /a session only/, 'the applied scope is the one named');
+  });
+
+  test('S11: a rejected toggle load also rolls the request back', async () => {
+    const asked = [];
+    const view = build({
+      groups: [MAIN, RAIL],
+      onToggleAll: (all) => {
+        asked.push(all);
+        return Promise.reject(new Error('read failed'));
+      },
+    });
+    await tick();
+    const sessionFooter = footerOf(view.render(200));
+    view.handleInput('a');
+    await tick();
+    assert.equal(footerOf(view.render(200)), sessionFooter, 'a rejection leaves the hint alone');
+    view.handleInput('a');
+    await tick();
+    assert.deepEqual(asked, [true, true], 'the retry asks for the same scope again');
+  });
+
+  test('S11: without onToggleAll the key does nothing and its hint is never listed', async () => {
+    const view = build({ groups: [MAIN, RAIL] });
+    await tick();
+    const before = view.render(100);
+    assert.ok(!bodyOf(before).includes('worktrees'), `no hint for a key that cannot work: ${footerOf(before)}`);
+    view.handleInput('a');
+    assert.deepEqual(view.render(100), before, 'the key changes nothing at all');
+  });
+
+  test('S11: the reloaded grouping re-applies the selection when the document is still there', async () => {
+    const view = build({ groups: [MAIN, RAIL], onToggleAll: () => {} });
+    await tick();
+    for (let step = 0; step < 3; step += 1) view.handleInput('down');
+    assert.equal(focusedRow(view.render(100)), 'delta', 'the premise: delta is the document being read');
+    // The caller answered the `a` toggle with every worktree: delta is still
+    // there, in a different place of a longer listing.
+    view.applyGroups([
+      MAIN,
+      checkout('odd-rail', '/wt/odd-rail', false, [
+        groupDoc('zulu', '/wt/odd-rail'),
+        groupDoc('delta', '/wt/odd-rail'),
+      ]),
+    ]);
+    await tick();
+    const lines = view.render(100);
+    assert.deepEqual(rowsOf(lines), ['▾ main', 'alpha', 'bravo', '▾ odd-rail', 'zulu', 'delta']);
+    assert.equal(focusedRow(lines), 'delta', 'the reader keeps the SAME document');
+    assert.match(bodyOf(lines), /body of delta/, 'and its pane is still the one being read');
+  });
+
+  test('S6/S10: initialDoc finds its document inside a group, before any key press', async () => {
+    const reads = [];
+    const view = createOddView({
+      groups: [
+        checkout('main', '/wt/main', true, [{ name: 'alpha', path: '/wt/main/odd/tasks/alpha.md', mtimeMs: 2 }]),
+        RAIL,
+      ],
+      initialDoc: '/wt/odd-rail/odd/tasks/delta.md',
+      loadDoc: (entry) => {
+        reads.push(entry.docPath || entry.path || entry.name);
+        return { ok: true, text: `# ${entry.name}\n\nbody of ${entry.name}\n` };
+      },
+      helpers,
+      theme: plainTheme,
+      rowsAvailable: () => 14,
+      requestRender: () => {},
+      done: () => {},
+    });
+    assert.deepEqual(reads, ['/wt/odd-rail/odd/tasks/delta.md'], 'the requested document is read on mount');
+    await tick();
+    const lines = view.render(100);
+    assert.equal(focusedRow(lines), 'delta', 'the highlight is on the requested document row');
+    assert.equal(view.state.index, 3, 'across the group it lives in');
+    assert.match(bodyOf(lines), /body of delta/, 'the right pane starts on the requested document');
+    assert.equal(view.state.scroll, 0, 'and at the top of it');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T12 (D2, S11): the preview clamp and the frame it paints must agree on ONE
+// viewport. The host's row source is not a constant — a resize between two reads
+// of the same frame is exactly what a real terminal does — so the clamp has to
+// measure the body this frame paints, never a second live sample.
+// ---------------------------------------------------------------------------
+// T6: the preview clamp must use the same viewport as this frame.
+test('T6 independent: a row-count change cannot omit the end of the preview', () => {
+  let flip = false;
+  let reads = 0;
+  const text = Array.from({ length: 180 }, (_, i) => `Unique paragraph ${i}\n\n`).join('');
+  const v = createOddView({
+    docs: [{ name: 'long', path: '/tmp/long.md' }], helpers,
+    loadDoc: () => ({ ok: true, text }),
+    rowsAvailable: () => !flip || reads++ === 0 ? 8 : 34,
+  });
+  v.handleInput('\x1b[F');
+  assert.match(v.render(120).join('\n'), /Unique paragraph 179/);
+  flip = true;
+  assert.match(v.render(120).join('\n'), /Unique paragraph 179/);
 });

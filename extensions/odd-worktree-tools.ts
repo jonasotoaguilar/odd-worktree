@@ -2985,6 +2985,125 @@ function handleWorktreeOddEvent(event, ctx, pi, allowPhaseTrigger) {
   return undefined;
 }
 
+// ---------------------------------------------------------------------------
+// The ODDs THIS session wrote or edited (odd-rail-section T8: S8, S9).
+//
+// S9: this is an ANNOTATION, never the source of truth. What exists and where it lives
+// is the grouped model's answer (`lib/odd-group.js`), and which copy of a name is
+// newest belongs to the rail's row model (`lib/odd-rail-model.js`); the
+// record below only says "this session touched that document", so the rail can order it
+// first and ask for an immediate refresh instead of waiting for its TTL.
+//
+// S8: the rule is lib/odd-session.js's — a `write` or an `edit` landing on an
+// `odd/tasks/*.md` document. The DECISION lives there, as a pure function of the
+// `{ toolName, paths }` this file already extracts for every other observation
+// (`oddToolNameOf`, `oddTouchedPaths`, `oddEventCwd`), so there is no second
+// tool-argument parser here and the rule is testable without a host.
+//
+// S8: the observation is `tool_result`, not `tool_call`, because a write which FAILS
+// must not leave a phantom row: only a result that is not an error is a touch.
+//
+// S9: a SUBAGENT's write never reaches this handler — a subagent runs in its own
+// session, with its own instance of this extension — so the parent records nothing for
+// it. That is by design and not a gap to work around: the filesystem scan is what
+// covers a subagent's ODD, and this record only ever annotates the session that
+// actually made the call.
+//
+// The record itself is module scope so the rail's section (T4) can read `touched()`
+// and request a refresh; nothing here draws, lists or decides anything.
+//
+// It is NOT part of the `Worktrees+` half: the ODD rail belongs to the worktree module
+// only through registration, so the attribution has to be there with that module OFF —
+// a session that cannot register a worktree still works on ODDs. Only the observation
+// lives here, so leaving it on costs one comparison per tool result and no surface.
+let oddSession = null;
+// The section's immediate-refresh request. Unset until the rail binds it (T4), and
+// calling an unset request is a no-op, so a touch never depends on a section existing.
+let oddSessionRefresh = null;
+
+function setOddSessionRefresh(request) {
+  oddSessionRefresh = typeof request === "function" ? request : null;
+}
+
+// The record this load owns, or null when the module cannot be loaded. It is created
+// whatever the `Worktrees+` switch says, because the attribution is not a worktree
+// feature (see above); the module's own factory takes an injectable clock, and
+// production passes none and gets `Date.now`.
+function createOddSession() {
+  try {
+    const lib = libRequire("odd-session.js");
+    if (!lib || typeof lib.createOddSession !== "function") return null;
+    return lib.createOddSession();
+  } catch {
+    // No record: an annotation nobody can keep is left out, never fatal.
+    return null;
+  }
+}
+
+// S8 (T8): ONE durable entry per registered touch, guarded exactly like
+// `warpAppendQueueEntry`: a host without the seam, or one that throws, simply records
+// the touch in memory and shows nothing. No entry renderer is registered for it — a
+// custom entry paints nothing in the transcript unless it is paired with one (Pi's
+// `appendEntry`/`registerEntryRenderer` contract) — so a touch never adds a line.
+function appendOddTouchEntry(pi, entry) {
+  if (!pi || typeof pi.appendEntry !== "function") return false;
+  try {
+    pi.appendEntry(entry.customType, entry.data);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The `tool_result` observation (S8): never throws, never patches the result, and does
+// nothing at all when the worktree module left no record.
+function noteOddSessionTouch(event, ctx, pi) {
+  try {
+    if (oddSession === null) return;
+    const toolName = oddToolNameOf(event);
+    // The registration test runs in lib before a timestamp is read, so a `read`, a
+    // `bash` or any other tool costs no clock and no entry.
+    const registered = oddSession.note({
+      toolName,
+      paths: oddTouchedPaths(oddArgsOf(event)),
+      cwd: oddEventCwd(event, ctx),
+      isError: event && typeof event === "object" ? event.isError === true : false,
+    });
+    if (registered !== true) return;
+    // The document this call just registered is the record's front row (a touch always
+    // moves its document there), so the persisted entry carries exactly the recorded
+    // path and `at` instead of a second reading of the clock.
+    const touch = oddSession.touched()[0];
+    if (!touch) return;
+    appendOddTouchEntry(pi, oddSession.entryOf(touch));
+    if (oddSessionRefresh !== null) {
+      try {
+        oddSessionRefresh();
+      } catch {
+        // A section that cannot refresh never costs the record.
+      }
+    }
+  } catch {
+    // A `tool_result` observation is bookkeeping: it never breaks the result it rides on.
+  }
+  return undefined;
+}
+
+// S8 (T8): the resume boundary. `session_start` fires for a new, resumed, forked and
+// reloaded session alike, and the persisted entries are what a resumed session
+// remembers — so the record is rebuilt from them there and nowhere else. A manager that
+// cannot answer restores nothing (lib/odd-session.js skips every garbage entry).
+function restoreOddSession(ctx) {
+  try {
+    if (oddSession === null) return;
+    const sm = ctx && ctx.sessionManager;
+    const entries = sm && typeof sm.getEntries === "function" ? sm.getEntries() : undefined;
+    oddSession.restore(entries);
+  } catch {
+    // An unreadable session manager leaves the record empty, never the boundary broken.
+  }
+}
+
 // The worktree guard (S1–S6, S8–S10): one `tool_call` observation that REFUSES the
 // `bash` commands which would take work out of the ODD's own checkout. The decision
 // is `lib/worktree-guard.js`'s — text-only, and only for the `bash` tool — and this
@@ -6683,39 +6802,477 @@ function openExternalSuspended(hostTui, target) {
     .finally(resume);
 }
 
-async function runOddFallback(ctx, listing) {
+// S6 (T4): the ONE optional target `/odd <target>` takes — and the reason the
+// refusal sentence keeps exactly the wording it always had. Two shapes are
+// targets: an ABSOLUTE path to an existing `odd/tasks/*.md` document (the rule
+// lib/odd-docs.js scans: directly under that directory, never a dotfile), and a
+// BARE ODD name, which is resolved against the loaded groups below because only
+// the scan knows which names exist. Everything else — a flag, a relative path, a
+// nested path, another extension, a document outside `odd/tasks` — is the
+// unknown option it always was. This panel is never a general file opener.
+function oddTargetRequest(raw, cwd) {
+  if (raw === "") return { kind: "none" };
+  // A flag is never a target, so `--nope` keeps refusing before any git read.
+  if (raw.startsWith("-")) return { kind: "invalid" };
+  if (path.isAbsolute(raw)) {
+    return oddTaskDocument(raw, cwd) ? { kind: "path", target: raw } : { kind: "invalid" };
+  }
+  // A relative path is refused rather than resolved against the session cwd: the
+  // target is either an absolute document or a name, and nothing in between.
+  if (raw.includes("/") || raw.includes(path.sep)) return { kind: "invalid" };
+  return { kind: "name", name: raw };
+}
+
+// S6/T17 (F4): a document is `<checkout>/odd/tasks/<name>.md`, non-recursive, no
+// dotfile — the segments come from the library that owns the rule instead of being
+// restated here, and the file has to be a regular one, exactly like the scan's own
+// row. The argument is RESOLVED first (`path.resolve` against the call's cwd, the
+// same rule `oddTaskDocumentPath` applies), because the grammar is about the path a
+// reader MEANS: `tasks/./x.md` and `tasks/../tasks/x.md` name the listed document,
+// and validating their raw segments refused paths `path.resolve` makes equal. Only
+// the resolved path is validated, so a sibling that resolves outside `odd/tasks`, a
+// non-`.md`, a dotfile and a nonexistent target keep the refusal they always had.
+function oddTaskDocument(target, cwd) {
+  let resolved;
+  try {
+    resolved = path.resolve(typeof cwd === "string" && cwd.length > 0 ? cwd : process.cwd(), target);
+  } catch {
+    return false;
+  }
+  const name = path.basename(resolved);
+  if (!/\.md$/i.test(name) || name.startsWith(".")) return false;
+  let segments = ["odd", "tasks"];
+  try {
+    const shared = libRequire("odd-docs.js").TASKS_DIR;
+    if (typeof shared === "string" && shared.length > 0) {
+      const parts = shared.split(/[\\/]+/).filter((part) => part.length > 0);
+      if (parts.length >= 2) segments = parts;
+    }
+  } catch {
+    // The documented default above stands.
+  }
+  const dir = path.dirname(resolved);
+  if (path.basename(dir) !== segments[segments.length - 1]) return false;
+  if (path.basename(path.dirname(dir)) !== segments[segments.length - 2]) return false;
+  try {
+    return fs.statSync(resolved).isFile();
+  } catch {
+    return false;
+  }
+}
+
+// S10/S13 (T4): the grouped model the panel draws and `a` toggles. `roots` is the
+// session's REGISTERED worktrees: an array groups exactly those, absent groups
+// every owned worktree. S11 (T6): `all` is the panel's ALL-worktrees mode — every
+// worktree Git lists, registered or not — and it wins over `roots`, so the two are
+// never combined. The read is awaited off the same git seam the rest of this file
+// uses, and a model that cannot be read is `null`, which leaves the flat listing
+// the caller already holds standing.
+async function oddGroupsFor(repoRoot, roots, all = false) {
+  try {
+    const git = libRequire("worktree-git.js");
+    const scope = {};
+    if (all === true) scope.all = true;
+    else if (Array.isArray(roots)) scope.roots = roots;
+    const grouped = await libRequire("odd-group.js").groupOddDocs({
+      repoRoot,
+      runAsync: libRunner(git),
+      // S13 (T13): a listing Git cannot answer is NO model, never a synthetic
+      // main made of this checkout — inside a linked worktree that would show
+      // its private documents under main's name on both surfaces.
+      failClosed: true,
+      ...scope,
+    });
+    if (Array.isArray(grouped)) return grouped;
+  } catch {
+    // A missing or broken lib never opens a grouped panel.
+  }
+  return null;
+}
+
+// D2 (T6): the sentinel `lib/odd-view.js` exports for "this answer was SUPERSEDED,
+// do nothing". Resolving it is how a reload reports that it lost the race without
+// touching the frame, the preview scroll or the footer's reload state — the view
+// owns that reading, this file only names it. `Symbol.for` keeps one identity even
+// across this package's lib require-cache purge, so no second copy of the string
+// lives here.
+function oddReloadSuperseded() {
+  return libRequire("odd-view.js").RELOAD_SUPERSEDED;
+}
+
+// S21 (T4): the listing that ranks ONE checkout's own documents belongs to main's
+// group — the list the panel actually draws. Without this the ranked answer and
+// `r` would refresh a listing nobody sees.
+function oddGroupsWithRankedMain(groups, docs) {
+  if (!Array.isArray(groups) || !Array.isArray(docs)) return groups;
+  return groups.map((group) => (group && group.isMain === true ? { ...group, docs: docs.slice() } : group));
+}
+
+// S10/S12 (T10): MAIN's own checkout, read off the group that says it is main. The
+// session's checkout is only the fallback for a model that could not be read: a
+// session running in a LINKED WORKTREE ranks that worktree's documents if the
+// caller hands it `cwd`, and they would land in main's group.
+function oddMainRoot(groups, fallback) {
+  if (!Array.isArray(groups)) return fallback;
+  const main = groups.find((group) => group && group.isMain === true);
+  const root = main && typeof main.checkoutRoot === "string" ? main.checkoutRoot : "";
+  return root.length > 0 ? root : fallback;
+}
+
+// S6/S10 (T10): "there is nothing to read" is the MODEL's answer, never one
+// checkout's — true only when every loaded group, main included, is empty. A model
+// that could not be read answers `true`, so the flat listing's own emptiness still
+// decides exactly as it did before.
+function oddModelIsEmpty(groups) {
+  if (!Array.isArray(groups)) return true;
+  return groups.every((group) => !Array.isArray(group && group.docs) || group.docs.length === 0);
+}
+
+// S13/T15 (L11): the ONE listing both ODD surfaces draw. The panel's list and the
+// degraded menu are this single value: `lib/odd-listing.js` sorts each group's
+// documents with one comparator, emits a duplicate path ONCE, and derives every
+// label — a name that appears once keeps its exact plain text, a repeated name
+// gains the checkout that holds it, and two checkouts with the SAME basename are
+// told apart by the shortest path segments that distinguish them — so no two
+// labels can collide and the menu can never drift from the panel. Nothing here
+// sorts, dedupes or labels anything of its own: the module is the only authority.
+// A document carrying `order` keeps the sequence its caller handed over (T16);
+// nothing in this file puts one there for the panel, whose order comes from the
+// model, and `oddMenuListing` below is the one caller that does.
+function oddListingFor(groups) {
+  const empty = { groups: [], menu: [] };
+  let buildListing;
+  try {
+    buildListing = libRequire("odd-listing.js").buildListing;
+  } catch {
+    // A missing or broken lib never opens a viewer over a listing it invented.
+    return empty;
+  }
+  if (typeof buildListing !== "function") return empty;
+  let listed;
+  try {
+    listed = buildListing({ groups: Array.isArray(groups) ? groups : [] });
+  } catch {
+    return empty;
+  }
+  if (!listed || typeof listed !== "object") return empty;
+  return {
+    groups: Array.isArray(listed.groups) ? listed.groups : [],
+    menu: Array.isArray(listed.menu) ? listed.menu : [],
+  };
+}
+
+// T17/F3: the model's own groups carrying the LISTING's labels. `applyOddLoad` hands
+// the view what it read, and the view paints a row from `label` when it has one; the
+// labels come from the ONE listing (`lib/odd-listing.js`), keyed by resolved path, so
+// the rows the panel paints and the choices the menu offers can never disagree about
+// what a document is called — and two checkouts sharing a basename no longer paint
+// the same text. The groups and documents themselves are handed over untouched (an
+// empty main group included: the view needs it to draw a worktree's delta), so a
+// model the listing could not label keeps exactly what it had.
+function oddLabelledGroups(groups) {
+  if (!Array.isArray(groups)) return null;
+  const byPath = new Map();
+  for (const group of oddListingFor(groups).groups) {
+    for (const entry of group.entries) byPath.set(path.resolve(entry.path), entry.label);
+  }
+  return groups.map((group) => {
+    if (!group || typeof group !== "object" || !Array.isArray(group.docs)) return group;
+    return {
+      ...group,
+      docs: group.docs.map((doc) => {
+        if (!doc || typeof doc !== "object") return doc;
+        const target = typeof doc.docPath === "string" ? doc.docPath
+          : (typeof doc.path === "string" ? doc.path : "");
+        const label = target.length === 0 ? undefined : byPath.get(path.resolve(target));
+        return label === undefined ? doc : { ...doc, label };
+      }),
+    };
+  });
+}
+
+// S13/T15: MAIN's own documents for a model that could not be read. A session
+// inside an UNREGISTERED linked checkout may never be offered that checkout's
+// private documents, so this is main's `odd/tasks` and nothing else — and with no
+// main root, or nothing under it, it is EMPTY rather than this checkout's.
+// `ranked` is main's own ranking when a Git walk answered (T16): the documents keep
+// ITS order — each carries the index it was ranked at — instead of the mtime order
+// the cheap scan gives them. A caller that passes none gets the scan, exactly as
+// before.
+function oddMainListing(mainRoot, ranked) {
+  if (typeof mainRoot !== "string" || mainRoot.length === 0) return { groups: [], menu: [] };
+  const handed = Array.isArray(ranked) ? ranked : null;
+  const scanned = handed === null ? oddDocsLocal(mainRoot) : null;
+  const source = handed !== null ? handed : (Array.isArray(scanned && scanned.docs) ? scanned.docs : []);
+  const docs = [];
+  for (const doc of source) {
+    if (!doc || typeof doc.path !== "string") continue;
+    let mtimeMs = 0;
+    try {
+      const stats = fs.statSync(doc.path);
+      if (Number.isFinite(stats.mtimeMs)) mtimeMs = stats.mtimeMs;
+    } catch {
+      // An unreadable time is the oldest instant there is; it never hides a
+      // document (the listing's own rule).
+    }
+    const row = { path: doc.path, name: doc.name, mtimeMs };
+    docs.push(handed === null ? row : { ...row, order: docs.length });
+  }
+  return oddListingFor([{ checkoutName: "main", checkoutRoot: mainRoot, isMain: true, docs }]);
+}
+
+// S13/T15 (L11/T16): the DEGRADED MENU's listing. 53ae2b2's menu listed a main
+// checkout's documents in the order lib/odd-docs.js ranks them — commit recency,
+// then display name — and that sequence is kept here: main's own documents are
+// read through the SAME awaited ranking the panel's `r` uses, handed to main's
+// group (`oddGroupsWithRankedMain`), and each carries the index it landed at so
+// `buildListing` PRESERVES the rank instead of re-deriving one from mtime. This is
+// the only place in this file that passes an order signal; it never re-ranks by
+// hand and never reads a commit itself. A walk that cannot answer (or finds
+// nothing) leaves `listed` exactly as it is — the documented mtime fallback, never
+// an empty menu.
+async function oddMenuListing(groups, mainRoot, listed) {
+  const model = Array.isArray(groups) ? groups : null;
+  const root = oddMainRoot(model, mainRoot);
+  const ranked = await oddDocsOrdered(root);
+  if (!ranked || ranked.ok !== true || !Array.isArray(ranked.docs) || ranked.docs.length === 0) return listed;
+  const ordered = ranked.docs.map((doc, order) => ({ ...doc, order }));
+  if (model === null) return oddMainListing(root, ordered);
+  return oddListingFor(oddGroupsWithRankedMain(model, ordered));
+}
+
+// S6/S13/T15/T19: a document's identity is its REAL path, never its spelling.
+// `fs.realpathSync` on its own is not enough here: its JavaScript implementation
+// collapses a `..` that FOLLOWS a symlink lexically, which is exactly the case
+// this rule exists for (`<link>/../<name>.md` names the linked tree's inode, not
+// the local document the spelling collapses to). The platform's own `realpath`
+// is asked FIRST and only a runtime without it falls back. `null` is a path the
+// filesystem cannot resolve, which matches nothing — hence a STRICT helper of its
+// own rather than `oddRealPathOf`, whose documented fallback is the resolved
+// spelling and whose callers compare directories, not documents.
+function oddDocumentRealPath(target) {
+  try {
+    if (typeof fs.realpathSync.native === "function") return fs.realpathSync.native(target);
+    return fs.realpathSync(target);
+  } catch {
+    return null;
+  }
+}
+
+// S6/S13/T15/T19: the document a listing carries at this absolute target, as the
+// LISTED spelling — so a path with a `.` component opens the document the listing
+// names, never whatever string the reader typed. `null` means the listing does
+// NOT offer it, which is what refuses a private target of an unregistered
+// checkout even when the grouped model could not be read. The match is by REAL
+// path: a target that traverses a symlink names whatever inode that link reaches,
+// so comparing the resolved spellings alone opened the LOCAL document while the
+// reader's target was another tree's file (L13's one non-layout-gated finding). A
+// listed document reached without a symlink realpaths to itself, so the `.`,
+// `..` and `//` spellings that name the same inode keep opening. The target is
+// realpath'd as the reader WROTE it: `path.resolve` collapses a `..` that follows
+// a symlink lexically, which is what destroyed the evidence in the first place.
+function oddListedEntry(listed, target) {
+  const written = path.isAbsolute(target) ? target : path.resolve(target);
+  const real = oddDocumentRealPath(written);
+  if (real === null) return null;
+  for (const group of listed.groups) {
+    for (const entry of group.entries) {
+      if (typeof entry.path === "string" && oddDocumentRealPath(entry.path) === real) return entry;
+    }
+  }
+  return null;
+}
+
+// S6/S13/T15: a bare name is a target only when the listing carries it, so a name
+// no group lists keeps the refusal it always had.
+function oddListedName(listed, name) {
+  for (const group of listed.groups) {
+    for (const entry of group.entries) {
+      if (entry.name === name) return entry.name;
+    }
+  }
+  return null;
+}
+
+// S13/T15/T17 (F2): MAIN's own checkout. It is read from the SAME listing the
+// grouped model reads — `git worktree list --porcelain`, the first entry Git does
+// not flag `bare` — because that is the one answer that names the principal
+// checkout of THIS repository. The old reading believed the basename of the common
+// dir (`.git`), which a repository created with `git init --separate-git-dir` never
+// has, and then fell back to `identity.root`: inside a LINKED checkout that made the
+// linked root "main", so a failed listing offered that checkout's private documents
+// as main's. There is no such fallback now.
+//
+// A listing that cannot answer still leaves one SOUND derivation (T18/F2, L11), and it
+// has to be SOUND twice over: a directory is named only when it is VERIFIABLY this
+// clone's main working tree — it carries its own `.git` marker, that marker resolves to
+// the same common dir, and it is not the common dir itself. Git cannot arbitrate this
+// on its own: with `git init --separate-git-dir storage/.git` it reports the metadata
+// directory's PARENT as a worktree (`rev-parse --show-toplevel` answers that parent,
+// because Git derives the worktree from the git dir), so a common dir whose basename is
+// `.git` proves nothing. What separates the two claimants is which one was RE-POINTED at
+// the common dir: the real checkout's marker is a link FILE naming it, and the package's
+// own layout (`<repo-parent>/<repo-name>-worktrees/<odd>`) names that checkout for a
+// session standing in one of its worktrees. Anything else is `null`: nothing is offered
+// rather than this checkout's own listing or a metadata parent's.
+async function oddPrincipalRootAsync(cwd) {
+  try {
+    const git = libRequire("worktree-git.js");
+    const runAsync = libRunner(git);
+    const listed = await runAsync("git", ["worktree", "list", "--porcelain", "-z"], cwd);
+    if (listed && listed.status === 0) {
+      const entries = libRequire("worktree-registry.js").parseWorktreePorcelain(String(listed.stdout || ""));
+      const main = entries.find((entry) => entry && entry.bare !== true
+        && typeof entry.path === "string" && entry.path.length > 0);
+      if (main) return path.resolve(main.path);
+    }
+    const identity = await git.repoIdentityAsync(cwd, { runAsync });
+    const common = identity && typeof identity.commonDir === "string" ? identity.commonDir : "";
+    const checkoutRoot = identity && typeof identity.root === "string" ? identity.root : "";
+    if (common.length === 0) return null;
+    return oddMainCheckoutOf(checkoutRoot, common);
+  } catch {
+    // Not a checkout, or git cannot answer: no main root, so nothing is offered.
+  }
+  return null;
+}
+
+/** The `.git` marker a checkout root carries, resolved: `{ target, link }`, or null. */
+function oddGitMarkerOf(root) {
+  if (typeof root !== "string" || root.length === 0) return null;
+  const marker = path.join(root, ".git");
+  let stats = null;
+  try {
+    stats = fs.statSync(marker);
+  } catch {
+    return null;
+  }
+  if (stats.isDirectory()) return { target: oddRealPathOf(marker), link: false };
+  if (!stats.isFile()) return null;
+  let text = "";
+  try {
+    text = fs.readFileSync(marker, "utf8");
+  } catch {
+    return null;
+  }
+  const line = text.split("\n").map((value) => value.trim()).find((value) => value.length > 0) ?? "";
+  if (!line.toLowerCase().startsWith("gitdir:")) return null;
+  const name = line.slice("gitdir:".length).trim();
+  if (name.length === 0) return null;
+  // A link file may spell the git dir relative to the checkout that holds it.
+  return { target: oddRealPathOf(path.resolve(root, name)), link: true };
+}
+
+/** Two paths mean the same directory, trailing separators aside. */
+function oddSamePath(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (a.length <= 1 || b.length <= 1) return false;
+  return a.replace(/[\\/]+$/, "") === b.replace(/[\\/]+$/, "");
+}
+
+/** The real path of `target` when the system can answer, its resolved spelling otherwise. */
+function oddRealPathOf(target) {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return path.resolve(target);
+  }
+}
+
+/**
+ * T18/F2: the main checkout this package's OWN layout names for a session standing in one
+ * of its worktrees — a create only ever lands at `<repo-parent>/<repo-name>-worktrees/
+ * <odd>` (S3), so that directory's sibling is the checkout that owns it. `null` for a
+ * checkout this package did not create.
+ */
+function oddOwnedPrincipalOf(checkoutRoot) {
+  if (typeof checkoutRoot !== "string" || checkoutRoot.length === 0) return null;
+  const owned = path.dirname(checkoutRoot);
+  const suffix = "-worktrees";
+  const name = path.basename(owned);
+  if (!name.endsWith(suffix) || name.length <= suffix.length) return null;
+  const candidate = path.join(path.dirname(owned), name.slice(0, -suffix.length));
+  return oddSamePath(candidate, checkoutRoot) ? null : candidate;
+}
+
+/**
+ * T18/F2: the fallback main root — the verified candidate, or null. A candidate is
+ * verified when it carries its own `.git` marker and that marker resolves to this same
+ * common dir; a checkout RE-POINTED at it by `--separate-git-dir` (a marker link file)
+ * wins over a directory that merely contains the git dir under the `.git` name.
+ */
+function oddMainCheckoutOf(checkoutRoot, common) {
+  const wanted = oddRealPathOf(common);
+  const candidates = [];
+  const owned = oddOwnedPrincipalOf(checkoutRoot);
+  if (owned !== null) candidates.push(owned);
+  if (path.basename(common) === ".git") candidates.push(path.dirname(common));
+  const verified = [];
+  for (const candidate of candidates) {
+    if (oddSamePath(candidate, wanted)) continue;
+    const marker = oddGitMarkerOf(candidate);
+    if (marker === null || !oddSamePath(marker.target, wanted)) continue;
+    if (verified.some((seen) => oddSamePath(seen.root, candidate))) continue;
+    verified.push({ root: path.resolve(candidate), link: marker.link === true });
+  }
+  const rePointed = verified.find((entry) => entry.link === true);
+  if (rePointed) return rePointed.root;
+  return verified.length > 0 ? verified[0].root : null;
+}
+
+// S6/S13/T15: the ONE degraded menu. Its choices ARE the listing's labels and its
+// result maps back by INDEX into exactly the array offered, so it reports that
+// entry's own path — never the first document whose name another checkout also
+// carries, and never a list this file built for itself.
+async function runOddFallback(ctx, listed) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const select = ctx && ctx.ui ? ctx.ui.select : undefined;
-  if (listing.docs.length === 0) {
+  const menu = listed && Array.isArray(listed.menu) ? listed.menu : [];
+  if (menu.length === 0) {
     if (typeof notify === "function") notify("odd: no documents under odd/tasks/ in this checkout", "info");
     return;
   }
   if (typeof select !== "function") {
     if (typeof notify === "function") {
-      notify(`odd: ${listing.docs.length} document(s) under odd/tasks/ (the viewer needs an interactive session)`, "info");
+      notify(`odd: ${menu.length} document(s) under odd/tasks/ (the viewer needs an interactive session)`, "info");
     }
     return;
   }
+  const labels = menu.map((entry) => entry.label);
   let picked = null;
   try {
-    picked = await select("Odd documents", listing.docs.map((doc) => doc.name));
+    picked = await select("Odd documents", labels);
   } catch {
     picked = undefined;
   }
   if (picked === undefined || picked === null) return;
-  const doc = listing.docs.find((entry) => entry.name === picked);
-  if (!doc) return;
-  if (typeof notify === "function") notify(doc.path, "info");
+  const index = labels.indexOf(picked);
+  if (index < 0) return;
+  const entry = menu[index];
+  if (!entry) return;
+  if (typeof notify === "function") notify(entry.path, "info");
 }
 
 async function executeOdd(rawArgs, ctx) {
+  // T4 (odd-rail-section S6): the rail click that dispatched this command is over
+  // the instant the command runs, so the one-shot open guard is released HERE
+  // instead of waiting for its timer. Idempotent, and a no-op when no rail click is
+  // pending — `/odd` typed by hand never touches it.
+  releaseOddRailOpen();
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const raw = String(rawArgs ?? "").trim();
-  if (raw !== "") {
+  // S6 (T4): ONE optional target replaces the blanket refusal. A flag, a relative
+  // path, a nested path, another extension and a document outside an `odd/tasks`
+  // directory are all refused HERE, before any git read, with exactly the sentence
+  // every unknown argument has always got. T17 (F4): the target is resolved in this
+  // call's cwd before it is validated, so the three reads below still start from the
+  // session's own checkout.
+  const cwd = toolCwd(ctx);
+  const request = oddTargetRequest(raw, cwd);
+  if (request.kind === "invalid") {
     if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
     return;
   }
-  const cwd = toolCwd(ctx);
   // S21: the checkout read is awaited, never a `spawnSync` probe, and the
   // listing that follows it is the CHEAP one — `odd/tasks` on disk with no Git
   // process at all. So the viewer appears at once even on a checkout whose
@@ -6723,20 +7280,71 @@ async function executeOdd(rawArgs, ctx) {
   // (below). Nothing on this path blocks the host event loop.
   const checkoutRoot = await oddCheckoutRootAsync(cwd);
   if (!checkoutRoot) {
+    // A bare name can only be told apart from an unknown option by the scan, so a
+    // checkout that cannot be read keeps the refusal it always answered with.
+    if (request.kind === "name") {
+      if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
+      return;
+    }
     if (typeof notify === "function") notify(notGitRepositoryLine(cwd), "info");
     return;
   }
-  const listing = oddDocsLocal(checkoutRoot);
-  if (listing.ok !== true) {
-    if (typeof notify === "function") notify(notGitRepositoryLine(cwd), "info");
-    return;
-  }
-  // S9: with nothing to read there is no overlay at all — one muted line,
-  // exactly like the changes view answers an empty repository. The cheapest
-  // scan already answers this, so an empty checkout costs no Git process.
-  if (listing.docs.length === 0) {
+  // S10/S13 (T4): the panel draws the checkouts this SESSION registered — main
+  // always, whole, plus one group per registered worktree carrying what that
+  // worktree has that main does not. The set is the same one the files panel
+  // reads, which is why both surfaces stay in sync. Nothing here reads
+  // `oddModules.worktrees`: registration decides the scope, not the module
+  // switch (corrected S7).
+  const registeredRoots = filesSessionWorktreeRoots(ctx);
+  const groups = await oddGroupsFor(checkoutRoot, registeredRoots);
+  // S13 (T15): MAIN's own root. A readable model names it; a model that could not
+  // be read (pending or failed) falls back to the PRINCIPAL checkout — never to
+  // the session's own when that checkout is a linked worktree, whose private
+  // documents would otherwise be offered as main's.
+  const mainRoot = Array.isArray(groups) ? oddMainRoot(groups, null) : await oddPrincipalRootAsync(checkoutRoot);
+  // S13/T15 (L11): the ONE listing both surfaces draw — the panel's groups and the
+  // menu's entries, from the same entries, in the same order, under the same
+  // labels. With no model the only documents there are are MAIN's own, and with
+  // none of those either the listing is EMPTY: this checkout's own flat listing is
+  // never a fallback, on any surface.
+  const listed = Array.isArray(groups) ? oddListingFor(groups) : oddMainListing(mainRoot);
+  // S13 (T6): the mount-time read above answers the FIRST frame only. Every reload
+  // reads the register AT RELOAD TIME — `r`, and `a` back to the session's mode —
+  // so a worktree the rail registered after this panel opened appears on the next
+  // reload instead of waiting for the panel to be reopened.
+  const registeredRootsNow = () => filesSessionWorktreeRoots(ctx);
+  // S9/S6 (T10): the empty answer is the LOADED MODEL's, never the session
+  // checkout's alone. A model that could not be read is not an empty model — the
+  // panel opens on main's own documents (or on its empty copy) instead of
+  // refusing the command.
+  if (request.kind === "none" && Array.isArray(groups) && listed.menu.length === 0 && oddModelIsEmpty(groups)) {
     if (typeof notify === "function") notify("No odd documents under odd/tasks/ in this checkout.", "info");
     return;
+  }
+  // S6 (T10/T15): BOTH target shapes are answered from the LISTING. A bare name is
+  // a target only when the listing carries it — main's ODDs and the registered
+  // worktrees' alike — and an absolute document for the same reason: a path the
+  // listing does not offer (an unregistered worktree's, a checkout outside the
+  // scope) is refused instead of being handed to a view that cannot place it.
+  let initialDoc = null;
+  if (request.kind === "path") {
+    // S6 (T13): the view matches a target by the LISTED identity, so a path with a
+    // `.` component (or any other spelling that resolves to the same document)
+    // must open the document the listing names, never whatever the raw string names.
+    const entry = oddListedEntry(listed, request.target);
+    if (entry === null) {
+      if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
+      return;
+    }
+    initialDoc = entry.path;
+  }
+  if (request.kind === "name") {
+    const known = oddListedName(listed, request.name);
+    if (known === null) {
+      if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
+      return;
+    }
+    initialDoc = request.name;
   }
   // The viewer names only the checkout it reads: nothing is assigned from this
   // surface (S10b), so the root exists solely to know what was listed.
@@ -6747,16 +7355,137 @@ async function executeOdd(rawArgs, ctx) {
   } catch {
     helpers = null;
   }
+  // S10/S11 (T4): the grouped model is reloaded OFF the key handler, and the live
+  // view plus the reader's own scope are the only state these seams share: `a`
+  // reports the new mode, the reload that follows keeps it, and `r` reloads in the
+  // mode the reader is in.
+  let liveView = null;
+  let liveGroups = Array.isArray(groups) ? groups : null;
+  // S11 (T15): ONE applied scope for this panel. It is written in exactly ONE
+  // place — the success branch of `applyOddLoad` — so a request, a failed read or
+  // a superseded one can never move it: it always describes the listing that is
+  // really on screen, which is what the footer hint names.
+  const appliedScope = { all: false };
+  // S11/S13/D2 (T12): ONE generation counter orders EVERY load that can land on
+  // this view — the startup ranking, each `a` toggle and each `r` reload. A load
+  // takes its number when it STARTS and applies only while that number is still the
+  // latest; a superseded load is dropped whole, the `r` path by answering the view's
+  // SUPERSEDED sentinel and the others by simply not applying. ONE counter, never
+  // one per path: a late answer of one kind must not land on top of a newer one of
+  // another kind, which is exactly how the startup ranking used to replace a
+  // completed `a` listing with the order it had ranked before the toggle ran.
+  let oddGeneration = 0;
+  const beginOddLoad = () => (oddGeneration += 1);
+  const oddLoadIsLatest = (generation) => generation === oddGeneration;
+  // T13/S11: ONE shape for every load and ONE place that applies it.
+  //
+  //   { groups, scope: { all } }  a load that carries the scope it was read in
+  //   { groups, scope: null }     the startup rank: new order, no mode published
+  //   null                        the load FAILED: nothing lands
+  //
+  // Applying drops anything but the latest generation, never applies a model on
+  // `null` (the drawn rows and the applied mode stay), and hands the scope to the
+  // view so its footer hint moves WITH the data instead of with the request.
+  const applyOddLoad = (generation, load) => {
+    if (!oddLoadIsLatest(generation)) return;
+    if (!load || !Array.isArray(load.groups)) return;
+    liveGroups = load.groups;
+    // T17/F3: every load lands with the LISTING's labels, so a reload can never
+    // draw a row the menu names differently.
+    const labelled = () => oddLabelledGroups(liveGroups) ?? load.groups;
+    if (load.scope === null || load.scope === undefined) {
+      // The startup rank publishes NO mode: it only replaces main's order.
+      if (liveView && typeof liveView.applyGroups === "function") liveView.applyGroups(labelled());
+      return;
+    }
+    // S11 (T15): the ONE write. Nothing else in this file moves the applied
+    // scope, so every read of it describes the data a load really landed.
+    appliedScope.all = load.scope.all === true;
+    if (liveView && typeof liveView.applyGroups === "function") {
+      liveView.applyGroups(labelled(), { all: appliedScope.all });
+    }
+  };
+// S11 (T15): the scope the READER is asking for. The view owns that request — it
+  // flips it on each `a` press and returns it to the value before a press whose
+  // read failed — so `r` reloads the scope the reader is really in WITHOUT a
+  // second copy here that a failure, a supersede or a skip could leave stale (that
+  // drift is what made a retry ask the wrong scope). A view that cannot answer
+  // falls back to the applied scope: the last listing that really landed.
+  const oddRequestedScope = () => {
+    if (liveView && typeof liveView.requestedAll === "function") {
+      try {
+        const asked = liveView.requestedAll();
+        if (asked === true || asked === false) return asked;
+      } catch {
+        // A view that cannot answer falls back to the applied scope below.
+      }
+    }
+    return appliedScope.all;
+  };
+  // S10/S13 (T15): the groups the panel OPENS on are the ONE listing's groups —
+  // its order and its deduplicated entries. A model whose main group carries
+  // nothing keeps the model itself, because the view needs main to draw a
+  // registered worktree's delta at all (the listing drops an empty group by
+  // design). A load that lands later hands the view the model it read, whose main
+  // group is the RANKED listing, so its order is never re-sorted here.
+  const viewGroups = () => {
+    if (!Array.isArray(groups)) return null;
+    if (!listed.groups.some((group) => group.isMain === true)) return groups;
+    return listed.groups.map((group) => ({
+      checkoutName: group.checkoutName,
+      checkoutRoot: group.checkoutRoot,
+      isMain: group.isMain === true,
+      docs: group.entries.map((entry) => ({
+        name: entry.name,
+        docPath: entry.path,
+        mtimeMs: entry.mtimeMs,
+        // T17/F3: the listing's own label, so the frame paints what the menu offers.
+        label: entry.label,
+      })),
+    }));
+  };
+  // S13/T15: main's own documents for the FLAT listing the view falls back to,
+  // taken from the same listing. With no main group there is nothing to draw —
+  // never the session checkout's own documents.
+  const flatDocs = () => {
+    const main = listed.groups.find((group) => group.isMain === true);
+    return main
+      ? main.entries.map((entry) => ({ path: entry.path, name: entry.name, mtimeMs: entry.mtimeMs, label: entry.label }))
+      : [];
+  };
+  // T18/L11: the model a load hands the view with main's RANKED order — main's own
+  // documents read through lib/odd-docs.js's reader (commit recency, then display name),
+  // exactly the order the startup rank and `r` land, merged into main's group by
+  // `oddGroupsWithRankedMain`. Nothing is re-ranked here. `null` answers a generation a
+  // newer load has already superseded, so a read that lost the race is never applied.
+  const oddRankedMain = async (generation, groups) => {
+    const ranked = await oddDocsFor(oddMainRoot(groups, mainRoot));
+    if (!oddLoadIsLatest(generation)) return null;
+    if (!ranked || ranked.ok !== true || !Array.isArray(ranked.docs)) return groups;
+    return oddGroupsWithRankedMain(groups, ranked.docs);
+  };
   if (helpers && ctx && ctx.ui && typeof ctx.ui.custom === "function") {
     try {
       await ctx.ui.custom(
         (hostTui, theme, _keybindings, done) => {
           // Started INSIDE the factory so the history walk overlaps the overlay
           // instead of preceding it, and never runs at all when the host falls
-          // back to the plain menu.
-          const settled = oddDocsOrdered(checkoutRoot);
+          // back to the plain menu. S10/S12 (T15): it ranks MAIN's documents from
+          // main's OWN root — never the session's checkout, which inside a
+          // worktree would pour that worktree's documents into main's group.
+          const rankGeneration = beginOddLoad();
+          const settled = oddDocsOrdered(oddMainRoot(liveGroups, mainRoot));
           const view = libRequire("odd-view.js").createOddView({
-            docs: listing.docs,
+            docs: flatDocs(),
+            // S10/S13 (T15): the panel draws the ONE listing — the same value the
+            // degraded menu offers — so labels, order and identity are decided in
+            // exactly one place. A model that could not be read leaves main's own
+            // flat listing, or the empty copy.
+            groups: viewGroups(),
+            // S6 (T4): the target the command was given. The view resolves it
+            // against the model above and, for one it cannot place, opens on its
+            // own first document instead of failing.
+            initialDoc,
             checkoutName,
             // S1: the viewer reads documents. It is handed NO association prop
             // and NO write callback — a worktree carries no ODD document, so
@@ -6770,9 +7499,79 @@ async function executeOdd(rawArgs, ctx) {
             // it.
             openExternal: (target) => openExternalSuspended(hostTui, target),
             loadDoc: (doc) => libRequire("odd-docs.js").readOddDoc(doc),
+            // S11 (T4): `a` flips the mode in the view and reports the new value
+            // once; the reload happens here, awaited off the key handler, and
+            // lands back through `applyGroups`. `true` means EVERY worktree Git
+            // lists — `all: true`, no ownership filter (S11) — and `false` the
+            // session's registered set, read at THIS moment (S13).
+            // A reload that fails keeps the groups already on screen and never
+            // throws into the host.
+            onToggleAll: (all) => {
+              // S11 (T15): the scope is the one the VIEW asked for; the applied
+              // scope is only written when this load lands (inside applyOddLoad).
+              const scope = all === true;
+              const generation = beginOddLoad();
+              return Promise.resolve(oddGroupsFor(
+                checkoutRoot,
+                scope ? undefined : registeredRootsNow(),
+                scope,
+              )).then(async (next) => {
+                if (!oddLoadIsLatest(generation)) return undefined;
+                if (!Array.isArray(next)) return false;
+                // T13/S11: the load's own scope travels with it, so the hint can
+                // only ever describe the data that was actually applied. T18/L11:
+                // a load that RETURNS to the session's scope carries main's RANKED
+                // order — the one the first frame and `r` already have — instead of
+                // the cheap scan's mtime order, so `a` twice cannot reorder a listing
+                // whose rows did not change. `a` into the all-worktrees mode keeps the
+                // scan, whose own walk ranks nothing.
+                const groups = scope ? next : await oddRankedMain(generation, next);
+                if (groups === null || !oddLoadIsLatest(generation)) return undefined;
+                applyOddLoad(generation, { groups, scope: { all: scope } });
+                return true;
+              }, () => {
+                if (!oddLoadIsLatest(generation)) return undefined;
+                return false;
+              });
+            },
             // S21: the reload is the awaited reader too, so `r` never freezes
-            // the frame on a slow history walk.
-            reloadDocs: () => oddDocsFor(cwd),
+            // the frame on a slow history walk. S10/S11 (T4): the GROUPS are the
+            // model actually drawn, so they are reloaded through the same seam
+            // in the reader's own mode — otherwise a reload would refresh a
+            // listing nobody sees and leave the drawn one stale.
+            reloadDocs: async () => {
+              const generation = beginOddLoad();
+              // S11/S13 (T15): the model is reloaded in the reader's own scope —
+              // `all: true` in the all-worktrees mode, the session's registered
+              // set (read NOW) otherwise — read from the ONE request the view
+              // owns, so a failed toggle can never leave this asking elsewhere.
+              const scopeAll = oddRequestedScope();
+              const next = await oddGroupsFor(
+                checkoutRoot,
+                scopeAll ? undefined : registeredRootsNow(),
+                scopeAll,
+              );
+              // D2 (T6): a reload the generation has already superseded answers
+              // with the documented sentinel, so it is INERT — the view ignores it
+              // and nothing of it lands: not the listing, not the preview scroll,
+              // not the footer's reload state.
+              if (!oddLoadIsLatest(generation)) return oddReloadSuperseded();
+              // T13/S11: a Git read that failed is NOT a model. Answering `null`
+              // is the view's failure branch, which keeps the drawn rows and the
+              // applied mode exactly as they were.
+              if (!Array.isArray(next)) return null;
+              // S10/S12 (T15): the ranked listing ranks MAIN's documents, so it is
+              // read from main's own root — never from the session's checkout.
+              const flat = await oddDocsFor(oddMainRoot(next, mainRoot));
+              if (!oddLoadIsLatest(generation)) return oddReloadSuperseded();
+              if (flat && flat.ok === true) {
+                applyOddLoad(generation, {
+                  groups: oddGroupsWithRankedMain(next, flat.docs),
+                  scope: { all: scopeAll },
+                });
+              }
+              return flat;
+            },
             helpers,
             theme,
             rowsAvailable: () => oddTerminalRows(hostTui),
@@ -6785,13 +7584,30 @@ async function executeOdd(rawArgs, ctx) {
             },
             done,
           });
+          liveView = view;
           // The ranked order replaces the cheap one in the LIVE view: the
           // focused document survives by identity, so the reader never loses
           // the pane they are already reading. A walk that could not answer
           // leaves the cheap first frame standing — it is the documented mtime
-          // fallback, never an empty viewer.
+          // fallback, never an empty viewer. S10/S21 (T4): a grouped panel draws
+          // the MODEL, and this listing ranks one checkout's own documents, so
+          // with groups the order lands on main's group.
           settled.then((next) => {
+            // T12: the startup ranking took its number when it STARTED, so a
+            // listing a newer `a` or `r` has already applied supersedes it and
+            // this answer is dropped whole — it would otherwise put main's OLD
+            // order back on screen and take a document added since with it.
+            if (!oddLoadIsLatest(rankGeneration)) return;
             if (!next || next.ok !== true || !Array.isArray(next.docs)) return;
+            if (Array.isArray(liveGroups)) {
+              // T13/S11: the rank publishes NO mode (`scope: null`); it only
+              // replaces main's order through the same one apply.
+              applyOddLoad(rankGeneration, {
+                groups: oddGroupsWithRankedMain(liveGroups, next.docs),
+                scope: null,
+              });
+              return;
+            }
             if (typeof view.applyDocs === "function") view.applyDocs(next.docs);
           }).catch(() => {
             // The cheap first frame already stands.
@@ -6803,22 +7619,13 @@ async function executeOdd(rawArgs, ctx) {
         { overlay: true, overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%", margin: 0 } },
       );
     } catch {
-      // A host that rejects the overlay degrades to the menu below.
-      await runOddFallback(ctx, await oddFallbackListing(checkoutRoot, listing));
+      // A host that rejects the overlay degrades to the menu below — the SAME
+      // listing the panel would have drawn, in main's ranked order (T16).
+      await runOddFallback(ctx, await oddMenuListing(groups, mainRoot, listed));
     }
     return;
   }
-  await runOddFallback(ctx, await oddFallbackListing(checkoutRoot, listing));
-}
-
-// The plain select menu is the DEGRADED path (no TUI helpers, or a host that
-// refused the overlay): there is no live frame to protect, so it keeps the same
-// git-ranked order the old synchronous listing handed it. A walk that cannot
-// answer leaves the cheap scan in place, so the menu never lists nothing.
-async function oddFallbackListing(root, local) {
-  const ordered = await oddDocsOrdered(root);
-  const usable = ordered && ordered.ok === true && Array.isArray(ordered.docs) && ordered.docs.length > 0;
-  return usable ? ordered : local;
+  await runOddFallback(ctx, await oddMenuListing(groups, mainRoot, listed));
 }
 
 // `/odd` (odd-viewer S1-S8): a two-pane viewer of this checkout's odd/
@@ -6826,7 +7633,7 @@ async function oddFallbackListing(root, local) {
 function registerOddCommand(pi) {
   if (typeof pi?.registerCommand !== "function") return;
   pi.registerCommand("odd", {
-    description: "Read this checkout's odd documents: list on the left, styled markdown on the right",
+    description: "Read this checkout's odd documents: list on the left, styled markdown on the right; one optional target — an ODD name, or the absolute odd/tasks/*.md document of main or of a worktree this session registered",
     handler: async (args, ctx) => {
       await executeOdd(args, ctx);
     },
@@ -10413,6 +11220,302 @@ function registerIssuesSidebar(pi) {
 }
 
 // ---------------------------------------------------------------------------
+// The ODD rail (odd-rail-section T4: S1, S2, S5, S6, S9, S12, S13). A SECOND
+// section beside the issues one, answered by the same bridge object and by the
+// package's own `lib/odd-rail-section.js` factory. It is the sibling of
+// `registerIssuesSidebar` above, not a part of it: same gate, same subscription,
+// same teardown, different read.
+//
+// The corrected S7 is the reason nothing below reads `oddModules.worktrees`: the
+// rail is driven by the worktrees REGISTERED in this session (the `worktree_register`
+// entries `filesSessionWorktreeRoots` reads, the same reader the files panel uses),
+// so it works with Worktrees+ off. The ONE gate is the bridge having published a
+// compatible object — without it there is no rail to register.
+//
+// S9/S13: the rows are the grouped model's, scoped to the registered set, one row per
+// ODD name (S12), with the session's `write`/`edit` record only ORDERING them.
+// `lines()` never runs git: the section reads ONE in-process snapshot and schedules
+// its own read, so a frame is never spent on a checkout listing.
+//
+// S6: the click DISPATCHES `/odd <document>`, it does not mount a panel — the command
+// is the one way in, exactly like the issues rail's. One open at a time, guarded
+// synchronously before `sendUserMessage` and released by the command it started or by
+// the bounded timer below (`sendUserMessage` returns `void` by contract, so a command
+// the host never runs must not leave the rail dead).
+const ODD_RAIL_OPEN_GUARD_MS = 10000;
+const ODD_RAIL_DISPATCH_FAILED = "the /odd command could not be dispatched";
+
+// The live binding, torn down and remade exactly like the issues one: `oddRailHandle`
+// owns the section's floor timer, `oddRailDisposer` is the bridge's own unregister
+// for it, and `oddRailApi` is the published object the section was registered on.
+let oddRailHandle = null;
+let oddRailDisposer = null;
+let oddRailApi = null;
+let oddRailSubscribed = false;
+// The one-shot open guard: a token taken synchronously by a click, and the bounded
+// timer that releases it if the command never runs.
+let oddRailOpenToken = null;
+let oddRailOpenTimer = null;
+
+function clearOddRailOpenTimer() {
+  if (oddRailOpenTimer === null) return;
+  const timer = oddRailOpenTimer;
+  oddRailOpenTimer = null;
+  try {
+    clearTimeout(timer);
+  } catch {
+    // A host timer that cannot be cancelled still fires into a released guard.
+  }
+}
+
+// Idempotent, and scoped to one token when one is named, so a release can never
+// clear a NEWER open's guard.
+function releaseOddRailOpen(token) {
+  if (token !== undefined && oddRailOpenToken !== token) return;
+  clearOddRailOpenTimer();
+  oddRailOpenToken = null;
+}
+
+function armOddRailOpenGuard(token) {
+  clearOddRailOpenTimer();
+  let timer = null;
+  try {
+    timer = setTimeout(() => {
+      releaseOddRailOpen(token);
+    }, ODD_RAIL_OPEN_GUARD_MS);
+  } catch {
+    timer = null;
+  }
+  // Unref'd: the guard is a safety net for the rail, never a reason for the process
+  // to stay alive.
+  if (timer && typeof timer.unref === "function") {
+    try {
+      timer.unref();
+    } catch {
+      // A host timer without a working unref still bounds the wait.
+    }
+  }
+  oddRailOpenTimer = timer;
+}
+
+// The documented path travels in the message and nowhere else: it is not logged,
+// not announced and not kept once the open is released.
+function dispatchOddRailOpen(pi, target) {
+  // A click while a rail open is in flight has no effect at all, exactly like the
+  // issues rail's: no second command, no notice, no paint.
+  if (oddRailOpenToken !== null) return { ok: true };
+  const docPath = target && typeof target.docPath === "string" ? target.docPath : "";
+  if (docPath.length === 0) return { ok: false, error: ODD_RAIL_DISPATCH_FAILED };
+  const token = {};
+  oddRailOpenToken = token;
+  armOddRailOpenGuard(token);
+  if (!pi || typeof pi.sendUserMessage !== "function") {
+    // The host cannot dispatch, so nothing will run to release the guard.
+    releaseOddRailOpen(token);
+    return { ok: false, error: ODD_RAIL_DISPATCH_FAILED };
+  }
+  try {
+    pi.sendUserMessage(`/odd ${docPath}`, { expandPromptTemplates: true });
+  } catch (err) {
+    // A dispatch that threw reaches no command either.
+    releaseOddRailOpen(token);
+    return { ok: false, error: `${ODD_RAIL_DISPATCH_FAILED}: ${issuesSidebarError(err, "unknown error")}` };
+  }
+  return { ok: true };
+}
+
+// The section's read: the session's own checkout, the checkouts it REGISTERED, the
+// grouped model over those, and the session's touch record (S9) — the one argument
+// that never decides existence, only order. A read with no session, no checkout or
+// no model answers an empty list rather than an error row: there is simply nothing
+// to draw.
+async function loadOddRailRows() {
+  const ctx = issuesSidebarCtx;
+  if (ctx === null) return [];
+  const repoRoot = await oddCheckoutRootAsync(toolCwd(ctx));
+  if (!repoRoot) return [];
+  const groups = await oddGroupsFor(repoRoot, filesSessionWorktreeRoots(ctx));
+  // S13 (T13): a listing Git could not read is no model at all. REJECT instead of
+  // drawing an unregistered checkout's private documents under main: the
+  // section's failure branch keeps its previous rows and marks them stale.
+  if (!Array.isArray(groups)) throw new Error("cannot read the ODDs");
+  const model = libRequire("odd-rail-model.js");
+  return model.railRows({
+    groups,
+    touched: oddSession === null ? [] : oddSession.touched(),
+  });
+}
+
+// T10 (S13): ONE refresh of the live section for the triggers that ask for a read
+// without drawing a frame — this session's `write`/`edit` on an ODD (T8/S9) and the
+// host's own worktree registration, below. No live section is nothing to do, and a
+// section that throws never breaks the trigger.
+function refreshOddRailNow() {
+  const live = oddRailHandle;
+  if (live === null || typeof live.refresh !== "function") return;
+  try {
+    const pending = live.refresh();
+    if (pending && typeof pending.catch === "function") pending.catch(() => {});
+  } catch {
+    // The rail is optional: a failed refresh never breaks the record.
+  }
+}
+
+// T10 (S13): `gentle-pi:session-worktree-changed` — the host event gentle-shell
+// emits after each successful worktree registration. This is an OBSERVED,
+// UNDOCUMENTED seam of that host, not a contract: it is listened to best effort,
+// nothing else depends on it, and the section's TTL stays the floor if it never
+// arrives. ONE subscription for the section's whole life; a host without
+// `pi.events`, a seam that throws and an event with no live section are all the
+// same silence.
+const ODD_RAIL_WORKTREES_EVENT = "gentle-pi:session-worktree-changed";
+let oddRailWorktreesSubscribed = false;
+
+function subscribeOddRailWorktreesChanged(pi) {
+  if (oddRailWorktreesSubscribed) return;
+  try {
+    const events = pi && pi.events ? pi.events : null;
+    if (!events || typeof events.on !== "function") return;
+    events.on(ODD_RAIL_WORKTREES_EVENT, () => {
+      try {
+        refreshOddRailNow();
+      } catch {
+        // A host event never breaks the rail.
+      }
+    });
+    oddRailWorktreesSubscribed = true;
+  } catch {
+    // A host whose event seam throws keeps the TTL as its only refresh.
+  }
+}
+
+// T18's teardown, for this section: the bridge's unregister first, then the
+// section's own `dispose()`, each guarded on its own so a teardown that throws still
+// leaves the caller free to register the replacement. The slots are cleared BEFORE
+// either call, so a re-entrant teardown cannot run twice and nothing keeps pointing
+// at a section this module no longer owns. The touch callback is unset here as well,
+// so a write after the session ended asks nobody for a refresh.
+function teardownOddRail() {
+  const disposer = oddRailDisposer;
+  const handle = oddRailHandle;
+  oddRailDisposer = null;
+  oddRailHandle = null;
+  releaseOddRailOpen();
+  setOddSessionRefresh(null);
+  if (disposer !== null) {
+    try {
+      disposer();
+    } catch {
+      // A bridge that refuses the unregister still gets its section disposed.
+    }
+  }
+  if (handle !== null && typeof handle.dispose === "function") {
+    try {
+      handle.dispose();
+    } catch {
+      // A section that refuses `dispose()` never blocks the replacement.
+    }
+  }
+}
+
+function mountOddRail(pi, api) {
+  let factory;
+  try {
+    factory = libRequire("odd-rail-section.js");
+  } catch {
+    return;
+  }
+  if (!factory || typeof factory.createOddRailSection !== "function") return;
+  // A mount REPLACES the binding (`/reload`, a republished bridge, a second mount).
+  teardownOddRail();
+  const onRefreshed = typeof api.requestRepaint === "function"
+    ? () => {
+      try {
+        api.requestRepaint();
+      } catch {
+        // A repaint failure never breaks the section.
+      }
+    }
+    : undefined;
+  let handle;
+  try {
+    handle = factory.createOddRailSection({
+      load: () => loadOddRailRows(),
+      open: (target) => dispatchOddRailOpen(pi, target),
+      ...(onRefreshed === undefined ? {} : { requestRepaint: onRefreshed }),
+    });
+  } catch {
+    return;
+  }
+  if (!handle || !handle.section) return;
+  let disposer;
+  try {
+    disposer = api.registerSection(handle.section);
+  } catch {
+    return;
+  }
+  oddRailHandle = handle;
+  oddRailDisposer = typeof disposer === "function" ? disposer : null;
+  oddRailApi = api;
+  // T8 (S9): a `write`/`edit` this session made on an `odd/tasks` document asks the
+  // section for ONE immediate read — the touch already moved that ODD to the front of
+  // the record, so the refresh is what puts it first on screen. Unset by
+  // `teardownOddRail()`, and calling it while unset is a no-op.
+  setOddSessionRefresh(refreshOddRailNow);
+}
+
+// T10 (S13): the session boundary for a rail that SURVIVES it. The section is torn
+// down on shutdown only, so a session_start on the same bridge would otherwise keep
+// the PREVIOUS session's rows until the one-minute TTL happened to expire. Dropping
+// the snapshot here makes the next drawn frame reload — new, resumed, forked and
+// reloaded alike, because they all arrive through the one `session_start` hook.
+function invalidateOddRail() {
+  const live = oddRailHandle;
+  if (live === null || typeof live.invalidate !== "function") return;
+  try {
+    live.invalidate();
+  } catch {
+    // The rail is optional: a section that refuses the supersede never breaks the
+    // boundary.
+  }
+}
+
+// The rail reaches the host ONLY through the published bridge object — the same gate
+// the issues section uses, and the ONLY one: nothing here reads `oddModules`. A host
+// without the object is subscribed to the ready announcement ONCE and nothing else
+// happens (no notify, no throw, no other surface touched).
+function registerOddRail(pi) {
+  try {
+    // T10 (S13): the host's own worktree-registration announcement, listened to
+    // once for the section's whole life and guarded like every other `pi.events`
+    // listener here.
+    subscribeOddRailWorktreesChanged(pi);
+    const api = issuesSidebarBridge();
+    if (api !== null) {
+      // The SAME published object is the same bridge, so a second moment (a
+      // `session_start` after a shutdown tore the section down) binds the rail again
+      // only when it has no section; otherwise it contributes nothing twice. A
+      // DIFFERENT object is a republished bridge, and `mountOddRail` replaces the
+      // previous binding.
+      if (api === oddRailApi && oddRailHandle !== null) return;
+      mountOddRail(pi, api);
+      return;
+    }
+    if (oddRailSubscribed) return;
+    const subscribed = subscribeBridgeReady(pi, () => {
+      try {
+        registerOddRail(pi);
+      } catch {
+        // The rail stays absent; every other surface keeps working.
+      }
+    });
+    if (subscribed) oddRailSubscribed = true;
+  } catch {
+    // The rail is optional: a broken bridge never breaks this extension.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // S36 (files-picker T15): the file picker's ONE key, bound directly.
 //
 // The key is bound HERE, on the host's own seam and bound once at extension load:
@@ -10865,6 +11968,11 @@ function registerOddWorktreeSurfaceEntries(pi) {
   } catch {
     oddModules = { codegraph: true, worktrees: true };
   }
+  // S8/S9 (T8): the record of the ODDs this session wrote or edited is NOT part of the
+  // worktree half: the ODD rail is `Worktrees+`'s surface, so the attribution has to be
+  // there with that module OFF too. One record per load — a `session_start` restores it
+  // from the session's own entries.
+  oddSession = createOddSession();
   if (oddModules.worktrees) registerWarpMessageRenderer(pi);
   // S5 (warp-queue-boundary): the durable fallback of the queued line needs a
   // renderer for its own entry type, exactly like Pi's `restored N messages`
@@ -10876,6 +11984,10 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // published its API; otherwise one ready-announcement subscription. The same
   // path contributes the bash activity design.
   registerIssuesSidebar(pi);
+  // T4 (odd-rail-section): the ODD rail, a second section on the SAME published
+  // object. It is registered here rather than inside the `Worktrees+` half because
+  // the corrected S7 makes the session's REGISTERED worktrees its scope.
+  registerOddRail(pi);
   if (oddModules.worktrees) registerWarpCommand(pi);
   registerOddCommand(pi);
   // T7 (files-picker): the file picker is the fourth command. It mounts its own
@@ -10925,6 +12037,12 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // `registerShortcut`, so this boundary has nothing of the picker's to do.
   pi.on("session_start", (event, ctx) => {
     rememberIssuesSidebarSession(ctx);
+    // S8/S9 (T8): the resume boundary. A resumed (or new, forked, reloaded) session
+    // remembers the ODD documents it wrote or edited because the entries are rebuilt
+    // here. It sits in the ONE `session_start` hook rather than a second one for the
+    // same event, and it is not gated by the `Worktrees+` switch: the attribution of
+    // this session's ODDs exists with that module off as well.
+    restoreOddSession(ctx);
     // T16 (S6/S9): a session that starts in another checkout also cuts the CACHE
     // write path, not just the section's snapshot. The identity — not the checkout
     // — keys the cache, so two checkouts of one repository share an entry: an
@@ -10947,6 +12065,12 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // new binding. This is the moment both are picked up again; with a live
     // section on the same bridge it is a no-op.
     registerIssuesSidebar(pi);
+    // T4 (odd-rail-section): the same moment for the ODD rail, for the same reason.
+    // T10 (S13): and the rows belong to the session that read them — a rail that
+    // survives the boundary is invalidated here, so the next drawn frame reloads
+    // instead of showing the previous session's rows until the TTL expires.
+    invalidateOddRail();
+    registerOddRail(pi);
     // S5 (T4/S5): dispatched, never awaited, and only while the rail is active.
     preloadIssuesSidebar(railHandleBefore, railWasDrawn);
     // S7: the prompt card's install belongs to the lifecycle pair the factory registers
@@ -11008,6 +12132,10 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // ended here: the bridge's unregister and the section's own `dispose()`, so a
     // frame the host still paints after shutdown arms nothing and reads nothing.
     teardownIssuesSidebar();
+    // T4 (odd-rail-section): the ODD rail goes with the session it read for, and
+    // the open guard goes with it too, so a click left over never blocks the next
+    // session.
+    teardownOddRail();
     // S7: the prompt card's teardown belongs to the lifecycle pair registered before the
     // bridge gate — the same owner as its install, so a session whose bridge was never
     // present still closes (and its ready announcement can no longer arm an install).
@@ -11043,6 +12171,14 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // the host runs it. Same switch: with `Worktrees+` off, a read is left as the host proposed it.
   if (oddModules.worktrees) pi.on("tool_call", (event) => keepSkillReadWholeCall(event));
   if (oddModules.worktrees) pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
+  // S8/S9 (T8): the ODD documents THIS session wrote or edited. It is a THIRD
+  // `tool_result` observation beside the naming one — the two answer different
+  // questions about the same event — and it is `tool_result` on purpose: a write that
+  // never landed is not a touch. Nothing here draws: the record is what the rail's
+  // section reads (T4). It is deliberately NOT gated by `Worktrees+`: the rail's ODD
+  // list belongs to that module, so the attribution must already be recording when the
+  // module is off. Every worktree observation above and below keeps its own gate.
+  pi.on("tool_result", (event, ctx) => noteOddSessionTouch(event, ctx, pi));
   // S10 (T9): ONE `tool_result` observation for the rail's forced refresh. It
   // answers the `bash` tool only — every other tool returns before the classifier
   // is even loaded — and it is separate from the naming handler because the two
@@ -11223,4 +12359,4 @@ function registerOddWorktreeSurfaceEntries(pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setUserPromptCardHostLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setUserPromptCardHostLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule, oddSession, setOddSessionRefresh };

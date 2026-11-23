@@ -826,11 +826,12 @@ a pull request in both buckets counts once.
   host without the bridge has neither the section nor the toggle. The section
   declares no preview of its own: every `Sections` row draws the host's single
   shared list of active sections — `[changes] [rdd] [agents] [todo] [usageCost] …` —
-  and the bridge appends this section's `rowLabel` (`github`) to it while the
-  section is shown, leaving it out of a `hidden` row's hypothetical. There is
-  nothing to opt into, and `registerSection` has no `preview` field. The row was
-  named `issues` before the pull requests joined it; it is `github` now, and that
-  is the name a `/gentle:customize` → `Sections` row shows. The section also
+  and the bridge appends that section's `rowLabel` — `github` for this one, `odd`
+  for the ODD rail below — to it while the section is shown, leaving it out of a
+  `hidden` row's hypothetical. There is nothing to opt into, and `registerSection`
+  has no `preview` field. The row was named `issues` before the pull requests
+  joined it; it is `github` now, and that is the name a `/gentle:customize` →
+  `Sections` row shows. The section also
   declares `placement: 'end'` (gentle-shell-bridge `0.13.0` lets a section name
   where it sits in the rail): the GITHUB card goes after every native card, which
   is where it always went and the bridge's own default, said out loud so it does
@@ -995,6 +996,68 @@ a pull request in both buckets counts once.
   just fixed is noticed quickly), once per checkout and `GH_HOST`, at most eight
   checkouts at a time, and everything is dropped at `session_shutdown`. A verdict that
   lands after its session was replaced is discarded.
+
+## The `ODD` rail section
+
+A second sidebar section, beside the `GITHUB` one and titled `ODD`, listing the ODD
+this machine is working on across every checkout the session knows about. It is
+placed right after the host's own `AGENTS` rail part (`placement: { after: "agents" }`),
+never at the top. Rows are the ODD documents under `odd/tasks/`, read from the same
+grouped model `/odd` draws.
+
+- **One row per ODD NAME, never one per checkout.** An ODD that exists in main and in
+a worktree is ONE entry, and the row's right-hand column — the bridge's own muted
+`meta` cell — names the copy the click will open: `main`, or the worktree's own name,
+never a path. Which copy that is: the most recently modified document, and on an
+exact tie `main`, because `main` is a group label and a tie-break, not an override.
+Two worktrees at the same instant are settled by the model's own group order.
+- **The scope is the session's registered worktrees.** The section lists main's ODDs
+always, plus the ODDs of the checkouts this session registered through the host's
+`worktree_register` tool — the same session entries the files panel and `/odd`
+read — so the rail and the panel answer from one set and stay in sync. A registered
+worktree whose `odd/tasks` has nothing new or different from main contributes
+nothing at all: no row and no group, since a row is an ODD and not a checkout.
+- **Four rows, then `N more`.** The body holds at most four ODDs; with more, the
+fifth line reads `<N> more`, in the dim tone, and is inert — there is no panel
+behind "the rest". Exactly four ODDs paint four rows and no elision line.
+- **The ODDs this session wrote or edited come first.** A `write` or an `edit` whose
+target is an `odd/tasks/*.md` document is recorded against the session, and that
+record ORDERS the rail and asks for an immediate re-read; it never adds a row, never
+removes one and never decides where an ODD lives. Touched names come first, by their
+own touch instant; an exact tie on touch time follows the order the touches were
+recorded. For everything untouched the order is recency (`mtimeMs` descending) and
+then the name in code units, so the sequence is the same on every host.
+- **A click opens `/odd` on that document; it does not mount a panel itself.**
+Clicking a row sends `/odd <absolute document path>` to the host at once, so the
+viewer opens on that ODD — the copy the row's `meta` named — and the panel decides
+what it reads. One open at a time: a click while an open is in flight does nothing at
+all — no second message, nothing painted, nothing refused — and the rail answers
+again once the command runs, or after a bounded safety interval of about ten seconds
+if the host never ran it. A path holding spaces is one argument, exactly as typed.
+- **A frame never runs `git`.** `lines()` reads one in-process snapshot and only ever
+SCHEDULES the read: the grouped model (`git worktree list`, then one comparison per
+worktree with something to compare) is read off the frame, behind the section's own
+TTL, and again — immediately — when the session records a touch or the host announces
+that a worktree was registered. A `session_start` does not read anything itself: it drops
+the previous session's rows, so the next drawn frame schedules the read instead of
+waiting out the TTL. A hidden section schedules no read of its own — a drawn frame
+is what owns the timer and the staleness path — but the session's own recorded touch
+asks for one immediate read even with no frame drawn. The
+registration announcement is the host event `gentle-pi:session-worktree-changed`, an
+observed seam that gentle-shell does not document as a contract: if it is renamed or
+never arrives, the TTL is the floor and a worktree registered mid-session appears at the
+next refresh, up to a minute later.
+- **It does not depend on `Worktrees+`.** The rail is not one of the worktree
+surfaces: with that module Off the worktree tools, `/warp` and the guards are gone
+and this section is still registered, because what scopes it is the session's
+registered worktrees. The ONE gate is the bridge: a host that published no
+compatible object gets no section (no notify, nothing else touched), and a bridge
+announced later registers it through the one `ready` subscription. `session_shutdown`
+disposes it — the bridge's unregister and the section's own `dispose()` — so the
+ended session leaves no read and no click behind.
+- **What it needs.** A checkout whose repository git can be read, and a Gentle Shell
+whose `gentle-shell-bridge` published its API and draws a rail. No `gh`: unlike the
+`GITHUB` section, this one has no CLI of its own, no network and nothing to refuse.
 
 ## `/files`: the picker, its scopes and its orders
 

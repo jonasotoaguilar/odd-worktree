@@ -6,8 +6,8 @@ starts, which rule each change must preserve, and where to begin.
 ## What This Codebase Owns
 
 One Pi extension package, `pi-odd-worktree`: two agent tools (`worktree_create`,
-`worktree_list`), five panels (`/warp`, `/odd`, `/files`, `/issues`, `/prs`), one
-optional sidebar section and two tool designs on the bridge — the `activity`
+`worktree_list`), five panels (`/warp`, `/odd`, `/files`, `/issues`, `/prs`), two
+optional sidebar sections — the `GITHUB` issues rail and the `ODD` rail — and two tool designs on the bridge — the `activity`
 value of its `Card activity` line (`bash`, the read-only shell tools `grep`, `find`,
 `ls`, and `read`, `write` and `edit`, the last two through a scope limited to
 skill and ODD paths, which is what lets the file cards ask about them) and the
@@ -23,14 +23,14 @@ creating and listing the checkouts an ODD works in, reading a checkout's
 checkout's files, reading and — role permitting — editing that checkout's GitHub
 issues and pull requests, and the drawing of its own cards. `git` is the only external requirement,
 and gentle-shell-bridge is the plugin's own prerequisite: without it the package
-loads nothing at all. With it, the bridge carries two control surfaces: the rail
-section and the design (which the file cards read). The two host shortcuts are
+loads nothing at all. With it, the bridge carries three control surfaces: the two
+rail sections and the design (which the file cards read). The two host shortcuts are
 neither: the file picker's `alt+p` and the issues panel's `alt+i` are
 bound directly on the host, and `GENTLE_PI_FILES_KEY` and `GENTLE_PI_ISSUES_KEY`
 override them. `gh` is optional and belongs to the three GitHub surfaces
 alone — `/issues`, `/prs` and the `GITHUB` rail section: it is a local `PATH` walk
 (`lib/which-command.js`), never a child process,
-and when it finds nothing, neither command is ever registered and the rail section is
+and when it finds nothing, neither command is ever registered and the `GITHUB` rail section is
 never added — every other surface keeps working.
 
 ## What It Does Not Own
@@ -63,7 +63,9 @@ never added — every other surface keeps working.
    behind the bridge gate it registers the five commands (`/issues` and `/prs`
    only when the
    local `gh` probe finds the CLI), the two tools, the message renderer, the file
-   card, the rail section (also `gh` only), the two tool designs and the hooks —
+   card, the two rail sections (`GITHUB`, also `gh` only, and `ODD`, scoped to the
+   session's registered worktrees and therefore outside `Worktrees+`), the two tool
+   designs and the hooks —
    deferred until gentle-shell-bridge is present, and nothing at all without it.
    Its `gh` gate is dispatched startup work under the generation the
    dispatch captured, never an awaited step of `session_start`, so a session start
@@ -93,7 +95,7 @@ Every module and what it owns is one row in [`code-map.md`](code-map.md).
 | Extension entry point | Registration, renderers, optional bridge surfaces, hooks | `extensions/odd-worktree-tools.ts` |
 | Worktrees | Create, list, ownership, removal, the `bash` guards | `lib/worktree-create.js` |
 | `/warp` panel | Selector, extended list, create wizard, delete confirmation, queued warp | `lib/warp-selector-view.js` |
-| ODD reader | `odd/tasks/*.md` discovery, ordering and markdown rendering | `lib/odd-view.js` |
+| ODD reader | `odd/tasks/*.md` discovery, ordering and markdown rendering; the grouped model and the `ODD` rail | `lib/odd-view.js` |
 | `/issues` | The `gh` client, the view, the repository pin, the linked-PR click and the rail section with its two cache halves | `lib/gh-issues.js` |
 | `/prs` | The pull-request `gh` client, the panel, its preview, the linked-issue click and the rail's pull-request count | `lib/gh-prs.js` |
 | Cards | The card substrate, the tool cards, the file cards and the two tool designs | `lib/shell-card.js` |
@@ -111,7 +113,7 @@ for each is in [`invariants.md`](invariants.md).
 | --- | --- |
 | [1](invariants.md) | One extension entry point: `pi.extensions` is exactly `["./extensions/odd-worktree-tools.ts"]` and `extensions/` holds no other file. |
 | [2](invariants.md) | No customize command, plugin-tools toggle or Herdr panel surface; CodeGraph only as 18 and 19 allow. |
-| [3](invariants.md) | The shipped surface is exactly five commands, two tools, one sidebar section and two tool designs. |
+| [3](invariants.md) | The shipped surface is exactly five commands, two tools, two sidebar sections and two tool designs. |
 | [4](invariants.md) | Deletion refuses on a live session and discloses every caveat it could not resolve. |
 | [5](invariants.md) | Deletion is git only: `git worktree remove <absolute path>`, branch kept. |
 | [6](invariants.md) | `/issues` keeps repository identity pinning, and refuses a mutation after the remote moves. |
@@ -162,6 +164,7 @@ Work on a branch, never on `main`: an ODD gets its own checkout at
 | `/issues`, its tabs or its capabilities | `lib/gh-issues.js`, `lib/issues-view.js`, `lib/issue-preview.js` |
 | `/prs`, its tabs, its merge step or its capabilities | `lib/gh-prs.js`, `lib/prs-view.js`, `lib/pr-preview.js` |
 | The rail section, its count or its caches | `lib/issues-section.js`, `lib/related-issues-cache.js`, `lib/issues-cache-store.js`, `lib/prs-rail-store.js` |
+| The `ODD` rail, its rows or their order | `lib/odd-rail-model.js`, `lib/odd-rail-section.js`, `lib/odd-group.js`, `lib/odd-session.js` |
 | A `bash` command that should force a rail read | `lib/issues-bash-mutation.js` |
 | CodeGraph indexing, daemon or MCP entry | `lib/codegraph-session.js`, `lib/codegraph-index.js`, `lib/codegraph-mcp-config.js` |
 | The `bash` guards | `lib/worktree-guard.js`, `lib/skill-read-guard.js` |

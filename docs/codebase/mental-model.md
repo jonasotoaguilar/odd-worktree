@@ -137,6 +137,7 @@ for each is in [`invariants.md`](invariants.md).
 | [26](invariants.md) | The rail's timed refresh exists only while the section is drawn. |
 | [27](invariants.md) | A forced refresh happens only after a mutating `bash`, behind its cap. |
 | [28](invariants.md) | The `gh`-absent and non-repository states are settled, so nothing retries them. |
+| [29](invariants.md) | The user prompt card draws the host's class, gated by `Card activity`, and never touches its text. |
 
 ## Common Change Paths
 

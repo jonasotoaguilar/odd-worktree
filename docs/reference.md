@@ -1587,6 +1587,49 @@ headed by its name alone — no invented detail, no empty separator.
   bytes of both cards, the whole body at `minimal`, the style flip repainting, the live `Card activity` flip on
   and off, the `0.12.0` gate and the tone roles.
 
+## The user prompt card
+
+`lib/user-prompt-card.js` draws the message you sent as a card in the transcript — `✿ You`,
+no subtitle and no clock (a timestamp belongs to whoever owns the clock, not to this card),
+tone `info` with the title AND the whole frame in the accent role, the body your own text
+rendered by Pi's Markdown with the user-message background dropped. It obeys the shell's
+card style on every paint, so `float` draws its rail and `neon` its closed frame, and a
+style switch repaints the prompts already on screen.
+
+Pi publishes no extension seam for a `role: "user"` transcript entry —
+`UserMessageComponent` is constructed inside interactive mode, and `registerMessageRenderer`
+is for custom types only — so this is the ONE host class the package patches: its
+`render(width)` is wrapped once per process through a `Symbol.for` slot, the class handed in
+by the extension's lazy `import()` (so nothing under `lib/` imports a Pi package, and a host
+without the export installs nothing), the live logic replaced rather than double-wrapped on a
+second evaluation or `/reload`, re-installed on `session_start`, and restored to the original
+function BY REFERENCE on `session_shutdown`.
+
+- **When it draws.** Only while the bridge's `Card activity` line answers this package's
+  `activity` design, asked INSIDE the patched `render` on every paint and never cached — that
+  is what repaints a prompt already on screen when the line changes. It registers nothing, so
+  `Cards` grows no row and there is no second switch.
+- **Switch it off and Pi owns the prompt again.** `default` (stored `native`), another design
+  on the line, an absent or throwing bridge, a width below six columns, or a Markdown shape
+  that is not Pi's all hand the host's own rows back BYTE FOR BYTE. Unlike the file cards —
+  whose pre-switch answer paints — this card fails CLOSED, because a prompt is the host's own
+  text and a guess would restyle a message nobody asked to restyle.
+- **The prompt zone stays.** Pi PREFIXES the first row with the OSC 133 zone-start sequence and
+  PREFIXES the last row with the zone-end and final markers, in that order; the card carries the
+  same three markers the same way — once each, never appended (Pi's own screen filters strip
+  OSC 133 prefixes only, so a suffix would survive where Pi's own would not) — and the native
+  path stays byte-identical, so click-to-jump and shell integration keep working.
+- **Cost.** An active card paint pays two live reads and nothing else: the gate (`Card activity`, one
+  selection read of the bridge's own store, which is what makes the flip instant) and the
+  shell's style (`lib/card-style.js`, the published slot, or `<home>/card-style.json` when no
+  live slot is published — so a style picked by hand repaints too). Everything about the
+  drawing itself is memoized per component on the width the frame really draws at, the
+  resolved paint and the rendered Markdown rows: a steady frame spends those reads and a few
+  comparisons, recomposes nothing, and no error on this side ever reaches the host.
+- **Tests.** `tools/user-prompt-card.test.js` drives the public seam — the gate and its live
+  flip on one mounted instance, the byte-for-byte native answers, the accent cells in `float`
+  and `neon`, the zone markers, the wrap-once and uninstall-by-reference claims.
+
 ## The diff card
 
 A second design, `lib/diff-design.js`, registers on the line `diff` through the same

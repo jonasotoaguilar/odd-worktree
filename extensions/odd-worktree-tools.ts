@@ -10058,10 +10058,153 @@ function subscribeBridgeReady(pi, retry) {
 function registerBashDesignRows(api) {
   try {
     const design = libRequire("bash-design.js");
-    if (!design || typeof design.registerBashDesign !== "function") return;
-    design.registerBashDesign(api);
+    if (!design || typeof design.registerBashDesign !== "function") return false;
+    const disposer = design.registerBashDesign(api);
+    // Only a registration the bridge accepted arms the user prompt card: the card's
+    // whole gate is this line answering with this design, so installing it where
+    // nothing was registered would wrap a class for a card that can never be drawn.
+    if (typeof disposer !== "function") return false;
+    bashActivityRegistered = true;
+    installUserPromptCard();
+    return true;
   } catch {
     // The design is cosmetic; the host keeps drawing its own bash cards.
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The user's own prompt, as a card (`lib/user-prompt-card.js`).
+//
+// The bridge has no surface for a prompt, so this card is a prototype shim: Pi's
+// `UserMessageComponent.prototype.render` is wrapped. The class is resolved through
+// the same lazy dynamic `import()` every other host package here uses, never a
+// static import, and it is HANDED to the lib module, which imports nothing from Pi
+// and stays testable with a stub class. A host without that export installs
+// nothing, and the card's own gate is the bridge line the block above registers.
+// ---------------------------------------------------------------------------
+let bashActivityRegistered = false;
+// The epoch a deferred install belongs to, and the epoch whose import is in flight. Both are
+// per epoch on purpose: `session_shutdown` moves the epoch and drops the pending claim, so an
+// import from a closed session can neither patch the class nor suppress the NEXT session's own
+// install. (Pi caches this factory, so this state outlives a session boundary.)
+let userPromptCardEpoch = 0;
+let userPromptCardPendingEpoch;
+// Whether the session that owns this shim is the live one. It starts CLOSED — Pi loads the
+// factory before any session exists — and `session_start` opens it. Every path into the host
+// package (the design registration, a `gentle-shell-bridge:ready` announcement, a gate observer
+// woken by a silent publication, a load that resolved late) checks it before arming and again
+// before patching.
+let userPromptCardSessionLive = false;
+// Whether this load already owns the session boundary (the pair below). A load may arm an
+// install only once it owns the shutdown that unwraps it, whichever path got there first.
+let userPromptCardLifecycleRegistered = false;
+
+// The host package the shim needs (`UserMessageComponent`), resolved lazily through the same
+// injectable seam every other host-package loader here uses (`warpTuiLoader`, `oddTuiLoader`):
+// a plain-node copy of this file cannot resolve it, and a test drives a resolve that lands
+// AFTER the session ended.
+let userPromptCardHostLoader = () => import("@earendil-works/pi-coding-agent");
+
+function setUserPromptCardHostLoader(loader) {
+  userPromptCardHostLoader = loader;
+}
+
+function installUserPromptCard() {
+  // S7: owning the teardown is a PRECONDITION of installing. A host that refused the shutdown
+  // hook owns no patch, so its prompt stays Pi's own.
+  if (!userPromptCardLifecycleRegistered) return;
+  // S7: no install is armed for a session that is gone — whatever woke this path (the design
+  // registration, a `ready` announcement, a session start).
+  if (!bashActivityRegistered || !userPromptCardSessionLive) return;
+  // S7: this EPOCH's import is in flight already; a claim left by a closed epoch is not ours.
+  if (userPromptCardPendingEpoch === userPromptCardEpoch) return;
+  userPromptCardPendingEpoch = userPromptCardEpoch;
+  // The session this install belongs to, captured before the await: a shutdown that lands
+  // while the import is in flight moves the epoch, and the resolve below then does nothing.
+  const epoch = userPromptCardEpoch;
+  Promise.resolve()
+    .then(() => userPromptCardHostLoader())
+    .then((host) => {
+      // S7: checked AGAIN, immediately before the patch: the epoch that started this work and
+      // the session that owns it must both still be the live ones.
+      if (epoch !== userPromptCardEpoch || !userPromptCardSessionLive) return;
+      const component = host && typeof host === "object" ? host.UserMessageComponent : undefined;
+      if (typeof component !== "function") return;
+      const lib = libRequire("user-prompt-card.js");
+      if (!lib || typeof lib.installUserPromptCard !== "function") return;
+      // The measurement seam is asked on every paint (the TUI package may load late), and
+      // the card reads Pi's own live theme from its process-wide slot, like every other
+      // surface that paints outside a host render call.
+      lib.installUserPromptCard({ component, metrics: () => resolveWorktreeToolCardMetrics() });
+    })
+    .catch(() => {
+      // A host without the class keeps Pi's own prompt rows (S6).
+    })
+    .finally(() => {
+      // Only this epoch's own claim is released: a NEW epoch may already hold the slot.
+      if (userPromptCardPendingEpoch === epoch) userPromptCardPendingEpoch = undefined;
+    });
+}
+
+/**
+ * The prompt card's session boundary — registered ONCE per load, by whichever path can first arm
+ * an install: the factory when a bridge is already published, the ready subscription, or the gate
+ * observer when a silent publication wakes it.
+ *
+ * S7: the boundary may not live behind the surface's own registration (a gate-closed load with no
+ * bus registered no surface and therefore no shutdown hook at all, so a session that woke the
+ * surface left the class wrapped), and a bridge announced during a shutdown must find a session
+ * that is already closed. Registering the pair is not a SURFACE registration — it contributes no
+ * command, tool, section, design or card — so a gate-closed load still ships nothing.
+ *
+ * OWNING THE TEARDOWN IS A PRECONDITION OF INSTALLING, so the SHUTDOWN hook is registered FIRST
+ * and a host that refuses it (or has no `pi.on`) owns nothing: the start hook is never registered
+ * either, the session is never marked live, and `installUserPromptCard` refuses. A host that
+ * cannot give this package a shutdown gets no patch, so its prompt stays Pi's own.
+ *
+ * Answers whether this load OWNS the teardown.
+ */
+function registerUserPromptCardLifecycle(pi) {
+  if (userPromptCardLifecycleRegistered) return true;
+  if (typeof pi?.on !== "function") return false;
+  try {
+    pi.on("session_shutdown", () => {
+      userPromptCardSessionLive = false;
+      uninstallUserPromptCard();
+    });
+  } catch {
+    // No teardown owner means no install, ever: nothing else of the pair is registered.
+    return false;
+  }
+  try {
+    pi.on("session_start", () => {
+      // A start hook is only ever registered by a load that already owns a shutdown; the flag is
+      // checked anyway, because it is the one answer the install path trusts.
+      if (!userPromptCardLifecycleRegistered) return;
+      userPromptCardSessionLive = true;
+      installUserPromptCard();
+    });
+  } catch {
+    // An accepted shutdown is still ownership: the teardown exists, so a session opened by the
+    // gate observer (a `session_start` it accepted) is still unwrapped. Nothing installs without
+    // one of those paths opening the session.
+  }
+  userPromptCardLifecycleRegistered = true;
+  return true;
+}
+
+function uninstallUserPromptCard() {
+  // A pending install belongs to the session that is ending: the epoch moves and the claim is
+  // dropped first, so its resolve installs nothing AND the next session's install is not
+  // suppressed by it; the wrapper is removed now.
+  userPromptCardEpoch += 1;
+  userPromptCardPendingEpoch = undefined;
+  try {
+    const lib = libRequire("user-prompt-card.js");
+    if (lib && typeof lib.uninstallUserPromptCard === "function") lib.uninstallUserPromptCard();
+  } catch {
+    // The prompt stays whatever Pi drew; nothing else of the session is touched.
   }
 }
 
@@ -10581,8 +10724,9 @@ function registerOddWorktreeSurface(pi) {
 // publish after us) and ONE session_start observer (the missing-plugin notice).
 // Nothing else is registered.
 function holdSurfaceForBridge(pi) {
+  let announced = false;
   try {
-    subscribeBridgeReady(pi, () => {
+    announced = subscribeBridgeReady(pi, () => {
       try {
         registerOddWorktreeSurface(pi);
       } catch {
@@ -10590,11 +10734,22 @@ function holdSurfaceForBridge(pi) {
       }
     });
   } catch {
-    // No bus: a bridge that publishes later is noticed at the next session start.
+    announced = false;
   }
+  // S7: with a bus, the bridge's announcement can wake the surface at ANY moment — a shutdown
+  // included — so the prompt card's session boundary has to exist from here on, even though no
+  // surface registered yet.
+  if (announced === true) registerUserPromptCardLifecycle(pi);
   if (typeof pi?.on !== "function") return;
   try {
     const dispose = pi.on("session_start", (event, ctx) => {
+      // S7: the observer is a WAKE-UP path, not a session. The moment it wakes the surface it
+      // owns the session too — the boundary is acquired here and the session opened — so a
+      // silent publication on a host with no bus cannot leave the class wrapped after shutdown.
+      // Registering this pair is session bookkeeping, not a surface: a gate-closed load still
+      // registers no command, tool, section, design or card. A host that refuses the teardown
+      // owns nothing, so the session is NOT opened for it: no install, no patch.
+      if (registerUserPromptCardLifecycle(pi) === true) userPromptCardSessionLive = true;
       // A bridge that was there all along, or arrived without an announcement,
       // makes the notice untrue: register instead of warning.
       if (issuesSidebarBridge() !== null) {
@@ -10618,6 +10773,9 @@ export default function (pi) {
   // S18 (T14): no bridge, no package. The published object is read from its slot
   // after its own schema and version gate — never imported, never a dependency.
   if (issuesSidebarBridge() !== null) {
+    // S7: the prompt card's session boundary is owned here, before the surface registers, so
+    // this load always has the shutdown hook that closes the session it belongs to.
+    registerUserPromptCardLifecycle(pi);
     registerOddWorktreeSurface(pi);
     return;
   }
@@ -10720,6 +10878,9 @@ function registerOddWorktreeSurfaceEntries(pi) {
     registerIssuesSidebar(pi);
     // S5 (T4/S5): dispatched, never awaited, and only while the rail is active.
     preloadIssuesSidebar(railHandleBefore, railWasDrawn);
+    // S7: the prompt card's install belongs to the lifecycle pair the factory registers
+    // BEFORE the bridge gate (it must exist on a load that registered no surface), so this
+    // boundary leaves it alone: one owner for one session state.
     // T11 (S2 amended): the missing-plugin hint. It is armed in the same
     // boundary as the section's own state, and it says nothing yet when the
     // host could still announce.
@@ -10776,6 +10937,9 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // ended here: the bridge's unregister and the section's own `dispose()`, so a
     // frame the host still paints after shutdown arms nothing and reads nothing.
     teardownIssuesSidebar();
+    // S7: the prompt card's teardown belongs to the lifecycle pair registered before the
+    // bridge gate — the same owner as its install, so a session whose bridge was never
+    // present still closes (and its ready announcement can no longer arm an install).
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,
   // so startup work still in flight drops instead of writing into the session
@@ -10988,4 +11152,4 @@ function registerOddWorktreeSurfaceEntries(pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setUserPromptCardHostLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule };

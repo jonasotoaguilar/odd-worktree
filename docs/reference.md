@@ -84,7 +84,9 @@ surface — `alt+p` for [the file
 picker](#files-the-picker-its-scopes-and-its-orders) and `alt+i` for
 [`/issues`](#issues-three-tabs-one-shortcut-one-filter). `GENTLE_PI_FILES_KEY`
 and `GENTLE_PI_ISSUES_KEY` override them when they hold a non-empty value, and
-`/files` and `/issues` stay reachable as commands with no key at all.
+`/files` and `/issues` stay reachable as commands with no key at all. `/prs` has
+no host shortcut either: it is reached by typing the command, or by a rail click
+that dispatches it.
 
 `/warp` selector — the footer legend is the key reference. Its top rule carries
 the heading `Warp · n worktrees`, `n` being the checkouts its listing holds; the
@@ -147,6 +149,7 @@ the bar reads only `All (<n>)`.
 | `a` | Assignee editor | triage and a loaded issue |
 | `c` | Comment | read access and a loaded issue |
 | `x` (and `X`) | Close the issue, after the host's confirmation; only `x` rides the legend | triage and a loaded issue |
+| `enter` | Insert the focused issue into the chat input as `ISSUE #63`, and close the panel; inside the search box, an editor or the close confirmation the same key keeps that step's meaning | a loaded issue |
 | `esc`, `q`, `ctrl+c` | Close the reader | — |
 
 **The shortcut teaches itself.** Outside `All` the footer reads `g all issues`;
@@ -168,8 +171,9 @@ simply not taught. The footer is a guide, not a complete key list — `]`/`[`, `
 `/`, `X`, `home`/`end`, `q` and the preview's paging alternates all work without a
 token.
 
-**The footer offers only what works now.** The five tokens that act on the
-selected issue — `l labels`, `a assign`, `c comment`, `x close`, `o web` — are
+**The footer offers only what works now.** The six tokens that act on the
+selected issue — `l labels`, `a assign`, `c comment`, `x close`, `o web`, `enter
+insert` — are
 painted only while an issue is focused AND loaded: an empty bucket, a read still
 in flight and a failed read all drop them, and the three repository actions keep
 their literal-`true` capability gate on top. Movement, the bucket switch, `t
@@ -201,6 +205,43 @@ GitHub lets anyone with read access comment, so requiring triage would hide an
 action the viewer is allowed to take. Anything but a confirmed capability fails
 closed — no hint, the key refuses on screen, no editor opens, no mutation is
 attempted.
+
+`/prs` — the same reader for pull requests. The tab bar reads `My Pull
+Request (<n>)`, `Needs My Review (<n>)` and `Involved (<n>)`; `All` is again the
+`g` shortcut's own view, and there the bar reads only `All (<n>)`.
+
+| Key | Action | Needs |
+| --- | --- | --- |
+| `↑`/`↓`, `j`/`k`, `home`/`end` | Move the selection | — |
+| `←`/`→` (also `tab`/`shift+tab`) | Cycle the three scoped tabs; inside `All` they do nothing | — |
+| `g` | Enter `All`; the same key returns to the tab you came from. Inside the search box it types a letter | — |
+| `]`/`[` | Scroll the list one page; the hint is deliberately absent from the footer | — |
+| `ctrl+j`/`ctrl+k` | Scroll the pane a page (`ctrl+shift+j/k`, `shift+J/K` and `pgUp`/`pgDn` also work; `ctrl+d`/`ctrl+u` scroll half a page) | — |
+| `t` | Open the search box (`T` and `/` also open it) | — |
+| `o` | Open the pull request in the browser through `gh pr view <n> --web -R` | a loaded pull request |
+| `r` | Re-read the list and the pane freshly | — |
+| `l` | Labels editor: apply or remove an existing label | triage and a loaded pull request |
+| `a` | Assignee editor — a toggle, so it assigns and unassigns | triage and a loaded pull request |
+| `c` | Comment | read access and a loaded pull request |
+| `i` | Linked-issues editor (the Development relation); `n` inside it opens the repository's open issues to pick from | write and a loaded pull request |
+| `x` (and `X`) | Close the pull request, after the host's confirmation; only `x` rides the legend | write and a loaded pull request |
+| `m` | Merge: the confirmation step described below | write, a non-draft pull request and at least one method the repository allows |
+| `enter` | Insert the focused pull request into the chat input as `PR #87`, and close the panel; inside the search box, an editor, the merge step or the close confirmation the same key keeps that step's meaning | a loaded pull request |
+| `esc`, `q`, `ctrl+c` | Close the reader | — |
+
+The legend drops hints rather than clipping them, exactly as it does in
+`/issues`: the tokens that act on a pull request are painted only while one is
+focused AND loaded, and each one carries its capability on top, so `l labels`, `a
+assign`, `i linked`, `x close` and `m merge` leave the row for a viewer whose
+role does not confirm them while movement, the bucket switch, `t search`, `g all
+prs` and `esc close` stay. A sub-mode replaces that row with its own keys:
+`space toggle · n new · ctrl+s apply · esc back` for labels, `space toggle ·
+ctrl+s apply · esc back` for assignees, `enter newline · ctrl+s post · esc
+discard` for a comment, `space toggle · n add · ctrl+s apply · esc back` for the
+linked issues (and `space toggle · ctrl+j/k scroll · enter keep · esc discard`
+inside the candidate list `n` opens), `enter add · esc cancel` while naming a new
+label, and `↑↓ field · ←→ method · enter select · ctrl+s merge · esc cancel` for
+the merge step.
 
 ## The deletion guard, and its honest limit
 
@@ -423,6 +464,273 @@ normalized the same way, so a raw value never reaches gh.
 Nothing that mutates is loosened: every action re-proves the checkout with a fresh
 read and refuses on drift, as above.
 
+## `/prs`: the pull request panel
+
+`/prs` is the same reader for pull requests: the list on the left, the pull
+request on the right, and the same frame, search row and note row. Opening it
+reads the three scoped buckets only — `My Pull Request` (`author:@me`), `Needs My
+Review` (`review-requested:@me`) and `Involved` (`involves:@me -author:@me`, so a
+pull request you opened never repeats there, as in `/issues`) — one cursor page
+each, open pull requests, newest update first. `All` costs nothing until you ask
+for it: the `g` view is the repository's own pull-request connection
+(`pullRequests(states: OPEN)`), read on first entry, reused on the way back and
+never prefetched, so it is not a fourth tab and the prefetch never reads it.
+
+- **The pane starts with the facts the issue reader also shows, plus the pull
+  request's own.** In this order: `#69 title`, the
+  state row (`[open]`, or `[draft]` for a draft), `labels: …` (`(no labels)`
+  when there are none), `assignees: …`, `reviewers: …` with each reviewer's own
+  mark — `review requested`, `approved`, `changes requested`, `commented`,
+  `dismissed`, and no mark at all for a state it cannot name — then
+  `by <author> · created <ago> · updated <ago>` and `👍 n · m comments`.
+  While the richer read is still in flight the row's own facts are painted and
+  the read is named (`loading…`): nothing the row never carried is invented.
+- **`linked issues:` is a list of numbers, and every number is its own click.**
+  It reads `linked issues: #12, #14` (ascending, `, …` when the read hit its cap)
+  and each `#N` is an independent target — never the whole line — that opens
+  `/issues` on that issue. A reference whose repository is not this one is not a
+  target at all (see the cross-links section), so nothing here can open another
+  repository's same-numbered issue.
+- **The two summaries sit between the relations and the body.**
+  `Changes` carries `3 files changed +40 -5` and `7 commits 2h ago`; `Checks`
+  carries `5 checks · 1 failed`, `5 checks · all passed`, `5 checks · pending`,
+  `no checks` or `checks unknown`, plus `failing: build` naming the checks that
+  failed. A block is painted only when the read carried the numbers it
+  summarises, so a repository without checks simply draws none. Then the body and
+  every comment follow, ending with `(end of pull request)`.
+- **Both reading panes separate their blocks with one full-width rule.** The
+  metadata block (in `/prs`, the `Changes` and `Checks` summaries included) is
+  set off from the body, the body from the comments and each comment from the
+  next by a `─` line as wide as the pane and painted muted; no rule precedes the
+  first row, none follows the last, and a block the item does not have adds
+  none.
+- **Search is the server's, and it scrolls like `/issues`.** Every page request
+  carries the query, a settled query is read after a short debounce, and the
+  answer is never re-filtered as literal title text. The pane pages with the
+  shared preview bindings (`ctrl+j`/`ctrl+k`, their shifted and `pgUp`/`pgDn`
+  alternates, and half a page with `ctrl+d`/`ctrl+u`), and `]`/`[` scroll the list.
+  A tab that has not answered for the current filter shows `–` instead of a count
+  from the previous one. `All` names its read on the note row — `via connection
+  (exact total)` or `via search (total capped)` — exactly as `/issues` does.
+- **`/prs <number>` opens on one pull request, loaded.** `/prs 69` and
+  `/prs #69` open with #69 selected and its detail read. The bucket is the one a
+  rail click named (the one-shot hint below), else `My Pull Request`; the view
+  reads up to five pages of that bucket looking for the number, then looks ONCE
+  in the other of the `mine`/`review` pair, and only then leaves the first row
+  selected and says `#69 is not in My Pull Request` on the note row. Any other
+  argument keeps the command's refusal, `Unknown option "<what you typed>". Use
+  /prs.`, so a typo opens nothing.
+- **It pins the repository the same way.** Every page, detail, label and assignee
+  read binds the pinned identity, and every action re-proves the checkout freshly
+  before it runs and refuses on drift with the same sentence `/issues` uses
+  (`the checkout's repository changed since this issue list loaded (now … instead
+  of …); reopen /issues`). A NUMBERED open pins the scope the checkout already
+  proved, so its first frame is not behind a fresh probe; a typed plain `/prs`
+  keeps the fresh proof, and a cached pin that cannot be read falls back to it
+  once. Nothing that mutates rides a pin. A write with no checkout and no pin
+  resolves the ambient repository ONCE and pins it host-qualified for the role
+  read and the write alike, so a default that moves mid-action cannot authorize
+  one repository and write under another (`github.company.example/amber/widget`
+  stays itself), never a bare `owner/name` re-qualified as github.com. That
+  ambient host comes from the repository lookup itself — `gh repo view --json
+  nameWithOwner,url`, read from the URL gh answered — never from a github.com
+  assumption. The API host travels with the call too: `gh api`/GraphQL never
+  read it from `GH_REPO`, so every `api` child carries `--hostname <host>`
+  (after its own flags, so the query slot is unchanged) and every child of that
+  scope carries `GH_HOST` — github.com INCLUDED, because gh's own default may
+  itself be an Enterprise server. The host is named only when the call can prove
+  it (an explicit pin, `GH_HOST`, or the host half of `GH_REPO`); a caller
+  environment that selects a different server is left exactly as given, so the
+  identity resolution still refuses it before any child runs.
+- **The `o` key opens it on GitHub.** `gh pr view <n> --web -R
+  <host>/<owner>/<repo>` — the pinned identity, normalized the same way, never a
+  raw value.
+- **Without a usable `gh` the panel refuses instead of opening.** A failed gate
+  notifies `prs: <gh's own answer> — /prs cannot open until then`, or `prs: the
+  gh CLI is not available; install it (https://cli.github.com) and run \`gh auth
+  login\` — /prs cannot open until then`; a cwd outside a repository gets the
+  shared `not a git repository` line. A host with no overlay gets one honest
+  line instead: `prs: 12 pull request(s) across 3 pages (the viewer needs an
+  interactive session)`, counting the rows the three scoped reads answered.
+
+## The `/prs` actions, gated by capability
+
+The capability map comes from the repository role the detail read reported, and
+it fails closed exactly like `/issues`: anything but a literal `true` means no
+hint, no editor, no merge step and no write.
+
+| Action | Needs |
+| --- | --- |
+| Comment | read access — deliberately ungated, in every pull request state (a merged or closed one included), because GitHub lets anyone with read access comment; a comment goes to the number its composer was opened for |
+| Labels, assignees | `TRIAGE` or above |
+| Creating a label from the label picker | `WRITE`, `MAINTAIN` or `ADMIN` (`canCreateLabels`, re-checked when the editor saves) |
+| Close, merge, linked issues | `WRITE`, `MAINTAIN` or `ADMIN` |
+| Merge, in addition | a pull request that is not a draft, and at least one merge method the repository allows |
+
+Each refused key names the capability it wanted and reaches no seam: `labels
+cannot be edited: this repository permission is missing`, `assignees cannot be
+edited: this repository permission is missing`, `pull requests cannot be closed:
+this repository permission is missing`, `pull requests cannot be merged: this
+repository permission is missing`, `linked issues cannot be edited: this
+repository permission is missing`. Every editor save re-reads the captured
+number's OWN detail first — capabilities and state together, and the NEWEST read
+for that number wins, so a positive answer that settles after a newer negative
+one can never revive the write. A role withdrawn (or a row substituted by a
+reload) while an editor or the confirmation is on screen therefore never reaches
+GitHub, and neither does a label created without the creation capability
+(`new labels cannot be created: this repository permission is missing`). A pull
+request that is no longer OPEN is refused there too, with its own sentence and
+no child: `pull request #69 is not open; it cannot be closed`, `pull request #69
+is not open; it cannot be merged`, `pull request #69 is not open; its linked
+issues cannot be edited`, `pull request #69 is not open; its labels cannot be
+edited`, `pull request #69 is not open; its assignees cannot be edited`. The
+client enforces the same rule for close, merge and the linked-issue body edit,
+reading the state in the round trip that proves the role.
+
+Every confirmation and the comment composer keep their pull request in view: the
+list follows the captured number when a reload moves it out of the window, a row
+the list no longer holds is still named on the step's own line, and that line
+(`Confirm merge #69`, `Confirm close #69`, `Comment on #69`) is reserved a pane
+row no scroll window can clip. A frame too short to hold it — under seven rows —
+refuses to confirm instead of acting on a line the reader cannot see: `the
+terminal is too short to confirm this pull request; enlarge it and press the key
+again`.
+
+- **Merge is a step of its own.** `m` opens it and the pane reads `Merge` over
+  five rows: `Type:` (only the methods the repository allows — `◂ merge ▸` when
+  there is more than one, the bare word when there is only one), `Commit
+  message:`, `Description:`, `Confirm merge #69` and `Cancel`. `↑`/`↓` (also `j`/`k`
+  and `tab`) walk the rows, `←`/`→` (also `space`, `h`/`l`) cycle the type while
+  the type row has the focus, typing edits whichever text row does, `enter`
+  confirms from `Confirm merge #69` and cancels from `Cancel`, `ctrl+s merge` sends
+  from anywhere and `esc` cancels. The message and the description open
+  prefilled with GitHub's own proposals: a merge proposes
+  `Merge pull request #69 from owner/branch` with the pull request's title as the
+  description, and a squash proposes the title alone. A rebase merge takes
+  neither, so it
+  sends the method alone. A refused merge keeps the step and its draft on screen
+  and names the reason — `the repository does not allow the "rebase" merge method
+  (allowed: merge, squash)`, `pull request #69 is a draft; it cannot be merged`, or
+  `the repository allows no merge method for pull request #69`. On success the
+  notice reads `merged` and the row leaves the open list.
+- **Close asks once.** `x` (and `X`) paints
+  `Confirm close #69 (enter confirm · esc cancel)` and
+  `This will close the pull request on GitHub.`; `enter` (or `y`) closes, `esc`
+  (or `n`, `q`) backs out, and the outcome reads `pull request closed`.
+- **Comment names its pull request.** `c` opens the composer titled
+  `Comment on #69`, over the row it will post to, and `ctrl+s post` sends it to
+  that number; the composer works in every pull request state.
+- **Assign is a toggle.** `a` opens the assignees editor over the assignable
+  users plus every current assignee, `space` toggles one and `ctrl+s` sends the
+  add/remove delta — so the same editor assigns and unassigns you.
+- **The linked issues are the Development relation, and GitHub has no mutation
+  for it.** `i` opens `Linked issues` over the pull request's current numbers,
+  one `[x] #63 Title` row each — the editor names every issue by NUMBER AND
+  TITLE, never by a bare number. The titles come from the same candidate read
+  described next, fetched once when the editor opens; a title that read cannot
+  answer leaves the row as `#63` instead of blocking the editor. `space` toggles
+  one, `n` opens the candidate list, `esc back` leaves and `ctrl+s apply` sends
+  the add/remove delta. `n` lists the repository's OPEN issues instead of asking
+  for a number: the links the draft already holds come FIRST, checked, with
+  their real titles, then every other open issue in the seam's own
+  hottest-updated order. `space` toggles the focused row, the list scrolls with
+  the panel's own scroll keys (`ctrl+j`/`ctrl+k`, `pgUp`/`pgDn`, `ctrl+d`/`ctrl+u`,
+  and `]`/`[`) and reads the next page as it scrolls, `enter` keeps the selection
+  and returns to the toggles, and `esc` leaves the list without keeping the
+  picks it made. A failed read paints its own `issues unreadable: …` line and
+  keeps the toggles. A candidate the pull request already links is toggled, never
+  added a second time, and the toggles keep working exactly as before, so a link
+  unchecked there is still removed on `ctrl+s apply`. The pane says what the
+  write really is: `closes #N lines in the body`. GitHub exposes no mutation for
+  that panel, so the client writes a `Closes #N` line in the pull request body
+  through `gh pr edit --body` and preserves every other byte of it — line
+  endings included. A number that is not one refuses with `a linked issue needs
+  a number`. The rule is a MARKER rule, not a Markdown reader: every line the
+  panel adds is `Closes #N <!-- odd-worktree:linked -->`, on a line of its own
+  (a blank line first unless the body already ends with one), and a body that
+  already declares the number at column 0 — any closing keyword, marked or not —
+  is left alone with nothing written. A REMOVAL deletes only a line that is that
+  line BYTE FOR BYTE — `Closes`, one space, the number, one space, the marker
+  and nothing else, with just the `\r` of a CRLF ending tolerated — so a
+  declaration this panel did not write is never rewritten: a number whose
+  declarations are somebody else's, or a look-alike such as
+  `CLOSES #63 <!-- odd-worktree:linked -->` or one with an extra space, refuses
+  with `that link was not added by this panel; remove it on GitHub`, and nothing
+  is written. A marked line INSIDE a code fence or an HTML comment is an example
+  of what the panel writes, not a declaration, and deleting it would edit that
+  example: that removal refuses with `that link sits inside a code fence or
+  comment in the body; remove it on GitHub`. Two structure facts refuse BOTH
+  directions with `the pull request body ends inside an unclosed code fence or
+  comment`: a run of three or more backticks or tildes that starts a line opens
+  a fence, only a run of the SAME character at least as long with nothing but
+  whitespace after it closes it, and one still open at the end of the body means
+  the tail may be code; and an `<!--`/`-->` count that does not pair up — or a
+  scan that ends inside a comment — means the tail may be commented out. Nothing
+  else interprets the Markdown: every line between a paired fence or a comment
+  is never touched, which is what keeps a code example out of reach. The body is
+  read once to prepare the edit and once more immediately before the write, and
+  that last read answers the pull request STATE with the body: a pull request
+  that is no longer `OPEN` refuses with `pull request #N is not open; its linked
+  issues cannot be edited`, a re-read that proves no state refuses as an
+  unexpected shape, and one byte of difference in the body refuses with `the
+  pull request body changed while it was being edited`. Nothing is written in
+  any of those cases, so an author's edit or a close that landed in between is
+  never overwritten. The outcome reads `linked issues updated`.
+- **Any write owns the keyboard until it settles.** A save in flight paints its
+  own note and ignores every key, so a second save, a navigation or a keystroke
+  can never race it, and a rejected save stays visible with its draft intact.
+
+## The cross-links between the two panels
+
+A click or a rail row can open a pull request that none of the panel's lists holds
+(a merged one, or an open one of someone else's outside `All`). `/prs <n>` then reads
+that pull request by its number, pins it at the top of the list and paints its real
+state; a pull request that is not open is read-only, so no editor, close or merge key
+is offered for it. A confirmation always acts on the number it displayed, whatever a
+reload did to the rows underneath it. The `/prs` pin-drift refusal names `/prs`
+(`…; reopen /prs`), the `/issues` one keeps naming `/issues`.
+
+Both panes publish one click target per relation number, never one per line.
+
+- **The same range answers the pointer.** A `move` over a linked number paints
+  exactly that number in the role a rail row takes when hovered (`accent`, in
+  bold), a move onto a cell that carries no range clears the highlight, and the
+  pane repaints only when the hovered target actually changes.
+
+- **A linked reference is identified by repository AND number.** The rail's read
+  and the issue's metadata both ask the linked pull request for its
+  `repository { nameWithOwner }`, and one that names another repository is not
+  this repository's pull request: the rail draws no mark for it, a rail row never
+  routes to `/prs` for it, and the pane paints it as plain `owner/repo#N` text
+  with no click range, so a same-numbered lookalike can never be opened (or
+  closed) here. A reference that names no repository is kept, because the read
+  itself is repository-scoped. The same rule holds the other way round for the
+  `/prs` pane's `linked issues:`.
+- **In `/issues`**, the pane's `linked PRs: #69, #77` row is a set of independent
+  ranges: a left click on one number opens `/prs` on that pull request, while the
+  row label, its separators, the truncation ellipsis and a `#N` that appears in
+  the title, the body or a comment are not targets. A number the wrap had to split
+  across two rows is not clickable at all, rather than half of it being so.
+- **In `/prs`**, the same holds for `linked issues:` and `/issues`. Each range is
+  recorded while the row is composed — its own line, start and end cell — and a
+  click is mapped through the frame the reader last painted, the pane's columns
+  and its scroll offset included, so a scrolled pane maps correctly.
+- **The panel you clicked in closes first**, and the other command is dispatched
+  through the same single-flight path a rail click uses, so two panels never
+  stack. A host that cannot dispatch at all gets the same visible refusal a rail
+  click gets. A click while that other panel is already opening changes nothing
+  and leaves the current panel where it is, instead of closing onto a dispatch
+  that would be dropped.
+- **`enter` inserts in both panels.** In list mode it formats the focused item as
+  `ISSUE #63` or `PR #87`, hands that line to the host's own insertion seam
+  (`ctx.ui.pasteToEditor`, the one the file picker already uses) and closes the
+  panel; nothing is sent to the agent. A host whose editor refuses the insertion
+  gets one honest line naming the text, and the panel still closes. Inside the
+  search box, an editor, the merge step and the close confirmation, `enter`
+  keeps the meaning it has there. The `/prs` panel with no insert seam refuses
+  with `insert is unavailable` and stays open; the `/issues` panel simply stays
+  open, because it treats a missing seam as no-op.
+
 ## The `GITHUB` rail section
 
 When Gentle Shell draws its rail, a section headed `GITHUB` lists this checkout's
@@ -433,8 +741,12 @@ seven drawn, and when the read answered with more, an eighth and last dim row
 reads `and N more issues` (`N+` when either contributing search was truncated at
 its cap, because the real total is larger). The section's own meta reports what it
 holds as the count the last read produced, with its unit — `8 issues`, never
-`8 assigned` — and `8 issues · stale` while the rows on screen are the last good
-ones.
+`8 assigned` — and, once its second read has answered, the pull requests the same
+repository holds for you as `8 issues · 3 pr`. While the rows on screen are the
+last good ones it says so: `8 issues · stale`, or `8 issues · 3 pr · stale` when
+both reads have a last good answer. The `pr` number is the DISTINCT numbers in
+`mine` ∪ `review` (your own pull requests and the ones awaiting your review), so
+a pull request in both buckets counts once.
 
 - **One request per refresh.** A refresh is a single `gh api graphql` request with
   three aliased searches — `author:@me`, `assignee:@me` and
@@ -442,6 +754,21 @@ ones.
   answers its own `issueCount` and rows. The section draws the merged `mine` +
   `assigned` pair (the `involved` search is only cached, below), and `/issues`
   paints its first frame from that cache.
+- **`/prs` paints the same instant first frame.** The pull-request panel reads the
+  rail's in-memory entry for the identity it just proved, so the authored and
+  review buckets show their rows on the first frame instead of `loading…`, and the
+  mount's own reads replace every seeded row (a bucket the rail never read keeps
+  its own read). This is the pull-request twin of the issues panel's seed, and it
+  costs no child and no disk read on the open path.
+- **A second read counts the pull requests.** The same section asks for the
+  repository's pull requests in ONE aliased GraphQL request — `mine` and `review`,
+  each with its exact `issueCount` and the `linkedIssues` of every row — and that
+  answer does exactly two things: it names the header's `pr` count, and it routes
+  a row's click. It starts only after the issues read proved a repository, rides
+  the same TTL, timer and drawn window, and keeps its own one-read-in-flight
+  guard. A failed pull-request read KEEPS the count already painted instead of
+  blanking it, and a section that never answered the first time keeps the old
+  `8 issues` header rather than claiming `0 pr`.
 - **A row is an issue, and its one mark is a pull-request number.** It reads
   `#<number> <title>`, and when one of the issue's cross-reference events is a
   pull request (the read asks for the newest ten of them) its right-hand mark is
@@ -452,21 +779,28 @@ ones.
   same combined request as the rows, so a failed read takes the rows and their
   marks together and lands in the stale state below. The line keeps ONE click
   target — the issue — because a bridge row carries one `onClick` and has no
-  per-segment handler, so clicking the number opens the issue too.
+  per-segment handler, so clicking the number acts on the issue's click below.
 - **A row click opens the panel; the overflow row opens it with no number.**
   Clicking an issue row sends `/issues <n>` to the host at once, so the panel opens
-  with that issue selected and its detail read — not in a browser. `/issues`' own
-  `o` key is still the browser open,
-  `gh issue view <n> --web -R <host>/<owner>/<repo>`. The click does NOT prove the
-  repository: the panel pins and proves it itself when it opens, exactly like a
-  typed `/issues <n>`, so a row retained across a checkout change still dispatches
-  its number and the panel decides what it opens. What the click still refuses is a
-  host that cannot dispatch at all, and that refusal is VISIBLE: one transcript
-  entry through the host's `appendEntry` seam, or the host's notice seam when it
-  has no entries — never only a field on the snapshot. The `and N more issues` row
-  names no issue, so it sends plain `/issues`. Both are deferred off the paint
-  path, run once per click, and a failure never escapes into the rail; a dispatch
-  reports that the command was sent, never that a panel opened.
+  with that issue selected and its detail read — not in a browser. **When the
+  issue carries a linked pull request, the click opens that pull request instead:**
+  it dispatches `/prs <n>` for the marked number, and the bucket it was read from
+  travels with the click as a one-shot hint (`review` when the pull request is in
+  that bucket, `mine` next, `all` when it is in neither), so the panel opens on
+  the list that actually holds it. `Needs My Review` wins over `My Pull Request`
+  when the pull request belongs to both. The bucket is decided against the
+  buckets the rail holds when the click RUNS, so a retained row follows the read
+  that landed since it was painted. `/issues`' own `o` key is still the browser
+  open, `gh issue view <n> --web -R <host>/<owner>/<repo>`. The click does NOT
+  prove the repository: the panel pins and proves it itself when it opens,
+  exactly like a typed number, so a row retained across a checkout change still
+  dispatches its number and the panel decides what it opens. What the click still
+  refuses is a host that cannot dispatch at all, and that refusal is VISIBLE: one
+  transcript entry through the host's `appendEntry` seam, or the host's notice
+  seam when it has no entries — never only a field on the snapshot. The `and N
+  more issues` row names no issue, so it sends plain `/issues`. Both are deferred
+  off the paint path, run once per click, and a failure never escapes into the
+  rail; a dispatch reports that the command was sent, never that a panel opened.
 - **One open at a time, and a swallowed click is invisible.** While a click is
   being opened, any further click — the same row, another issue, the overflow row
   — does NOTHING: no second `/issues` message, no second overlay, nothing painted
@@ -492,21 +826,32 @@ ones.
   host without the bridge has neither the section nor the toggle. The section
   declares no preview of its own: every `Sections` row draws the host's single
   shared list of active sections — `[changes] [rdd] [agents] [todo] [usageCost] …` —
-  and the bridge appends that section's `rowLabel` — `issues` for this one, `odd`
+  and the bridge appends that section's `rowLabel` — `github` for this one, `odd`
   for the ODD rail below — to it while the section is shown, leaving it out of a
   `hidden` row's hypothetical. There is nothing to opt into, and `registerSection`
-  has no `preview` field.
+  has no `preview` field. The row was named `issues` before the pull requests
+  joined it; it is `github` now, and that is the name a `/gentle:customize` →
+  `Sections` row shows. The section also
+  declares `placement: 'end'` (gentle-shell-bridge `0.13.0` lets a section name
+  where it sits in the rail): the GITHUB card goes after every native card, which
+  is where it always went and the bridge's own default, said out loud so it does
+  not depend on a default another release could change; a bridge that predates the
+  field ignores it.
 - **A frame never waits on `gh`.** The host calls `lines()` and `meta()` once per
   frame and both return synchronously: they read one in-memory snapshot and only
   ever schedule the refresh. The session's `gh` gate is dispatched startup work,
   never an awaited step: no child process and no network call sits on the path
-  that opens a session or switches to another one, and `/issues` probes `gh`
-  itself the moment you open it. A snapshot older than 60 s schedules exactly one
-  deferred refresh, and only a drawn body frame schedules it at all — the header
+  that opens a session or switches to another one, and `/issues` and `/prs`
+  probe `gh` themselves the moment you open them. A snapshot older than 60 s
+  schedules exactly one deferred refresh, and only a drawn body frame schedules
+  it at all — the header
   call never does. While the section is DRAWN it also re-reads on TIME: one
   self-scheduled, unref'd timer at a 20 s floor, re-armed only from its own fire
   and stopped by itself the moment the section leaves the drawn window — two
-  minutes without a frame. A hidden section keeps no timer, spawns nothing and
+  minutes without a frame. That one timer covers BOTH reads: the pull requests
+  are asked on their own threshold behind the same floor and the same window, so
+  a fresh issues snapshot never keeps an aged `pr` count on screen. A hidden
+  section keeps no timer, spawns nothing and
   reads nothing, and showing it again starts from `loading…`. Each turn of yours
   (`before_agent_start`, then `turn_end`) can ask for a read too, behind a 30 s
   floor measured on the last ATTEMPT: a failed read starts that floor, so a `gh`
@@ -529,9 +874,11 @@ ones.
   and not the host process's own directory.
 - **A failed refresh keeps the rows.** Once a list is on screen, a refresh that
   fails does not replace it: the same rows, in the same order, with the same
-  marks, stay where they are and the header reads `<n> issues · stale` instead.
-  A transient `gh` stall is therefore a stale list, not an empty one, and
-  the next successful read clears the mark.
+  marks, stay where they are and the header reads `8 issues · stale` (or `8
+  issues · 3 pr · stale`) instead. A transient `gh` stall is therefore a stale
+  list, not an empty one, and the next successful read clears the mark. A failed
+  pull-request read alone keeps the count it already painted, and a section that
+  never read one simply keeps the `8 issues` header.
 - **Every state is a row, none is a throw.** `loading…` (dim) before the first
   answer, `no open issues` (dim) for an empty result, and one error row naming the
   failure — but only while there is nothing to show; after that, a failure is the
@@ -560,7 +907,7 @@ ones.
   versioned document, `issues-cache.json` under `$XDG_CACHE_HOME/odd-worktree/`
   (else `~/.cache/odd-worktree/`), one entry per identity under the same key,
   bounded to the eight most recent identities and written through a temp file and
-  a rename, so a failed write leaves the previous document whole. Nothing there is
+  a rename, so a failed write leaves the previous document whole.Nothing there is
   on a paint path or on `session_start`: the loader hydrates an entry before its
   plan and queues the write fire-and-forget, one in flight, and a session boundary
   does NOT clear it — the entries are the point — so a warm identity's first read
@@ -600,26 +947,48 @@ ones.
   reports truncated, are seeded inexact — the tab's count wears a `+` — because a
   total derived from rows the rail itself does not trust is a number it refuses to
   report.
+- **The pull requests have their own document.** The rail's second read is
+  persisted the same way and by its own module (`lib/prs-rail-store.js`): one
+  versioned document, `prs-rail.json` under the same cache directory, one entry per
+  repository identity, bounded to the eight most recent and written through a temp
+  file and a rename. It stores the two bucket rows, each bucket's total and the
+  moment they were read — never a count, because the header's number is derived
+  from those rows plus those totals — so a stored entry can never contradict what
+  is painted, and a total below the rows it came with (or one that is not a count)
+  is ignored, leaving the rows as the floor. That is why the number is the same on
+  both sides of a restart: 50 rows with a total of 52 paints `52 pr` while the live
+  read answers and again from the store, never `50 pr`. The extension's async
+  loader is the only reader and the only writer: a cold start paints the stored
+  rows at once (`2 issues · 1 pr`) while the live read is held, with the entry's own
+  `syncedAt` as its age so it never passes for a fresh read and never defeats the
+  TTL; the live answer then replaces it, the entry is also the fallback for a read
+  that failed, and it is written only from a successful read in the generation
+  that asked. Both of those paints ask the section for the repaint the new count
+  needs. A document of an older version is a cold cache (silence, never an error),
+  and a mutation made in `/prs` marks the identity so the stored rows are not
+  offered back as if nothing had changed.
 - **The scope is this checkout's repository, and nothing else moves.** It is the one
-  repository the `/issues` reader is pinned to, not every issue across every
-  repository you touch. `/issues` keeps its own four tabs, its own repository pin
-  and its own reads; the only thing it takes from the section is the cache entry
-  above, which it reads and never changes, so the section neither grows a second
+  repository both readers are pinned to, not every issue or pull request across
+  every repository you touch. `/issues` keeps its own four tabs, its own repository
+  pin and its own reads, and `/prs` keeps its three scoped tabs and its lazy `All`;
+  the only thing they take from the section is the cache entry
+  above, which they read and never change, so the section neither grows a second
   reader nor hands its state over.
 - **What it needs.** `gh`, authenticated (`gh auth login`); a checkout whose own
   repository can be proven — a failed proof is the error row and makes no `gh`
   call; and a Gentle Shell whose `gentle-shell-bridge` published its API and draws
-  a rail. `gh` decides whether the two issues surfaces EXIST at all: without it on
-  `PATH`, `/issues` is never registered and this section is never added to the rail
-  — no child, no read, no timer, nothing to refuse and no line to draw. Every other
-  surface (`/warp`, `/odd`, `/files`, the tools, the cards, the bash design, the
-  prompt append, CodeGraph) keeps working without it.
+  a rail. `gh` decides whether the GitHub surfaces EXIST at all: without it on
+  `PATH`, `/issues` and `/prs` are never registered and this section is never added
+  to the rail — no child, no read, no timer, nothing to refuse and no line to draw.
+  Every other surface (`/warp`, `/odd`, `/files`, the tools, the cards, the bash
+  design, the prompt append, CodeGraph) keeps working without it.
 - **The `gh` check never delays a session.** Whether `gh` is usable (`gh api user`,
   `gh repo view`, plus the checkout's own git probes: about a second of network) is
   decided in the background: `session_start` dispatches it and returns at once, so
   opening Pi, resuming a session and switching sessions never wait for it. The one
-  startup notice a failing check gives, and the refusal `/issues` gives, are the same
-  sentences as before; only when they appear changed. `/issues` typed while the check
+  startup notice a failing check gives, and the refusal `/issues` and `/prs` give,
+  are the same sentences as before; only when they appear changed. Either command
+  typed while the check
   is still running waits for that same check instead of starting a second one. The
   checkout is resolved FIRST, with one local `git rev-parse`, so a session outside a
   repository makes no `gh` call at all and says nothing about it. A verdict is reused
@@ -1217,9 +1586,20 @@ substrate (`lib/shell-card.js`) through the host's `registerToolRenderer` hook, 
   declares these four tools (`lib/bash-design.js`), and only the answer `design` carrying `odd-worktree.bash-activity`
   paints. `native`, `not-covered`, `missing`, another plugin's design, no bridge, a bridge older than the reader, a reader
   that throws and an answer nothing can read all leave Pi's own box exactly as it was.
-- **When it is read.** The file cards forward to the host's renderers while their switch is off, so they decide on every
-  paint. These four tools have no renderer to forward to, so the answer is read when the card is built: a switch made
-  mid-session reaches the next job card, not the one already on screen.
+- **When it is read.** On every paint, inside the component the host already mounted. Pi resolves a tool's renderers once
+  (`interactive-mode.js` hands the resolved definition to `ToolExecutionComponent` at construction) and never asks again, so a
+  gate read at resolver time could only reach the next card: the line is asked in the card's own `render(width)`, which is what
+  makes flipping `Card activity` repaint the job cards already on screen, exactly as it does for `bash`.
+- **Off, it draws exactly the host's own row.** These four tools have no renderer of their own, so `lib/file-card.js` reproduces
+  what Pi draws for one: the host's box — `Box(outputPad, 1, bgFn)` in `toolPendingBg` while the call streams, `toolErrorBg`
+  once it failed, `toolSuccessBg` otherwise — around the host's own fallback, `formatToolCallWithArgs` for the call and the
+  result's text in `toolOutput` (ten rows collapsed, with the host's expand hint) for the result. Nothing of this card's is
+  drawn: no mark, no frame, no tone. The box closes ONCE: the call carries its closing blank only while no result follows it,
+  and the result half carries it afterwards — a result the host builds marks the frame before the pass that paints it, so a
+  result still streaming is not boxed twice. The result's text is read with the host's own reader,
+  `sanitizeBinaryOutput(stripAnsi(text))` with carriage returns removed, so U+FFF9–U+FFFB and the binary controls go and DEL
+  stays, exactly as Pi reads it. The host still adds its one separator blank row above a self-framed tool, as it does for the
+  file card's forwarded rows.
 - **Content level.** Under `minimal` a collapsed card is the call alone; a failed result still says why.
 - **One family, two voices.** `bash_background` and `monitor` wear the same mark and the same role
   (`⧗`, `bashMode`), because they are the same tool with two timeouts; their words say which TOOL ran —
@@ -1303,6 +1683,55 @@ headed by its name alone — no invented detail, no empty separator.
   bytes of both cards, the whole body at `minimal`, the style flip repainting, the live `Card activity` flip on
   and off, the `0.12.0` gate and the tone roles.
 
+## The user prompt card
+
+`lib/user-prompt-card.js` draws the message you sent as a card in the transcript — `✿ You · 14:32`,
+the name and the whole frame in the accent role and the clock in `muted` beside it (the message's own
+`timestamp` when Pi restored it from a session entry, else the clock captured at the prompt's first
+paint, else nothing: no clock is invented), the body your own text
+rendered by Pi's Markdown with the user-message background dropped. It obeys the shell's
+card style on every paint, so `float` draws its rail and `neon` its closed frame, and a
+style switch repaints the prompts already on screen.
+
+Pi publishes no extension seam for a `role: "user"` transcript entry —
+`UserMessageComponent` is constructed inside interactive mode, and `registerMessageRenderer`
+is for custom types only — so this is the ONE host class the package patches: its
+`render(width)` is wrapped once per process through a `Symbol.for` slot, the class handed in
+by the extension's lazy `import()` (so nothing under `lib/` imports a Pi package, and a host
+without the export installs nothing), the live logic replaced rather than double-wrapped on a
+second evaluation or `/reload`, re-installed on `session_start`, and restored to the original
+function BY REFERENCE on `session_shutdown`.
+
+- **When it draws.** Only while the bridge's `Card activity` line answers this package's
+  `activity` design, asked INSIDE the patched `render` on every paint and never cached — that
+  is what repaints a prompt already on screen when the line changes. It registers nothing, so
+  `Cards` grows no row and there is no second switch.
+- **A restored session repaints.** The transcript a session restores is built before the deferred
+  host import resolves, so the install asks the bridge for ONE repaint when it succeeds — the
+  bridge's optional `requestRepaint`, one differential frame — and the prompts already on screen
+  come back as cards instead of waiting for unrelated input. A refused install, a closed session
+  and a bridge without that member request nothing.
+- **Switch it off and Pi owns the prompt again.** `default` (stored `native`), another design
+  on the line, an absent or throwing bridge, a width below six columns, or a Markdown shape
+  that is not Pi's all hand the host's own rows back BYTE FOR BYTE. Unlike the file cards —
+  whose pre-switch answer paints — this card fails CLOSED, because a prompt is the host's own
+  text and a guess would restyle a message nobody asked to restyle.
+- **The prompt zone stays.** Pi PREFIXES the first row with the OSC 133 zone-start sequence and
+  PREFIXES the last row with the zone-end and final markers, in that order; the card carries the
+  same three markers the same way — once each, never appended (Pi's own screen filters strip
+  OSC 133 prefixes only, so a suffix would survive where Pi's own would not) — and the native
+  path stays byte-identical, so click-to-jump and shell integration keep working.
+- **Cost.** An active card paint pays two live reads and nothing else: the gate (`Card activity`, one
+  selection read of the bridge's own store, which is what makes the flip instant) and the
+  shell's style (`lib/card-style.js`, the published slot, or `<home>/card-style.json` when no
+  live slot is published — so a style picked by hand repaints too). Everything about the
+  drawing itself is memoized per component on the width the frame really draws at, the
+  resolved paint and the rendered Markdown rows: a steady frame spends those reads and a few
+  comparisons, recomposes nothing, and no error on this side ever reaches the host.
+- **Tests.** `tools/user-prompt-card.test.js` drives the public seam — the gate and its live
+  flip on one mounted instance, the byte-for-byte native answers, the accent cells in `float`
+  and `neon`, the zone markers, the wrap-once and uninstall-by-reference claims.
+
 ## The diff card
 
 A second design, `lib/diff-design.js`, registers on the line `diff` through the same
@@ -1376,6 +1805,11 @@ opens on the host's own card (`default`) until a choice is made.
 Both are On by default, and everything not named here (the issues surfaces, `/odd`, `/files`, every
 card, the skill-read guard) is transversal and has no switch.
 
+The page sits right after the host's `Sections` page and before `Keymaps`: the provider asks for that
+position with `categoryPlacement: { after: "Sections" }`, because the bridge derives its page list from
+the order of the rows while it builds the menu. A bridge older than `0.16.1` ignores the field, and the
+page opens at the end instead — everything else works the same.
+
 | Switch | Off leaves out |
 | --- | --- |
 | `Codegraph+` | the `## CodeGraph` prompt text for every role, the two CodeGraph reminders and the whole CodeGraph session wiring (index, daemon, MCP entry, edit sync). The CodeGraph CARD is not here: it is a design, so it follows `Card activity` → `activity` |
@@ -1432,8 +1866,10 @@ One cache document lives outside the checkout and outside the host's session
 files: the issues read cache, `issues-cache.json` under
 `$XDG_CACHE_HOME/odd-worktree/` (`~/.cache/odd-worktree/` when `XDG_CACHE_HOME` is
 unset), keyed by repository identity and bounded to the eight most recent ones.
-It is a cache, not a preference: deleting it costs one full read and nothing else,
-and a write it cannot commit is silence rather than an error ([the rail
+Its sibling `prs-rail.json`, in the same directory and bounded the same way, holds
+the rail's pull-request rows. Both
+are caches, not preferences: deleting one costs a read and nothing else, and a
+write it cannot commit is silence rather than an error ([the rail
 section](#the-github-rail-section)).
 
 This package writes no preference document of its own: the file cards obey the
@@ -1708,7 +2144,20 @@ package never stops a daemon it did not start.
 **Its switch is the `Card activity` line, not `Codegraph+`.** The card paints a call; it never runs
 CodeGraph, so it belongs with the other cards of the `activity` design: with `activity` selected it
 paints, and with `native` (or a line that no longer covers these tools) every row is handed back to
-the chain exactly as it resolved. `Codegraph+` off removes the CodeGraph wiring and its prompt text
+the chain exactly as it resolved — asked on every paint, inside the component the host already
+mounted, so flipping the line repaints the cards already on screen. The host resolves a tool's
+renderers once and never asks again, so the card claims the native tool and both MCP spellings on
+every answer and the chain's own renderers, captured when it was built, draw the row while the line
+says anything else — including a renderer that throws, which falls back to the host's own fallback
+row exactly as the host catches it. When the chain resolved none (Pi's own `codegraph` ships a
+definition with no renderer) the host's own fallback is reproduced instead — `formatToolCallWithArgs`
+for the call and the result's text in `toolOutput` for the result, inside the host's box for a
+default-shell tool and bare for one that declares `renderShell: "self"`, which is what the host draws
+for a tool with no renderer at all. One surface is the exception: `bash` is decided per CALL, which a
+resolver never sees, so a bash row is only wrapped while the line already claims it (a bash row's own
+repaint is the bridge's design pass, not this card's) and a bash call that runs no CodeGraph keeps the
+host's component itself — its rows, its mouse handling and every other behaviour untouched, on
+every answer. `Codegraph+` off removes the CodeGraph wiring and its prompt text
 and leaves this card alone, and a bridge with no such reader at all paints nothing of it.
 
 With the CLI installed the package also draws CodeGraph's tool rows as a card on the same card
@@ -1746,8 +2195,9 @@ keeps that row alone and its index facts wait for the expansion. A `codegraph �
 
 ## Deliberately absent
 
-This package is the worktree / ODD / files / issues surface only: two agent
-tools, four panels, one optional rail section and two tool designs on the bridge,
+This package is the worktree / ODD / files / issues / pull requests surface only:
+two agent tools, five panels, one optional rail section and two tool designs on
+the bridge,
 no preference of its own, no customize panel, no plugin-tools
 toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. Its
@@ -1757,7 +2207,8 @@ the `Card diff` line — which the skill/ODD file cards obey as well. It adds no
 or row of its own, and the file
 picker's `alt+p` and the issues panel's `alt+i` are bound on the host directly
 rather than contributed to any shell surface. There is
-nothing to configure here, and `/warp`, `/odd`, `/files` and `/issues` are always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
+nothing to configure here, and `/warp`, `/odd`, `/files`, `/issues` and `/prs` are
+always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 
 ## Tests

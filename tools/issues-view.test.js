@@ -5828,3 +5828,430 @@ describe('S21: a self-assignment repaints the panel without reopening it', () =>
     assert.ok(leftColumn(view, 160).includes('issue title 21'), 'and the row is still there');
   });
 });
+
+// S7 (prs: cross-links and Enter): `enter` is the insert key of the issues panel
+// too. In list mode it puts the SELECTED issue into the chat input as
+// `ISSUE #63` and closes the panel; inside the search box, the editors and the
+// close confirmation the same key keeps the meaning it always had there. A host
+// without the `actions.insert` seam gets no effect and no close.
+describe('S7: enter inserts the selected issue', () => {
+  function insertView(opts = {}) {
+    const inserted = [];
+    const listRows = Array.isArray(opts.listRows) ? opts.listRows : [issue(1), issue(2)];
+    const calls = [];
+    const { view, done } = makeView({
+      pages: pagesOf([listRows, [], []]),
+      issues: listRows,
+      rows: opts.height || 24,
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: EDITABLE }), comments: [] }),
+      labels: opts.labels,
+      loadLabels: opts.loadLabels,
+      loadAssignees: opts.loadAssignees,
+      actions: {
+        insert: (text) => inserted.push(text),
+        setState: (n, state) => { calls.push([n, state]); return { ok: true }; },
+        ...(opts.actions || {}),
+      },
+    });
+    return { view, done, inserted, calls };
+  }
+
+  const footerOf = (view, width = 200) => strip(view.render(width).at(-2));
+
+  test('list mode inserts ISSUE #N for the selected issue and closes the panel', async () => {
+    const { view, done, inserted } = insertView();
+    await tick();
+    view.render(120);
+    view.handleInput('enter');
+    assert.deepEqual(inserted, ['ISSUE #1'], 'the focused issue is inserted in the agreed form');
+    assert.equal(done(), null, 'the panel closes once the insertion was offered');
+
+    const second = insertView();
+    await tick();
+    second.view.render(120);
+    second.view.handleInput('down');
+    await tick();
+    second.view.render(120);
+    second.view.handleInput('enter');
+    assert.deepEqual(second.inserted, ['ISSUE #2'], 'the insertion follows the selection, never the first row');
+  });
+
+  test('an empty list and a host with no insert seam are both a no-op', async () => {
+    const empty = insertView({ listRows: [] });
+    await tick();
+    empty.view.render(120);
+    empty.view.handleInput('enter');
+    assert.deepEqual(empty.inserted, [], 'nothing is selected, so nothing is inserted');
+    assert.equal(empty.done(), 'pending', 'and the panel stays open');
+
+    const bare = insertView({ actions: { insert: undefined } });
+    await tick();
+    bare.view.render(120);
+    bare.view.handleInput('enter');
+    assert.equal(bare.done(), 'pending', 'a host with no seam keeps its panel');
+  });
+
+  test('enter in the search box keeps closing it and never inserts', async () => {
+    const { view, inserted } = insertView();
+    await tick();
+    view.render(120);
+    view.handleInput('t');
+    view.handleInput('2');
+    view.handleInput('enter');
+    assert.equal(view.state.searching, false, 'enter still leaves the box');
+    assert.equal(view.state.query, '2', 'and keeps the filter');
+    assert.deepEqual(inserted, [], 'the search box enter is not the insert key');
+  });
+
+  test('enter keeps its meaning in the label, assignee and comment editors and the confirm', async () => {
+    const { view, inserted, calls } = insertView({
+      labels: [{ name: 'bug' }],
+      loadLabels: () => ({ ok: true, labels: [{ name: 'bug' }] }),
+      loadAssignees: () => ({ ok: true, users: [{ login: 'ann' }] }),
+    });
+    await tick();
+    view.render(200);
+
+    view.handleInput('l');
+    await tick();
+    view.handleInput('n');
+    view.handleInput('x');
+    view.handleInput('enter');
+    assert.match(bodyOf(view, 160), /new labels: x/, 'enter still adds the typed label name');
+    view.handleInput('escape');
+    assert.equal(view.state.mode, 'list');
+
+    view.handleInput('a');
+    await tick();
+    view.handleInput('enter');
+    assert.match(bodyOf(view, 160), /\[x\] ann/, 'enter still toggles the focused assignee');
+    view.handleInput('escape');
+    assert.equal(view.state.mode, 'list');
+
+    view.handleInput('c');
+    view.handleInput('h');
+    view.handleInput('enter');
+    assert.equal(view.state.commentText, 'h\n', 'enter still opens a comment line');
+    view.handleInput('escape');
+    view.handleInput('y');
+    assert.equal(view.state.mode, 'list');
+
+    view.handleInput('x');
+    assert.equal(view.state.mode, 'confirm');
+    view.handleInput('enter');
+    await tick();
+    assert.deepEqual(calls, [[1, 'closed']], 'enter still confirms the close');
+    assert.deepEqual(inserted, [], 'no editor and no confirm ever inserted an issue');
+  });
+
+  test('the footer names enter insert in list mode and only there', async () => {
+    const { view } = insertView({
+      labels: [{ name: 'bug' }],
+      loadLabels: () => ({ ok: true, labels: [{ name: 'bug' }] }),
+    });
+    await tick();
+    assert.match(footerOf(view), /enter insert/, 'the reading legend names the insert key');
+
+    view.handleInput('t');
+    assert.match(footerOf(view), /enter\/esc keep/, 'the search box names its own enter');
+    assert.ok(!footerOf(view).includes('enter insert'), 'and not the insert key');
+    view.handleInput('escape');
+
+    view.handleInput('c');
+    assert.match(footerOf(view), /enter newline/, 'the comment editor names its own enter');
+    assert.ok(!footerOf(view).includes('enter insert'), 'and not the insert key');
+    view.handleInput('escape');
+
+    const empty = insertView({ listRows: [] });
+    await tick();
+    assert.ok(!footerOf(empty.view, 220).includes('enter insert'), 'nothing focused, nothing to insert');
+  });
+});
+
+// S6 (prs cross-links): in the issues pane each linked PR number is its OWN
+// click range. A click on one opens exactly that pull request in the PR panel
+// and never the whole row: the `linked PRs:` label, the separators and the
+// truncation ellipsis open nothing, the pane maps the click through the row it
+// shows and its scroll offset, and a host with no `openLinked` seam does
+// nothing. The geometry is asserted through the view's own `handleMouse`, which
+// is the seam the host dispatches a mouse event to.
+describe('S6: each linked PR is its own click range', () => {
+  const PANE_START = (width) => 5 + readerPanes(width).left;
+  const BODY_TOP = 4;
+
+  function paneTextOf(line, width) {
+    const panes = readerPanes(width);
+    return [...strip(line)].slice(PANE_START(width), PANE_START(width) + panes.right).join('');
+  }
+
+  function mouse(overrides = {}) {
+    return {
+      type: 'click',
+      button: 'left',
+      x: 0,
+      y: 0,
+      width: 120,
+      height: 24,
+      shift: false,
+      alt: false,
+      ctrl: false,
+      ...overrides,
+    };
+  }
+
+  // The click cell of `needle` inside the RIGHT pane of the frame the view just
+  // composed, so no assertion guesses at the pane's columns or rows.
+  function clickOn(view, width, needle, offset = 0) {
+    const lines = view.render(width);
+    for (let y = BODY_TOP; y < lines.length - 2; y += 1) {
+      const pane = paneTextOf(lines[y], width);
+      const at = pane.indexOf(needle);
+      if (at < 0) continue;
+      const event = mouse({ x: PANE_START(width) + at + offset, y, width, height: lines.length });
+      return { ...event, result: view.handleMouse(event), pane, at };
+    }
+    assert.fail(`no pane row carries ${JSON.stringify(needle)}`);
+  }
+
+  function linkedDetail(overrides = {}) {
+    return issue(7, {
+      title: 'linked issue',
+      linkedPullRequests: [69, 77],
+      linkedPullRequestsTruncated: false,
+      body: 'the body',
+      ...overrides,
+    });
+  }
+
+  function linkedView(opts = {}) {
+    const calls = [];
+    const listRows = Array.isArray(opts.listRows) ? opts.listRows : [issue(7)];
+    const { view } = makeView({
+      rows: opts.height || 24,
+      pages: pagesOf([listRows, [], []]),
+      issues: listRows,
+      loadIssue: () => ({ ok: true, issue: linkedDetail(opts.detail || {}), comments: opts.comments || [] }),
+      actions: { openLinked: (target) => calls.push(target), ...(opts.actions || {}) },
+    });
+    return { view, calls };
+  }
+
+  test('a click on one number opens exactly that pull request', async () => {
+    const { view, calls } = linkedView();
+    await tick();
+    const first = clickOn(view, 120, '#69');
+    assert.deepEqual(first.result, { handled: true, render: false }, 'the link consumes the click without repainting');
+    assert.deepEqual(calls, [{ kind: 'pullRequest', number: 69 }], 'only the clicked number is opened');
+
+    const second = clickOn(view, 120, '#77');
+    assert.deepEqual(second.result, { handled: true, render: false });
+    assert.deepEqual(
+      calls,
+      [{ kind: 'pullRequest', number: 69 }, { kind: 'pullRequest', number: 77 }],
+      'each number is its own independent target, never the whole line',
+    );
+  });
+
+  test('the label, the separators and the truncation ellipsis open nothing', async () => {
+    const { view, calls } = linkedView();
+    await tick();
+    assert.equal(clickOn(view, 120, 'linked PRs:').result, undefined, 'the row label is not a link');
+    assert.equal(clickOn(view, 120, '#69,', 3).result, undefined, 'the separator after a number is not a link');
+    assert.deepEqual(calls, [], 'no click on the row itself opened anything');
+
+    const capped = linkedView({ detail: { linkedPullRequests: [69], linkedPullRequestsTruncated: true } });
+    await tick();
+    assert.equal(clickOn(capped.view, 120, '…').result, undefined, 'the truncation ellipsis is not clickable');
+    assert.deepEqual(capped.calls, []);
+    assert.deepEqual(clickOn(capped.view, 120, '#69').result, { handled: true, render: false }, 'the number still is');
+  });
+
+  test('the pane maps a click through its scroll offset, row and column included', async () => {
+    const body = Array.from({ length: 24 }, (_, at) => `body paragraph ${at}`).join('\n\n');
+    const { view, calls } = linkedView({ height: 16, detail: { body } });
+    await tick();
+    const first = clickOn(view, 120, '#69');
+    assert.deepEqual(first.result, { handled: true, render: false });
+    assert.equal(view.state.scroll, 0);
+
+    view.handleInput('ctrl+d');
+    // The frame that clamps the scroll is the one the click has to map against.
+    view.render(120);
+    const scroll = view.state.scroll;
+    assert.ok(scroll > 0, 'the preview scrolled');
+    assert.ok(first.y - scroll >= 4, `the linked row stays inside the body: ${first.y} - ${scroll}`);
+
+    const stale = view.handleMouse(mouse({ x: first.x, y: first.y, width: 120, height: view.render(120).length }));
+    assert.equal(stale, undefined, 'the old position now shows a row that carries no link');
+    const moved = view.handleMouse(mouse({ x: first.x, y: first.y - scroll, width: 120, height: view.render(120).length }));
+    assert.deepEqual(moved, { handled: true, render: false }, 'the number is clickable one window up');
+    assert.deepEqual(calls, [
+      { kind: 'pullRequest', number: 69 },
+      { kind: 'pullRequest', number: 69 },
+    ]);
+  });
+
+  test('a host with no seam does nothing, and a click outside the pane is unhandled', async () => {
+    const bare = linkedView({ actions: { openLinked: undefined } });
+    await tick();
+    assert.deepEqual(clickOn(bare.view, 120, '#69').result, { handled: true, render: false },
+      'the link is consumed even when nothing can open');
+
+    const { view, calls } = linkedView();
+    await tick();
+    const linked = clickOn(view, 120, '#69');
+    const height = view.render(120).length;
+    assert.equal(view.handleMouse(mouse({ x: 3, y: linked.y, width: 120, height })), undefined,
+      'the left list column on the same row is not the pane');
+    assert.equal(view.handleMouse(mouse({ x: linked.x, y: 1, width: 120, height })), undefined,
+      'a header row is never a link');
+    assert.equal(view.handleMouse(mouse({ x: linked.x, y: height - 2, width: 120, height })), undefined,
+      'the footer is never a link');
+    assert.equal(view.handleMouse(mouse({ x: linked.x, y: linked.y, width: 100, height })), undefined,
+      'a click carrying another frame geometry is not this frame');
+    assert.equal(view.handleMouse(mouse({ x: linked.x, y: linked.y, type: 'press', width: 120, height })), undefined,
+      'a press is not the click that opens a link');
+    assert.equal(view.handleMouse(null), undefined, 'an absent event is unhandled');
+    assert.equal(calls.length, 1, 'only the pane link called the seam');
+  });
+
+  test('a number in the title, the body or a comment is not a link', async () => {
+    const { view, calls } = linkedView({
+      detail: { title: 'linked issue', body: 'see #69 for details' },
+      comments: [{ author: 'ann', body: 'also #77', createdAt: new Date().toISOString() }],
+    });
+    await tick();
+    assert.equal(clickOn(view, 120, '#69 for details').result, undefined, 'free text is not a click range');
+    assert.deepEqual(calls, []);
+  });
+});
+
+// S6 follow-up: the same link geometry answers the pointer. Pi's TUI delivers
+// `type: "move"` events to `handleMouse`, so hovering a linked PR number paints
+// exactly that number in the role the rail gives a hovered row, moving off
+// clears it, and a repaint happens only when the target actually changes.
+describe('S6: a move over a linked PR number highlights it', () => {
+  const PANE_START = (width) => 5 + readerPanes(width).left;
+  const BODY_TOP = 4;
+
+  function moveEvent(overrides = {}) {
+    return {
+      type: 'move',
+      button: 'none',
+      x: 0,
+      y: 0,
+      width: 120,
+      height: 24,
+      shift: false,
+      alt: false,
+      ctrl: false,
+      ...overrides,
+    };
+  }
+
+  // The frame cell of `needle` inside the RIGHT pane, read off the frame the
+  // view just painted, so the test never assumes the pane's columns or rows.
+  function cellOf(view, width, needle, offset = 0) {
+    const lines = view.render(width);
+    const panes = readerPanes(width);
+    for (let y = BODY_TOP; y < lines.length - 2; y += 1) {
+      const pane = [...strip(lines[y])].slice(PANE_START(width), PANE_START(width) + panes.right).join('');
+      const at = pane.indexOf(needle);
+      if (at < 0) continue;
+      return { x: PANE_START(width) + at + offset, y, width, height: lines.length };
+    }
+    assert.fail(`no pane row carries ${JSON.stringify(needle)}`);
+  }
+
+  function hoverView() {
+    const theme = recordingTheme();
+    const calls = [];
+    const rows = [issue(7)];
+    const made = makeView({
+      rows: 24,
+      theme,
+      pages: pagesOf([rows, [], []]),
+      issues: rows,
+      loadIssue: () => ({
+        ok: true,
+        issue: issue(7, { title: 'linked issue', linkedPullRequests: [69, 77], body: 'the body' }),
+        comments: [],
+      }),
+      actions: { openLinked: (target) => calls.push(target) },
+    });
+    return { view: made.view, paints: made.paints, theme, calls };
+  }
+
+  // The roles the LAST render asked for, so an assertion is about this frame.
+  function hoveredNumbers(view, theme, width = 120) {
+    const mark = theme.calls.length;
+    const lines = view.render(width);
+    const roles = theme.calls.slice(mark)
+      .filter((call) => call.role === 'accent' && /^#\d+$/.test(call.text))
+      .map((call) => call.text);
+    return { roles, lines };
+  }
+
+  test('a move over one number paints exactly that range, and moving off clears it', async () => {
+    const { view, theme } = hoverView();
+    await tick();
+    const linked = cellOf(view, 120, '#69');
+    assert.deepEqual(view.handleMouse(moveEvent(linked)), { handled: true, render: true },
+      'the move is consumed and asks for a repaint');
+
+    let hovered = hoveredNumbers(view, theme);
+    assert.deepEqual(hovered.roles, ['#69'], 'only the hovered number takes the hover role');
+    const row = hovered.lines.find((line) => strip(line).includes('linked PRs:'));
+    assert.ok(row.includes('\x1b[96m#69'), 'the hovered number is painted with the accent role');
+    assert.ok(!row.includes('\x1b[96m#77'), 'the other number keeps its plain text');
+    assert.match(strip(row), /linked PRs: #69, #77/, 'painting never changes the row the click expects');
+
+    const off = cellOf(view, 120, 'linked PRs:');
+    assert.deepEqual(view.handleMouse(moveEvent(off)), { handled: true, render: true },
+      'moving onto the row label is a change of target');
+    hovered = hoveredNumbers(view, theme);
+    assert.deepEqual(hovered.roles, [], 'nothing is highlighted once the pointer leaves the number');
+  });
+
+  test('a move to another number moves the highlight with it', async () => {
+    const { view, theme } = hoverView();
+    await tick();
+    assert.deepEqual(view.handleMouse(moveEvent(cellOf(view, 120, '#69'))), { handled: true, render: true });
+    assert.deepEqual(hoveredNumbers(view, theme).roles, ['#69']);
+    assert.deepEqual(view.handleMouse(moveEvent(cellOf(view, 120, '#77'))), { handled: true, render: true });
+    assert.deepEqual(hoveredNumbers(view, theme).roles, ['#77'], 'the highlight follows the pointer');
+  });
+
+  test('the same target twice does not repaint, and a move outside clears the hover', async () => {
+    const { view, theme, paints } = hoverView();
+    await tick();
+    const linked = cellOf(view, 120, '#69');
+    view.handleMouse(moveEvent(linked));
+    const painted = paints.length;
+    assert.deepEqual(view.handleMouse(moveEvent(linked)), { handled: true, render: false },
+      'the hovered target did not change, so no repaint is asked for');
+    assert.equal(paints.length, painted, 'and none is issued');
+
+    assert.deepEqual(view.handleMouse(moveEvent({ x: 3, y: linked.y })), { handled: true, render: true },
+      'a move onto the list column lands on no link and clears the hover');
+    assert.deepEqual(hoveredNumbers(view, theme).roles, []);
+    assert.deepEqual(view.handleMouse(moveEvent({ width: 100 })), { handled: true, render: false },
+      'a move from another frame geometry lands nowhere and changes nothing');
+  });
+
+  test('the same geometry serves the click and the hover', async () => {
+    const { view, calls, theme } = hoverView();
+    await tick();
+    const linked = cellOf(view, 120, '#69');
+    assert.deepEqual(view.handleMouse(moveEvent(linked)), { handled: true, render: true });
+    // The cell the pointer highlighted is exactly the cell that opens #69.
+    assert.deepEqual(view.handleMouse({ ...moveEvent(linked), type: 'click', button: 'left' }),
+      { handled: true, render: false });
+    assert.deepEqual(calls, [{ kind: 'pullRequest', number: 69 }]);
+    // And the separator right after the number is neither hovered nor clicked:
+    // leaving the number clears the highlight with a repaint.
+    assert.deepEqual(view.handleMouse(moveEvent({ ...linked, x: linked.x + 3 })), { handled: true, render: true },
+      'a move onto the separator clears the hover');
+    assert.deepEqual(hoveredNumbers(view, theme).roles, [], 'no number is left highlighted');
+  });
+});

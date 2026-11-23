@@ -6,7 +6,7 @@ starts, which rule each change must preserve, and where to begin.
 ## What This Codebase Owns
 
 One Pi extension package, `pi-odd-worktree`: two agent tools (`worktree_create`,
-`worktree_list`), four panels (`/warp`, `/odd`, `/files`, `/issues`), two
+`worktree_list`), five panels (`/warp`, `/odd`, `/files`, `/issues`, `/prs`), two
 optional sidebar sections — the `GITHUB` issues rail and the `ODD` rail — and two tool designs on the bridge — the `activity`
 value of its `Card activity` line (`bash`, the read-only shell tools `grep`, `find`,
 `ls`, and `read`, `write` and `edit`, the last two through a scope limited to
@@ -21,15 +21,16 @@ reads it as a choice at all — so nobody loses the choice they made. It owns
 creating and listing the checkouts an ODD works in, reading a checkout's
 `odd/tasks/*.md`, browsing and previewing a
 checkout's files, reading and — role permitting — editing that checkout's GitHub
-issues, and the drawing of its own cards. `git` is the only external requirement,
+issues and pull requests, and the drawing of its own cards. `git` is the only external requirement,
 and gentle-shell-bridge is the plugin's own prerequisite: without it the package
 loads nothing at all. With it, the bridge carries three control surfaces: the two
 rail sections and the design (which the file cards read). The two host shortcuts are
 neither: the file picker's `alt+p` and the issues panel's `alt+i` are
 bound directly on the host, and `GENTLE_PI_FILES_KEY` and `GENTLE_PI_ISSUES_KEY`
-override them. `gh` is optional and belongs to the two issues surfaces
-alone: it is a local `PATH` walk (`lib/which-command.js`), never a child process,
-and when it finds nothing, `/issues` is never registered and the `GITHUB` rail section is
+override them. `gh` is optional and belongs to the three GitHub surfaces
+alone — `/issues`, `/prs` and the `GITHUB` rail section: it is a local `PATH` walk
+(`lib/which-command.js`), never a child process,
+and when it finds nothing, neither command is ever registered and the `GITHUB` rail section is
 never added — every other surface keeps working.
 
 ## What It Does Not Own
@@ -59,13 +60,14 @@ never added — every other surface keeps working.
 ## Main Flow
 
 1. `extensions/odd-worktree-tools.ts` — the only entry point the host loads:
-   behind the bridge gate it registers the four commands (`/issues` only when the
+   behind the bridge gate it registers the five commands (`/issues` and `/prs`
+   only when the
    local `gh` probe finds the CLI), the two tools, the message renderer, the file
    card, the two rail sections (`GITHUB`, also `gh` only, and `ODD`, scoped to the
    session's registered worktrees and therefore outside `Worktrees+`), the two tool
    designs and the hooks —
    deferred until gentle-shell-bridge is present, and nothing at all without it.
-   Its issues `gh` gate is dispatched startup work under the generation the
+   Its `gh` gate is dispatched startup work under the generation the
    dispatch captured, never an awaited step of `session_start`, so a session start
    or switch pays no child process and no network call for it.
 2. `lib/worktree-*.js` — a create validates and plans in
@@ -74,9 +76,11 @@ never added — every other surface keeps working.
    task; a listing renders in `lib/worktree-list.js`; `/warp` composes
    `lib/warp-*.js`; `/odd` reads through `lib/odd-docs.js`.
 3. `lib/worktree-git.js` — the one git seam, where a child argv leaves for git,
-   with `lib/worktree-remove.js` the one removal. `lib/gh-issues.js` is the `gh`
-   seam for the two issues surfaces, reached only by a read that is already off the
-   session path; `lib/issues-cache-store.js` writes the one issues cache document
+   with `lib/worktree-remove.js` the one removal. `lib/gh-issues.js` and
+   `lib/gh-prs.js` are the `gh` seams of the three GitHub surfaces, reached only by a
+   read that is already off the
+   session path; `lib/issues-cache-store.js` and `lib/prs-rail-store.js` write the
+   two cache documents
    under the user's cache home; the file cards own no switch and ask the bridge's
    published reader on every paint (invariant 23);
    `lib/codegraph-mcp-config.js` is the only
@@ -92,7 +96,8 @@ Every module and what it owns is one row in [`code-map.md`](code-map.md).
 | Worktrees | Create, list, ownership, removal, the `bash` guards | `lib/worktree-create.js` |
 | `/warp` panel | Selector, extended list, create wizard, delete confirmation, queued warp | `lib/warp-selector-view.js` |
 | ODD reader | `odd/tasks/*.md` discovery, ordering and markdown rendering; the grouped model and the `ODD` rail | `lib/odd-view.js` |
-| `/issues` | The `gh` client, the view, the repository pin, the rail section and its two cache halves | `lib/gh-issues.js` |
+| `/issues` | The `gh` client, the view, the repository pin, the linked-PR click and the rail section with its two cache halves | `lib/gh-issues.js` |
+| `/prs` | The pull-request `gh` client, the panel, its preview, the linked-issue click and the rail's pull-request count | `lib/gh-prs.js` |
 | Cards | The card substrate, the tool cards, the file cards and the two tool designs | `lib/shell-card.js` |
 | Prompt blocks | The `## ODD worktrees` text and the `## CodeGraph` role texts | `lib/codegraph-rules.js` |
 | CodeGraph wiring | Index, lock, daemon, MCP entry, compaction, edit sync, reminders | `lib/codegraph-session.js` |
@@ -134,6 +139,7 @@ for each is in [`invariants.md`](invariants.md).
 | [26](invariants.md) | The rail's timed refresh exists only while the section is drawn. |
 | [27](invariants.md) | A forced refresh happens only after a mutating `bash`, behind its cap. |
 | [28](invariants.md) | The `gh`-absent and non-repository states are settled, so nothing retries them. |
+| [29](invariants.md) | The user prompt card draws the host's class, gated by `Card activity`, and never touches its text. |
 
 ## Common Change Paths
 
@@ -155,8 +161,9 @@ Work on a branch, never on `main`: an ODD gets its own checkout at
 | The card of a background-job tool | `lib/jobs-card.js`, `lib/jobs-card-resolver.js` |
 | The two advisory message cards | `lib/message-card.js` |
 | Prompt text the model reads | `lib/odd-prompt/odd-worktrees.md`, `lib/codegraph-prompt/*.md` via `lib/odd-worktrees-prompt.js` and `lib/codegraph-rules.js` |
-| `/issues`, its tabs or its capabilities | `lib/gh-issues.js`, `lib/issues-view.js` |
-| The rail section or its cache | `lib/issues-section.js`, `lib/related-issues-cache.js`, `lib/issues-cache-store.js` |
+| `/issues`, its tabs or its capabilities | `lib/gh-issues.js`, `lib/issues-view.js`, `lib/issue-preview.js` |
+| `/prs`, its tabs, its merge step or its capabilities | `lib/gh-prs.js`, `lib/prs-view.js`, `lib/pr-preview.js` |
+| The rail section, its count or its caches | `lib/issues-section.js`, `lib/related-issues-cache.js`, `lib/issues-cache-store.js`, `lib/prs-rail-store.js` |
 | The `ODD` rail, its rows or their order | `lib/odd-rail-model.js`, `lib/odd-rail-section.js`, `lib/odd-group.js`, `lib/odd-session.js` |
 | A `bash` command that should force a rail read | `lib/issues-bash-mutation.js` |
 | CodeGraph indexing, daemon or MCP entry | `lib/codegraph-session.js`, `lib/codegraph-index.js`, `lib/codegraph-mcp-config.js` |

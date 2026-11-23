@@ -1617,9 +1617,9 @@ test('the audit\'s real PR command names the publishing activity', () => {
 
 The four tools are declared on the \`tags\` line so the bridge can answer for them; the activity design itself returns their rows exactly as drawn.
 
-## Limitation
+## Repaint
 
-The gate is read when a job card is built, not on every paint: these tools have no host renderer to forward to, so a switch made mid-session reaches the next job card.
+The gate is read on every paint, inside the component the host already mounted, so flipping \`Card activity\` between \`default\` and \`activity\` repaints the job cards already on screen. Off, the card draws the host's own fallback row and box, reproduced, because these tools have no host renderer to hand the row back to.
 
 ## Tests
 

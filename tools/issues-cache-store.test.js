@@ -94,7 +94,7 @@ test('S4: an entry round-trips through ONE small versioned document', async () =
 
   assert.deepEqual(fs.readdirSync(dir), [FILE], 'exactly one document, no stray file');
   const doc = documentAt(dir);
-  assert.equal(doc.version, 1, 'the document is versioned');
+  assert.equal(doc.version, 2, 'the document is versioned');
   assert.equal(doc.identities.length, 1);
   assert.equal(doc.identities[0].identity, IDENTITY, 'the entry is keyed by the repository identity');
 });
@@ -166,7 +166,7 @@ test('S4: a wrong version is silence, and the next save writes the current one',
   const cache = store(dir);
   assert.equal(await cache.load(IDENTITY), null, 'a version this module does not know is never read');
   assert.equal(await cache.save(IDENTITY, snapshot()), true);
-  assert.equal(documentAt(dir).version, 1);
+  assert.equal(documentAt(dir).version, 2);
 });
 
 test('S4: a hostile entry is dropped and every other identity still answers', async () => {

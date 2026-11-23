@@ -23,13 +23,13 @@ The question this page answers: which rules must every change preserve, and what
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
-3. **The shipped surface is exactly four commands, two tools, TWO sidebar
+3. **The shipped surface is exactly five commands, two tools, TWO sidebar
    sections and two tool designs.** `/warp`, `/odd`,
-   `/files`, `/issues`; `worktree_create`, `worktree_list`; the one fourth kind of
+   `/files`, `/issues`, `/prs`; `worktree_create`, `worktree_list`; the one fourth kind of
    surface, a sidebar section — and there are TWO of them, each neither a command nor a
    tool and each registering no name the host or the agent can call: the issues rail
    (`lib/issues-section.js`, id `odd-worktree.issues`, headed `GITHUB`, `rowLabel`
-   `issues`, mounted only where the `gh` probe found the CLI) and the ODD rail
+   `github`, mounted only where the `gh` probe found the CLI) and the ODD rail
    (`lib/odd-rail-section.js` over the row model `lib/odd-rail-model.js`, id
    `odd-worktree.odd-rail`, headed `ODD`, `rowLabel` `odd`, `placement: { after:
    "agents" }`, scoped to the session's registered worktrees and therefore independent
@@ -176,7 +176,19 @@ The question this page answers: which rules must every change preserve, and what
    consume that hint; the open then pins the repository the user just clicked, and
    every write still re-proves the checkout fresh.
    `tools/issues-open-guard.test.js` pins the guard, its release points, both pins,
-   the generation and the normalization.
+   the generation and the normalization. `/prs` opens through the SAME one-at-a-time
+   guard (`dispatchPrsPanel`, its own token, the same ~10 s backstop) and pins its
+   own repository with the same function, taking a numbered open's cached scope
+   first and the fresh proof for a typed plain `/prs`; a rail click on an issue
+   that carries a linked pull request leaves the bucket hint
+   (`review` | `mine` | `all`) for that one number, in that generation.
+   `tools/prs-command.test.js` pins it.
+
+   **`/prs` is a panel and nothing else, exactly like `/files`.** It mounts its own
+   full-screen overlay through `ctx.ui.custom`, and a host that rejects the overlay
+   gets its own one honest line (`prs: the viewer could not open in this session`)
+   and no second surface in its place. It registers no key of its own, and its
+   capabilities are invariant 7's.
 
    **The file cards add no surface and own no switch.** They obey the bridge's own
    `Card activity` line: the card is painted while that line answers with this
@@ -209,16 +221,37 @@ The question this page answers: which rules must every change preserve, and what
    read, every mutation and the `o` browser opener. A checkout whose remote moved
    while the reader is open must refuse the mutation with the scope-drift message
    and keep the displayed repository for reads. Failing closed beats guessing a
-   repository.
+   repository. `lib/gh-prs.js` carries the SAME rule for `/prs` — one pin for every
+   page, detail, label and assignee read, the same scope-drift refusal before a
+   write — and `tools/gh-prs.test.js` and `tools/prs-command.test.js` pin both the
+   pin and the refusal. A linked reference is identified by repository AND number
+   on every surface that routes it: the rail's read and both issue reads ask for
+   the reference's `repository { nameWithOwner }`, and one that names another
+   repository gets no rail mark, no `/prs` dispatch and no pane click range
+   (it is painted as `owner/repo#N`), so a same-numbered lookalike in this
+   checkout is never opened, commented on or closed.
 7. **`/issues` capabilities fail closed.** Close, labels and assignees need
    `TRIAGE`; creating a label needs `WRITE`; commenting is ungated. Anything but
-   a literal `true` capability means no hint, no editor, no mutation.
+   a literal `true` capability means no hint, no editor, no mutation. `/prs`
+   reads its own map the same way (`pullRequestPermissions` in `lib/gh-prs.js`, into
+   the view's `permissions`): labels and assignees need one of
+   `TRIAGE|WRITE|MAINTAIN|ADMIN`, closing, merging and editing the linked issues
+   need `WRITE|MAINTAIN|ADMIN` (so does creating a label, `canCreateLabels`, re-checked at the save), commenting stays ungated in every pull request state, every write re-reads the role — with the pull request's own state in that same round trip, so a non-open one keeps only its comment key — and writes under the ONE scope that read resolved, and `canMerge` is only
+   true for a pull request that is not a draft in a repository that allows at least
+   one merge method, with the merge form's chosen method re-checked against the freshly read `mergeMethods` before the seam. A refused key paints no hint and reaches no seam;
+   `tools/prs-view.test.js` pins every refusal sentence and that no seam is called.
 8. **The package ships only `extensions`, `lib`, `tools`, `README.md`.** Adding a
    shipped path means changing `files[]` and the package-surface test together.
 9. **Fixed argv, never a shell string.** Every child (`git`, `gh`, package
-   managers) gets a binary plus an argument array with a bounded timeout.
+   managers) gets a binary plus an argument array with a bounded timeout. Both
+   `gh` seams — `lib/gh-issues.js` and `lib/gh-prs.js` — spawn through the same
+   `execFile`-shaped runner with its argv array and its bound.
    Interactive paths await the async runner; nothing blocks the host event loop
-   with `spawnSync`.
+   with `spawnSync`. The API host is part of that fixed argv: `gh api`/GraphQL
+   never read it from `GH_REPO`, so every `/prs` `api` child carries
+   `--hostname <host>` and its scope's `GH_HOST`, github.com included, and an
+   ambient repository's host is read from `gh repo view --json nameWithOwner,url`
+   rather than assumed.
 10. **There is no worktree document.** A create always lands at
     `<repo-parent>/<repo-name>-worktrees/<odd>`, so the path is the whole record:
     which checkouts this package created and which ODD each one serves. No
@@ -594,6 +627,30 @@ The question this page answers: which rules must every change preserve, and what
     a default-shell renderer (`read`, `write`), and untouched, with no box, no
     padding and no background, for one that frames itself (Pi's `edit`).
 
+    **The jobs and CodeGraph cards claim their tools on every answer, because Pi
+    never asks twice.** The host resolves a tool's renderers ONCE, when it mounts
+    the card (`interactive-mode.js` hands the definition it resolved to
+    `ToolExecutionComponent`), so a `Card activity` gate read at resolver time could
+    only ever reach the next card. Both gates are therefore read INSIDE the
+    component's `render(width)`, which the host does run on every frame, and both
+    cards draw the host's own rows for every answer but `activity`:
+    `bash_background`, `monitor`, `job_stop` and `job_list` have no renderer of their
+    own, so `lib/file-card.js` reproduces the host's fallback itself —
+    `formatToolCallWithArgs` for the call, `createResultFallback` for the result
+    (read with the host's own `sanitizeBinaryOutput(stripAnsi(...))`), inside the
+    same reproduced box, whose ONE closing blank is the call's only while no result
+    follows and the result's afterwards; the CodeGraph card hands the row to the
+    chain's own renderers, captured by reference when the card was built, and
+    reproduces that same fallback for a tool whose definition resolved none (Pi's
+    own `codegraph`, which declares `renderShell: "self"`: its rows are drawn bare,
+    with no box) or whose renderer throws, exactly as the host catches it. `bash` is
+    the exception: its call is decided per COMMAND, which a resolver never sees, so a
+    bash row is wrapped only while the line already claims it and a bash call that
+    runs no CodeGraph keeps the host's very component — rows, mouse handling and all
+    — on every answer. One row of difference is expected and is the host's own: a
+    self-framed tool gets the host's separator blank row above it, exactly as the
+    file card's forwarded rows already do.
+
     **The bridge's design selection is the one switch, and this card owns none of
     it.** The card is painted while — and only while — the bridge's published
     reader answers that this package's activity design draws the tool being
@@ -646,22 +703,30 @@ The question this page answers: which rules must every change preserve, and what
     invented placeholder, and a failed edit keeps its error rows.
 
 24. **No session path waits on `gh`, and every `gh` reach is deferred.**
-    `session_start` DISPATCHES the issues gate as tracked startup work under the
+    `session_start` DISPATCHES the `gh` gate as tracked startup work under the
     generation the dispatch captured and never awaits it, so opening a session or
     switching to another one spends no child process and no network call there —
-    and a host without the CLI dispatches no gate at all, because the two issues
+    and a host without the CLI dispatches no gate at all, because the three GitHub
     surfaces were never registered. What the gate does off that path is one local
     `git rev-parse` for repository-ness and the `gh` health read only when that
     answers yes; a late answer from a session that has ended sets no state and
-    notifies no UI. `/issues` takes that same verdict when it opens instead of
-    starting a second probe, and asks its own question about its OWN cwd when the
+    notifies no UI. `/issues` and `/prs` take that same verdict when they open
+    instead of
+    starting a second probe, and each asks its own question about its OWN cwd when the
     session's answer was only a non-repository state. In the rail, `lines()` and
     `meta()` keep their synchronous contract: they read ONE in-memory snapshot and
-    only schedule the refresh. `tools/issues-command.test.js` pins it with "the
+    only schedule the refresh — and the second read (the rail's pull requests,
+    `lib/gh-prs.js` `listRailPullRequests`) is only ever SCHEDULED by a frame:
+    the work itself runs through the extension's async loader, and the persisted
+    entry is touched there alone.
+    `tools/issues-command.test.js` pins it with "the
     awaited session_start resolves while the injected gh runner is still pending"
     and "a session outside a repository makes no gh call at startup, and stays
     silent"; `tools/issues-section.test.js` with "a frame never waits" and "without
-    the gh CLI the GITHUB section is never added to the rail".
+    the gh CLI the GITHUB section is never added to the rail";
+    `tools/prs-command.test.js` with "a section the host was drawing asks for a
+    read, dispatched and never awaited" and "a hidden section starts no read at
+    session start".
 
 25. **A persisted cache entry never defeats the count invariant or the full-read
     TTL.** The disk half (`lib/issues-cache-store.js`) stores what the plan needs
@@ -684,6 +749,34 @@ The question this page answers: which rules must every change preserve, and what
     read, and the newest entry waits behind it instead of interleaving" and "the
     cache survives a session_shutdown/start pair, so the next read is a delta".
 
+    **The rail's pull-request entry cannot fake a number either.**
+    `lib/prs-rail-store.js` persists the two bucket ROWS, each bucket's TOTAL and
+    when they were read, never the count: the header's `M` is the distinct numbers
+    in mine ∪ review plus the remainder of each total, DERIVED on load from what the
+    document holds (the count itself is never written), so a stored entry can never
+    contradict what is painted. A total below the rows it came with, or one that is
+    not a count, is ignored and the rows stay the floor — exactly the rule the live
+    read obeys — so 50 rows with a total of 52 is `52 pr` before a restart and after
+    it. The document is versioned (the totals moved it to version 2, and a document
+    of an older version is SILENCE, a cold cache, never an error). The extension
+    hydrates the stored entry from the section's async loader so a cold start paints
+    it at once, under its own `syncedAt` (it never passes for a fresh read and never
+    defeats the TTL) and never for a settled state; the live read then replaces it,
+    it is also the fallback for a read that failed, and the extension writes an
+    entry only from a successful read in the generation that asked, and drops the
+    entry's identity (so it is never hydrated back) after a mutation made in
+    `/prs`. Both settlements of that read — the stored one and the live one — ask
+    the section's own notifier (`onRefreshed`) for the frame the new count is
+    painted by, exactly like the issues read, so the header never keeps an old
+    number until some unrelated event produces a frame; a frame itself never asks.
+    Keyed exactly as the rail keys its own reads (`<host>/<owner>/<repo>`),
+    bounded to the eight most recent identities, written as a temp file plus a
+    rename, and read only from the async loader. `tools/prs-rail-store.test.js`
+    pins the document, the totals it derives from and its silence;
+    `tools/prs-command.test.js` pins the fallback paint, the totals that survive a
+    restart, the invalidation after a mutation, the repaint the settled read asks
+    for and that no temp file is left behind.
+
 26. **The rail's timed refresh exists only while the section is drawn.** With a
     floor named, `lib/issues-section.js` keeps ONE self-scheduled, unref'd timer at
     that floor: a DRAW arms it (`lines()` or `meta()` — a collapsed section is a
@@ -691,7 +784,11 @@ The question this page answers: which rules must every change preserve, and what
     flight owns that instant, and it stops by itself the moment the section leaves
     the drawn window, so a section the host stops painting keeps it no longer than
     that window. `invalidate()` and `dispose()` clear it, which is what a session
-    boundary performs. A section nobody draws keeps no timer, spawns nothing and
+    boundary performs. That one timer serves BOTH reads: the pull-request read is
+    asked behind its own TTL and its own one-read-in-flight guard, inside the same
+    drawn window, so a fresh issues snapshot never keeps an aged `pr` count on
+    screen and a hidden section asks for neither. A section nobody draws keeps no
+    timer, spawns nothing and
     reads nothing. `tools/issues-section.test.js` pins "a drawn section reads on its
     own timer at the floor, one read per floor", "the timer never overlaps a read,
     and it stops once the section is not drawn", "invalidate and dispose clear the
@@ -705,7 +802,10 @@ The question this page answers: which rules must every change preserve, and what
     an issue or a pull request, and the section is drawn — inside its window, for
     the session this rail belongs to. It bypasses the frame TTL and the activity
     floor, never the caller's anti-storm cap, and never a read already in flight,
-    so one result starts at most one read per cap. The classifier is text only: no
+    so one result starts at most one read per cap. Both reads go with it: the
+    forced read also asks the pull requests (`ensureFreshPullRequests(0)`), behind
+    their own one-in-flight guard, which the issues cap does not govern. The
+    classifier is text only: no
     child, no file, no clock, no cache, and it never throws; a mutation merely
     MENTIONED in an argument, and a read such as `gh issue list`, names no write.
     `tools/issues-bash-mutation.test.js` pins the classifier;
@@ -714,10 +814,11 @@ The question this page answers: which rules must every change preserve, and what
     same read" and "a hidden section forces no read, and a mutating result after
     shutdown does nothing".
 
-28. **A missing `gh` CLI removes the two issues surfaces; a non-repository cwd is a
+28. **A missing `gh` CLI removes the three GitHub surfaces; a non-repository cwd is a
     settled state.** The CLI question is answered ONCE, at registration, by a local
-    `PATH` walk (`lib/which-command.js`) with no child process: absent, `/issues` is
-    never registered and the `GITHUB` section is never added to the rail, so there
+    `PATH` walk (`lib/which-command.js`) with no child process: absent, `/issues`
+    and `/prs` are never registered and the `GITHUB` section is never added to the
+    rail, so there
     is no line, notice or refusal to draw for it — nothing appears, because nothing
     was registered — and every other surface keeps working. The panel's own host
     shortcut is bound only when that command actually registered, so the gate
@@ -725,8 +826,10 @@ The question this page answers: which rules must every change preserve, and what
     overriding it when that variable holds a non-empty string, bound once at load
     through `pi.registerShortcut`, its handler the command's own invoked with no
     argument and the session context — the picker's silence applies unchanged to a
-    host with no `registerShortcut` and to one that throws from it. The path guards that
-    remain (the gate, `/issues`' own probe, the rail's read) are defence in depth
+    host with no `registerShortcut` and to one that throws from it. `/prs` has no
+    host shortcut at all, so the gate has no key to leave behind for it. The path
+    guards that
+    remain (the gate, either command's own probe, the rail's read) are defence in depth
     for a `gh` that disappears after load: they still fail closed with no child, and
     the rail's `gh CLI not installed` `dim` line is that case alone. A cwd outside a
     repository is one short `dim` line — `not a git repository` — and a checkout that
@@ -745,3 +848,44 @@ The question this page answers: which rules must every change preserve, and what
     `tools/issues-command.test.js` pins "without the CLI neither the command nor the
     rail section exists" and "the decision costs no child process, at load or at
     session start".
+29. **The user prompt card is a DRAWING shim, gated by the same line and never
+    touching the host's text.** `lib/user-prompt-card.js` wraps
+    `UserMessageComponent.prototype.render` — the one host class this package
+    patches — because Pi publishes no extension seam for a `role: "user"` entry: the
+    class is handed in from the extension's lazy `import()`, so `lib/` imports no Pi
+    package and a host without the export installs nothing. The card it draws is a
+    `✿ You · HH:MM` card on the card substrate (`float`/`neon` read live, tone `info`,
+    the whole frame and the title in `accent`, the separator and the clock in
+    `muted` — the component's own `timestamp` when Pi restored the prompt, else the
+    clock captured once at its first paint, else no subtitle at all — and the body
+    Pi's own Markdown clone with the
+    user-message background dropped and its painted rows placed, never repainted).
+    A successful install asks the bridge for ONE `requestRepaint` (a differential
+    frame) so a transcript restored before the deferred host import resolves comes
+    back as cards instead of waiting for unrelated input; a refused install, a
+    closed session and a bridge without that member request nothing.
+    It adds NO row, command, setting or design, so invariant 3's surface is
+    unchanged. The gate is `Card activity` answering this package's `activity`
+    design, asked INSIDE the patched `render` on every paint and never cached, which
+    is what repaints a prompt already on screen: any other answer — `default`
+    (stored `native`), another design, an absent or throwing bridge, a width below
+    six columns, a component whose Markdown shape is not Pi's — hands the host's own
+    rows back BYTE FOR BYTE, fail CLOSED, unlike the file cards' pre-switch answer.
+    Pi's OSC 133 prompt-zone markers are re-emitted once on the card's first and last
+    row and never on the native path, so shell integration is not degraded. The
+    wrapper is installed once per process through a `Symbol.for` slot (a second
+    evaluation, `/reload` or a second session replaces only the live logic), never
+    throws, is re-installed on `session_start` and restored to the original `render`
+    by reference on `session_shutdown`, and its memo is keyed on everything that
+    changes a row (the width the frame really draws at, the resolved paint, the
+    rendered Markdown rows), so a style change always recomposes. An ACTIVE card paint
+    pays two live reads and nothing else: the gate itself — the live `Card activity`
+    answer, asked on every paint including the native one — and, only while the card
+    actually draws, the shell's style (the published slot, or `<home>/card-style.json`
+    when none is published), which is the price of a prompt that repaints the moment
+    either changes;
+    the drawing
+    recomputes nothing on a steady frame. `tools/user-prompt-card.test.js` pins the
+    gate and its live flip on
+    one instance, the byte-for-byte native answers, the accent cells in both styles,
+    the zone markers and the wrap-once/uninstall-by-reference claims.

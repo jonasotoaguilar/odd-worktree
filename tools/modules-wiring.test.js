@@ -3,11 +3,28 @@
 // switches. The switches are read ONCE, when the extension registers, from the bridge's
 // store, and a missing document keeps everything on — so every other suite in this package
 // loads the whole thing.
-const { test, describe, afterEach } = require('node:test');
+const { test, describe, after, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
 
 const { BRIDGE_SLOT, defaultBridge, loadExtension } = require('./fixtures/load-extension.js');
+
+// The prompt assertions below read the extension's own `before_agent_start`, which honors these
+// two switches from the ambient environment: a suite that ran inside a subagent child (or under
+// `ODD_WORKTREE_PROMPT=0`) would otherwise assert against a prompt the extension was told to keep
+// empty. They are cleared once here, so the cases are the same in every environment.
+const savedPromptEnv = {
+  child: process.env.GENTLE_PI_AGENTS_CHILD,
+  prompt: process.env.ODD_WORKTREE_PROMPT,
+};
+delete process.env.GENTLE_PI_AGENTS_CHILD;
+delete process.env.ODD_WORKTREE_PROMPT;
+after(() => {
+  for (const [key, value] of [['GENTLE_PI_AGENTS_CHILD', savedPromptEnv.child], ['ODD_WORKTREE_PROMPT', savedPromptEnv.prompt]]) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 const saved = globalThis[BRIDGE_SLOT];
 afterEach(() => {
@@ -54,6 +71,11 @@ describe('the Tools page', () => {
       assert.deepEqual(
         tools[0].rows({}).map((row) => `${row.choice.setting} ${row.choice.value}`),
         ['Codegraph+ Off', 'Codegraph+ On', 'Worktrees+ Off', 'Worktrees+ On'],
+      );
+      assert.deepEqual(
+        tools[0].categoryPlacement,
+        { after: 'Sections' },
+        'the page is placed by the bridge, right after the host Sections page',
       );
     }
   });
@@ -108,21 +130,45 @@ describe('Codegraph+', () => {
 });
 
 describe('the CodeGraph card', () => {
-  const cardResolvers = async (modules, selection) => {
-    const resolvers = [];
-    await load(modules, { selection, host: { registerToolRenderer: (resolver) => resolvers.push(resolver) } });
-    return resolvers.filter((resolver) => resolver('codegraph', () => undefined) !== undefined).length;
+  // The card claims `codegraph` on EVERY answer, because Pi resolves a tool's renderers once,
+  // when it mounts the card, and never asks again: the `Card activity` line is read inside the
+  // component, on every paint, and a flipped line repaints the card already on screen. What this
+  // file can observe is the ROWS — with any answer but `activity`, and with no reader at all, the
+  // chain's own renderer keeps them untouched — and that the card is still the one answering,
+  // which is what a flip depends on. (This load injects no text seam, so the card itself degrades
+  // to the host's drawing here; tools/codegraph-card.test.js proves the card's own rows.)
+  const CHAIN = {
+    renderShell: 'self',
+    renderCall: () => ({ render: () => ['the chain drew this'], invalidate() {} }),
+    renderResult: () => ({ render: () => ['the chain drew this too'], invalidate() {} }),
   };
 
-  test('is a design of the `Card activity` line: activity on paints it, and Codegraph+ off keeps it', async () => {
-    assert.equal(await cardResolvers(undefined, ACTIVITY), 1, 'activity on, both modules on');
-    assert.equal(await cardResolvers({ codegraph: false }, ACTIVITY), 1, 'Codegraph+ off does not take the card away');
+  /** The CodeGraph card's own answer on this load, as the call rows it draws — or [] when none claims. */
+  const cardRows = async (modules, selection) => {
+    const resolvers = [];
+    await load(modules, { selection, host: { registerToolRenderer: (resolver) => resolvers.push(resolver) } });
+    return resolvers
+      .map((resolver) => resolver('codegraph', () => CHAIN))
+      .filter((slot) => slot !== CHAIN && slot?.renderShell === 'self' && typeof slot.renderCall === 'function')
+      .map((slot) => slot.renderCall({ operation: 'status' }, undefined, { isPartial: false }).render(24));
+  };
+
+  test('is a design of the `Card activity` line: activity on answers it, and Codegraph+ off keeps it', async () => {
+    for (const modules of [undefined, { codegraph: false }]) {
+      assert.deepEqual(await cardRows(modules, ACTIVITY), [['the chain drew this']], `the card answers whatever the line says (${JSON.stringify(modules)})`);
+    }
   });
 
-  test('is not a module surface: native leaves every row to the chain', async () => {
-    assert.equal(await cardResolvers(undefined, () => ({ kind: 'native' })), 0);
-    assert.equal(await cardResolvers({ codegraph: false }, () => ({ kind: 'native' })), 0);
-    assert.equal(await cardResolvers(undefined, undefined), 0, 'no reader, no switch, no card');
+  test('is not a module surface: native, another answer and no reader hand every row back to the chain', async () => {
+    for (const [name, selection] of [
+      ['native', () => ({ kind: 'native' })],
+      ['another plugin\'s design', () => ({ kind: 'design', design: { id: 'acme.tools' } })],
+      ['no reader at all', undefined],
+    ]) {
+      for (const modules of [undefined, { codegraph: false }]) {
+        assert.deepEqual(await cardRows(modules, selection), [['the chain drew this']], `${name} (${JSON.stringify(modules)}): the rows are the chain's`);
+      }
+    }
   });
 });
 

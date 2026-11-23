@@ -251,3 +251,235 @@ describe('the preview title follows the shared palette (S13)', () => {
       'a ready read paints no pending word');
   });
 });
+
+// S6 (prs cross-links): the pane's `linked PRs:` row is a set of INDEPENDENT
+// click ranges the caller owns. The formatter reports each number it printed
+// with the row it landed on (wrapping included) and its own plain columns, so a
+// click can never open the whole line, a separator, or the truncation ellipsis.
+// The collector is optional: without it the returned rows are byte for byte the
+// ones this preview always produced.
+describe('linked PR click ranges (S6)', () => {
+  function rangesOf(detail, options = {}) {
+    const ranges = [];
+    const lines = issueDetailLines(detail, [], {
+      width: 80,
+      paint: plain,
+      emphasis: bold,
+      now: NOW,
+      ranges,
+      ...options,
+    });
+    return { lines, ranges };
+  }
+
+  test('each linked PR number is one range, on the row that carries it', () => {
+    const { lines, ranges } = rangesOf(FULL);
+    assert.deepEqual(ranges.map((range) => range.number), [69, 77], 'every number, in print order');
+    assert.ok(ranges.every((range) => range.kind === 'pullRequest'), 'the range names the relation it opens');
+    for (const range of ranges) {
+      assert.equal(lines[range.line].slice(range.start, range.end), `#${range.number}`,
+        `the range covers exactly #${range.number} and nothing else`);
+    }
+    assert.equal(ranges[0].line, ranges[1].line, 'the wide pane prints both numbers on their one row');
+  });
+
+  test('the truncation ellipsis is not a range', () => {
+    const { lines, ranges } = rangesOf({
+      ...FULL,
+      linkedPullRequests: [69],
+      linkedPullRequestsTruncated: true,
+    });
+    assert.deepEqual(ranges.map((range) => range.number), [69], 'only the number is clickable');
+    const row = lines[ranges[0].line];
+    assert.match(row, /, …$/, 'the capped page still ends with the ellipsis');
+    assert.ok(ranges.every((range) => !row.slice(range.start, range.end).includes('…')), 'the ellipsis carries no range');
+  });
+
+  test('a wrapped row keeps each range on the row its own number landed on', () => {
+    const { lines, ranges } = rangesOf(FULL, { width: 6 });
+    assert.equal(ranges.length, 2);
+    assert.notEqual(ranges[0].line, ranges[1].line, 'the narrow pane wraps the two numbers onto two rows');
+    for (const range of ranges) {
+      assert.equal(lines[range.line].slice(range.start, range.end), `#${range.number}`,
+        `#${range.number} is range-mapped on the row it was printed on`);
+    }
+  });
+
+  test('the body, the title and a pending read carry no range', () => {
+    const withBody = rangesOf({ ...FULL, title: '#69 title', body: 'linked PRs: #69, #77' });
+    assert.deepEqual(withBody.ranges.map((range) => range.number), [69, 77],
+      'only the linked row produces ranges, never the title or the body text');
+    assert.ok(
+      withBody.ranges.every((range) => withBody.lines[range.line].startsWith('linked PRs:')),
+      'every range lives on the one relation row',
+    );
+    const pending = rangesOf(FULL, { pending: true });
+    assert.deepEqual(pending.ranges, [], 'a pending read has not painted the relation row yet');
+  });
+
+  test('a caller that passes no collector gets exactly the rows it always did', () => {
+    const collected = rangesOf(FULL);
+    const plainRows = issueDetailLines(FULL, [], { width: 80, paint: plain, emphasis: bold, now: NOW });
+    assert.deepEqual(collected.lines, plainRows, 'the collector changes nothing about the painted rows');
+  });
+});
+
+// S6/D29: a linked pull request is identified by REPOSITORY and number. One of
+// another repository is painted with the repository it belongs to — never as a
+// bare `#N` that would read as this repository's number — and it owns no click
+// range, because this panel cannot open a pull request it has no identity for.
+describe('a linked PR of another repository (D29)', () => {
+  function rangesOf(detail, options = {}) {
+    const ranges = [];
+    const lines = issueDetailLines(detail, [], {
+      width: 80,
+      paint: plain,
+      emphasis: bold,
+      now: NOW,
+      ranges,
+      ...options,
+    });
+    return { lines, ranges };
+  }
+
+  test('renders as plain owner/repo#N and owns no click range', () => {
+    const { lines, ranges } = rangesOf({
+      ...FULL,
+      linkedPullRequests: [69],
+      linkedPullRequestsForeign: [{ repository: 'oak/payroll', number: 381 }],
+    });
+    const row = lines.find((line) => line.includes('linked PRs:'));
+    assert.ok(row, 'the relation row is painted');
+    assert.equal(row.trim(), 'linked PRs: #69, oak/payroll#381',
+      'the foreign link names its repository, so it cannot read as this one');
+    assert.deepEqual(ranges.map((range) => range.number), [69], 'only the same-repository number is a target');
+  });
+
+  test('a foreign link with the same number as a linked one is still not a target', () => {
+    const { ranges } = rangesOf({
+      ...FULL,
+      linkedPullRequests: [69],
+      linkedPullRequestsForeign: [{ repository: 'oak/payroll', number: 69 }],
+    });
+    assert.equal(ranges.length, 1, 'the bare #69 is the only range');
+    assert.equal(ranges[0].number, 69);
+  });
+
+  test('an absent foreign list paints nothing extra', () => {
+    const text = render(FULL, []);
+    assert.match(text, /linked PRs: #69, #77/);
+  });
+});
+
+// The reading pane separates its blocks with the horizontal rule the ODD reader
+// already draws (`lib/odd-markdown.js` paints `'─'.repeat(width)`), as wide as
+// the pane and in the muted role: the metadata block from the body, the body
+// from the comments and each comment from the next. No rule before the first
+// row, none after the last, and none for a block the issue does not have.
+describe('the pane separates its blocks with a full-width rule', () => {
+  const WIDTH = 40;
+  const RULE = '─'.repeat(WIDTH);
+
+  function painted(detail, comments, options = {}) {
+    const calls = [];
+    const paint = (role, text) => {
+      calls.push({ role, text: String(text) });
+      return String(text);
+    };
+    const lines = issueDetailLines(detail, comments, {
+      width: WIDTH,
+      paint,
+      emphasis: bold,
+      now: NOW,
+      ...options,
+    });
+    return { lines, calls };
+  }
+
+  const ruleRows = (lines) => lines.reduce((found, line, at) => (line === RULE ? [...found, at] : found), []);
+
+  test('the metadata block, the body and each comment are separated by one rule', () => {
+    const { lines, calls } = painted(FULL, [
+      { author: 'ana', body: 'first comment', createdAt: '2026-02-27T00:00:00.000Z' },
+      { author: 'beto', body: 'second comment', createdAt: '2026-02-28T00:00:00.000Z' },
+    ]);
+    const at = (needle) => {
+      const index = lines.findIndex((line) => line.includes(needle));
+      assert.notEqual(index, -1, `not painted: ${needle}`);
+      return index;
+    };
+    assert.equal(lines[0], '#77 parity title', 'no rule before the first row');
+    assert.equal(lines.at(-1), '(end of issue)', 'no rule after the last row');
+    assert.equal(lines[at('the body') - 1], RULE, 'the metadata block and the body are separated');
+    assert.equal(lines[at('─ ana') - 1], RULE, 'the body and the comments are separated');
+    assert.equal(lines[at('─ beto') - 1], RULE, 'each comment is separated from the next');
+    assert.deepEqual(ruleRows(lines), [at('the body') - 1, at('─ ana') - 1, at('─ beto') - 1],
+      'exactly those three rows carry a rule and no two rules are adjacent');
+    const paintedRules = calls.filter((call) => call.text === RULE);
+    assert.equal(paintedRules.length, 3, 'each rule is painted through the caller seam');
+    assert.ok(paintedRules.every((call) => call.role === 'muted'), 'the rule takes the muted role');
+    assert.equal([...RULE].length, WIDTH, 'the rule spans the whole pane');
+  });
+
+  test('a comment-free issue draws only the rule before the body', () => {
+    const { lines } = painted({ ...FULL, body: '' }, []);
+    const body = lines.indexOf('(no description)');
+    assert.notEqual(body, -1, 'the placeholder is still the body block');
+    assert.deepEqual(ruleRows(lines), [body - 1], 'nothing separates a body from no comments');
+    assert.equal(lines.at(-1), '(end of issue)');
+  });
+
+  test('a pending read separates nothing it has not painted', () => {
+    const { lines } = painted({ number: 12, title: 'pending read' }, [], { pending: true });
+    assert.ok(!lines.includes(RULE), 'a pane with no body and no comments draws no rule');
+  });
+
+  test('the rule is exactly the pane width at any width', () => {
+    for (const width of [12, 40, 121]) {
+      const rule = '─'.repeat(width);
+      const lines = issueDetailLines(FULL, [], { width, paint: plain, emphasis: bold, now: NOW });
+      assert.deepEqual(lines.reduce((found, line, at) => (line === rule ? [...found, at] : found), []),
+        [lines.indexOf('the body') - 1], `one full-width rule at ${width}`);
+    }
+  });
+});
+
+// The hover highlight paints the linked number the pointer is over, through the
+// same role the rail uses for a hovered row, and changes nothing about the
+// published click geometry.
+describe('the hovered linked PR is the one painted as the target', () => {
+  function paintedCalls(hover) {
+    const calls = [];
+    const ranges = [];
+    const paint = (role, text) => {
+      calls.push({ role, text: String(text) });
+      return String(text);
+    };
+    const lines = issueDetailLines(FULL, [], {
+      width: 80,
+      paint,
+      emphasis: bold,
+      now: NOW,
+      ranges,
+      hover,
+    });
+    return { calls, lines, ranges };
+  }
+
+  test('only the hovered number takes the hover role', () => {
+    const { calls, lines } = paintedCalls(77);
+    const targets = calls.filter((call) => call.role === 'accent').map((call) => call.text);
+    assert.ok(targets.includes('#77'), 'the hovered number is painted as the target');
+    assert.ok(!targets.includes('#69'), 'the other number keeps its plain text');
+    assert.match(lines.find((line) => line.includes('linked PRs:')), /#69, #77/,
+      'the painted row still carries both numbers');
+  });
+
+  test('no hover paints no target, and the click geometry is identical either way', () => {
+    const hovered = paintedCalls(77);
+    const plainRun = paintedCalls(null);
+    assert.ok(!plainRun.calls.some((call) => call.role === 'accent' && call.text === '#77'),
+      'without hover no number takes the switch role');
+    assert.deepEqual(hovered.ranges, plainRun.ranges, 'hover never moves a click range');
+  });
+});

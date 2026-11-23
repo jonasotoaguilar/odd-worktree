@@ -52,6 +52,13 @@ after(() => {
   }
 });
 
+
+// The header may also carry the rail's pull-request segment (`· M pr`), which this
+// suite does not read: only the issues number and the `· stale` mark are asserted.
+function issuesCount(text) {
+  return String(text).replace(/ · \d+ pr/, '');
+}
+
 function track(dir) {
   roots.push(dir);
   return dir;
@@ -1202,11 +1209,14 @@ describe('/issues actions (S3,S4)', () => {
       ['issue', 'view', '76', '--web', '-R', 'github.com/jonasotoaguilar/herdr-gentle-shell']);
     assert.equal(gitCalls[0].cwd, root, 'the opener runs in this checkout');
     assert.ok(!gitCalls[0].argv.join(' ').includes('xdg-open'), 'never an invented opener');
-    assert.deepEqual(run.host.lifecycle, ['stop', 'start', 'render'],
-      'the TUI is suspended for the browser open and taken back afterwards');
-    assert.deepEqual(run.host.stops, [{ preserveScreen: true }],
-      'the suspend preserves the screen: a bare stop stamps the whole alt-screen frame into scrollback');
-    assert.deepEqual(run.host.paints, [true], 'the terminal is forced to repaint on resume');
+    // Regression: the opener used to stop the host TUI and start it again. `gh`
+    // here runs on pipes and never touches the terminal, and in Pi the
+    // stop/start pair left the render loop dead (the screen kept the plain shell
+    // and stopped repainting). Opening a browser is not an interactive child, so
+    // the TUI is never suspended for it.
+    assert.deepEqual(run.host.lifecycle, [], 'the browser opener never stops or restarts the TUI');
+    assert.deepEqual(run.host.stops, [], 'nothing suspends the screen to open a URL');
+    assert.deepEqual(run.host.paints, [], 'no resume repaint is needed because nothing was suspended');
   });
 
   test('r re-reads the current page fresh, and the removed state toggle reads nothing', async () => {
@@ -2606,7 +2616,7 @@ describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)
     const root = makeRepo({ tag: 'issues-self-assign' });
     const state = repoState();
     const { loaded, gh, section, ctx } = await warmRail(root, state);
-    assert.equal(section.meta(ctx), '2 issues', 'the rail starts with both rows');
+    assert.equal(issuesCount(section.meta(ctx)), '2 issues', 'the rail starts with both rows');
 
     const { component } = await mountPanel(loaded, root);
     // `Assigned` is where the viewer's own row lives; the tab reads it on entry.
@@ -2644,7 +2654,7 @@ describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)
     assert.ok(await waitFor(() => railReads(gh).length >= 2), 'the write started a rail read of its own');
     assert.match(railQuery(railReads(gh)[1]), /first: 100/,
       'the dropped entry makes the next rail read the full size, so a removal can land');
-    assert.ok(await waitFor(() => section.meta(ctx) === '1 issues'), 'the rail count follows the removal');
+    assert.ok(await waitFor(() => issuesCount(section.meta(ctx)) === '1 issues'), 'the rail count follows the removal');
     assert.deepEqual(section.lines(ctx).map((row) => row.label), ['#12 Mine twelve'],
       'and the merged rows are the ones the full read answered');
   });
@@ -2671,7 +2681,7 @@ describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)
     await tick();
     assert.equal(component.state.mode, 'assignees', 'the editor keeps the draft');
     assert.equal(railReads(gh).length, before, 'a failed write invalidates nothing, so no rail read starts');
-    assert.equal(section.meta(ctx), '2 issues', 'the rail keeps the pre-write count');
+    assert.equal(issuesCount(section.meta(ctx)), '2 issues', 'the rail keeps the pre-write count');
     assert.match(frameOf(component), /Assigned \(1\)/, 'and the panel keeps the pre-write count');
     assert.ok(frameOf(component).includes('Assigned twenty-one'), 'the row never left');
   });

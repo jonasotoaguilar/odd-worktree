@@ -100,6 +100,16 @@ const plainTheme = {
   },
 };
 
+// The host's own palette, as far as a test can see it: every role is named and bold is its
+// own tag, so the rows this package hands back can be compared with the host's drawing
+// byte for byte.
+const hostTheme = {
+  fg: (role, value) => `<${role}>${value}</${role}>`,
+  bg: (role, value) => `<${role}>${value}</${role}>`,
+  bold: (value) => `<bold>${value}</bold>`,
+};
+const hostRow = (role, text, width) => `<${role}>${text.padEnd(width)}</${role}>`;
+
 /** A theme that can also paint the float background, so the text stays readable. */
 function paintTheme() {
   const roles = { fg: [], bg: [] };
@@ -208,6 +218,195 @@ const ACTIVITY_ON = (tool) => (isCodeGraphCardTool(tool) || tool === 'bash' ? { 
 publishBridge(ACTIVITY_ON);
 after(() => {
   delete globalThis[BRIDGE_API_SLOT];
+});
+
+/** A host that draws CodeGraph rows itself: the chain's renderers, captured when the card was built. */
+const HOST_CODEGRAPH = {
+  renderShell: 'self',
+  renderCall: () => ({ render: (width) => [`host call ${width}`.padEnd(width, ' ')], invalidate() {} }),
+  renderResult: () => ({ render: (width) => [`host result ${width}`.padEnd(width, ' ')], invalidate() {} }),
+};
+
+// ---- the switch, read per paint ----
+//
+// Pi resolves a tool's renderers ONCE, when it mounts the card
+// (`interactive-mode.js` hands the resolved definition to `ToolExecutionComponent`), and
+// never asks again. The bridge's `Card activity` line is therefore read INSIDE the
+// component's build, which the host does run on every frame: the cases below mount one
+// card, flip the line, and repaint that same component.
+
+test('the line is read on every paint: a mounted card hands the row back to the chain and takes it again', () => {
+  publishBridge(ACTIVITY_ON);
+  const resolver = cardFor({ cwd: '/work/repo' });
+  const slot = renderersFor(resolver, CODEGRAPH_TOOL, HOST_CODEGRAPH);
+  const args = { operation: 'explore', query: 'auth login' };
+  const context = { args, isPartial: false };
+  // ONE card, mounted: the components the host built before any of this changed.
+  const call = slot.renderCall(args, hostTheme, context);
+  const result = slot.renderResult(textResult('found it'), { isPartial: false }, hostTheme, context);
+  const on = { call: call.render(60), result: result.render(60) };
+  assert.ok(on.call.length > 0, 'the card is drawn while the line says activity');
+  assert.ok(on.result.length > 0, 'and its result half too');
+  // The line is turned off, and the SAME mounted components are repainted.
+  publishBridge({ kind: 'native' });
+  assert.deepEqual(call.render(60), [`host call 60`.padEnd(60, ' ')], 'off, the chain\'s own renderer draws the row it captured at build time');
+  assert.deepEqual(result.render(60), [`host result 60`.padEnd(60, ' ')], 'the result half too');
+  // And back on, from the same two components.
+  publishBridge(ACTIVITY_ON);
+  assert.deepEqual(call.render(60), on.call, 'flipped back on, the card is drawn again, unchanged');
+  assert.deepEqual(result.render(60), on.result, 'the result half too');
+});
+
+test('the line is read on every paint for all three surfaces and a bash call that runs CodeGraph', () => {
+  // The mounted-repaint contract (S1): ONE component per surface, mounted while the line says
+  // `activity`, repainted after the line is turned off and after it is turned back on.
+  const surfaces = [
+    [CODEGRAPH_TOOL, { operation: 'explore', query: 'auth login' }, 'the native tool'],
+    [CODEGRAPH_MCP_TOOL, { query: 'auth login' }, 'the MCP tool, bare name'],
+    [MCP_PREFIXED_TOOL, { query: 'auth login' }, 'the MCP tool, prefixed name'],
+    ['bash', { command: 'codegraph explore -- auth login' }, 'a bash call that runs CodeGraph'],
+  ];
+  const flips = [];
+  for (const [tool, args, label] of surfaces) {
+    publishBridge(ACTIVITY_ON);
+    const resolver = cardFor({ cwd: '/work/repo' });
+    const slot = renderersFor(resolver, tool, HOST_CODEGRAPH);
+    const context = { args, isPartial: false };
+    const call = slot.renderCall(args, hostTheme, context);
+    const on = call.render(60);
+    assert.ok(on.length > 0 && !on.join('\n').includes('host call'), `${label}: the card is drawn while the line says activity`);
+    publishBridge({ kind: 'native' });
+    assert.deepEqual(call.render(60), [`host call 60`.padEnd(60, ' ')], `${label}: flipped off, the chain's own rows are drawn`);
+    publishBridge(ACTIVITY_ON);
+    assert.deepEqual(call.render(60), on, `${label}: flipped back on, the card is drawn again, unchanged`);
+    flips.push(label);
+  }
+  assert.equal(flips.length, 4, 'four surfaces, four mounted repaints, each in both directions');
+  publishBridge(ACTIVITY_ON);
+});
+
+test('a captured renderer that throws falls back to the host\'s own drawing', () => {
+  // Pi catches a renderer that throws and draws `createCallFallback()` in its place
+  // (`ToolExecutionComponent.updateDisplay`); the card must do the same rather than lose the row.
+  const throwing = {
+    renderShell: 'self',
+    renderCall() {
+      throw new Error('host renderer exploded');
+    },
+    renderResult() {
+      throw new Error('host renderer exploded');
+    },
+  };
+  publishBridge({ kind: 'native' });
+  try {
+    const resolver = cardFor({ cwd: '/work/repo' });
+    const call = renderersFor(resolver, CODEGRAPH_TOOL, throwing).renderCall({ operation: 'status' }, hostTheme, { isPartial: false }).render(120);
+    const title = `<toolTitle><bold>${CODEGRAPH_TOOL}</bold></title>`.replace('</title>', '</toolTitle>');
+    // The host's own fallback row; Pi prepends its one separator blank for a self-framed tool,
+    // which is the baseline's two rows.
+    assert.deepEqual(call, [`${title} <muted>operation="status"</muted>`.padEnd(120, ' ')]);
+  } finally {
+    publishBridge(ACTIVITY_ON);
+  }
+});
+
+test('ordinary bash keeps the same clickable child while activity is off', () => {
+  // The verifier's own dispatch check, kept here so a future wrapper cannot silently swallow a
+  // click: with the line off the host mounts the child's component ITSELF, and its mouse handler
+  // is the one that runs.
+  publishBridge({ kind: 'native' });
+  try {
+    let clicks = 0;
+    const child = {
+      render: () => ['ordinary bash'],
+      invalidate() {},
+      handleMouse() { clicks += 1; return { handled: true }; },
+    };
+    const chain = { renderShell: 'self', renderCall: () => child };
+    const resolved = cardFor({ cwd: '/work/repo' })('bash', () => chain);
+    assert.equal(resolved, chain);
+    const mounted = resolved.renderCall({ command: 'printf ordinary' }, plainTheme, {});
+    assert.equal(mounted, child);
+    assert.deepEqual(mounted.handleMouse({ type: 'click', button: 'left' }), { handled: true });
+    assert.equal(clicks, 1);
+  } finally {
+    publishBridge(ACTIVITY_ON);
+  }
+});
+
+test('with the line off a bash row is handed back untouched, never wrapped', () => {
+  // A bash call's own component is what the host mounts, so its rows, its mouse handling and
+  // every other behaviour stay exactly as Pi resolved them: off, this card adds no wrapper.
+  publishBridge({ kind: 'native' });
+  try {
+    const chain = {
+      renderShell: 'self',
+      renderCall: () => ({ render: () => ['the chain drew this'], invalidate() {} }),
+      renderResult: () => ({ render: () => ['the chain drew this too'], invalidate() {} }),
+    };
+    for (const command of ['pnpm test', 'codegraph status .']) {
+      assert.equal(cardFor({ cwd: '/work/repo' })('bash', () => chain), chain, command);
+    }
+  } finally {
+    publishBridge(ACTIVITY_ON);
+  }
+  // While the line says activity the card is the one answering, so a flip can repaint it.
+  const chain = { renderShell: 'self', renderCall: () => ({ render: () => [], invalidate() {} }), renderResult: () => ({ render: () => [], invalidate() {} }) };
+  assert.equal(cardFor({ cwd: '/work/repo' })('bash', () => chain).renderShell, 'self', 'activity on: the card answers the bash row');
+});
+
+test('a PARTIAL result draws the rows every later paint draws, on the FIRST paint', () => {
+  // Pi builds the result component when the update arrives (`updateDisplay`) and only then
+  // renders the pass. A mark made while painting lands after the call already drew, so the first
+  // partial paint carries one row too many (the verifier measured 5/4 neon, 8/7 float). The card
+  // marks during construction, like the baseline: the first paint is the one every paint repeats.
+  publishBridge(ACTIVITY_ON);
+  const resolver = cardFor({ cwd: '/work/repo' });
+  const args = { operation: 'explore', query: 'auth login' };
+  const text = textResult('found it');
+  for (const isPartial of [true, false]) {
+    const state = {};
+    const context = { args, isPartial, state };
+    // One card, built the way the host builds it: the result's component first, then the call's.
+    const slot = renderersFor(resolver, CODEGRAPH_TOOL, HOST_CODEGRAPH);
+    const result = slot.renderResult(text, { isPartial }, hostTheme, context);
+    const call = slot.renderCall(args, hostTheme, context);
+    const first = [...call.render(70), ...result.render(70)].map(unpaint);
+    const again = [...call.render(70), ...result.render(70)].map(unpaint);
+    assert.deepEqual(first, again, `isPartial=${isPartial}: the first paint is the one every later paint draws`);
+    const closers = first.filter((row) => row.startsWith('╰')).length;
+    assert.equal(closers, isPartial ? 0 : 1, `isPartial=${isPartial}: one frame, closed only by the settled result`);
+    assert.equal(call.render(70).map(unpaint).filter((row) => row.startsWith('╰')).length, 0, `isPartial=${isPartial}: the call never closes it`);
+  }
+});
+
+test('with the line off and no renderer in the chain, the rows are the host\'s own fallback, byte for byte', () => {
+  publishBridge({ kind: 'native' });
+  try {
+    const resolver = cardFor({ cwd: '/work/repo' });
+    const args = { query: 'auth login' };
+    // The MCP tool's definition declares no shell, so Pi draws its fallback inside its own
+    // box: one painted blank row, the padded call, one painted blank row.
+    const mcp = renderersFor(resolver, MCP_PREFIXED_TOOL, undefined);
+    const boxed = mcp.renderCall(args, hostTheme, { args, isPartial: false, outputPad: 1 }).render(120);
+    const title = `<toolTitle><bold>${MCP_PREFIXED_TOOL}</bold></toolTitle>`;
+    // The call half opens the box; its closing blank belongs to the result half, which
+    // is where the host draws it once the result exists.
+    assert.deepEqual(boxed, [
+      hostRow('toolSuccessBg', ' '.repeat(120), 120),
+      hostRow('toolSuccessBg', ` ${title} <muted>query="auth login"</muted>`, 120),
+    ]);
+    // The native tool frames itself (`renderShell: 'self'` in its own definition), and Pi
+    // draws no box around a tool that does: the fallback rows alone, padded.
+    const native = renderersFor(resolver, CODEGRAPH_TOOL, { renderShell: 'self' });
+    const bare = native.renderCall({ operation: 'status' }, hostTheme, { isPartial: false, outputPad: 1 }).render(120);
+    const nativeTitle = `<toolTitle><bold>${CODEGRAPH_TOOL}</bold></toolTitle>`;
+    assert.deepEqual(bare, [`${nativeTitle} <muted>operation="status"</muted>`.padEnd(120, ' ')]);
+    // A result that states nothing draws no row at all, exactly as the host's own fallback.
+    assert.deepEqual(native.renderResult(textResult(''), { isPartial: false }, hostTheme, { args: { operation: 'status' } }).render(60), []);
+  } finally {
+    publishBridge(ACTIVITY_ON);
+  }
 });
 
 // ---- the resolver under test ----
@@ -987,23 +1186,37 @@ test('S11: `native`, `not-covered`, `missing`, another design and a throwing rea
     undefined,
     null,
   ];
+  // The chain's own drawing says which rows are which: this fake names itself in every row.
+  const chain = {
+    renderShell: 'self',
+    renderCall: () => ({ render: (width) => [`host call ${width}`], invalidate() {} }),
+    renderResult: () => ({ render: (width) => [`host result ${width}`], invalidate() {} }),
+  };
+  const call = (slot) => slot.renderCall({ operation: 'explore' }, plainTheme, { isPartial: false }).render(40);
+  const result = (slot) => slot.renderResult(textResult('output'), { isPartial: false }, plainTheme, { args: { operation: 'explore' } }).render(40);
   for (const answer of answers) {
     publishBridge(() => answer);
     const resolver = cardFor();
     for (const tool of [CODEGRAPH_TOOL, CODEGRAPH_MCP_TOOL, 'bash']) {
-      assert.equal(resolver(tool, () => HOST_BASH), HOST_BASH, `${tool} under ${JSON.stringify(answer)}`);
+      // The card is claimed — Pi resolves it once and would never ask again — and every
+      // answer but `activity` draws the chain's own rows, on every paint.
+      const slot = resolver(tool, () => chain);
+      assert.equal(slot?.renderShell, 'self', `${tool} under ${JSON.stringify(answer)}`);
+      assert.deepEqual(call(slot), ['host call 40'], `${tool} under ${JSON.stringify(answer)}`);
+      assert.deepEqual(result(slot), ['host result 40'], `${tool} under ${JSON.stringify(answer)}`);
     }
   }
   publishBridge(() => { throw new Error('bridge exploded'); });
-  assert.equal(cardFor()(CODEGRAPH_TOOL, () => HOST_BASH), HOST_BASH, 'a throwing reader is a no');
+  assert.deepEqual(call(cardFor()(CODEGRAPH_TOOL, () => chain)), ['host call 40'], 'a throwing reader is a no');
   publishBridge(ACTIVITY_ON);
 });
 
-test('S11: with no reader at all the card claims nothing, and a host without the hook registers nothing', () => {
+test('S11: with no reader at all the chain\'s rows are drawn, and a host without the hook registers nothing', () => {
+  const silent = (slot) => slot.renderCall({ operation: 'explore' }, plainTheme, { isPartial: false }).render(40);
   globalThis[BRIDGE_API_SLOT] = { schema: 'gentle-shell-bridge/api', version: 1 };
-  assert.equal(cardFor()(CODEGRAPH_TOOL, () => HOST_BASH), HOST_BASH, 'an older bridge has no switch to follow');
+  assert.deepEqual(silent(cardFor()(CODEGRAPH_TOOL, () => HOST_BASH)), [], 'an older bridge has no switch to follow, so the host draws its own rows');
   delete globalThis[BRIDGE_API_SLOT];
-  assert.equal(cardFor()(CODEGRAPH_TOOL, () => HOST_BASH), HOST_BASH, 'no bridge, no switch, no card');
+  assert.deepEqual(silent(cardFor()(CODEGRAPH_TOOL, () => HOST_BASH)), [], 'no bridge, no switch, so the host still draws its own rows');
   publishBridge(ACTIVITY_ON);
   const { registerCodegraphCard } = require('../lib/codegraph-card.js');
   assert.deepEqual(registerCodegraphCard({}, {}), { registered: false, resolver: undefined }, 'no host hook, no registration');

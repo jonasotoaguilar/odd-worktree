@@ -41,6 +41,16 @@
 //   nowhere;
 // - `refreshIfStale(maxAgeMs)` is the activity seam: one read for an absent or
 //   aged snapshot, nothing for a fresh one, one in flight, or a disposed one;
+// - the rail's SECOND read is the repository's pull requests (S4/S5, T4):
+//   `loadPullRequests` answers `{ ok, mine, review }`, the header reads
+//   `<n> issues · <m> pr` with `m` the distinct numbers in mine ∪ review (`<n>
+//   issues` alone while that read is unavailable, `· stale` kept), the read
+//   obeys the same TTL, the same self-scheduled floor and the same drawn window
+//   as the issues read, never blocks a frame, and a failed read keeps the last
+//   count. A row whose issue has a linked pull request sends its click to
+//   `open(number, { pullRequest, pullRequestBucket })` — `review` beats `mine`,
+//   and a pull request in neither is `all` — while every other row keeps the
+//   four arguments it always had; DEFAULT_ROW_LABEL is `github` (S4),
 // - the three states are rows (`loading…`, `no open issues`, ONE error row),
 //   never a throw;
 // - the extension reaches the rail ONLY through gentle-shell-bridge's
@@ -1117,6 +1127,341 @@ test('S5: loading, empty and error are rows, never a throw', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// T4 (S4, S5): the rail's second read — the checkout repository's pull requests.
+//
+// `loadPullRequests` is the seam T5 provides, shaped like
+// `listRailPullRequests`: `{ ok, mine, review }`, each row a
+// `{ number, linkedIssues }`. It decides exactly two things: the header's `pr`
+// count (the DISTINCT numbers in mine ∪ review) and which PR panel a row's click
+// opens. It is a read like the issues one — same TTL, same self-scheduled floor,
+// same drawn window, never awaited by a frame — and a failed read keeps the last
+// count, because a `gh` killed by its bound must never cost the human a number it
+// already had.
+// ---------------------------------------------------------------------------
+
+// The two buckets as the seam answers them. A bare number is a row with no linked
+// issues, which is what most of these tests need.
+function railBuckets({ mine = [], review = [] } = {}) {
+  const row = (entry) => (typeof entry === 'number' ? { number: entry, linkedIssues: [] } : entry);
+  return { ok: true, mine: mine.map(row), review: review.map(row) };
+}
+
+function railPullRequests(buckets, onRead = null) {
+  return async () => {
+    if (onRead !== null) onRead();
+    return railBuckets(buckets);
+  };
+}
+
+// S4: `n issues · n pr` is the one header the human asked for, and `pr` counts
+// the distinct numbers in the union of the two buckets the rail reads — a pull
+// request that is both mine and awaiting my review is ONE pr.
+test('S4 (T4): the header reads `n issues · m pr`, m the distinct pull requests in mine ∪ review', async () => {
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    loadPullRequests: railPullRequests({ mine: [69, 70], review: [70, 71] }),
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+
+  assert.equal(handle.section.meta({}), '2 issues · 3 pr',
+    '70 is in both buckets and counts once');
+  assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#2 Issue 2', '#1 Issue 1'],
+    'the pull-request count never changes a row');
+  assert.equal(handle.section.rowLabel, 'github', 'S4 renames the customize row too');
+});
+
+// S4: the seam is optional. A caller that names none — every existing wiring —
+// gets exactly the section it had: the bare issues count and the four click
+// arguments.
+test('S4 (T4, re-pinned): without the pull-request seam the header stays `n issues`', async () => {
+  const opened = [];
+  const sched = manualSchedule();
+  const handle = createIssuesSection({
+    load: async () => ({
+      ok: true,
+      identity: IDENTITY,
+      generation: 7,
+      truncated: false,
+      issues: [{ ...issue(4, 'No pull requests at all', '2024-01-01T00:00:00Z'), bucket: 'assigned' }],
+    }),
+    open: (...args) => { opened.push(args); },
+    openAll: () => {},
+    schedule: sched.schedule,
+  });
+  await handle.refresh();
+  assert.equal(handle.section.meta({}), '1 issues', 'no pull-request read, no `pr` segment');
+
+  handle.section.lines({})[0].onClick();
+  await sched.flush();
+  assert.deepEqual(opened, [[4, IDENTITY, 'assigned', 7]],
+    'the row without a linked pull request keeps the call it always made');
+});
+
+// S5: the read is never awaited. `lines()`/`meta()` stay synchronous over one
+// snapshot, so a pull-request read still in flight leaves the header exactly as
+// it was and the frame still answers.
+test('S5 (T4): a frame never waits for the pull-request read', async () => {
+  const pending = [];
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    loadPullRequests: () => new Promise((resolve) => pending.push(resolve)),
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+
+  assert.equal(handle.section.meta({}), '2 issues', 'a read still in flight adds no segment');
+  assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['#2 Issue 2', '#1 Issue 1'],
+    'and the rows are drawn as usual');
+
+  pending.shift()(railBuckets({ mine: [69] }));
+  await settleFrames();
+  assert.equal(handle.section.meta({}), '2 issues · 1 pr', 'the settled answer paints the count');
+});
+
+// S4: a failed pull-request read is a stall, never a lost number: the last count
+// stays on screen (and so does the issues list's own `· stale`).
+test('S4 (T4): a failed pull-request read keeps the last count, and `· stale` is kept', async () => {
+  let prReads = 0;
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    loadPullRequests: async () => {
+      prReads += 1;
+      if (prReads === 1) return railBuckets({ mine: [69], review: [70] });
+      return { ok: false, error: 'gh timed out' };
+    },
+    open: () => {},
+    openAll: () => {},
+    // `ttlMs: 0` makes every read stale, so the second refresh re-reads both.
+    ttlMs: 0,
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+  assert.equal(handle.section.meta({}), '2 issues · 2 pr');
+
+  await handle.refresh();
+  await settleFrames();
+  assert.equal(prReads, 2, 'the second refresh asked again');
+  assert.equal(handle.section.meta({}), '2 issues · 2 pr',
+    'a failed pull-request read keeps the count it had instead of blanking the header');
+
+  // And a failing ISSUES read still owns the `· stale` suffix, after the pr count.
+  const failingIssues = createIssuesSection({
+    load: (() => {
+      let reads = 0;
+      return async () => {
+        reads += 1;
+        if (reads === 1) return { ok: true, identity: IDENTITY, issues: issueList(2), truncated: false };
+        return { ok: false, error: 'gh timed out' };
+      };
+    })(),
+    loadPullRequests: railPullRequests({ mine: [69] }),
+    open: () => {},
+    openAll: () => {},
+    ttlMs: 0,
+    schedule: (fn) => { fn(); },
+  });
+  await failingIssues.refresh();
+  await settleFrames();
+  assert.equal(failingIssues.section.meta({}), '2 issues · 1 pr');
+  await failingIssues.refresh();
+  await settleFrames();
+  assert.equal(failingIssues.section.meta({}), '2 issues · 1 pr · stale',
+    'the stalled count keeps both numbers and says it is stale');
+});
+
+// S5: the click routing the human asked for. An issue that has a linked pull
+// request opens the PR panel on THAT pull request, and only when the issue has
+// none does the row keep the arguments it always passed.
+test('S5 (T4): a row with a linked pull request opens the PR panel — review beats mine, neither is `all`', async () => {
+  const opened = [];
+  const sched = manualSchedule();
+  const handle = createIssuesSection({
+    load: async () => ({
+      ok: true,
+      identity: IDENTITY,
+      generation: 7,
+      truncated: false,
+      issues: [
+        { ...issue(63, 'Mine and awaiting review', '2024-04-01T00:00:00Z'), bucket: 'assigned', hasPullRequest: true, pullRequestNumber: 69 },
+        { ...issue(64, 'Only mine', '2024-03-01T00:00:00Z'), bucket: 'assigned', hasPullRequest: true, pullRequestNumber: 70 },
+        { ...issue(65, 'Neither bucket', '2024-02-01T00:00:00Z'), bucket: 'assigned', hasPullRequest: true, pullRequestNumber: 71 },
+        { ...issue(66, 'No pull request', '2024-01-01T00:00:00Z'), bucket: 'assigned', hasPullRequest: false, pullRequestNumber: null },
+      ],
+    }),
+    loadPullRequests: railPullRequests({ mine: [69, 70], review: [69] }),
+    open: (...args) => { opened.push(args); },
+    openAll: () => {},
+    schedule: sched.schedule,
+  });
+  await handle.refresh();
+  await sched.flush();
+
+  const rows = handle.section.lines({});
+  assert.equal(rows[0].meta, '\ue726 #69', 'the mark is untouched by the routing');
+  for (const row of rows) row.onClick();
+  await sched.flush();
+
+  assert.deepEqual(opened, [
+    [63, { pullRequest: 69, pullRequestBucket: 'review' }],
+    [64, { pullRequest: 70, pullRequestBucket: 'mine' }],
+    [65, { pullRequest: 71, pullRequestBucket: 'all' }],
+    [66, IDENTITY, 'assigned', 7],
+  ], 'a row with no linked pull request keeps the call it always made');
+});
+
+// S5: the routing is a fact of the read that is current WHEN THE CLICK RUNS, so
+// a click on a retained row is answered by the buckets the rail holds now — a
+// forced read (the caller knows something changed) moves the same row's
+// destination.
+test('S5 (T4): a click is routed by the buckets the rail holds when it runs', async () => {
+  const opened = [];
+  let prReads = 0;
+  const sched = manualSchedule();
+  const handle = createIssuesSection({
+    load: async () => ({
+      ok: true,
+      identity: IDENTITY,
+      truncated: false,
+      issues: [{ ...issue(63, 'Linked', '2024-01-01T00:00:00Z'), hasPullRequest: true, pullRequestNumber: 69 }],
+    }),
+    loadPullRequests: async () => {
+      prReads += 1;
+      return prReads === 1 ? railBuckets({ mine: [69] }) : railBuckets({ review: [69] });
+    },
+    open: (...args) => { opened.push(args); },
+    openAll: () => {},
+    schedule: sched.schedule,
+  });
+  await handle.refresh();
+  await sched.flush();
+
+  handle.section.lines({})[0].onClick();
+  await sched.flush();
+
+  await handle.forceRefresh(0);
+  await sched.flush();
+  assert.equal(prReads, 2, 'the forced read asked for the pull requests again');
+  handle.section.lines({})[0].onClick();
+  await sched.flush();
+
+  assert.deepEqual(opened, [
+    [63, { pullRequest: 69, pullRequestBucket: 'mine' }],
+    [63, { pullRequest: 69, pullRequestBucket: 'review' }],
+  ], 'the same row routes to `mine` and then to `review` as the buckets move');
+});
+
+// S4/S5: the PR count is part of the snapshot a session boundary drops. A read
+// from the previous session that settles afterwards paints nothing.
+test('S4/S5 (T4): invalidate() drops the pull-request count, and a late answer lands nowhere', async () => {
+  const pending = [];
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    loadPullRequests: () => new Promise((resolve) => pending.push(resolve)),
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  handle.section.lines({});
+  await settleFrames();
+  assert.equal(pending.length, 1, 'the drawn frame started the pull-request read');
+
+  handle.invalidate();
+  assert.equal(handle.section.meta({}), undefined, 'the loading header claims neither count');
+
+  pending.shift()(railBuckets({ mine: [69] }));
+  await settleFrames();
+  assert.equal(handle.section.meta({}), undefined,
+    'the answer the superseded read delivers lands nowhere');
+});
+
+// S4/S5: outside a repository there is nothing to read, so the pull-request read
+// is not started either — the same settled state the issues read reports.
+test('S4/S5 (T4): a settled repository state starts no pull-request read at all', async () => {
+  let prReads = 0;
+  const timers = fakeTimerSeam();
+  const handle = createIssuesSection({
+    load: async () => ({ ok: false, error: 'not a git repository', errorTone: 'dim' }),
+    loadPullRequests: async () => {
+      prReads += 1;
+      return railBuckets({ mine: [69] });
+    },
+    open: () => {},
+    openAll: () => {},
+    now: () => timers.clock,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    refreshFloorMs: 20000,
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+  handle.section.lines({});
+  handle.section.meta({});
+  await settleFrames();
+
+  assert.equal(prReads, 0, 'a dim state costs no child, so it costs no pull-request read either');
+  assert.equal(timers.armed.length, 0, 'and it keeps no floor timer');
+  assert.equal(handle.section.meta({}), undefined);
+});
+
+// S4: the pull-request read obeys the SAME rules the issues read does: the frame
+// TTL, the self-scheduled floor while the section is drawn, and the drawn window
+// that stops it.
+test('S4 (T4): the pull-request read follows the frame TTL, the floor and the drawn window', async () => {
+  const timers = fakeTimerSeam();
+  let issueReads = 0;
+  let prReads = 0;
+  const handle = createIssuesSection({
+    load: async () => {
+      issueReads += 1;
+      return { ok: true, identity: IDENTITY, issues: [], truncated: false };
+    },
+    loadPullRequests: async () => {
+      prReads += 1;
+      return railBuckets({ mine: [69] });
+    },
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+    now: () => timers.clock,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    refreshFloorMs: 20000,
+    timerDrawnWindowMs: 120000,
+  });
+
+  handle.section.lines({});
+  await settleFrames();
+  assert.equal(issueReads, 1);
+  assert.equal(prReads, 1, 'the drawn frame made its own pull-request read');
+
+  handle.section.lines({});
+  handle.section.meta({});
+  await settleFrames();
+  assert.equal(prReads, 1, 'a fresh read is never repeated by a frame');
+
+  timers.take();
+  await settleFrames();
+  assert.equal(prReads, 2, 'the floor reads the pull requests on its own, once per floor');
+
+  // Nobody draws the section for longer than the drawn window: the timer stops
+  // and reads nothing at all.
+  timers.clock += 121000;
+  timers.take();
+  await settleFrames();
+  assert.equal(prReads, 2, 'a section outside its drawn window reads nothing');
+  assert.equal(timers.armed.length, 0, 'and keeps no timer');
+});
+
+// ---------------------------------------------------------------------------
 // T2: the bridge wiring in extensions/odd-worktree-tools.ts.
 // ---------------------------------------------------------------------------
 
@@ -1254,8 +1599,13 @@ function sectionGithub({ issues = [], mine = [], involved = [], counts = {}, rep
   return { runner, calls };
 }
 
+// D9 (S4): the rail's pull-request read is a GraphQL request of its own and is
+// now issued as early as a cold start allows, so it is not one of the ISSUES
+// reads these assertions order and count. It is told apart by the qualifier only
+// it carries.
 function graphqlCalls(calls) {
-  return calls.filter((call) => call.argv[0] === 'api' && call.argv[1] === 'graphql');
+  return calls.filter((call) => call.argv[0] === 'api' && call.argv[1] === 'graphql'
+    && !call.argv.join(' ').includes('is:pr'));
 }
 
 function sessionStartHandlers(hooks) {
@@ -1313,6 +1663,15 @@ async function waitForRows(section, ctx) {
   throw new Error('the section never left loading');
 }
 
+// D9 (S4): the rail's `· M pr` segment is a SECOND read, and it now lands as
+// early as a cold start allows (a stored entry paints at once, the live answer
+// follows). A test about the ISSUES count therefore asserts the part it is
+// about: the issues number and the `· stale` mark stay exact, and whichever
+// pull-request count the same header already carries is not what the test reads.
+function issuesCount(text) {
+  return String(text).replace(/ · \d+ pr/, '');
+}
+
 // S1/S2 (issues-startup-performance T1): the `gh` gate is DISPATCHED startup work
 // now, not an awaited step of `session_start`, so it settles a moment after the
 // host's handlers return. A test that counts `gh` children waits for that work to
@@ -1359,8 +1718,13 @@ test('S2: a published bridge receives exactly one section with the decided ident
   const section = registered[0];
   assert.equal(section.id, 'odd-worktree.issues');
   assert.equal(section.title, 'GITHUB');
-  assert.equal(section.rowLabel, 'issues');
+  // S4 (T4, re-pinned): the customize row used to read `issues`; the human asked
+  // for `github`, because the section now carries pull requests beside them.
+  assert.equal(section.rowLabel, 'github');
   assert.equal(section.defaultVisible, true);
+  // gentle-shell-bridge 0.13.0: the card is placed at the end of the rail, stated
+  // rather than left to the bridge's default.
+  assert.equal(section.placement, 'end');
   assert.equal(typeof section.lines, 'function');
   assert.equal(typeof section.meta, 'function');
   assert.equal(loaded.commands.has('issues'), true, 'every other surface still registers');
@@ -1830,7 +2194,7 @@ test('S8 (T9): the ONE combined read supplies both the rows and the pull-request
   assert.equal(rows[2].meta, '\ue726 #69');
   assert.deepEqual(rows.map((row) => row.tone), ['text', 'text', 'text'],
     'only the meta column is gray: the row keeps the plain text tone');
-  assert.equal(section.meta(ctx), '3 issues', 'the marker never changes the count');
+  assert.equal(issuesCount(section.meta(ctx)), '3 issues', 'the marker never changes the count');
 
   // T14: the marker read T9 introduced is gone — the same read that returns the
   // rows returns their cross-reference facts, so there is no second call.
@@ -1849,8 +2213,10 @@ test('S8 (T9): the ONE combined read supplies both the rows and the pull-request
   }
   assert.ok(query.includes('timelineItems(last: 10, itemTypes: [CROSS_REFERENCED_EVENT])'),
     'the marker selection rides each row and reads the newest events');
-  assert.ok(query.includes('... on PullRequest { number }'),
-    'and the selection asks for the number the mark prints (S8)');
+  // S6/D29: the source carries its REPOSITORY as well, so a same-numbered pull
+  // request in another repository is never the mark this row draws.
+  assert.ok(query.includes('... on PullRequest { number repository { nameWithOwner } }'),
+    'and the selection asks for the number the mark prints and its repository (S8, D29)');
 });
 
 // T14 rewrote this test: its old premise — a separate marker read that fails
@@ -1882,7 +2248,7 @@ test('S4 (T9): a row without a cross-referenced pull request carries no marker a
   assert.equal('meta' in rows[0], false, 'the decoration is simply absent');
   assert.equal(rows[1].meta, '\ue726 #69', 'the row with a pull request carries its number');
   const meta = section.meta(ctx);
-  assert.equal(meta, '2 issues', 'the section stays ready, never stale');
+  assert.equal(issuesCount(meta), '2 issues', 'the section stays ready, never stale');
   assert.ok(!String(meta).includes('stale'), 'a decoration never reports a stall');
 });
 
@@ -3536,7 +3902,7 @@ test('S9 (T14): an issue that left the assigned set makes the next refresh a ful
       () => section.lines(ctx).map((row) => row.label).join('|') === '#12 Twelve',
       'the full read never replaced the bucket',
     );
-    assert.equal(section.meta(ctx), '1 issues');
+    assert.equal(issuesCount(section.meta(ctx)), '1 issues');
   } finally {
     Date.now = realNow;
   }
@@ -3586,7 +3952,7 @@ test('S9 (T14): a failed read keeps the cache and the section stale, so the next
     await fireSessionStart(loaded.hooks, ctx);
     const section = registered[0];
     await waitForRows(section, ctx);
-    assert.equal(section.meta(ctx), '2 issues');
+    assert.equal(issuesCount(section.meta(ctx)), '2 issues');
 
     offset = 61000;
     section.lines(ctx);
@@ -3955,7 +4321,7 @@ test('S6/S9 (T16): a checkout switch cuts the previous read out of the cache', a
   );
   assert.ok(!section.lines(ctxB).some((row) => row.label === '#11 Left behind'),
     "the previous checkout's rows never survive the move");
-  assert.match(section.meta(ctxB), /^1 issues$/, 'the header counts only the moved session rows');
+  assert.equal(issuesCount(section.meta(ctxB)), '1 issues', 'the header counts only the moved session rows');
 });
 
 // T10 (S9): the pre-dispatch proof E18 described is gone, so there is no window
@@ -4241,4 +4607,247 @@ test('S4 (T3): a save that REJECTS never escapes as an unhandled rejection and n
     process.removeListener('unhandledRejection', onUnhandled);
     store.createIssuesCacheStore = originalFactory;
   }
+});
+
+// ---------------------------------------------------------------------------
+// T8b (S4): the header's `pr` count is EXACT, and a cold start paints it from
+// the disk at once.
+//
+// D8: the rail's read reports an exact `issueCount` per bucket while carrying at
+// most a window of rows. The count is the distinct numbers in mine ∪ review PLUS
+// the remainder of each bucket's total — the numbers the answer never carried,
+// which cannot be deduplicated against anything and so are counted one by one.
+// It is never less than what is known: a total below the rows it came with, a
+// hostile total, or no total at all leaves the distinct count alone.
+//
+// D9: `hydratePullRequests` is the stored entry's own seam. The section asks it
+// only from a read it already dispatched (never from a frame, never from a
+// session path), paints it only while no read has painted a count yet, and the
+// live answer always replaces it. The stored entry never settles the read: the
+// live read is asked every time its own TTL says so, and a settled state — no
+// repository proof — reads no entry at all.
+// ---------------------------------------------------------------------------
+
+// `total` is the bucket's exact `issueCount`, which the window of `rows` may
+// under-represent.
+function countedBuckets(buckets, totals) {
+  return async () => ({
+    ok: true,
+    mine: (buckets.mine || []).map((number) => ({ number, linkedIssues: [] })),
+    review: (buckets.review || []).map((number) => ({ number, linkedIssues: [] })),
+    counts: totals,
+  });
+}
+
+test('S4 (T8b, D8): the pr count adds each bucket\'s unfetched remainder', async () => {
+  const numbers = Array.from({ length: 50 }, (_, index) => index + 1);
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    // The verifier's own case: `issueCount=51` with 50 nodes and an empty
+    // review painted `2 issues · 50 pr`, dropping the one row the window cut.
+    loadPullRequests: countedBuckets({ mine: numbers, review: [] }, { mine: 51, review: 0 }),
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+
+  assert.equal(handle.section.meta({}), '2 issues · 51 pr',
+    'the unfetched remainder of a bucket counts too, so the header is never short');
+});
+
+test('S4 (T8b, D8): remainders are added per bucket, and no total can lower the count', async () => {
+  const mine = Array.from({ length: 50 }, (_, index) => index + 1);
+  const overlapping = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    // Two buckets, both cut: 50 fetched (1..50) + 69 = 51 distinct numbers, plus
+    // one remainder each — 69 shared with nothing, since a remainder's number was
+    // never carried.
+    loadPullRequests: countedBuckets({ mine, review: [50, 69] }, { mine: 51, review: 3 }),
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  await overlapping.refresh();
+  await settleFrames();
+  assert.equal(overlapping.section.meta({}), '2 issues · 53 pr',
+    'each bucket\'s remainder counts, and the fetched numbers still dedupe');
+
+  const hostile = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    // A total BELOW the rows it came with, and a total that is not a count at
+    // all: neither is trusted, and neither can shrink what the rows prove.
+    loadPullRequests: countedBuckets({ mine, review: [69] }, { mine: 3, review: 'many' }),
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  await hostile.refresh();
+  await settleFrames();
+  assert.equal(hostile.section.meta({}), '2 issues · 51 pr',
+    'the distinct numbers stay the floor, whatever a total claims');
+});
+
+test('S4 (T8b, D9): a cold start paints the stored count while the live read is held, and the live answer replaces it', async () => {
+  const pending = [];
+  const hydrated = [];
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    hydratePullRequests: async (identity) => {
+      hydrated.push(identity);
+      return { mine: [{ number: 69, linkedIssues: [1] }], review: [], syncedAt: 1 };
+    },
+    loadPullRequests: () => new Promise((resolve) => pending.push(resolve)),
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+
+  assert.deepEqual(hydrated, [IDENTITY], 'the entry is asked for the identity the issues read proved');
+  assert.equal(handle.section.meta({}), '2 issues · 1 pr',
+    'the stored count paints at once, before the live read answers');
+
+  pending.shift()(railBuckets({ mine: [69, 70] }));
+  await settleFrames();
+  assert.equal(handle.section.meta({}), '2 issues · 2 pr', 'the live answer replaces the stored one');
+});
+
+test('S4 (T8b, D9): the stored entry never settles the read, and a failed live read keeps its count', async () => {
+  const pending = [];
+  let hydrations = 0;
+  let liveReads = 0;
+  let failNext = false;
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    hydratePullRequests: async () => {
+      hydrations += 1;
+      return { mine: [{ number: 69, linkedIssues: [] }], review: [], syncedAt: 1 };
+    },
+    loadPullRequests: () => {
+      liveReads += 1;
+      if (failNext) return { ok: false, error: 'gh timed out' };
+      return new Promise((resolve) => pending.push(resolve));
+    },
+    open: () => {},
+    openAll: () => {},
+    // `ttlMs: 0` makes every attempt stale, so the second refresh asks again.
+    ttlMs: 0,
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+  assert.equal(liveReads, 1, 'a stored entry does not defeat the live read: it was asked anyway');
+  assert.equal(handle.section.meta({}), '2 issues · 1 pr');
+  pending.shift()(railBuckets({ mine: [69, 70] }));
+  await settleFrames();
+  assert.equal(handle.section.meta({}), '2 issues · 2 pr');
+
+  failNext = true;
+  await handle.refresh();
+  await settleFrames();
+  assert.equal(liveReads, 2, 'the next attempt asks the live read again, stored entry or not');
+  assert.equal(hydrations, 1, 'nothing is hydrated over a count that is already painted');
+  assert.equal(handle.section.meta({}), '2 issues · 2 pr', 'a failed read keeps the count it had');
+});
+
+test('S4 (T8b, D9): a settled state reads no stored entry at all', async () => {
+  let hydrations = 0;
+  let liveReads = 0;
+  const handle = createIssuesSection({
+    load: async () => ({ ok: false, error: 'not a git repository', errorTone: 'dim' }),
+    hydratePullRequests: async () => {
+      hydrations += 1;
+      return { mine: [{ number: 69, linkedIssues: [] }], review: [], syncedAt: 1 };
+    },
+    loadPullRequests: async () => {
+      liveReads += 1;
+      return railBuckets({ mine: [69] });
+    },
+    open: () => {},
+    openAll: () => {},
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+
+  assert.deepEqual(handle.section.lines({}), [{ label: 'not a git repository', tone: 'dim' }]);
+  assert.equal(hydrations, 0, 'a settled state hydrates nothing from the disk');
+  assert.equal(liveReads, 0, 'and reads no pull requests');
+  assert.equal(handle.section.meta({}), undefined, 'nor paints a count it was never given');
+});
+
+// ---------------------------------------------------------------------------
+// T10b (S4): D9 — both settlements of the pull-request read repaint the header.
+//
+// The issues read already asks the section's own notifier for a repaint when it
+// lands (`replace()` reads `onRefreshed`). The `pr` count is painted from a
+// SECOND state, so its two settlements — the stored entry from the disk and the
+// live answer — must ask for the same repaint, or the header keeps its old count
+// until some unrelated event produces a frame. A frame asks for none: the
+// notifier is reached from a landed read alone (invariants 24-28 keep every
+// session path and every frame free of the read), and a disposed or superseded
+// section still repaints nothing.
+// ---------------------------------------------------------------------------
+
+test('S4 (T10b, D9): the live pull-request settlement asks for one repaint, and a frame asks for none', async () => {
+  const pending = [];
+  let repaints = 0;
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    loadPullRequests: () => new Promise((resolve) => pending.push(resolve)),
+    open: () => {},
+    openAll: () => {},
+    onRefreshed: () => { repaints += 1; },
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+  assert.equal(handle.section.meta({}), '2 issues', 'the issues read painted its own header, with no `pr` count yet');
+  const painted = repaints;
+
+  // The two drawing calls are frames over the in-process snapshot: neither is a
+  // reason to repaint anything.
+  handle.section.lines({});
+  handle.section.meta({});
+  await settleFrames();
+  assert.equal(repaints, painted, 'a frame never asks for a repaint');
+
+  pending.shift()(railBuckets({ mine: [69] }));
+  await settleFrames();
+  assert.equal(repaints, painted + 1, 'the settled pull-request read repaints the header it changed');
+  assert.equal(handle.section.meta({}), '2 issues · 1 pr', 'and the repaint is what the new count is painted by');
+});
+
+test('S4 (T10b, D9): the hydration asks for one repaint when the stored count paints', async () => {
+  let settleStored = null;
+  let repaints = 0;
+  const handle = createIssuesSection({
+    load: readyLoad(issueList(2)),
+    hydratePullRequests: () => new Promise((resolve) => { settleStored = resolve; }),
+    loadPullRequests: () => new Promise(() => {}),
+    open: () => {},
+    openAll: () => {},
+    onRefreshed: () => { repaints += 1; },
+    schedule: (fn) => { fn(); },
+  });
+  await handle.refresh();
+  await settleFrames();
+  assert.equal(typeof settleStored, 'function', 'the dispatched read asked the disk for the stored entry');
+  assert.equal(handle.section.meta({}), '2 issues', 'nothing was painted from the disk yet');
+  const painted = repaints;
+
+  settleStored({ mine: [{ number: 69, linkedIssues: [] }], review: [], syncedAt: 1 });
+  await settleFrames();
+  assert.equal(repaints, painted + 1, 'the hydration repaints the header it just painted from the disk');
+  assert.equal(handle.section.meta({}), '2 issues · 1 pr');
+
+  // A state that keeps its count (`stale`) repaints nothing on top of a refusal
+  // that has nothing to paint: the settled section is not a reason to paint.
+  handle.dispose();
+  const afterDispose = repaints;
+  await settleFrames();
+  assert.equal(repaints, afterDispose, 'a disposed section repaints nothing');
 });

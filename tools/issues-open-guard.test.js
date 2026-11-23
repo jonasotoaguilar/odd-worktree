@@ -344,6 +344,20 @@ async function waitForRows(section, ctx) {
   throw new Error('the section never left loading');
 }
 
+// T5 (prs): the rail's SECOND read — the pull-request count — starts as soon as
+// the issues read proves the repository, so a test that snapshots the children
+// before a click must let that background read settle first. It is the RAIL's
+// read, not the open's, and it would otherwise land inside the window a click
+// measures (a single-remote checkout resolves its identity with `gh repo view`).
+async function waitForBackgroundReads(calls, quietMs = 100) {
+  let last = -1;
+  for (let round = 0; round < 40; round += 1) {
+    if (calls.length === last) return;
+    last = calls.length;
+    await new Promise((resolve) => realSetTimeout(resolve, quietMs));
+  }
+}
+
 // `draw: false` runs the session in a SECOND checkout: the startup `gh` probe
 // warms nothing in the fixture checkout under test, so a numbered open there meets
 // a COLD scope cache and has to prove the identity — the pattern the command tests
@@ -373,6 +387,7 @@ async function harness({
   await fireSessionStart(loaded.hooks, ctx);
   const section = registered[0];
   const rows = draw && section ? await waitForRows(section, ctx) : [];
+  if (draw && section) await waitForBackgroundReads(gh.calls);
   return { checkout, loaded, gh, identity, registered, section, rows, sent, notices, repaints, ctx };
 }
 

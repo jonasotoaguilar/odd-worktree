@@ -1,0 +1,29 @@
+{
+  "data": {
+    "repository": {
+      "viewerPermission": "WRITE",
+      "mergeCommitAllowed": true,
+      "squashMergeAllowed": true,
+      "rebaseMergeAllowed": false,
+      "pullRequest": {
+        "isDraft": false,
+        "closingIssuesReferences": {
+          "nodes": [
+            {
+              "number": 63
+            },
+            {
+              "number": 14
+            },
+            {
+              "number": 63
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": false
+          }
+        }
+      }
+    }
+  }
+}

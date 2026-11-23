@@ -1,0 +1,61 @@
+{
+  "data": {
+    "mine": {
+      "issueCount": 3,
+      "nodes": [
+        {
+          "number": 87,
+          "closingIssuesReferences": {
+            "nodes": [
+              {
+                "number": 14
+              },
+              {
+                "number": 63
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        },
+        {
+          "number": 86,
+          "closingIssuesReferences": {
+            "nodes": [],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        },
+        {
+          "number": 85,
+          "closingIssuesReferences": {
+            "nodes": [
+              {
+                "number": 70
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        }
+      ]
+    },
+    "review": {
+      "issueCount": 1,
+      "nodes": [
+        {
+          "number": 86,
+          "closingIssuesReferences": {
+            "nodes": [],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        }
+      ]
+    }
+  }
+}

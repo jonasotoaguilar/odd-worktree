@@ -1,0 +1,82 @@
+{
+  "data": {
+    "search": {
+      "issueCount": 2,
+      "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": "Y3Vyc29yOnYyOpK5MjAyNi0xMC0xOVQwODowMDowMFo"
+      },
+      "edges": [
+        {
+          "cursor": "Y3Vyc29yOnYyOpK5MjAyNi0xMC0xOVQwODowMDowMFo",
+          "node": {
+            "number": 87,
+            "title": "feat: the prs panel",
+            "state": "OPEN",
+            "isDraft": false,
+            "url": "https://github.com/jonasotoaguilar/herdr-gentle-shell/pull/87",
+            "createdAt": "2026-10-18T04:21:27Z",
+            "updatedAt": "2026-10-19T08:00:00Z",
+            "author": {
+              "login": "jonasotoaguilar"
+            },
+            "labels": {
+              "nodes": [
+                {
+                  "name": "enhancement",
+                  "color": "a2eeef",
+                  "description": "New feature or request"
+                }
+              ]
+            },
+            "assignees": {
+              "nodes": [
+                {
+                  "login": "octocat"
+                }
+              ]
+            },
+            "comments": {
+              "totalCount": 2
+            },
+            "reactionGroups": [
+              {
+                "content": "HEART",
+                "users": {
+                  "totalCount": 3
+                }
+              }
+            ],
+            "reviewDecision": "REVIEW_REQUIRED"
+          }
+        },
+        {
+          "cursor": "Y3Vyc29yOnYyOpK5MjAyNi0xMC0xN1QwOTowMDowMFo",
+          "node": {
+            "number": 86,
+            "title": "fix: the rail count",
+            "state": "OPEN",
+            "isDraft": true,
+            "url": "https://github.com/jonasotoaguilar/herdr-gentle-shell/pull/86",
+            "createdAt": "2026-10-17T09:00:00Z",
+            "updatedAt": "2026-10-17T09:30:00Z",
+            "author": {
+              "login": "jonasotoaguilar"
+            },
+            "labels": {
+              "nodes": []
+            },
+            "assignees": {
+              "nodes": []
+            },
+            "comments": {
+              "totalCount": 0
+            },
+            "reactionGroups": [],
+            "reviewDecision": ""
+          }
+        }
+      ]
+    }
+  }
+}

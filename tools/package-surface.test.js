@@ -13,7 +13,7 @@
 // worktree↔issue association.
 //
 // The bash activity is not a preference here: it is a design on gentle-shell-bridge's
-// own `Card activity` line, so the shipped surface is exactly four commands, two tools, one
+// own `Card activity` line, so the shipped surface is exactly five commands, two tools, one
 // sidebar section, one tools design and the one `Cards` row group the two file-card
 // switches carry.
 //
@@ -73,7 +73,7 @@ describe('manifest', () => {
     // their own four modules — a classifier, the card, its resolver and the document
     // body Pi's Markdown draws — and own no preference at all (S1): they are gated by
     // the bridge's `Card activity` line, which is the bridge's, not ours.
-    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'skill-read-guard.js', 'bash-activity.js', 'bash-inline-script.js', 'bash-design.js', 'bash-frame.js', 'diff-design.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js']) {
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'gh-prs.js', 'pr-preview.js', 'prs-view.js', 'prs-rail-store.js', 'issues-section.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'skill-read-guard.js', 'bash-activity.js', 'bash-inline-script.js', 'bash-design.js', 'bash-frame.js', 'diff-design.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
     for (const gone of ['card-files-mode.js', 'cards-customize.js']) {
@@ -83,11 +83,11 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd, /files, /issues and the two worktree tools', async () => {
+  test('registers /warp, /odd, /files, /issues, /prs and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['files', 'issues', 'odd', 'warp'], 'the command list is exactly the four panels');
+    assert.deepEqual(registered, ['files', 'issues', 'odd', 'prs', 'warp'], 'the command list is exactly the five panels');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
@@ -321,6 +321,20 @@ describe('removed surface', () => {
     assert.ok(source.includes('function registerIssuesCommand'), 'its registration is a named step');
     assert.ok(source.includes('libRequire("gh-issues.js")'), 'the reader uses the migrated gh client');
     assert.ok(source.includes('libRequire("issues-view.js")'), 'the reader mounts the migrated view');
+  });
+
+  test('the /prs command keeps its own client and view (T5, S1)', () => {
+    const source = stubbedSource();
+    assert.ok(source.includes('pi.registerCommand("prs"'), 'the /prs command is registered');
+    assert.ok(source.includes('function registerPrsCommand'), 'its registration is a named step');
+    assert.ok(source.includes('libRequire("gh-prs.js")'), 'the reader uses the migrated pull-request client');
+    assert.ok(source.includes('createPrsClient'), 'the client is built with the issues client INJECTED');
+    assert.ok(source.includes('libRequire("prs-view.js")'), 'the reader mounts the migrated pull-request view');
+    // S4 (T5): the rail's pull-request count is a SECOND READ on the one
+    // GITHUB section, never a second section.
+    assert.equal(source.split('api.registerSection(').length - 1, 1, 'still exactly one sidebar section');
+    assert.ok(source.includes('loadPullRequests'), 'the one section reads pull requests for its header');
+    assert.ok(source.includes('libRequire("prs-rail-store.js")'), 'the count is persisted by the loader');
   });
 
   test('the loaded extension holds no reference to the removed packages', async () => {

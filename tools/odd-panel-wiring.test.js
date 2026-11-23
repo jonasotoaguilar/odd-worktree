@@ -765,6 +765,12 @@ describe('T6 verifier regressions (S11, S13, D2)', () => {
       observed.clear();
       deferred.pending[1].resolve(fresh);
       await waitForRankedListing(observed, [repo]);
+      // T12/F1: the clamp measures the body the LAST frame painted, so a host
+      // paints a frame before the reader can press a key — this renders that
+      // frame. Pressing `end` against a view no frame ever painted budgets one
+      // row, which a real host never does, and the reading position it reports
+      // is then corrected by the next frame.
+      frameText(view);
       view.handleInput('end');
       const scroll = view.state.scroll;
       const frame = frameText(view);
@@ -840,4 +846,86 @@ describe('the ODD panel is not gated by Worktrees+ (corrected S7)', () => {
       observed.restore();
     }
   });
+});
+
+// T12 (S11): the footer hint describes the listing that is DRAWN. The mode the
+// reader asked for is a request until its git read is APPLIED, so a held all-mode
+// load must not make the footer claim a scope the panel is not showing.
+test('T6 independent: while an all-mode read is held the hint still matches the drawn scope (S11/R2)', async () => {
+  const loaded = await load();
+  const repo = makeRepo();
+  const other = addWorktree(repo, 'held-all');
+  writeTask(other, 'visible-in-all', '# Visible in all\n');
+  const host = mountHost();
+  const pending = loaded.commands.get('odd').handler('', ctxFor(repo, host, []));
+  const delayed = deferGroups(loaded.mod);
+  try {
+    await waitFor(() => host.mounts.length === 1, 'mount');
+    const v = host.mounts[0].component;
+    delayed.arm();
+    v.handleInput('a');
+    await waitFor(() => delayed.pending.length === 1, 'held all-mode read');
+    assert.doesNotMatch(frameText(v), /visible-in-all/);
+    assert.match(frameText(v), /a all worktrees/);
+    delayed.pending[0].resolve(await delayed.real(delayed.pending[0].input));
+    await waitFor(() => frameText(v).includes('visible-in-all'), 'all-mode result');
+    assert.match(frameText(v), /a session only/);
+  } finally {
+    for (const read of delayed.pending) read.resolve([]);
+    delayed.restore();
+    await closePanel(host, pending);
+  }
+});
+
+// T12 (S10, S11): ONE generation orders every load that can land on the panel —
+// the startup ranking included. A rank that started before an `a` reload is
+// superseded by it, so its late answer must not replace the newer listing.
+test('T6 independent: a late initial rank cannot replace a newer all-mode listing (S10/S11/R2)', async () => {
+  const loaded = await load();
+  const repo = makeRepo();
+  const other = addWorktree(repo, 'rank-witness');
+  writeTask(other, 'all-witness', '# All mode witness\n');
+  const host = mountHost();
+  const docs = loaded.mod.libModule('odd-docs.js');
+  const original = docs.listOddDocsAsync;
+  let release;
+  docs.listOddDocsAsync = async (...args) => {
+    const old = await original(...args);
+    await new Promise(resolve => { release = resolve; });
+    return old;
+  };
+  const pending = loaded.commands.get('odd').handler('', ctxFor(repo, host, []));
+  try {
+    await waitFor(() => host.mounts.length === 1 && release, 'held initial ranking');
+    const v = host.mounts[0].component;
+    writeTask(repo, 'late-main', '# Added while ranking\n');
+    v.handleInput('a');
+    await waitFor(() => /all-witness/.test(frameText(v)) && /late-main/.test(frameText(v)), 'new all-mode frame');
+    const before = frameText(v);
+    release();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(frameText(v), before);
+  } finally {
+    release?.();
+    docs.listOddDocsAsync = original;
+    await closePanel(host, pending);
+  }
+});
+
+// T12 (S13): the degraded select menu answers the SAME scope the panel draws —
+// the loaded groups — so a session checkout that is not one of them can never
+// leak its private documents into it.
+test('T6 independent: the select fallback excludes a document in the unregistered current worktree (S13)', async () => {
+  const loaded = await load();
+  const repo = makeRepo();
+  const linked = addWorktree(repo, 'fallback-linked');
+  writeTask(linked, 'local-private', '# Only in the linked checkout\n');
+  const host = mountHost();
+  const menus = [];
+  delete host.ui.custom;
+  host.ui.select = (title, choices) => { menus.push([title, choices]); };
+  await loaded.commands.get('odd').handler('', ctxFor(linked, host, []));
+  assert.equal(menus.length, 1);
+  assert.equal(menus[0][0], 'Odd documents');
+  assert.deepEqual(menus[0][1].slice().sort(), ['main-one', 'main-two']);
 });

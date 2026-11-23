@@ -2662,3 +2662,25 @@ describe('createOddView grouped listing (T9: S10,S11,S13)', () => {
     assert.equal(view.state.scroll, 0, 'and at the top of it');
   });
 });
+
+// ---------------------------------------------------------------------------
+// T12 (D2, S11): the preview clamp and the frame it paints must agree on ONE
+// viewport. The host's row source is not a constant — a resize between two reads
+// of the same frame is exactly what a real terminal does — so the clamp has to
+// measure the body this frame paints, never a second live sample.
+// ---------------------------------------------------------------------------
+// T6: the preview clamp must use the same viewport as this frame.
+test('T6 independent: a row-count change cannot omit the end of the preview', () => {
+  let flip = false;
+  let reads = 0;
+  const text = Array.from({ length: 180 }, (_, i) => `Unique paragraph ${i}\n\n`).join('');
+  const v = createOddView({
+    docs: [{ name: 'long', path: '/tmp/long.md' }], helpers,
+    loadDoc: () => ({ ok: true, text }),
+    rowsAvailable: () => !flip || reads++ === 0 ? 8 : 34,
+  });
+  v.handleInput('\x1b[F');
+  assert.match(v.render(120).join('\n'), /Unique paragraph 179/);
+  flip = true;
+  assert.match(v.render(120).join('\n'), /Unique paragraph 179/);
+});

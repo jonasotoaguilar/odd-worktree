@@ -6926,6 +6926,37 @@ function oddModelLists(groups, target) {
   }));
 }
 
+// S13 (T12): the DEGRADED menu draws the SAME scope the panel draws. When the
+// grouped model loaded, its documents ARE the listing — every group's, main's
+// first, deduplicated by absolute path — so a session checkout that is not one of
+// the loaded groups (an UNREGISTERED linked worktree) can never leak its private
+// documents into the menu. Only a model that could not be read at all (`null`)
+// falls back to the session checkout's flat listing, which is what the menu has
+// always shown.
+function oddFallbackDocs(groups) {
+  if (!Array.isArray(groups)) return null;
+  const main = groups.filter((group) => group && group.isMain === true);
+  const worktrees = groups.filter((group) => !(group && group.isMain === true));
+  const docs = [];
+  const seen = new Set();
+  for (const group of [...main, ...worktrees]) {
+    for (const entry of Array.isArray(group && group.docs) ? group.docs : []) {
+      const location = entry && typeof entry.docPath === "string" && entry.docPath.length > 0
+        ? entry.docPath
+        : (entry && typeof entry.path === "string" ? entry.path : "");
+      const name = entry && typeof entry.name === "string" && entry.name.length > 0
+        ? entry.name
+        : path.basename(location, ".md");
+      if (name.length === 0) continue;
+      const key = location.length > 0 ? path.resolve(location) : `name:${name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      docs.push({ name, path: location });
+    }
+  }
+  return docs;
+}
+
 async function runOddFallback(ctx, listing) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const select = ctx && ctx.ui ? ctx.ui.select : undefined;
@@ -7052,20 +7083,37 @@ async function executeOdd(rawArgs, ctx) {
   // S11: the reader's current mode. `false` is the session's registered set, read
   // from the register each time a reload needs it (S13).
   let showAll = false;
-  // S11/S13 (T10): every reload is NUMBERED when it starts and may apply its answer
-  // only while it is still the latest request. Two `a` presses faster than the disk
-  // answers them otherwise let the OLDER result land on top of the newer one, and
-  // the footer would then describe a mode the drawn listing is not in.
-  let reloadSequence = 0;
-  const beginReload = () => (reloadSequence += 1);
-  const applyOddGroups = (next) => {
+  // S11/S13/D2 (T12): ONE generation counter orders EVERY load that can land on
+  // this view — the startup ranking, each `a` toggle and each `r` reload. A load
+  // takes its number when it STARTS and applies only while that number is still the
+  // latest; a superseded load is dropped whole, the `r` path by answering the view's
+  // SUPERSEDED sentinel and the others by simply not applying. ONE counter, never
+  // one per path: a late answer of one kind must not land on top of a newer one of
+  // another kind, which is exactly how the startup ranking used to replace a
+  // completed `a` listing with the order it had ranked before the toggle ran.
+  let oddGeneration = 0;
+  const beginOddLoad = () => (oddGeneration += 1);
+  const oddLoadIsLatest = (generation) => generation === oddGeneration;
+  // T12 (S11): `applied` is the scope the answer was read in, handed to the view so
+  // its footer hint moves when the DATA moves — and only then. The startup ranking
+  // and `r` keep the mode the reader is in, so they pass nothing.
+  const applyOddGroups = (next, applied) => {
     if (!Array.isArray(next)) return;
     liveGroups = next;
-    if (liveView && typeof liveView.applyGroups === "function") liveView.applyGroups(next);
+    if (liveView && typeof liveView.applyGroups === "function") liveView.applyGroups(next, applied);
   };
-  const applyOddGroupsIfLatest = (sequence, next) => {
-    if (sequence !== reloadSequence) return;
-    applyOddGroups(next);
+  const applyOddGroupsIfLatest = (generation, next, applied) => {
+    if (!oddLoadIsLatest(generation)) return;
+    applyOddGroups(next, applied);
+  };
+  // S13 (T12): what the DEGRADED menu lists — the documents of the loaded model
+  // when the model loaded, the checkout's flat listing otherwise. It is built at
+  // the moment the menu is actually needed, so a working overlay never pays for
+  // the ranked read behind it.
+  const oddMenuListing = async () => {
+    const groupedDocs = oddFallbackDocs(groups);
+    if (groupedDocs !== null) return { ...listing, docs: groupedDocs };
+    return oddFallbackListing(checkoutRoot, listing);
   };
   if (helpers && ctx && ctx.ui && typeof ctx.ui.custom === "function") {
     try {
@@ -7077,6 +7125,7 @@ async function executeOdd(rawArgs, ctx) {
           // main's own group — the session's checkout is only the fallback for a
           // model that could not be read, because inside a worktree it would pour
           // that worktree's documents into main's group.
+          const rankGeneration = beginOddLoad();
           const settled = oddDocsOrdered(oddMainRoot(liveGroups, checkoutRoot));
           const view = libRequire("odd-view.js").createOddView({
             docs: listing.docs,
@@ -7113,13 +7162,14 @@ async function executeOdd(rawArgs, ctx) {
             // throws into the host.
             onToggleAll: (all) => {
               showAll = all === true;
-              const sequence = beginReload();
+              const scope = showAll;
+              const generation = beginOddLoad();
               return Promise.resolve(oddGroupsFor(
                 checkoutRoot,
-                showAll ? undefined : registeredRootsNow(),
-                showAll,
+                scope ? undefined : registeredRootsNow(),
+                scope,
               ))
-                .then((next) => applyOddGroupsIfLatest(sequence, next))
+                .then((next) => applyOddGroupsIfLatest(generation, next, { all: scope }))
                 .catch(() => {});
             },
             // S21: the reload is the awaited reader too, so `r` never freezes
@@ -7128,7 +7178,7 @@ async function executeOdd(rawArgs, ctx) {
             // in the reader's own mode — otherwise a reload would refresh a
             // listing nobody sees and leave the drawn one stale.
             reloadDocs: async () => {
-              const sequence = beginReload();
+              const generation = beginOddLoad();
               // S11/S13 (T6): the model is reloaded in the reader's own mode —
               // `all: true` in the all-worktrees mode, the session's registered
               // set (read NOW) otherwise.
@@ -7137,18 +7187,18 @@ async function executeOdd(rawArgs, ctx) {
                 showAll ? undefined : registeredRootsNow(),
                 showAll,
               );
-              // D2 (T6): a reload the sequence has already superseded answers with
-              // the documented sentinel, so it is INERT — the view ignores it and
-              // nothing of it lands: not the listing, not the preview scroll, not
-              // the footer's reload state. (Its groups are already dropped by
+              // D2 (T6): a reload the generation has already superseded answers
+              // with the documented sentinel, so it is INERT — the view ignores it
+              // and nothing of it lands: not the listing, not the preview scroll,
+              // not the footer's reload state. (Its groups are already dropped by
               // `applyOddGroupsIfLatest`, and no further read is spent on it.)
-              if (sequence !== reloadSequence) return oddReloadSuperseded();
+              if (!oddLoadIsLatest(generation)) return oddReloadSuperseded();
               // S10/S12 (T10): the ranked listing ranks MAIN's documents, so it is
               // read from main's own root — never from the session's checkout.
               const flat = await oddDocsFor(oddMainRoot(next, oddMainRoot(liveGroups, checkoutRoot)));
-              if (sequence !== reloadSequence) return oddReloadSuperseded();
+              if (!oddLoadIsLatest(generation)) return oddReloadSuperseded();
               if (flat && flat.ok === true) {
-                applyOddGroupsIfLatest(sequence, oddGroupsWithRankedMain(next, flat.docs));
+                applyOddGroupsIfLatest(generation, oddGroupsWithRankedMain(next, flat.docs));
               }
               return flat;
             },
@@ -7173,6 +7223,11 @@ async function executeOdd(rawArgs, ctx) {
           // the MODEL, and this listing ranks one checkout's own documents, so
           // with groups the order lands on main's group.
           settled.then((next) => {
+            // T12: the startup ranking took its number when it STARTED, so a
+            // listing a newer `a` or `r` has already applied supersedes it and
+            // this answer is dropped whole — it would otherwise put main's OLD
+            // order back on screen and take a document added since with it.
+            if (!oddLoadIsLatest(rankGeneration)) return;
             if (!next || next.ok !== true || !Array.isArray(next.docs)) return;
             if (Array.isArray(liveGroups)) {
               applyOddGroups(oddGroupsWithRankedMain(liveGroups, next.docs));
@@ -7190,11 +7245,11 @@ async function executeOdd(rawArgs, ctx) {
       );
     } catch {
       // A host that rejects the overlay degrades to the menu below.
-      await runOddFallback(ctx, await oddFallbackListing(checkoutRoot, listing));
+      await runOddFallback(ctx, await oddMenuListing());
     }
     return;
   }
-  await runOddFallback(ctx, await oddFallbackListing(checkoutRoot, listing));
+  await runOddFallback(ctx, await oddMenuListing());
 }
 
 // The plain select menu is the DEGRADED path (no TUI helpers, or a host that

@@ -6916,89 +6916,124 @@ function oddModelIsEmpty(groups) {
   return groups.every((group) => !Array.isArray(group && group.docs) || group.docs.length === 0);
 }
 
-// S6 (T10): the document a loaded group carries at this absolute target, as the
-// LISTED spelling — the group's own `docPath`, so the view matches by identity
-// instead of by whatever string the reader typed (a `.` component resolves to
-// the same document, not to another one). A model that could not be read proves
-// nothing either way, so it answers the resolved target. `null` means the loaded
-// model does NOT list it.
-function oddListedDocPath(groups, target) {
-  if (!Array.isArray(groups)) return path.resolve(target);
+// S13/T15 (L11): the ONE listing both ODD surfaces draw. The panel's list and the
+// degraded menu are this single value: `lib/odd-listing.js` sorts each group's
+// documents with one comparator, emits a duplicate path ONCE, and derives every
+// label — a name that appears once keeps its exact plain text, a repeated name
+// gains the checkout that holds it, and two checkouts with the SAME basename are
+// told apart by the shortest path segments that distinguish them — so no two
+// labels can collide and the menu can never drift from the panel. Nothing here
+// sorts, dedupes or labels anything of its own: the module is the only authority.
+function oddListingFor(groups) {
+  const empty = { groups: [], menu: [] };
+  let buildListing;
+  try {
+    buildListing = libRequire("odd-listing.js").buildListing;
+  } catch {
+    // A missing or broken lib never opens a viewer over a listing it invented.
+    return empty;
+  }
+  if (typeof buildListing !== "function") return empty;
+  let listed;
+  try {
+    listed = buildListing({ groups: Array.isArray(groups) ? groups : [] });
+  } catch {
+    return empty;
+  }
+  if (!listed || typeof listed !== "object") return empty;
+  return {
+    groups: Array.isArray(listed.groups) ? listed.groups : [],
+    menu: Array.isArray(listed.menu) ? listed.menu : [],
+  };
+}
+
+// S13/T15: MAIN's own documents for a model that could not be read. A session
+// inside an UNREGISTERED linked checkout may never be offered that checkout's
+// private documents, so this is main's `odd/tasks` and nothing else — and with no
+// main root, or nothing under it, it is EMPTY rather than this checkout's.
+function oddMainListing(mainRoot) {
+  if (typeof mainRoot !== "string" || mainRoot.length === 0) return { groups: [], menu: [] };
+  const scanned = oddDocsLocal(mainRoot);
+  const docs = [];
+  for (const doc of Array.isArray(scanned && scanned.docs) ? scanned.docs : []) {
+    if (!doc || typeof doc.path !== "string") continue;
+    let mtimeMs = 0;
+    try {
+      const stats = fs.statSync(doc.path);
+      if (Number.isFinite(stats.mtimeMs)) mtimeMs = stats.mtimeMs;
+    } catch {
+      // An unreadable time is the oldest instant there is; it never hides a
+      // document (the listing's own rule).
+    }
+    docs.push({ path: doc.path, name: doc.name, mtimeMs });
+  }
+  return oddListingFor([{ checkoutName: "main", checkoutRoot: mainRoot, isMain: true, docs }]);
+}
+
+// S6/S13/T15: the document a listing carries at this absolute target, as the
+// LISTED spelling — so a path with a `.` component opens the document the listing
+// names, never whatever string the reader typed. `null` means the listing does
+// NOT offer it, which is what refuses a private target of an unregistered
+// checkout even when the grouped model could not be read.
+function oddListedEntry(listed, target) {
   const wanted = path.resolve(target);
-  for (const group of groups) {
-    for (const entry of Array.isArray(group && group.docs) ? group.docs : []) {
-      const listed = entry && (typeof entry.docPath === "string" ? entry.docPath
-        : (typeof entry.path === "string" ? entry.path : ""));
-      if (typeof listed === "string" && listed.length > 0 && path.resolve(listed) === wanted) return listed;
+  for (const group of listed.groups) {
+    for (const entry of group.entries) {
+      if (typeof entry.path === "string" && path.resolve(entry.path) === wanted) return entry;
     }
   }
   return null;
 }
 
-// S13 (T12): the DEGRADED menu draws the SAME scope the panel draws. When the
-// grouped model loaded, its documents ARE the listing — every group's, main's
-// first, deduplicated by absolute path — so a session checkout that is not one of
-// the loaded groups (an UNREGISTERED linked worktree) can never leak its private
-// documents into the menu. Only a model that could not be read at all (`null`)
-// falls back to the session checkout's flat listing, which is what the menu has
-// always shown.
-//
-// S6/S13 (T13): the menu's choices are built from these entries, so each one
-// carries the checkout it belongs to. A name that appears once keeps that name
-// as its label; a name TWO checkouts carry is labelled `name (main)` /
-// `name (<worktree>)`, so the reader can tell the copies apart and the selection
-// maps back to the entry it names.
-function oddFallbackDocs(groups) {
-  if (!Array.isArray(groups)) return null;
-  const main = groups.filter((group) => group && group.isMain === true);
-  const worktrees = groups.filter((group) => !(group && group.isMain === true));
-  const docs = [];
-  const seen = new Set();
-  const names = new Map();
-  for (const group of [...main, ...worktrees]) {
-    for (const entry of Array.isArray(group && group.docs) ? group.docs : []) {
-      const location = entry && typeof entry.docPath === "string" && entry.docPath.length > 0
-        ? entry.docPath
-        : (entry && typeof entry.path === "string" ? entry.path : "");
-      const name = entry && typeof entry.name === "string" && entry.name.length > 0
-        ? entry.name
-        : path.basename(location, ".md");
-      if (name.length === 0) continue;
-      const key = location.length > 0 ? path.resolve(location) : `name:${name}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const checkout = group && group.isMain === true
-        ? "main"
-        : (group && typeof group.checkoutName === "string" && group.checkoutName.length > 0
-          ? group.checkoutName
-          : "");
-      names.set(name, (names.get(name) || 0) + 1);
-      docs.push({ name, path: location, checkout });
+// S6/S13/T15: a bare name is a target only when the listing carries it, so a name
+// no group lists keeps the refusal it always had.
+function oddListedName(listed, name) {
+  for (const group of listed.groups) {
+    for (const entry of group.entries) {
+      if (entry.name === name) return entry.name;
     }
   }
-  // Only a name that really repeats is disambiguated: a unique one keeps the
-  // exact label the menu has always offered.
-  return docs.map((doc) => (names.get(doc.name) > 1 && doc.checkout.length > 0
-    ? { ...doc, label: `${doc.name} (${doc.checkout})` }
-    : doc));
+  return null;
 }
 
-async function runOddFallback(ctx, listing) {
+// S13/T15: MAIN's own checkout, resolved WITHOUT `git worktree list` — the read
+// that may be failing on a cold start. The shared common dir answers which
+// checkout owns the repository (a linked worktree's `--git-common-dir` is
+// `<principal>/.git`), so no branch name is ever assumed. A root that cannot be
+// read is `null`: nothing is offered rather than this checkout's own listing.
+async function oddPrincipalRootAsync(cwd) {
+  try {
+    const git = libRequire("worktree-git.js");
+    const identity = await git.repoIdentityAsync(cwd, { runAsync: libRunner(git) });
+    const root = identity && typeof identity.root === "string" ? identity.root : "";
+    const common = identity && typeof identity.commonDir === "string" ? identity.commonDir : "";
+    if (common.length > 0 && path.basename(common) === ".git") return path.resolve(path.dirname(common));
+    if (root.length > 0 && path.isAbsolute(root)) return root;
+  } catch {
+    // Not a checkout, or git cannot answer: no main root, so nothing is offered.
+  }
+  return null;
+}
+
+// S6/S13/T15: the ONE degraded menu. Its choices ARE the listing's labels and its
+// result maps back by INDEX into exactly the array offered, so it reports that
+// entry's own path — never the first document whose name another checkout also
+// carries, and never a list this file built for itself.
+async function runOddFallback(ctx, listed) {
   const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
   const select = ctx && ctx.ui ? ctx.ui.select : undefined;
-  if (listing.docs.length === 0) {
+  const menu = listed && Array.isArray(listed.menu) ? listed.menu : [];
+  if (menu.length === 0) {
     if (typeof notify === "function") notify("odd: no documents under odd/tasks/ in this checkout", "info");
     return;
   }
   if (typeof select !== "function") {
     if (typeof notify === "function") {
-      notify(`odd: ${listing.docs.length} document(s) under odd/tasks/ (the viewer needs an interactive session)`, "info");
+      notify(`odd: ${menu.length} document(s) under odd/tasks/ (the viewer needs an interactive session)`, "info");
     }
     return;
   }
-  // S6/S13 (T13): the choices are the exact list offered and the selection maps
-  // back by INDEX, never by a name another checkout may also carry.
-  const labels = listing.docs.map((doc) => (typeof doc.label === "string" && doc.label.length > 0 ? doc.label : doc.name));
+  const labels = menu.map((entry) => entry.label);
   let picked = null;
   try {
     picked = await select("Odd documents", labels);
@@ -7008,9 +7043,9 @@ async function runOddFallback(ctx, listing) {
   if (picked === undefined || picked === null) return;
   const index = labels.indexOf(picked);
   if (index < 0) return;
-  const doc = listing.docs[index];
-  if (!doc) return;
-  if (typeof notify === "function") notify(doc.path, "info");
+  const entry = menu[index];
+  if (!entry) return;
+  if (typeof notify === "function") notify(entry.path, "info");
 }
 
 async function executeOdd(rawArgs, ctx) {
@@ -7047,11 +7082,6 @@ async function executeOdd(rawArgs, ctx) {
     if (typeof notify === "function") notify(notGitRepositoryLine(cwd), "info");
     return;
   }
-  const listing = oddDocsLocal(checkoutRoot);
-  if (listing.ok !== true) {
-    if (typeof notify === "function") notify(notGitRepositoryLine(cwd), "info");
-    return;
-  }
   // S10/S13 (T4): the panel draws the checkouts this SESSION registered — main
   // always, whole, plus one group per registered worktree carrying what that
   // worktree has that main does not. The set is the same one the files panel
@@ -7060,41 +7090,50 @@ async function executeOdd(rawArgs, ctx) {
   // switch (corrected S7).
   const registeredRoots = filesSessionWorktreeRoots(ctx);
   const groups = await oddGroupsFor(checkoutRoot, registeredRoots);
+  // S13 (T15): MAIN's own root. A readable model names it; a model that could not
+  // be read (pending or failed) falls back to the PRINCIPAL checkout — never to
+  // the session's own when that checkout is a linked worktree, whose private
+  // documents would otherwise be offered as main's.
+  const mainRoot = Array.isArray(groups) ? oddMainRoot(groups, null) : await oddPrincipalRootAsync(checkoutRoot);
+  // S13/T15 (L11): the ONE listing both surfaces draw — the panel's groups and the
+  // menu's entries, from the same entries, in the same order, under the same
+  // labels. With no model the only documents there are are MAIN's own, and with
+  // none of those either the listing is EMPTY: this checkout's own flat listing is
+  // never a fallback, on any surface.
+  const listed = Array.isArray(groups) ? oddListingFor(groups) : oddMainListing(mainRoot);
   // S13 (T6): the mount-time read above answers the FIRST frame only. Every reload
   // reads the register AT RELOAD TIME — `r`, and `a` back to the session's mode —
   // so a worktree the rail registered after this panel opened appears on the next
   // reload instead of waiting for the panel to be reopened.
   const registeredRootsNow = () => filesSessionWorktreeRoots(ctx);
   // S9/S6 (T10): the empty answer is the LOADED MODEL's, never the session
-  // checkout's alone. Inside a linked worktree whose own `odd/tasks` is empty,
-  // main's documents are still there to read — so the muted line is said only
-  // when every loaded group is empty too, and the panel mounts otherwise.
-  if (request.kind === "none" && listing.docs.length === 0 && oddModelIsEmpty(groups)) {
+  // checkout's alone. A model that could not be read is not an empty model — the
+  // panel opens on main's own documents (or on its empty copy) instead of
+  // refusing the command.
+  if (request.kind === "none" && Array.isArray(groups) && listed.menu.length === 0 && oddModelIsEmpty(groups)) {
     if (typeof notify === "function") notify("No odd documents under odd/tasks/ in this checkout.", "info");
     return;
   }
-  // S6 (T10): BOTH target shapes are answered from the loaded model. A bare name
-  // is a target only when a loaded group carries it — main's ODDs and the
-  // registered worktrees' alike — and an absolute document for the same reason: a
-  // path no group lists (an unregistered worktree's, a checkout outside the scope)
-  // would be handed to a view that cannot place it and silently open main's first
-  // document instead of refusing.
+  // S6 (T10/T15): BOTH target shapes are answered from the LISTING. A bare name is
+  // a target only when the listing carries it — main's ODDs and the registered
+  // worktrees' alike — and an absolute document for the same reason: a path the
+  // listing does not offer (an unregistered worktree's, a checkout outside the
+  // scope) is refused instead of being handed to a view that cannot place it.
   let initialDoc = null;
   if (request.kind === "path") {
     // S6 (T13): the view matches a target by the LISTED identity, so a path with a
     // `.` component (or any other spelling that resolves to the same document)
-    // must open the document the model lists, never whatever the raw string names.
-    const listedPath = oddListedDocPath(groups, request.target);
-    if (listedPath === null) {
+    // must open the document the listing names, never whatever the raw string names.
+    const entry = oddListedEntry(listed, request.target);
+    if (entry === null) {
       if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
       return;
     }
-    initialDoc = listedPath;
+    initialDoc = entry.path;
   }
   if (request.kind === "name") {
-    const known = Array.isArray(groups) && groups.some((group) => Array.isArray(group && group.docs)
-      && group.docs.some((entry) => entry && entry.name === request.name));
-    if (!known) {
+    const known = oddListedName(listed, request.name);
+    if (known === null) {
       if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
       return;
     }
@@ -7110,16 +7149,16 @@ async function executeOdd(rawArgs, ctx) {
     helpers = null;
   }
   // S10/S11 (T4): the grouped model is reloaded OFF the key handler, and the live
-  // view plus the reader's own mode are the only state these seams share: `a`
+  // view plus the reader's own scope are the only state these seams share: `a`
   // reports the new mode, the reload that follows keeps it, and `r` reloads in the
   // mode the reader is in.
   let liveView = null;
   let liveGroups = Array.isArray(groups) ? groups : null;
-  // S11: the reader's current mode. `false` is the session's registered set, read
-  // from the register each time a reload needs it (S13). `appliedAll` is the scope
-  // of the last APPLIED load, which is where a failed toggle rolls back to.
-  let showAll = false;
-  let appliedAll = false;
+  // S11 (T15): ONE applied scope for this panel. It is written in exactly ONE
+  // place — the success branch of `applyOddLoad` — so a request, a failed read or
+  // a superseded one can never move it: it always describes the listing that is
+  // really on screen, which is what the footer hint names.
+  const appliedScope = { all: false };
   // S11/S13/D2 (T12): ONE generation counter orders EVERY load that can land on
   // this view — the startup ranking, each `a` toggle and each `r` reload. A load
   // takes its number when it STARTS and applies only while that number is still the
@@ -7144,20 +7183,57 @@ async function executeOdd(rawArgs, ctx) {
     if (!oddLoadIsLatest(generation)) return;
     if (!load || !Array.isArray(load.groups)) return;
     liveGroups = load.groups;
-    const applied = load.scope === null || load.scope === undefined
-      ? undefined
-      : { all: load.scope.all === true };
-    if (applied !== undefined) appliedAll = applied.all;
-    if (liveView && typeof liveView.applyGroups === "function") liveView.applyGroups(load.groups, applied);
+    if (load.scope === null || load.scope === undefined) {
+      // The startup rank publishes NO mode: it only replaces main's order.
+      if (liveView && typeof liveView.applyGroups === "function") liveView.applyGroups(load.groups);
+      return;
+    }
+    // S11 (T15): the ONE write. Nothing else in this file moves the applied
+    // scope, so every read of it describes the data a load really landed.
+    appliedScope.all = load.scope.all === true;
+    if (liveView && typeof liveView.applyGroups === "function") {
+      liveView.applyGroups(load.groups, { all: appliedScope.all });
+    }
   };
-  // S13 (T12): what the DEGRADED menu lists — the documents of the loaded model
-  // when the model loaded, the checkout's flat listing otherwise. It is built at
-  // the moment the menu is actually needed, so a working overlay never pays for
-  // the ranked read behind it.
-  const oddMenuListing = async () => {
-    const groupedDocs = oddFallbackDocs(groups);
-    if (groupedDocs !== null) return { ...listing, docs: groupedDocs };
-    return oddFallbackListing(checkoutRoot, listing);
+  // S11 (T15): the scope the READER is asking for. The view owns that request — it
+  // flips it on each `a` press and returns it to the value before a press whose
+  // read failed — so `r` reloads the scope the reader is really in WITHOUT a
+  // second copy here that a failure, a supersede or a skip could leave stale (that
+  // drift is what made a retry ask the wrong scope). A view that cannot answer
+  // falls back to the applied scope: the last listing that really landed.
+  const oddRequestedScope = () => {
+    if (liveView && typeof liveView.requestedAll === "function") {
+      try {
+        const asked = liveView.requestedAll();
+        if (asked === true || asked === false) return asked;
+      } catch {
+        // A view that cannot answer falls back to the applied scope below.
+      }
+    }
+    return appliedScope.all;
+  };
+  // S10/S13 (T15): the groups the panel OPENS on are the ONE listing's groups —
+  // its order and its deduplicated entries. A model whose main group carries
+  // nothing keeps the model itself, because the view needs main to draw a
+  // registered worktree's delta at all (the listing drops an empty group by
+  // design). A load that lands later hands the view the model it read, whose main
+  // group is the RANKED listing, so its order is never re-sorted here.
+  const viewGroups = () => {
+    if (!Array.isArray(groups)) return null;
+    if (!listed.groups.some((group) => group.isMain === true)) return groups;
+    return listed.groups.map((group) => ({
+      checkoutName: group.checkoutName,
+      checkoutRoot: group.checkoutRoot,
+      isMain: group.isMain === true,
+      docs: group.entries.map((entry) => ({ name: entry.name, docPath: entry.path, mtimeMs: entry.mtimeMs })),
+    }));
+  };
+  // S13/T15: main's own documents for the FLAT listing the view falls back to,
+  // taken from the same listing. With no main group there is nothing to draw —
+  // never the session checkout's own documents.
+  const flatDocs = () => {
+    const main = listed.groups.find((group) => group.isMain === true);
+    return main ? main.entries.map((entry) => ({ path: entry.path, name: entry.name, mtimeMs: entry.mtimeMs })) : [];
   };
   if (helpers && ctx && ctx.ui && typeof ctx.ui.custom === "function") {
     try {
@@ -7165,21 +7241,18 @@ async function executeOdd(rawArgs, ctx) {
         (hostTui, theme, _keybindings, done) => {
           // Started INSIDE the factory so the history walk overlaps the overlay
           // instead of preceding it, and never runs at all when the host falls
-          // back to the plain menu. S10/S12 (T10): it ranks MAIN's documents, from
-          // main's own group — the session's checkout is only the fallback for a
-          // model that could not be read, because inside a worktree it would pour
-          // that worktree's documents into main's group.
+          // back to the plain menu. S10/S12 (T15): it ranks MAIN's documents from
+          // main's OWN root — never the session's checkout, which inside a
+          // worktree would pour that worktree's documents into main's group.
           const rankGeneration = beginOddLoad();
-          const settled = oddDocsOrdered(oddMainRoot(liveGroups, checkoutRoot));
+          const settled = oddDocsOrdered(oddMainRoot(liveGroups, mainRoot));
           const view = libRequire("odd-view.js").createOddView({
-            docs: listing.docs,
-            // S10/S13 (T4): the grouped model — main whole, then one group per
-            // registered worktree with something of its own — is what the panel
-            // draws; `docs` stays the flat listing it has always been, and a
-            // model that could not be read leaves that listing standing. Whether
-            // a registered but unchanged worktree gets a header is the view's own
-            // rule (S10), never repeated here.
-            groups,
+            docs: flatDocs(),
+            // S10/S13 (T15): the panel draws the ONE listing — the same value the
+            // degraded menu offers — so labels, order and identity are decided in
+            // exactly one place. A model that could not be read leaves main's own
+            // flat listing, or the empty copy.
+            groups: viewGroups(),
             // S6 (T4): the target the command was given. The view resolves it
             // against the model above and, for one it cannot place, opens on its
             // own first document instead of failing.
@@ -7205,8 +7278,9 @@ async function executeOdd(rawArgs, ctx) {
             // A reload that fails keeps the groups already on screen and never
             // throws into the host.
             onToggleAll: (all) => {
-              showAll = all === true;
-              const scope = showAll;
+              // S11 (T15): the scope is the one the VIEW asked for; the applied
+              // scope is only written when this load lands (inside applyOddLoad).
+              const scope = all === true;
               const generation = beginOddLoad();
               return Promise.resolve(oddGroupsFor(
                 checkoutRoot,
@@ -7219,13 +7293,13 @@ async function executeOdd(rawArgs, ctx) {
                 if (!oddLoadIsLatest(generation)) return undefined;
                 applyOddLoad(generation, load);
                 if (load !== null) return true;
-                // The view rolls its REQUESTED mode back when this answers
-                // `false`; the extension asks in the applied scope from now on.
-                showAll = appliedAll;
+                // S11 (T15): the view returns its REQUESTED mode to the value it
+                // held before this press when the answer is `false`, so the next
+                // press asks for the scope this one asked for — in every release
+                // order. This file holds no copy of that value to drift from it.
                 return false;
               }, () => {
                 if (!oddLoadIsLatest(generation)) return undefined;
-                showAll = appliedAll;
                 return false;
               });
             },
@@ -7236,10 +7310,11 @@ async function executeOdd(rawArgs, ctx) {
             // listing nobody sees and leave the drawn one stale.
             reloadDocs: async () => {
               const generation = beginOddLoad();
-              // S11/S13 (T6): the model is reloaded in the reader's own mode —
+              // S11/S13 (T15): the model is reloaded in the reader's own scope —
               // `all: true` in the all-worktrees mode, the session's registered
-              // set (read NOW) otherwise.
-              const scopeAll = showAll;
+              // set (read NOW) otherwise — read from the ONE request the view
+              // owns, so a failed toggle can never leave this asking elsewhere.
+              const scopeAll = oddRequestedScope();
               const next = await oddGroupsFor(
                 checkoutRoot,
                 scopeAll ? undefined : registeredRootsNow(),
@@ -7254,9 +7329,9 @@ async function executeOdd(rawArgs, ctx) {
               // is the view's failure branch, which keeps the drawn rows and the
               // applied mode exactly as they were.
               if (!Array.isArray(next)) return null;
-              // S10/S12 (T10): the ranked listing ranks MAIN's documents, so it is
+              // S10/S12 (T15): the ranked listing ranks MAIN's documents, so it is
               // read from main's own root — never from the session's checkout.
-              const flat = await oddDocsFor(oddMainRoot(next, oddMainRoot(liveGroups, checkoutRoot)));
+              const flat = await oddDocsFor(oddMainRoot(next, mainRoot));
               if (!oddLoadIsLatest(generation)) return oddReloadSuperseded();
               if (flat && flat.ok === true) {
                 applyOddLoad(generation, {
@@ -7313,22 +7388,13 @@ async function executeOdd(rawArgs, ctx) {
         { overlay: true, overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%", margin: 0 } },
       );
     } catch {
-      // A host that rejects the overlay degrades to the menu below.
-      await runOddFallback(ctx, await oddMenuListing());
+      // A host that rejects the overlay degrades to the menu below — the SAME
+      // listing the panel would have drawn.
+      await runOddFallback(ctx, listed);
     }
     return;
   }
-  await runOddFallback(ctx, await oddMenuListing());
-}
-
-// The plain select menu is the DEGRADED path (no TUI helpers, or a host that
-// refused the overlay): there is no live frame to protect, so it keeps the same
-// git-ranked order the old synchronous listing handed it. A walk that cannot
-// answer leaves the cheap scan in place, so the menu never lists nothing.
-async function oddFallbackListing(root, local) {
-  const ordered = await oddDocsOrdered(root);
-  const usable = ordered && ordered.ok === true && Array.isArray(ordered.docs) && ordered.docs.length > 0;
-  return usable ? ordered : local;
+  await runOddFallback(ctx, listed);
 }
 
 // `/odd` (odd-viewer S1-S8): a two-pane viewer of this checkout's odd/

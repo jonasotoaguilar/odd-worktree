@@ -1131,3 +1131,366 @@ test('T6 round 4: every release order leaves the latest applied load (S11/S13/D2
   assert.equal(releases, 114, 'every release of both event sets was checked (24×4 + 6×3)');
   assert.ok(elapsed < 120_000, `bounded permutations stay fast (${elapsed} ms)`);
 });
+
+// ---------------------------------------------------------------------------
+// T15 (odd-rail-section, L11): the round-5 verifier's RED probes for the three
+// defects this unit closes. They are ported here with this suite's helper names
+// and every assertion kept as the verifier wrote it:
+//
+//   * E1/S11: ONE applied scope. After a failed toggle the retry must ask the
+//     scope that FAILED, in every release order of every event set.
+//   * E2/S13: a cold `/odd` whose `git worktree list` fails offers MAIN's own
+//     documents only — never the session checkout's when that checkout is not
+//     main — and refuses a private target instead of mounting it.
+//   * E5/S13: two registered worktrees sharing a basename draw two distinct
+//     labels and each selection reports its OWN document.
+//   * B4: the degraded menu is `listing.menu` — the panel list flattened, in one
+//     order, with path identity.
+// ---------------------------------------------------------------------------
+
+const { AsyncLocalStorage } = require('node:async_hooks');
+const { setImmediate: tick } = require('node:timers/promises');
+
+const doOdd = (e, raw, ctx) => e.commands.get('odd').handler(raw, ctx);
+const isList = (a) => a.includes('worktree') && a.includes('list');
+const deferred = () => { let release; const p = new Promise((r) => { release = r; }); return { p, release }; };
+
+// The handler stays pending until the view closes; this opens it and answers the
+// component it mounted.
+const openPanel = async (e, host, ctx, raw = '') => {
+  const n = host.notifications.length;
+  const p = doOdd(e, raw, ctx);
+  p.catch(() => {});
+  await waitFor(() => host.mounts.length
+    || host.notifications.slice(n).some(([level]) => level === 'error'), 'overlay or refusal');
+  assert.equal(host.mounts.length, 1, JSON.stringify(host.notifications));
+  return { p, v: host.mounts[0].component };
+};
+
+// A worktree Git knows and the package does NOT own: a sibling directory.
+function outside(repo, prefix, basename, branch) {
+  const parent = path.join(path.dirname(repo), path.basename(repo) + '-' + prefix);
+  fs.mkdirSync(parent, { recursive: true });
+  const root = path.join(parent, basename);
+  git(repo, ['worktree', 'add', '-b', branch, root, 'main']);
+  return root;
+}
+
+function perms(plan) {
+  return plan.length
+    ? plan.flatMap((name, i) => perms(plan.filter((_, j) => i !== j)).map((p) => [name, ...p]))
+    : [[]];
+}
+
+// The frame the E1 probe measures: the registered witness is always there, the
+// outside one only in the all-worktrees mode, and the hint names that mode.
+function markFrame(v, all) {
+  const text = frameText(v);
+  assert.match(text, /registered-witness/);
+  assert.equal(text.includes('outside-witness'), all, text);
+  assert.ok(text.includes(all ? 'a session only' : 'a all worktrees'), text);
+}
+
+// The degraded select menu: no overlay, so the command falls back to `select`.
+async function chooseMenu(e, cwd, roots, select, reject = false) {
+  const h = mountHost();
+  let labels;
+  if (reject) h.ui.custom = () => Promise.reject(new Error('no overlay'));
+  else delete h.ui.custom;
+  h.ui.select = (title, choices) => {
+    assert.equal(title, 'Odd documents');
+    labels = choices.slice();
+    return select(choices);
+  };
+  await doOdd(e, '', ctxFor(cwd, h, roots));
+  return { labels, notifications: h.notifications };
+}
+
+test('E1: every release order and latest Git failure, real reads under both CWDs', { timeout: 240000 }, async (t) => {
+  const e = await load();
+  const repo = makeRepo(), reg = addWorktree(repo, 'registered');
+  const other = outside(repo, 'outside', 'elsewhere', 'feat/elsewhere');
+  writeTask(reg, 'registered-witness', '# Registered');
+  writeTask(other, 'outside-witness', '# Outside');
+  const g = e.mod.libModule('worktree-git.js'), realRun = g.runArgvAsync;
+  const vlib = e.mod.libModule('odd-view.js'), realView = vlib.createOddView;
+  const local = new AsyncLocalStorage();
+  const stats = { runs: 0, releases: 0, gitErrors: 0, retries: 0 };
+  const faults = [];
+  let hooks;
+  vlib.createOddView = (o) => {
+    for (const k of ['onToggleAll', 'reloadDocs']) {
+      const real = o[k];
+      o[k] = (...args) => {
+        const h = local.getStore();
+        h.request = args;
+        const p = real(...args);
+        p.then(h.done.release, h.done.release);
+        return p;
+      };
+    }
+    const v = realView(o);
+    const apply = v.applyGroups;
+    v.applyGroups = (groups, scope) => {
+      hooks.applied.push({
+        scope,
+        all: groups.some((q) => q.docs.some((d) => d.name === 'outside-witness')),
+        names: groups.flatMap((q) => q.docs.map((d) => d.name)),
+      });
+      return apply(groups, scope);
+    };
+    return v;
+  };
+  g.runArgvAsync = (bin, args, opts) => {
+    const h = local.getStore();
+    if (!h) return realRun(bin, args, opts);
+    h.calls.push({ args, cwd: opts.cwd });
+    if (h.started) return realRun(bin, args, opts);
+    h.started = true;
+    if (h !== hooks.rank) assert.ok(isList(args), args.join(' '));
+    return h.gate.p.then(async () => {
+      const result = await realRun(bin, h.fail ? ['worktree', 'list', '--invalid-t6-option'] : args, opts);
+      if (h.fail) { assert.notEqual(result.status, 0); stats.gitErrors++; }
+      return result;
+    });
+  };
+  const docs = e.mod.libModule('odd-docs.js'), realDocs = docs.listOddDocsAsync;
+  docs.listOddDocsAsync = async (root, opts) => {
+    const h = local.getStore() ?? hooks?.rank;
+    const result = await realDocs(root, {
+      ...opts,
+      runAsync: (bin, args, cwd) => {
+        if (h === hooks.rank && h && !h.started) {
+          h.started = true;
+          return h.gate.p.then(() => realRun(bin, args, { cwd }));
+        }
+        return realRun(bin, args, { cwd });
+      },
+    });
+    if (h && h === hooks.rank) setImmediate(h.done.release);
+    return result;
+  };
+  const key = (id) => id[0];
+  const hold = (id, fail) => ({ id, fail, calls: [], gate: deferred(), done: deferred() });
+  const schedules = [['rank', 'a1', 'r1', 'a2'], ['a1', 'r1', 'r2'], ['r1', 'a1'], ['a1', 'a2', 'r1', 'r2']];
+  try {
+    for (const cwd of [repo, other]) {
+      for (const plan of schedules) {
+        for (const order of perms(plan)) {
+          for (const failure of [false, true]) {
+            const latest = plan.at(-1);
+            const host = mountHost(), ctx = ctxFor(cwd, host, [reg]);
+            const byId = new Map(plan.map((id) => [id, hold(id, failure && id === latest)]));
+            hooks = { applied: [], rank: byId.get('rank') };
+            const o = await openPanel(e, host, ctx);
+            try {
+              if (!hooks.rank) await waitFor(() => hooks.applied.length === 1, 'unheld startup rank');
+              else await waitFor(() => hooks.rank.started, 'held startup rank');
+              hooks.applied.length = 0;
+              let requested = false;
+              for (const id of plan.filter((x) => x !== 'rank')) {
+                const h = byId.get(id);
+                if (key(id) === 'a') requested = !requested;
+                local.run(h, () => o.v.handleInput(key(id)));
+                await waitFor(() => h.started, 'held ' + id);
+                if (key(id) === 'a') assert.deepEqual(h.request, [requested]);
+                h.all = requested;
+              }
+              markFrame(o.v, false);
+              let all = false;
+              for (const id of order) {
+                const h = byId.get(id), before = frameText(o.v), n = hooks.applied.length;
+                h.gate.release();
+                await h.done.p;
+                await tick();
+                if (id === latest && !failure) {
+                  all = h.all;
+                  assert.equal(hooks.applied.length, n + 1);
+                  assert.deepEqual(hooks.applied.at(-1).scope, { all });
+                  assert.equal(hooks.applied.at(-1).all, all);
+                  // Verify the scope was exercised by reading the outside checkout itself.
+                  assert.equal(h.calls.some((c) => c.cwd === other && c.args.includes('merge-base')), all);
+                } else {
+                  assert.equal(hooks.applied.length, n, `unexpected apply after ${id}`);
+                  if (!(id === latest && key(id) === 'r')) assert.equal(frameText(o.v), before, `changed after ${id}`);
+                }
+                markFrame(o.v, all);
+                stats.releases++;
+              }
+              if (failure) {
+                const h = hold('retry', false);
+                local.run(h, () => o.v.handleInput(key(latest)));
+                h.gate.release();
+                await h.done.p;
+                await tick();
+                const should = byId.get(latest).all;
+                try {
+                  assert.deepEqual(hooks.applied.at(-1)?.scope, { all: should });
+                  markFrame(o.v, should);
+                } catch {
+                  faults.push(`${path.basename(cwd)} ${plan}/${order}: retry asked ${JSON.stringify(h.request)}, applied ${JSON.stringify(hooks.applied.at(-1)?.scope)}, expected ${should}`);
+                }
+                stats.retries++;
+              }
+              stats.runs++;
+            } finally {
+              await closePanel(host, o.p);
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    docs.listOddDocsAsync = realDocs;
+    g.runArgvAsync = realRun;
+    vlib.createOddView = realView;
+  }
+  t.diagnostic(JSON.stringify(stats));
+  t.diagnostic(`retry violations: ${faults.length}; ${faults.slice(0, 4).join('; ')}`);
+  assert.equal(faults.length, 0);
+});
+
+test('E2/S13: overlay startup during a real list failure (separate from legacy select menu)', async (t) => {
+  const e = await load();
+  const repo = makeRepo(), linked = addWorktree(repo, 'unregistered-overlay');
+  writeTask(linked, 'witness-private', '# Distinct private body');
+  const g = e.mod.libModule('worktree-git.js'), run = g.runArgvAsync;
+  let rc;
+  g.runArgvAsync = async (bin, args, opts) => {
+    const r = await run(bin, isList(args) ? ['worktree', 'list', '--strictly-invalid-t6'] : args, opts);
+    if (isList(args)) rc = r.status;
+    return r;
+  };
+  const h = mountHost(), ctx = ctxFor(linked, h, []);
+  const pending = doOdd(e, '', ctx);
+  let answered = false;
+  pending.then(() => { answered = true; });
+  try {
+    await waitFor(() => answered || h.mounts.length, 'failed cold start answer');
+    assert.notEqual(rc, 0);
+    assert.ok(rc !== undefined);
+    if (h.mounts.length) {
+      const text = frameText(h.mounts[0].component);
+      t.diagnostic(`Git exit=${rc}; overlay offered path in linked checkout: ${/witness-private/.test(text)}; private preview: ${/Distinct private body/.test(text)}`);
+      assert.doesNotMatch(text, /witness-private|Distinct private body/);
+    }
+  } finally {
+    g.runArgvAsync = run;
+    await closePanel(h, pending);
+  }
+});
+
+test('E2/S13: no model and no main documents opens the empty panel, never this checkout', async () => {
+  const e = await load();
+  const repo = makeRepo(), linked = addWorktree(repo, 'cold-empty');
+  // MAIN holds no document at all, and the session's linked checkout is not
+  // registered, so its private document is the only one on disk.
+  fs.rmSync(path.join(repo, 'odd'), { recursive: true, force: true });
+  writeTask(linked, 'linked-private', '# Private body');
+  const g = e.mod.libModule('worktree-git.js'), run = g.runArgvAsync;
+  g.runArgvAsync = (bin, args, opts) => run(bin, isList(args) ? ['worktree', 'list', '--strictly-invalid-t6'] : args, opts);
+  const h = mountHost();
+  const pending = doOdd(e, '', ctxFor(linked, h, []));
+  try {
+    await waitFor(() => h.mounts.length || h.notifications.length, 'cold answer');
+    assert.deepEqual(h.notifications, [], 'the command is not refused: it opens the empty panel');
+    assert.equal(h.mounts.length, 1);
+    const text = frameText(h.mounts[0].component);
+    assert.doesNotMatch(text, /linked-private|Private body/);
+    assert.match(text, /no odd documents/, 'the view\u2019s own empty copy');
+    assert.match(text, /0 documents/, 'and an empty listing');
+  } finally {
+    g.runArgvAsync = run;
+    await closePanel(h, pending);
+  }
+});
+
+test('E2 proof: a failed listing does not let the overlay open a private target (baseline refuses)', async (t) => {
+  const repo = makeRepo(), linked = addWorktree(repo, 'not-in-scope');
+  const target = writeTask(linked, 'private-direct', '# Excluded private preview');
+  const e = await load(), g = e.mod.libModule('worktree-git.js'), run = g.runArgvAsync;
+  const healthy = mountHost();
+  await doOdd(e, target, ctxFor(linked, healthy, []));
+  assert.equal(healthy.mounts.length, 0);
+  assert.deepEqual(healthy.notifications, [['error', `Unknown option "${target}". Use /odd.`]]);
+  t.diagnostic(`candidate with healthy listing: ${healthy.notifications[0][1]}`);
+  let rc;
+  g.runArgvAsync = async (bin, args, opts) => {
+    const answer = await run(bin, isList(args) ? ['worktree', 'list', '--strictly-invalid-t6'] : args, opts);
+    if (isList(args)) rc = answer.status;
+    return answer;
+  };
+  const h = mountHost();
+  const pending = doOdd(e, target, ctxFor(linked, h, []));
+  try {
+    await waitFor(() => h.mounts.length || h.notifications.length, 'direct command answers');
+    assert.equal(rc, 129);
+    if (h.mounts.length) t.diagnostic(`candidate git exit ${rc}: opened private target and read body = ${/Excluded private preview/.test(frameText(h.mounts[0].component))}`);
+    assert.equal(h.mounts.length, 0);
+    assert.deepEqual(h.notifications, [['error', `Unknown option "${target}". Use /odd.`]]);
+  } finally {
+    g.runArgvAsync = run;
+    await closePanel(h, pending);
+  }
+});
+
+test('E5: two registered real worktrees with the same basename cannot select each other', async (t) => {
+  const e = await load();
+  const repo = makeRepo();
+  const a = outside(repo, 'one', 'same checkout', 'feat/first-same');
+  const b = outside(repo, 'two', 'same checkout', 'feat/second-same');
+  const pa = writeTask(a, 'collision', '# First copy'), pb = writeTask(b, 'collision', '# Second copy');
+  assert.ok(git(repo, ['worktree', 'list', '--porcelain']).includes(a));
+  assert.ok(git(repo, ['worktree', 'list', '--porcelain']).includes(b));
+  const selections = [];
+  for (const i of [0, 1]) {
+    const result = await chooseMenu(e, repo, [a, b], (choices) => choices.filter((label) => label.startsWith('collision'))[i]);
+    assert.equal(result.labels.filter((label) => label.startsWith('collision')).length, 2);
+    t.diagnostic(`index ${i}: ${JSON.stringify(result.labels)} => ${JSON.stringify(result.notifications)}; registered candidates ${pa}, ${pb}`);
+    selections.push(result.notifications[0]?.[1]);
+  }
+  assert.deepEqual(selections.sort(), [pa, pb].sort());
+});
+
+test('E5: literal legacy label and generated main label both selectable', async (t) => {
+  const e = await load();
+  const repo = makeRepo(), a = addWorktree(repo, 'literal-test');
+  const literal = writeTask(repo, 'main-one (main)', '# Literal');
+  writeTask(a, 'main-one', '# Linked');
+  const result = await chooseMenu(e, repo, [a], (choices) => choices.find((x) => x === 'main-one (main)'));
+  t.diagnostic(JSON.stringify(result));
+  assert.equal(result.labels.filter((x) => x === 'main-one (main)').length, 1);
+  assert.deepEqual(result.notifications, [['info', literal]]);
+});
+
+test('B4: the degraded menu is `listing.menu`, in that order, reporting that entry path', async (t) => {
+  const e = await load();
+  const repo = makeRepo();
+  // Two registered worktrees that share a basename: the ad-hoc menu labelling this
+  // unit replaces drew the same label twice here, so one label selected both.
+  const a = outside(repo, 'one', 'same checkout', 'feat/b4-first-same');
+  const b = outside(repo, 'two', 'same checkout', 'feat/b4-second-same');
+  writeTask(a, 'collision', '# First copy');
+  writeTask(b, 'collision', '# Second copy');
+  // The model the command reads for this session, and the ONE listing value the
+  // panel and the menu must both draw from.
+  const groups = await e.mod.libModule('odd-group.js').groupOddDocs({ repoRoot: repo, roots: [a, b] });
+  const listing = e.mod.libModule('odd-listing.js').buildListing({ groups });
+  assert.equal(new Set(listing.menu.map((row) => row.label)).size, listing.menu.length,
+    'the listing really disambiguates the repeated basenames');
+  const result = await chooseMenu(e, repo, [a, b], (choices) => choices[0]);
+  assert.deepEqual(result.labels, listing.menu.map((row) => row.label),
+    'the menu IS the listing: same labels, same order, main first');
+  assert.deepEqual(result.notifications, [['info', listing.menu[0].path]],
+    'the first entry opens the document the first row names');
+  // Every index maps to its own entry, never to a name another checkout carries.
+  for (let index = 0; index < listing.menu.length; index += 1) {
+    const picked = await chooseMenu(e, repo, [a, b], (choices) => choices[index]);
+    assert.deepEqual(picked.notifications, [['info', listing.menu[index].path]], `index ${index}`);
+  }
+  // A unique name keeps the plain label the baseline had.
+  const plain = await chooseMenu(e, repo, [], (choices) => choices[0]);
+  assert.deepEqual(plain.labels, ['main-two', 'main-one'],
+    'unique names stay undecorated, in the listing order main first');
+  t.diagnostic(`menu ${JSON.stringify(result.labels)}`);
+});

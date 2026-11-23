@@ -8368,6 +8368,32 @@ async function loadStoredRailPullRequests(identity) {
   return prsRailStoredEntry;
 }
 
+// S1/S8 (T22): `/issues` paints its first frame from the rail's in-process cache
+// (`issuesSidebarCachedPages`), and `/prs` must open just as fast. The rail's
+// pull-request read and the stored-entry load both land in the same in-memory
+// pair, so this reader is synchronous — no child, no disk read on the open path —
+// and it answers only for the identity the panel just PROVED, never for another
+// repository's rows. A bucket with no rows seeds nothing, so every page keeps
+// exactly the behaviour it had before this seed existed.
+function prsRailCachedPages(identity) {
+  if (typeof identity !== "string" || identity.length === 0) return null;
+  if (prsRailStaleIdentities.has(identity)) return null;
+  if (prsRailStoredIdentity !== identity) return null;
+  const entry = prsRailStoredEntry;
+  if (!entry || typeof entry !== "object") return null;
+  const counts = storedRailCounts(entry);
+  const pages = new Map();
+  for (const id of ["mine", "review"]) {
+    const rows = Array.isArray(entry[id]) ? entry[id] : [];
+    if (rows.length === 0) continue;
+    const total = counts && Number.isFinite(Number(counts[id])) ? Number(counts[id]) : rows.length;
+    // A total below its own rows is not a count: the store already refuses one,
+    // and this reader never invents one either.
+    pages.set(id, { rows, total: total >= rows.length ? total : rows.length });
+  }
+  return pages.size === 0 ? null : pages;
+}
+
 // T10b (S4, D15): the bucket totals a stored entry carries, or `null` when it
 // carries none. The store already dropped every total it could not prove (one
 // below its own rows, one that is not a count), so what arrives here is exactly
@@ -8889,6 +8915,9 @@ async function openPrsPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, pi)
     }
     return;
   }
+  // T22: the identity this open PROVED is the only key that may seed the first
+  // frame, read once so every page of this mount comes from the same entry.
+  const seededPrsPages = pinnedRepo && pinnedRepo.ok === true ? prsRailCachedPages(pinnedRepo.identity) : null;
   // The overlay factory's own host object is what the browser opener suspends.
   let hostTuiRef = null;
   // S6: the panel's own close, captured from the host's factory, so a cross-panel
@@ -8953,12 +8982,24 @@ async function openPrsPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, pi)
           }
         };
         return libRequire("prs-view.js").createPrsView({
-          pages: PRS_INTERACTIVE_BUCKETS.map((spec) => ({
-            id: spec.id,
-            label: spec.label,
-            rows: null,
-            lazy: spec.lazy === true,
-          })),
+          // S8/T22: a bucket the rail already read (or the store answers) is
+          // seeded, so the first frame paints its rows instead of `loading…`.
+          // The seed is never the last word: the mount still reads the visible
+          // bucket and every seeded page carries no `loaded` stamp, so its first
+          // activation reads it and `r` re-reads the one on screen.
+          pages: PRS_INTERACTIVE_BUCKETS.map((spec) => {
+            const seeded = seededPrsPages === null ? null : seededPrsPages.get(spec.id);
+            if (!seeded) {
+              return { id: spec.id, label: spec.label, rows: null, lazy: spec.lazy === true };
+            }
+            return {
+              id: spec.id,
+              label: spec.label,
+              rows: seeded.rows,
+              total: seeded.total,
+              lazy: spec.lazy === true,
+            };
+          }),
           loadPullRequestPage,
           // S1/T4: a numbered open starts on the bucket the rail's click named,
           // with that pull request pending selection; the command already

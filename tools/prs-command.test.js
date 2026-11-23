@@ -652,6 +652,32 @@ describe('/prs overlay and reads (S1, S3)', () => {
     assert.equal(b.gh.calls[b.gh.calls.length - 1].repo, 'github.com/myfork/project', 'the pinned identity binds the page');
   });
 
+  test('S8/T22: the rail cache seeds the first frame, so /prs opens as fast as /issues', async () => {
+    const b = await boot({ railMine: [{ number: 69, title: 'mine sixty-nine' }], railReview: [{ number: 70, title: 'review seventy' }] });
+    const { registered } = installBridge();
+    await warmGate(b.loaded);
+    const root = makeCheckout();
+    const ctx = sessionCtx(root);
+    // The first start publishes the surface; the second is the session whose rail
+    // reads, which is the in-memory entry `/prs` seeds from. Nothing is opened in
+    // between, so this is exactly the state a click on the rail finds.
+    await fireSessionStart(b.loaded.hooks, sessionCtx(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-prs-seed-')))));
+    await fireSessionStart(b.loaded.hooks, ctx);
+    await drawSection(registered[0], ctx);
+    await waitFor(() => String(registered[0].meta(ctx)).includes(' pr'));
+
+    const capture = captureView(b.loaded.mod, 'prs-view.js', 'createPrsView');
+    await mountCommand(b.loaded, 'prs', '', ctx, { capture });
+
+    const pages = capture.options.pages;
+    const mine = pages.find((page) => page.id === 'mine');
+    const review = pages.find((page) => page.id === 'review');
+    assert.deepEqual(mine.rows.map((row) => row.number), [69], 'the authored bucket paints the rail row it already read');
+    assert.deepEqual(review.rows.map((row) => row.number), [70], 'and so does the review bucket');
+    assert.equal(mine.total, 1, 'the seeded page carries the count it can prove');
+    assert.equal(pages.find((page) => page.id === 'involved').rows, null, 'a bucket the rail never read keeps its own read');
+  });
+
   test('the lazy all bucket reads the repository connection', async () => {
     installBridge();
     const b = await boot();

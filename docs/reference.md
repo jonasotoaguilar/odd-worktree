@@ -754,6 +754,12 @@ a pull request in both buckets counts once.
   answers its own `issueCount` and rows. The section draws the merged `mine` +
   `assigned` pair (the `involved` search is only cached, below), and `/issues`
   paints its first frame from that cache.
+- **`/prs` paints the same instant first frame.** The pull-request panel reads the
+  rail's in-memory entry for the identity it just proved, so the authored and
+  review buckets show their rows on the first frame instead of `loading…`, and the
+  mount's own reads replace every seeded row (a bucket the rail never read keeps
+  its own read). This is the pull-request twin of the issues panel's seed, and it
+  costs no child and no disk read on the open path.
 - **A second read counts the pull requests.** The same section asks for the
   repository's pull requests in ONE aliased GraphQL request — `mine` and `review`,
   each with its exact `issueCount` and the `linkedIssues` of every row — and that

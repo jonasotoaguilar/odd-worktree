@@ -763,3 +763,35 @@ The question this page answers: which rules must every change preserve, and what
     `tools/issues-command.test.js` pins "without the CLI neither the command nor the
     rail section exists" and "the decision costs no child process, at load or at
     session start".
+29. **The user prompt card is a DRAWING shim, gated by the same line and never
+    touching the host's text.** `lib/user-prompt-card.js` wraps
+    `UserMessageComponent.prototype.render` — the one host class this package
+    patches — because Pi publishes no extension seam for a `role: "user"` entry: the
+    class is handed in from the extension's lazy `import()`, so `lib/` imports no Pi
+    package and a host without the export installs nothing. The card it draws is a
+    `✿ You` card on the card substrate (`float`/`neon` read live, tone `info`, the
+    whole frame and the title in `accent`, the body Pi's own Markdown clone with the
+    user-message background dropped and its painted rows placed, never repainted).
+    It adds NO row, command, setting or design, so invariant 3's surface is
+    unchanged. The gate is `Card activity` answering this package's `activity`
+    design, asked INSIDE the patched `render` on every paint and never cached, which
+    is what repaints a prompt already on screen: any other answer — `default`
+    (stored `native`), another design, an absent or throwing bridge, a width below
+    six columns, a component whose Markdown shape is not Pi's — hands the host's own
+    rows back BYTE FOR BYTE, fail CLOSED, unlike the file cards' pre-switch answer.
+    Pi's OSC 133 prompt-zone markers are re-emitted once on the card's first and last
+    row and never on the native path, so shell integration is not degraded. The
+    wrapper is installed once per process through a `Symbol.for` slot (a second
+    evaluation, `/reload` or a second session replaces only the live logic), never
+    throws, is re-installed on `session_start` and restored to the original `render`
+    by reference on `session_shutdown`, and its memo is keyed on everything that
+    changes a row (the width the frame really draws at, the resolved paint, the
+    rendered Markdown rows), so a style change always recomposes. A paint pays two live
+    reads and nothing else: the gate itself — the live `Card activity` answer — and the
+    shell's style (the published slot, or `<home>/card-style.json` when none is
+    published), which is the price of a prompt that repaints the moment either changes;
+    the drawing
+    recomputes nothing on a steady frame. `tools/user-prompt-card.test.js` pins the
+    gate and its live flip on
+    one instance, the byte-for-byte native answers, the accent cells in both styles,
+    the zone markers and the wrap-once/uninstall-by-reference claims.

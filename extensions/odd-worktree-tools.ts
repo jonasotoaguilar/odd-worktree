@@ -10178,7 +10178,11 @@ function installUserPromptCard() {
       // The measurement seam is asked on every paint (the TUI package may load late), and
       // the card reads Pi's own live theme from its process-wide slot, like every other
       // surface that paints outside a host render call.
-      lib.installUserPromptCard({ component, metrics: () => resolveWorktreeToolCardMetrics() });
+      const outcome = lib.installUserPromptCard({ component, metrics: () => resolveWorktreeToolCardMetrics() });
+      // S2 (prompt-card-fix): a transcript RESTORED from history was built before this import
+      // resolved, so the prompts already on screen keep Pi's rows until something unrelated
+      // repaints them. One request per install — never per paint — is what gives them the card.
+      requestPromptCardRepaint(outcome);
     })
     .catch(() => {
       // A host without the class keeps Pi's own prompt rows (S6).
@@ -10187,6 +10191,31 @@ function installUserPromptCard() {
       // Only this epoch's own claim is released: a NEW epoch may already hold the slot.
       if (userPromptCardPendingEpoch === epoch) userPromptCardPendingEpoch = undefined;
     });
+}
+
+/**
+ * S2 (prompt-card-fix): the ONE repaint a successful install asks for.
+ *
+ * A session restored from history builds its whole transcript before the deferred host import
+ * above resolves, so the prompts already on screen keep Pi's rows until something unrelated
+ * repaints. The bridge's published `requestRepaint` is the only repaint this package may ask
+ * for, and it is OPTIONAL (`gentle-shell-bridge` publishes it; an older bridge, or none, does
+ * not): absent member, no request. The request is made per INSTALL, never per paint, and only
+ * for an install that actually happened in a session that is still live — a refused install, a
+ * closed session and a bridge without the member all ask nothing. Its answer is irrelevant to
+ * the card, so the result is ignored and a throw is swallowed.
+ */
+function requestPromptCardRepaint(outcome) {
+  if (outcome === null || typeof outcome !== "object" || outcome.installed !== true) return;
+  if (!userPromptCardSessionLive) return;
+  try {
+    const resolver = libRequire("file-card-resolver.js");
+    const api = resolver && typeof resolver.bridgeApi === "function" ? resolver.bridgeApi() : undefined;
+    if (api === undefined || typeof api.requestRepaint !== "function") return;
+    api.requestRepaint();
+  } catch {
+    // A bridge that refuses its own repaint never breaks the install it belongs to.
+  }
 }
 
 /**

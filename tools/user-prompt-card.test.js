@@ -952,12 +952,179 @@ test('an empty prompt draws no card: the host\'s own nothing comes back', () => 
   assert.deepEqual(component.render(60), []);
 });
 
-test('the heading is this package\'s card: the accent name, no subtitle and no time', () => {
+// ---- S1 (prompt-card-fix): the heading's clock, in grey beside the name ----
+
+/** Local 24-hour `HH:MM`, zero padded: the clock the heading is expected to carry. */
+const localClock = (instant) => `${String(instant.getHours()).padStart(2, '0')}:${String(instant.getMinutes()).padStart(2, '0')}`;
+
+/** The `HH:MM` a heading row draws after its separator, read from the row's own cells. */
+function headingClock(row) {
+  const line = cells(row);
+  const dot = line.findIndex((cell) => cell.char === '·');
+  if (dot < 0) return undefined;
+  return line.slice(dot + 2, dot + 7).map((cell) => cell.char).join('');
+}
+
+test('S1: a component with a timestamp heads ✿ You · <local HH:MM>, and the clock is muted', () => {
+  publishBridge(ACTIVITY_ANSWER);
+  const paint = roleTheme();
+  install({ seams: { paint } });
+  // The instant the host sets on a prompt rebuilt from a session entry: an ISO string in UTC.
+  const at = '2026-11-23T19:12:59Z';
+  const expected = localClock(new Date(at));
+  const component = promptComponent();
+  component.timestamp = at;
+  const rows = component.render(60);
+  const head = unpaint(rows[0]);
+  assert.match(head, /^╭─ ✿ You · \d{2}:\d{2} /u, 'the name, the separator and the clock, on the frame');
+  assert.ok(head.includes(`✿ You · ${expected}`), `the clock is the local HH:MM of that instant: ${expected}`);
+  assert.equal(headingClock(rows[0]), expected, 'five clock columns, zero padded, no seconds');
+  // The role actually painted on the separator and on each clock column.
+  const line = cells(rows[0]);
+  const dot = line.findIndex((cell) => cell.char === '·');
+  assert.equal(line[dot].code, ROLE_CODE.muted, 'the separator wears the muted role');
+  for (const cell of line.slice(dot + 2, dot + 7)) {
+    assert.equal(cell.code, ROLE_CODE.muted, `"${cell.char}" of the clock is painted muted`);
+  }
+  const mark = line.find((cell) => cell.char === '✿');
+  assert.equal(mark.code, ROLE_CODE.accent, 'the mark still wears the accent with the name');
+});
+
+test('S1: without a timestamp the first-paint clock is used, unchanged on every later paint', () => {
+  publishBridge(ACTIVITY_ANSWER);
+  install();
+  const realNow = Date.now;
+  try {
+    Date.now = () => new Date(2026, 0, 2, 9, 7, 30).getTime();
+    const component = promptComponent();
+    const first = unpaint(component.render(60)[0]);
+    assert.ok(first.includes('✿ You · 09:07'), `the clock of the first paint: ${first}`);
+    // The clock moves on: a later frame keeps the arrival time, it never drifts.
+    Date.now = () => new Date(2026, 0, 2, 17, 45, 0).getTime();
+    const later = unpaint(component.render(60)[0]);
+    assert.equal(later, first, 'a later paint is the same heading, to the cell');
+    // A component built now has its OWN arrival time, captured on its own first paint.
+    const other = promptComponent();
+    assert.ok(unpaint(other.render(60)[0]).includes('✿ You · 17:45'), 'each prompt keeps its own first-paint clock');
+    assert.ok(unpaint(other.render(60)[0]).includes('✿ You · 17:45'), 'and it holds on the next paint too');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('S1: a component with neither a timestamp nor a clock shows ✿ You alone, inventing nothing', () => {
   publishBridge(ACTIVITY_ANSWER);
   install({ seams: { paint: taggedTheme } });
-  const component = promptComponent();
-  const head = component.render(60)[0];
-  assert.ok(head.includes('<accent>✿ You</accent>'), 'the mark and the name wear the title role together');
-  assert.equal(unpaint(head).includes('·'), false, 'no subtitle separator');
-  assert.doesNotMatch(unpaint(head), /\d{1,2}:\d{2}|ago/u, 'no timestamp: gentle-timestamps owns the clock');
+  const realNow = Date.now;
+  try {
+    // No clock to read at all, and nothing on the component: the heading is the name.
+    Date.now = () => Number.NaN;
+    const component = promptComponent();
+    const head = component.render(60)[0];
+    assert.ok(head.includes('<accent>✿ You</accent>'), 'the mark and the name wear the title role together');
+    const plain = unpaint(head);
+    assert.match(plain, /^╭─ ✿ You /u, 'the heading is the name alone');
+    assert.equal(plain.includes('·'), false, 'no subtitle separator');
+    assert.doesNotMatch(plain, /\d{1,2}:\d{2}|ago/u, 'no time is invented');
+    // A timestamp nothing can read is no clock either: still nothing invented.
+    const unreadable = promptComponent();
+    unreadable.timestamp = 'yesterday';
+    assert.equal(unpaint(unreadable.render(60)[0]).includes('·'), false, 'an unreadable timestamp invents no clock');
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+// ---- S2 (prompt-card-fix): a restored session repaints — once per install ----
+
+/**
+ * The bridge a repaint assertion needs: the published object every surface here reads, with a
+ * `requestRepaint` recorder and the gate's own reader. `extra` replaces a member per case.
+ */
+function repaintBridge(extra = {}) {
+  const api = fixture.defaultBridge().api;
+  const state = { repaints: 0 };
+  api.requestRepaint = () => {
+    state.repaints += 1;
+  };
+  api.resolveToolDesignSelection = () => ACTIVITY_ANSWER;
+  Object.assign(api, extra);
+  return { api, state };
+}
+
+/**
+ * Load this extension with one published bridge and drive the session that owns the deferred
+ * install — the only path that knows a session is live. Answers the host class and the hooks, so
+ * a test can watch the prototype and a paint.
+ */
+async function loadPromptCardSession(bridgeApi) {
+  const previous = globalThis[BRIDGE_API_SLOT];
+  globalThis[BRIDGE_API_SLOT] = bridgeApi;
+  class Host {
+    render(width) {
+      return [`native ${width}`];
+    }
+  }
+  const native = Host.prototype.render;
+  const { hooks } = await loadExtensionModule(() => ({ UserMessageComponent: Host }));
+  const emit = extensionSession(hooks);
+  const shutdown = async () => {
+    await emit('session_shutdown');
+    if (previous === undefined) delete globalThis[BRIDGE_API_SLOT];
+    else globalThis[BRIDGE_API_SLOT] = previous;
+  };
+  return { Host, native, emit, shutdown };
+}
+
+test('S2: a successful install asks the bridge for exactly one repaint, and no paint asks again', async () => {
+  const bridge = repaintBridge();
+  const session = await loadPromptCardSession(bridge.api);
+  try {
+    await session.emit('session_start');
+    await drain();
+    assert.notEqual(session.Host.prototype.render, session.native, 'the class is patched by the live session');
+    assert.equal(bridge.state.repaints, 1, 'the restored transcript is asked to repaint once');
+    // Painting is what the request produced: it never asks for another repaint itself.
+    const component = new session.Host();
+    component.render(60);
+    component.render(62);
+    assert.equal(bridge.state.repaints, 1, 'a paint requests none, and a steady frame neither');
+    // A second `session_start` is a re-install: it asks again, exactly once.
+    await session.emit('session_start');
+    await drain();
+    assert.equal(bridge.state.repaints, 2, 'the re-install path asks for its own single repaint');
+  } finally {
+    await session.shutdown();
+  }
+});
+
+test('S2: an install the gate never armed, and a bridge with no requestRepaint, ask for none', async () => {
+  // (a) The bridge refuses the design registration, so the install was never armed: no request.
+  const refused = repaintBridge({
+    registerToolDesign: () => {
+      throw new Error('this bridge refuses the activity design');
+    },
+  });
+  const ungated = await loadPromptCardSession(refused.api);
+  try {
+    await ungated.emit('session_start');
+    await drain();
+    assert.equal(ungated.Host.prototype.render, ungated.native, 'nothing was installed for a gated line');
+    assert.equal(refused.state.repaints, 0, 'an install that never happened asks for nothing');
+  } finally {
+    await ungated.shutdown();
+  }
+  // (b) The member is optional: the install succeeds and no member is there to call.
+  const absent = repaintBridge({});
+  delete absent.api.requestRepaint;
+  const memberless = await loadPromptCardSession(absent.api);
+  try {
+    assert.equal('requestRepaint' in absent.api, false, 'the published bridge carries no such member');
+    await memberless.emit('session_start');
+    await drain();
+    assert.notEqual(memberless.Host.prototype.render, memberless.native, 'the install still happened');
+    assert.equal(absent.state.repaints, 0, 'and nothing was asked for');
+  } finally {
+    await memberless.shutdown();
+  }
 });

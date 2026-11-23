@@ -817,3 +817,107 @@ describe('fail closed, never throw', () => {
     assert.equal(git.calls.length, 0, 'no git read without a root to read');
   });
 });
+
+// ---------------------------------------------------------------------------
+// T17/F1 (L11): MAIN is the first listed entry that is a WORKING TREE. Git's
+// listing is not "the main checkout first" for every repository shape: a
+// repository created with `git init --separate-git-dir` has its METADATA directory
+// listed where the main checkout would be (Git derives that record from the common
+// dir), so electing `entries[0]` blindly made main a directory with no `odd/tasks`
+// — and bare `/odd` reported "No odd documents under odd/tasks/ in this checkout."
+// for a checkout that owns a document. These tests build the real repositories
+// through the real CLI and read them with the module's own git seam, because the
+// shape under test is Git's, not the parser's.
+//
+// A standard repository keeps today's answer byte for byte: the pinned standard
+// case below and every fake-seam case above it.
+describe('T17/F1: main is elected from the listing’s attributes, never its position alone', () => {
+  const { spawnSync } = require('node:child_process');
+
+  function runGit(args, cwd) {
+    const answer = spawnSync('git', args, { cwd, encoding: 'utf8' });
+    if (answer.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${answer.stderr}`);
+    return answer.stdout;
+  }
+
+  // The module's seam, run against the real binary: the same contract as the fake
+  // (`{status, stdout, stderr, error}`), so the reads under test are Git's own.
+  function realSeam() {
+    return (bin, argv, cwd) => Promise.resolve().then(() => {
+      const answer = spawnSync(bin, argv, { cwd, encoding: 'utf8' });
+      return {
+        status: answer.status,
+        stdout: answer.stdout === null ? '' : answer.stdout,
+        stderr: answer.stderr === null ? '' : answer.stderr,
+        error: answer.error,
+      };
+    });
+  }
+
+  function configure(root) {
+    runGit(['config', 'user.email', 'test@example.test'], root);
+    runGit(['config', 'user.name', 'Test'], root);
+  }
+
+  function commitAll(root, message) {
+    runGit(['add', '-A'], root);
+    runGit(['commit', '-m', message], root);
+  }
+
+  // A real repository whose git dir is NOT the checkout: `git init
+  // --separate-git-dir <meta> <checkout>` leaves `<checkout>/.git` a link file and
+  // makes Git print `<meta>` as the worktree record.
+  function separateGitDirRepo(tag) {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `odd-group-sep-${tag}-`)));
+    roots.push(base);
+    const meta = path.join(base, 'git-meta');
+    const checkout = path.join(base, 'checkout');
+    runGit(['init', '--separate-git-dir', meta, checkout], base);
+    configure(checkout);
+    writeDoc(checkout, 'main-one', { at: '2020-01-01T00:00:00.000Z' });
+    commitAll(checkout, 'init');
+    return { base, meta, checkout };
+  }
+
+  test('F1: a separate git dir keeps the working tree as main, with its documents', async (t) => {
+    const repo = separateGitDirRepo('listing');
+    const listed = runGit(['worktree', 'list', '--porcelain'], repo.checkout);
+    t.diagnostic(`git's own record: ${JSON.stringify(listed)}`);
+
+    const groups = await groupOddDocs({ repoRoot: repo.checkout, runAsync: realSeam(), failClosed: true });
+
+    assert.ok(Array.isArray(groups), 'the listing answered, so there is a model');
+    assert.equal(groups.length, 1, 'main is the only checkout there is');
+    assert.equal(groups[0].checkoutName, 'main');
+    assert.equal(groups[0].checkoutRoot, repo.checkout,
+      'main is the WORKING TREE the listing could not name')
+    assert.deepEqual(groups[0].docs.map((doc) => doc.name), ['main-one'],
+      'and its own document is listed');
+    assert.deepEqual(Object.keys(groups[0].docs[0]).sort(), ['docPath', 'mtimeMs', 'name'],
+      'the row shape is unchanged (no invented status for main)');
+  });
+
+  test('F1 preserve: a standard repository elects the same main it always did', async () => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-group-standard-')));
+    roots.push(base);
+    const root = path.join(base, 'repo');
+    runGit(['init', '-b', 'main', root], base);
+    configure(root);
+    writeDoc(root, 'feature', { at: '2020-01-01T00:00:00.000Z' });
+    commitAll(root, 'init');
+    const owned = path.join(base, 'repo-worktrees', 'odd-rail');
+    runGit(['worktree', 'add', '-b', 'feat/odd-rail', owned, 'main'], root);
+    writeDoc(owned, 'delta', { at: '2020-02-01T00:00:00.000Z' });
+    runGit(['add', '-A'], owned);
+    runGit(['commit', '-m', 'delta'], owned);
+
+    const groups = await groupOddDocs({ repoRoot: root, runAsync: realSeam(), failClosed: true });
+
+    assert.deepEqual(groups.map((group) => [group.checkoutName, group.isMain, group.checkoutRoot]), [
+      ['main', true, root],
+      ['odd-rail', false, owned],
+    ], 'the main record is still main, and the worktree still follows it');
+    assert.deepEqual(groups[0].docs.map((doc) => doc.name), ['feature']);
+    assert.deepEqual(groups[1].docs.map((doc) => [doc.name, doc.status]), [['delta', 'added']]);
+  });
+});

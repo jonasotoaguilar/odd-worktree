@@ -6810,12 +6810,12 @@ function openExternalSuspended(hostTui, target) {
 // the scan knows which names exist. Everything else — a flag, a relative path, a
 // nested path, another extension, a document outside `odd/tasks` — is the
 // unknown option it always was. This panel is never a general file opener.
-function oddTargetRequest(raw) {
+function oddTargetRequest(raw, cwd) {
   if (raw === "") return { kind: "none" };
   // A flag is never a target, so `--nope` keeps refusing before any git read.
   if (raw.startsWith("-")) return { kind: "invalid" };
   if (path.isAbsolute(raw)) {
-    return oddTaskDocument(raw) ? { kind: "path", target: raw } : { kind: "invalid" };
+    return oddTaskDocument(raw, cwd) ? { kind: "path", target: raw } : { kind: "invalid" };
   }
   // A relative path is refused rather than resolved against the session cwd: the
   // target is either an absolute document or a name, and nothing in between.
@@ -6823,11 +6823,23 @@ function oddTargetRequest(raw) {
   return { kind: "name", name: raw };
 }
 
-// S6: a document is `<checkout>/odd/tasks/<name>.md`, non-recursive, no dotfile —
-// the segments come from the library that owns the rule instead of being restated
-// here, and the file has to be a regular one, exactly like the scan's own row.
-function oddTaskDocument(target) {
-  const name = path.basename(target);
+// S6/T17 (F4): a document is `<checkout>/odd/tasks/<name>.md`, non-recursive, no
+// dotfile — the segments come from the library that owns the rule instead of being
+// restated here, and the file has to be a regular one, exactly like the scan's own
+// row. The argument is RESOLVED first (`path.resolve` against the call's cwd, the
+// same rule `oddTaskDocumentPath` applies), because the grammar is about the path a
+// reader MEANS: `tasks/./x.md` and `tasks/../tasks/x.md` name the listed document,
+// and validating their raw segments refused paths `path.resolve` makes equal. Only
+// the resolved path is validated, so a sibling that resolves outside `odd/tasks`, a
+// non-`.md`, a dotfile and a nonexistent target keep the refusal they always had.
+function oddTaskDocument(target, cwd) {
+  let resolved;
+  try {
+    resolved = path.resolve(typeof cwd === "string" && cwd.length > 0 ? cwd : process.cwd(), target);
+  } catch {
+    return false;
+  }
+  const name = path.basename(resolved);
   if (!/\.md$/i.test(name) || name.startsWith(".")) return false;
   let segments = ["odd", "tasks"];
   try {
@@ -6839,11 +6851,11 @@ function oddTaskDocument(target) {
   } catch {
     // The documented default above stands.
   }
-  const dir = path.dirname(target);
+  const dir = path.dirname(resolved);
   if (path.basename(dir) !== segments[segments.length - 1]) return false;
   if (path.basename(path.dirname(dir)) !== segments[segments.length - 2]) return false;
   try {
-    return fs.statSync(target).isFile();
+    return fs.statSync(resolved).isFile();
   } catch {
     return false;
   }
@@ -6950,6 +6962,35 @@ function oddListingFor(groups) {
   };
 }
 
+// T17/F3: the model's own groups carrying the LISTING's labels. `applyOddLoad` hands
+// the view what it read, and the view paints a row from `label` when it has one; the
+// labels come from the ONE listing (`lib/odd-listing.js`), keyed by resolved path, so
+// the rows the panel paints and the choices the menu offers can never disagree about
+// what a document is called — and two checkouts sharing a basename no longer paint
+// the same text. The groups and documents themselves are handed over untouched (an
+// empty main group included: the view needs it to draw a worktree's delta), so a
+// model the listing could not label keeps exactly what it had.
+function oddLabelledGroups(groups) {
+  if (!Array.isArray(groups)) return null;
+  const byPath = new Map();
+  for (const group of oddListingFor(groups).groups) {
+    for (const entry of group.entries) byPath.set(path.resolve(entry.path), entry.label);
+  }
+  return groups.map((group) => {
+    if (!group || typeof group !== "object" || !Array.isArray(group.docs)) return group;
+    return {
+      ...group,
+      docs: group.docs.map((doc) => {
+        if (!doc || typeof doc !== "object") return doc;
+        const target = typeof doc.docPath === "string" ? doc.docPath
+          : (typeof doc.path === "string" ? doc.path : "");
+        const label = target.length === 0 ? undefined : byPath.get(path.resolve(target));
+        return label === undefined ? doc : { ...doc, label };
+      }),
+    };
+  });
+}
+
 // S13/T15: MAIN's own documents for a model that could not be read. A session
 // inside an UNREGISTERED linked checkout may never be offered that checkout's
 // private documents, so this is main's `odd/tasks` and nothing else — and with no
@@ -7026,19 +7067,35 @@ function oddListedName(listed, name) {
   return null;
 }
 
-// S13/T15: MAIN's own checkout, resolved WITHOUT `git worktree list` — the read
-// that may be failing on a cold start. The shared common dir answers which
-// checkout owns the repository (a linked worktree's `--git-common-dir` is
-// `<principal>/.git`), so no branch name is ever assumed. A root that cannot be
-// read is `null`: nothing is offered rather than this checkout's own listing.
+// S13/T15/T17 (F2): MAIN's own checkout. It is read from the SAME listing the
+// grouped model reads — `git worktree list --porcelain`, the first entry Git does
+// not flag `bare` — because that is the one answer that names the principal
+// checkout of THIS repository. The old reading believed the basename of the common
+// dir (`.git`), which a repository created with `git init --separate-git-dir` never
+// has, and then fell back to `identity.root`: inside a LINKED checkout that made the
+// linked root "main", so a failed listing offered that checkout's private documents
+// as main's. There is no such fallback now.
+//
+// A listing that cannot answer still leaves one SOUND derivation, and only one: when
+// the common dir IS a `.git` directory, its parent is the checkout that owns the
+// repository — true for a principal AND for a linked worktree, whose common dir is
+// `<principal>/.git`, so it can never name a linked root. That keeps an ordinary
+// single-root repository answering exactly as it did. Anything else is `null`:
+// nothing is offered rather than this checkout's own listing.
 async function oddPrincipalRootAsync(cwd) {
   try {
     const git = libRequire("worktree-git.js");
-    const identity = await git.repoIdentityAsync(cwd, { runAsync: libRunner(git) });
-    const root = identity && typeof identity.root === "string" ? identity.root : "";
+    const runAsync = libRunner(git);
+    const listed = await runAsync("git", ["worktree", "list", "--porcelain", "-z"], cwd);
+    if (listed && listed.status === 0) {
+      const entries = libRequire("worktree-registry.js").parseWorktreePorcelain(String(listed.stdout || ""));
+      const main = entries.find((entry) => entry && entry.bare !== true
+        && typeof entry.path === "string" && entry.path.length > 0);
+      if (main) return path.resolve(main.path);
+    }
+    const identity = await git.repoIdentityAsync(cwd, { runAsync });
     const common = identity && typeof identity.commonDir === "string" ? identity.commonDir : "";
     if (common.length > 0 && path.basename(common) === ".git") return path.resolve(path.dirname(common));
-    if (root.length > 0 && path.isAbsolute(root)) return root;
   } catch {
     // Not a checkout, or git cannot answer: no main root, so nothing is offered.
   }
@@ -7089,13 +7146,15 @@ async function executeOdd(rawArgs, ctx) {
   // S6 (T4): ONE optional target replaces the blanket refusal. A flag, a relative
   // path, a nested path, another extension and a document outside an `odd/tasks`
   // directory are all refused HERE, before any git read, with exactly the sentence
-  // every unknown argument has always got.
-  const request = oddTargetRequest(raw);
+  // every unknown argument has always got. T17 (F4): the target is resolved in this
+  // call's cwd before it is validated, so the three reads below still start from the
+  // session's own checkout.
+  const cwd = toolCwd(ctx);
+  const request = oddTargetRequest(raw, cwd);
   if (request.kind === "invalid") {
     if (typeof notify === "function") notify(`Unknown option "${raw}". Use /odd.`, "error");
     return;
   }
-  const cwd = toolCwd(ctx);
   // S21: the checkout read is awaited, never a `spawnSync` probe, and the
   // listing that follows it is the CHEAP one — `odd/tasks` on disk with no Git
   // process at all. So the viewer appears at once even on a checkout whose
@@ -7213,19 +7272,22 @@ async function executeOdd(rawArgs, ctx) {
     if (!oddLoadIsLatest(generation)) return;
     if (!load || !Array.isArray(load.groups)) return;
     liveGroups = load.groups;
+    // T17/F3: every load lands with the LISTING's labels, so a reload can never
+    // draw a row the menu names differently.
+    const labelled = () => oddLabelledGroups(liveGroups) ?? load.groups;
     if (load.scope === null || load.scope === undefined) {
       // The startup rank publishes NO mode: it only replaces main's order.
-      if (liveView && typeof liveView.applyGroups === "function") liveView.applyGroups(load.groups);
+      if (liveView && typeof liveView.applyGroups === "function") liveView.applyGroups(labelled());
       return;
     }
     // S11 (T15): the ONE write. Nothing else in this file moves the applied
     // scope, so every read of it describes the data a load really landed.
     appliedScope.all = load.scope.all === true;
     if (liveView && typeof liveView.applyGroups === "function") {
-      liveView.applyGroups(load.groups, { all: appliedScope.all });
+      liveView.applyGroups(labelled(), { all: appliedScope.all });
     }
   };
-  // S11 (T15): the scope the READER is asking for. The view owns that request — it
+// S11 (T15): the scope the READER is asking for. The view owns that request — it
   // flips it on each `a` press and returns it to the value before a press whose
   // read failed — so `r` reloads the scope the reader is really in WITHOUT a
   // second copy here that a failure, a supersede or a skip could leave stale (that
@@ -7255,7 +7317,13 @@ async function executeOdd(rawArgs, ctx) {
       checkoutName: group.checkoutName,
       checkoutRoot: group.checkoutRoot,
       isMain: group.isMain === true,
-      docs: group.entries.map((entry) => ({ name: entry.name, docPath: entry.path, mtimeMs: entry.mtimeMs })),
+      docs: group.entries.map((entry) => ({
+        name: entry.name,
+        docPath: entry.path,
+        mtimeMs: entry.mtimeMs,
+        // T17/F3: the listing's own label, so the frame paints what the menu offers.
+        label: entry.label,
+      })),
     }));
   };
   // S13/T15: main's own documents for the FLAT listing the view falls back to,
@@ -7263,7 +7331,9 @@ async function executeOdd(rawArgs, ctx) {
   // never the session checkout's own documents.
   const flatDocs = () => {
     const main = listed.groups.find((group) => group.isMain === true);
-    return main ? main.entries.map((entry) => ({ path: entry.path, name: entry.name, mtimeMs: entry.mtimeMs })) : [];
+    return main
+      ? main.entries.map((entry) => ({ path: entry.path, name: entry.name, mtimeMs: entry.mtimeMs, label: entry.label }))
+      : [];
   };
   if (helpers && ctx && ctx.ui && typeof ctx.ui.custom === "function") {
     try {

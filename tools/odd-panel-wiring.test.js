@@ -1405,6 +1405,224 @@ test('E2/S13: no model and no main documents opens the empty panel, never this c
   }
 });
 
+// ---------------------------------------------------------------------------
+// T17/F2 (L11): the PRINCIPAL root is never assumed. A repository whose git dir is
+// not its checkout (`git init --separate-git-dir`) has a common dir whose basename
+// is NOT `.git`, so the old derivation fell back to "this session's checkout" — and
+// a session standing in a LINKED checkout then had that checkout's private document
+// offered as main's whenever `git worktree list` failed. The principal is now read
+// from the same listing the model reads, and an undeterminable one is NO main root:
+// the degraded panel offers main's documents or nothing, never a private copy.
+//
+// The standard single-root repository keeps today's answer byte for byte: the
+// pinned case below (a failed listing still offers MAIN's own documents).
+// ---------------------------------------------------------------------------
+function separateMetadataRepo(tag) {
+  const base = fs.realpathSync(track(fs.mkdtempSync(path.join(os.tmpdir(), `odd-panel-meta-${tag}-`))));
+  const meta = path.join(base, 'git-meta');
+  const root = path.join(base, 'checkout');
+  git(base, ['init', '-b', 'main', '--separate-git-dir', meta, root]);
+  git(root, ['config', 'user.email', 'test@example.test']);
+  git(root, ['config', 'user.name', 'Test']);
+  const tasks = path.join(root, 'odd', 'tasks');
+  fs.mkdirSync(tasks, { recursive: true });
+  fs.writeFileSync(path.join(tasks, 'main-one.md'), '# body of main-one\n');
+  git(root, ['add', '-A']);
+  git(root, ['commit', '-m', 'init']);
+  return { base, meta, root };
+}
+
+test('F2: a failed listing in a linked checkout of a separate git dir offers no private document', async (t) => {
+  const e = await load();
+  const repo = separateMetadataRepo('linked');
+  const linked = addWorktree(repo.root, 'metadata-linked');
+  const priv = writeTask(linked, 'witness-private', '# Distinct private body');
+  const g = e.mod.libModule('worktree-git.js'), run = g.runArgvAsync;
+  let rc;
+  g.runArgvAsync = async (bin, args, opts) => {
+    const answer = await run(bin, isList(args) ? ['worktree', 'list', '--strictly-invalid-t7'] : args, opts);
+    if (isList(args)) rc = answer.status;
+    return answer;
+  };
+  const listHost = mountHost();
+  const banPending = doOdd(e, '', ctxFor(linked, listHost, []));
+  try {
+    await waitFor(() => listHost.mounts.length || listHost.notifications.length, 'cold answer');
+    assert.equal(rc, 129);
+    assert.equal(listHost.mounts.length, 1, 'the command opens the panel, it is not an error');
+    const text = frameText(listHost.mounts[0].component);
+    t.diagnostic(`overlay in a linked checkout with separate metadata: private offered = ${/witness-private|Distinct private body/.test(text)}`);
+    assert.doesNotMatch(text, /witness-private|Distinct private body/,
+      'the linked checkout is not main: its private document is neither offered nor previewed');
+  } finally {
+    await closePanel(listHost, banPending);
+  }
+  const targetHost = mountHost();
+  const targetPending = doOdd(e, priv, ctxFor(linked, targetHost, []));
+  try {
+    await waitFor(() => targetHost.mounts.length || targetHost.notifications.length, 'target answer');
+    assert.equal(targetHost.mounts.length, 0, 'and an absolute target to it is not mounted');
+    assert.deepEqual(targetHost.notifications, [['error', `Unknown option "${priv}". Use /odd.`]]);
+  } finally {
+    g.runArgvAsync = run;
+    await closePanel(targetHost, targetPending);
+  }
+});
+
+test('F2 preserve: a standard repository still offers MAIN\u2019s documents when the listing fails', async () => {
+  const e = await load();
+  const repo = makeRepo(), linked = addWorktree(repo, 'std-linked');
+  writeTask(linked, 'std-private', '# Linked private');
+  const g = e.mod.libModule('worktree-git.js'), run = g.runArgvAsync;
+  g.runArgvAsync = (bin, args, opts) => run(bin, isList(args) ? ['worktree', 'list', '--strictly-invalid-t7'] : args, opts);
+  const h = mountHost(), menus = [];
+  delete h.ui.custom;
+  h.ui.select = (title, choices) => { menus.push([title, choices]); };
+  try {
+    await doOdd(e, '', ctxFor(linked, h, []));
+    assert.equal(menus.length, 1, 'the degraded menu still answers');
+    assert.deepEqual(menus[0][1].slice().sort(), ['main-one', 'main-two'],
+      'main\u2019s own documents, never the linked checkout\u2019s');
+  } finally {
+    g.runArgvAsync = run;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// T17/F3 (L11): the panel draws the LISTING's label, not the model's raw name. Two
+// registered checkouts that share a basename drew `collision` twice (the label the
+// listing had already made unique never reached the frame), so the human could not
+// tell the rows apart. The label is derived once, in lib/odd-listing.js, and the
+// wiring now hands it over with every document; keyboard selection still resolves
+// each row to its own absolute path, so each copy opens its own body.
+//
+// A listing WITHOUT labels keeps the view's current behaviour: the standard
+// single-root repository paints plain names, exactly as before (pinned below).
+// ---------------------------------------------------------------------------
+// The LEFT pane of a frame: the rows between the frame's own chrome — never the
+// border lines, the search box or the footer legend.
+const listCells = (component) => renderedRows(component)
+  .filter((line) => /^\u2502/.test(line))
+  .map((line) => (line.split('\u2502')[1] || ''))
+  .filter((cell) => cell.trim() !== '' && !/^\u203a|^\u2191/.test(cell.trim()));
+const rowLabels = (component) => listCells(component)
+  .map((cell) => cell.trim().replace(/^\u25b8\s*/, ''))
+  .filter((cell) => cell !== '');
+const focusedLabel = (component) => {
+  const cell = listCells(component).map((value) => value.trim()).find((value) => value.startsWith('\u25b8'));
+  return cell === undefined ? null : cell.replace(/^\u25b8\s*/, '');
+};
+async function focusRow(component, label) {
+  let guard = 0;
+  while (focusedLabel(component) !== label && guard < 40) {
+    component.handleInput('down');
+    guard += 1;
+  }
+  assert.equal(focusedLabel(component), label, `the ${JSON.stringify(label)} row is focusable`);
+}
+
+test('F3: two registered checkouts sharing a basename paint two different labels, each opening its own body', async (t) => {
+  const e = await load();
+  const repo = makeRepo();
+  // Two checkouts with the SAME basename under one-letter parents, so the labels
+  // the listing derives differ where the list pane can paint them.
+  const base = fs.realpathSync(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-panel-labels-'))));
+  const linkedAt = (parent, branch) => {
+    const dir = path.join(base, parent);
+    fs.mkdirSync(dir, { recursive: true });
+    const root = path.join(dir, 'same checkout');
+    git(repo, ['worktree', 'add', '-b', branch, root, 'main']);
+    return root;
+  };
+  const a = linkedAt('a', 'feat/first-same');
+  const b = linkedAt('b', 'feat/second-same');
+  writeTask(a, 'collision', '# First copy\n');
+  writeTask(b, 'collision', '# Second copy\n');
+  const labelOf = (root) => `collision (${path.basename(path.dirname(root))}/${path.basename(root)})`;
+  const host = mountHost();
+  const pending = doOdd(e, '', ctxFor(repo, host, [a, b]));
+  try {
+    await waitFor(() => host.mounts.length === 1, 'the panel mounts');
+    const v = host.mounts[0].component;
+    const text = frameText(v);
+    t.diagnostic(`labels: ${JSON.stringify(rowLabels(v))}`);
+    const painted = rowLabels(v).filter((label) => label.startsWith('collision'));
+    assert.equal(painted.length, 2, `both copies are listed\n${text}`);
+    assert.notEqual(painted[0], painted[1], 'the two rows read differently');
+    assert.deepEqual(painted.slice().sort(), [labelOf(a), labelOf(b)].sort(),
+      'and they are the labels the ONE listing derived');
+    for (const [root, body] of [[a, /First copy/], [b, /Second copy/]]) {
+      await focusRow(v, labelOf(root));
+      assert.match(frameText(v), body, `${path.basename(path.dirname(root))}: its own body is open`);
+    }
+  } finally {
+    await closePanel(host, pending);
+  }
+});
+
+test('F3 preserve: a standard single-root repository still paints plain document names', async () => {
+  const e = await load();
+  const repo = makeRepo();
+  const host = mountHost();
+  const pending = doOdd(e, '', ctxFor(repo, host, []));
+  try {
+    await waitFor(() => host.mounts.length === 1, 'the panel mounts');
+    assert.deepEqual(rowLabels(host.mounts[0].component), ['main-two', 'main-one'],
+      'unique names keep their exact plain text, in the recency order the panel always used');
+  } finally {
+    await closePanel(host, pending);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// T17/F4 (L11): the target grammar RESOLVES before it validates. The parent check
+// compared the RAW argument's segments with `odd/tasks`, so `<parent>/odd/tasks/./
+// <name>.md` and `<parent>/odd/tasks/../tasks/<name>.md` were refused although they
+// name a listed document — `path.resolve` is the same rule the command's own
+// document test uses. Nothing else moves: a sibling path that resolves outside
+// `odd/tasks` keeps the verbatim refusal.
+// ---------------------------------------------------------------------------
+test('F4: a listed document reached through `.` or `..` segments opens its own body', async (t) => {
+  const e = await load();
+  const repo = makeRepo();
+  const tasks = path.join(repo, 'odd', 'tasks');
+  // Built by CONCATENATION: `path.join` would collapse the very segments under test.
+  const spellings = [`${tasks}/./main-one.md`, `${tasks}/../tasks/main-one.md`];
+  for (const raw of spellings) {
+    assert.equal(path.resolve(raw), path.join(tasks, 'main-one.md'), `${raw} resolves to the listed document`);
+    assert.notEqual(raw, path.join(tasks, 'main-one.md'), `${raw} keeps its own spelling`);
+    const host = mountHost();
+    const pending = doOdd(e, raw, ctxFor(repo, host, []));
+    pending.catch(() => {});
+    try {
+      await waitFor(() => host.mounts.length || host.notifications.length, `${raw}: an answer`);
+      t.diagnostic(`${raw} => ${host.mounts.length} mount(s), ${JSON.stringify(host.notifications)}`);
+      assert.deepEqual(host.notifications, [], `${raw}: accepted, not refused`);
+      assert.equal(host.mounts.length, 1, `${raw}: the panel opens`);
+      assert.match(frameText(host.mounts[0].component), /body of main-one/, `${raw}: its own body is open`);
+    } finally {
+      await closePanel(host, pending);
+    }
+  }
+});
+
+test('F4 preserve: a path that resolves outside odd/tasks is still refused verbatim', async () => {
+  const e = await load();
+  const repo = makeRepo();
+  const tasks = path.join(repo, 'odd', 'tasks');
+  const outsideDoc = path.join(repo, 'odd', 'README.md');
+  fs.writeFileSync(outsideDoc, '# Outside the rule\n');
+  // Both spellings RESOLVE to a real document that is not under `odd/tasks`: the
+  // path rule still refuses them, with the sentence every unknown argument gets.
+  for (const raw of [`${tasks}/../README.md`, `${tasks}/../tasks/./../README.md`]) {
+    assert.equal(path.resolve(raw), outsideDoc, `${raw}: the fixture really resolves outside`);
+    const host = mountHost();
+    await doOdd(e, raw, ctxFor(repo, host, []));
+    assert.equal(host.mounts.length, 0, `${raw}: nothing is mounted`);
+    assert.deepEqual(host.notifications, [['error', `Unknown option "${raw}". Use /odd.`]], raw);
+  }
+});
+
 test('E2 proof: a failed listing does not let the overlay open a private target (baseline refuses)', async (t) => {
   const repo = makeRepo(), linked = addWorktree(repo, 'not-in-scope');
   const target = writeTask(linked, 'private-direct', '# Excluded private preview');

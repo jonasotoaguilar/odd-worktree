@@ -627,19 +627,33 @@ again`.
   panel adds is `Closes #N <!-- odd-worktree:linked -->`, on a line of its own
   (a blank line first unless the body already ends with one), and a body that
   already declares the number at column 0 — any closing keyword, marked or not —
-  is left alone with nothing written. A REMOVAL deletes only a marked line, so a
-  declaration this panel did not write is never rewritten: a number whose only
-  declarations are somebody else's refuses with `that link was not added by this
-  panel; remove it on GitHub`, and nothing is written. Two structure facts are
-  read loosely and refuse BOTH directions with `the pull request body ends
-  inside an unclosed code fence or comment`: an odd number of three-plus
-  backtick or tilde runs anywhere in the body, and an unbalanced `<!--`/`-->`
-  count. Nothing else interprets the Markdown, which is what keeps a code
-  example out of reach by construction. The body is read once to prepare the
-  edit and once more immediately before the write; any difference refuses with
-  `the pull request body changed while it was being edited` and nothing is
-  written, so an author's edit that lands in between is never overwritten. The
-  outcome reads `linked issues updated`.
+  is left alone with nothing written. A REMOVAL deletes only a line that is that
+  line BYTE FOR BYTE — `Closes`, one space, the number, one space, the marker
+  and nothing else, with just the `\r` of a CRLF ending tolerated — so a
+  declaration this panel did not write is never rewritten: a number whose
+  declarations are somebody else's, or a look-alike such as
+  `CLOSES #63 <!-- odd-worktree:linked -->` or one with an extra space, refuses
+  with `that link was not added by this panel; remove it on GitHub`, and nothing
+  is written. A marked line INSIDE a code fence or an HTML comment is an example
+  of what the panel writes, not a declaration, and deleting it would edit that
+  example: that removal refuses with `that link sits inside a code fence or
+  comment in the body; remove it on GitHub`. Two structure facts refuse BOTH
+  directions with `the pull request body ends inside an unclosed code fence or
+  comment`: a run of three or more backticks or tildes that starts a line opens
+  a fence, only a run of the SAME character at least as long with nothing but
+  whitespace after it closes it, and one still open at the end of the body means
+  the tail may be code; and an `<!--`/`-->` count that does not pair up — or a
+  scan that ends inside a comment — means the tail may be commented out. Nothing
+  else interprets the Markdown: every line between a paired fence or a comment
+  is never touched, which is what keeps a code example out of reach. The body is
+  read once to prepare the edit and once more immediately before the write, and
+  that last read answers the pull request STATE with the body: a pull request
+  that is no longer `OPEN` refuses with `pull request #N is not open; its linked
+  issues cannot be edited`, a re-read that proves no state refuses as an
+  unexpected shape, and one byte of difference in the body refuses with `the
+  pull request body changed while it was being edited`. Nothing is written in
+  any of those cases, so an author's edit or a close that landed in between is
+  never overwritten. The outcome reads `linked issues updated`.
 - **Any write owns the keyboard until it settles.** A save in flight paints its
   own note and ignores every key, so a second save, a navigation or a keystroke
   can never race it, and a rejected save stays visible with its draft intact.

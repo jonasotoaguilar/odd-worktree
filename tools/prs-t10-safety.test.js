@@ -20,7 +20,9 @@ const row = (number, extra = {}) => ({ number, title: `PR ${number}`, state: 'op
 const send = (view, ...keys) => keys.forEach((key) => view.handleInput(key));
 const frame = (view) => view.render(140).join('\n');
 
-function mockClient(repository, bodyRead = ok({ body: 'PR body' }), children = []) {
+// The body read answers the pull request STATE with the body (S2/T18): the read
+// right before the write refuses a pull request that is no longer open.
+function mockClient(repository, bodyRead = ok({ body: 'PR body', state: 'OPEN' }), children = []) {
   const writes = [];
   const runGh = async (argv) => {
     children.push(argv.slice());
@@ -52,7 +54,7 @@ test('S2: a four-backtick fence holding three backticks and Closes #19 is code',
     '````',
     `Closes #19 ${MARK}`,
   ].join('\n');
-  const { client, writes } = mockClient({ viewerPermission: 'WRITE' }, ok({ body }));
+  const { client, writes } = mockClient({ viewerPermission: 'WRITE' }, ok({ body, state: 'OPEN' }));
 
   const res = await client.editLinkedIssues(87, { remove: [19] }, pin);
 
@@ -68,19 +70,19 @@ test('S2: a four-backtick fence holding three backticks and Closes #19 is code',
 });
 
 test('S2: a fence structure the reader cannot pair up refuses the edit outright', async () => {
-  // D27 replaced the Markdown reader with one conservative rule: the runs of
-  // three or more backticks and tildes must PAIR UP. This body has three of
-  // them, so nothing is interpreted and nothing is written.
+  // D27/T18: the runs of three or more backticks and tildes must PAIR UP by
+  // character and length — the tilde run that opens here is never closed (the
+  // backtick run is another character and `~~` is not a run at all) — so the
+  // body is refused instead of appended to, marked line and all.
   const body = [
     '~~~text',
     '```',
     'Closes #19',
     '~~',
     'Closes #20',
-    '~~~',
     `Closes #20 ${MARK}`,
   ].join('\n');
-  const { client, writes } = mockClient({ viewerPermission: 'WRITE' }, ok({ body }));
+  const { client, writes } = mockClient({ viewerPermission: 'WRITE' }, ok({ body, state: 'OPEN' }));
 
   const res = await client.editLinkedIssues(87, { remove: [20] }, pin);
 
@@ -91,7 +93,7 @@ test('S2: a fence structure the reader cannot pair up refuses the edit outright'
 
 test('S2: an added link is a marked line on a line of its own', async () => {
   const body = ['   ```', '   Closes #19', '   ```', 'Closes #20'].join('\n');
-  const { client, writes } = mockClient({ viewerPermission: 'WRITE' }, ok({ body }));
+  const { client, writes } = mockClient({ viewerPermission: 'WRITE' }, ok({ body, state: 'OPEN' }));
 
   const res = await client.editLinkedIssues(87, { add: [19] }, pin);
 
@@ -102,7 +104,7 @@ test('S2: an added link is a marked line on a line of its own', async () => {
 
 test('S2: a closing fence may carry trailing spaces and be longer than the opening one', async () => {
   const body = ['```', 'Closes #19', '`````  ', `Closes #19 ${MARK}`].join('\n');
-  const { client, writes } = mockClient({ viewerPermission: 'WRITE' }, ok({ body }));
+  const { client, writes } = mockClient({ viewerPermission: 'WRITE' }, ok({ body, state: 'OPEN' }));
 
   const res = await client.editLinkedIssues(87, { remove: [19] }, pin);
 

@@ -43,7 +43,8 @@ function client(t, fixture = {}) {
         fixture.onRole?.(call);
         return ok({ data: { repository: { viewerPermission: fixture.role || 'WRITE', mergeCommitAllowed: true, pullRequest }, viewer: { login: 'pat' } } });
       }
-      case 'pr view': return ok({ body: fixture.body ?? 'Summary\n' });
+      // The body read answers the pull request STATE with the body (S2/T18).
+      case 'pr view': return ok({ body: fixture.body ?? 'Summary\n', state: 'OPEN' });
       default: writes.push(call); return ok({});
     }
   };
@@ -89,7 +90,18 @@ test('D16: open to EOF is refused, so a removal never edits half a body', async 
   assert.deepEqual(await c.editLinkedIssues(prNum,{remove:[915]},opts),{ok:false,error:UNREADABLE});
   assert.deepEqual(writes, []);
 });
-test('D16: fence directly after a list marker', t => removeBody(t, '- ```text\n  Closes #915\n  ```'));
+test('D16/T18: a fence opened on a list-marker line cannot be paired line by line, so the edit refuses', async t => {
+  // D27/T18 pairs a fence run by character and length: only a run that STARTS a
+  // line opens or closes one. Here the closing-looking `  ``` ` starts a line
+  // with no fence open, so it opens one that nothing closes and the whole edit
+  // is refused — which is what keeps the example, and the panel's own line
+  // beside it, byte for byte. The old run COUNT accepted this body and rewrote
+  // it; the count was the defect.
+  const body = `- \`\`\`text\n  Closes #915\n  \`\`\`\n\nCloses #915 ${MARK}\nfooter\n`;
+  const { c, writes } = client(t, { body });
+  assert.deepEqual(await c.editLinkedIssues(prNum, { remove: [915] }, opts), { ok: false, error: UNREADABLE });
+  assert.deepEqual(writes, []);
+});
 test('NEW: a fence structure with three runs is refused, never resumed', async t => {
   const {c,writes} = client(t,{body:`- item\n  \`\`\`txt\n      \`\`\`\n  Closes #915 ${MARK}\n  \`\`\`\n`});
   assert.deepEqual(await c.editLinkedIssues(prNum,{remove:[915]},opts),{ok:false,error:UNREADABLE});

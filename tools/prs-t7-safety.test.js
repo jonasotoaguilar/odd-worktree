@@ -9,7 +9,8 @@ const ok = (x) => ({ status: 0, stdout: JSON.stringify(x) });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const row = (number) => ({ number, title: `PR ${number}`, state: 'open', isDraft: false });
 const send = (view, ...keys) => keys.forEach((key) => view.handleInput(key));
-function mockClient(repository, bodyRead = ok({body: 'PR body'})) {
+// The body read answers the pull request STATE with the body (S2/T18).
+function mockClient(repository, bodyRead = ok({body: 'PR body', state: 'OPEN'})) {
   const writes = [];
   const runGh = async (argv) => {
     // The role read answers the fresh pull request state in the same round trip
@@ -51,7 +52,7 @@ test('S2: merge refuses missing draft metadata', async () => {
 test('S2: a linked edit removes only the marked line, never a fenced Markdown example', async () => {
   const body = 'Intro 🧪\r\n```text\r\nCloses #12\r\n```\nCloses #12 <!-- odd-worktree:linked -->\r\nKeep me \t\nend';
   const wanted = `${body.replace('```\nCloses #12 <!-- odd-worktree:linked -->\r\n','```\n')}\r\n\r\nCloses #14 <!-- odd-worktree:linked -->\r\n`;
-  const {client, writes} = mockClient({viewerPermission:'WRITE'}, ok({body}));
+  const {client, writes} = mockClient({viewerPermission:'WRITE'}, ok({body, state: 'OPEN'}));
   await client.editLinkedIssues(87, {add:[14], remove:[12]}, pin);
   assert.deepEqual(writes, [['pr','edit','87','--body', wanted]]);
 });

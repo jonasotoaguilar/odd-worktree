@@ -914,7 +914,8 @@ describe('a write shares one resolved scope with its role read', () => {
           },
         }));
       }
-      if (argv[0] === 'pr' && argv[1] === 'view') return okJson(JSON.stringify({ body: 'Closes #12' }));
+      // The body read answers the pull request STATE with the body (S2/T18).
+      if (argv[0] === 'pr' && argv[1] === 'view') return okJson(JSON.stringify({ body: 'Closes #12', state: 'OPEN' }));
       return okJson('');
     };
     return { runGh, checkoutRepoScope, children, resolved };
@@ -989,12 +990,14 @@ describe('editLinkedIssues rewrites only the closing lines', () => {
 
   test('removing a marked linked issue keeps CRLF endings and every other byte', async () => {
     // S2/D27: a removal only ever deletes a line this panel wrote, so the
-    // fixture carries its marker.
-    const original = `Summary line\r\n\r\nfixes #14 ${MARK}\r\nCloses #63\r\nTrailing words`;
+    // fixture carries its marker. S2/T18: that line is the EXACT one this panel
+    // writes — a variant keyword case is a look-alike and is refused — and the
+    // re-read before the write answers the state with the body.
+    const original = `Summary line\r\n\r\nCloses #14 ${MARK}\r\nCloses #63\r\nTrailing words`;
     const { runner, calls } = makeRunner([
       okPermission(),
-      okJson(JSON.stringify({ body: original })),
-      okJson(JSON.stringify({ body: original })),
+      okJson(JSON.stringify({ body: original, state: 'OPEN' })),
+      okJson(JSON.stringify({ body: original, state: 'OPEN' })),
       okJson(''),
     ]);
     ghPrs.setGhRunner(runner);
@@ -1073,9 +1076,8 @@ describe('merge and the body edit fail closed on missing facts', () => {
     // only the marked declaration of the OTHER number is removed, and the
     // example's bytes stay exactly as they were.
     const body = `Intro\n\`\`\`text\nCloses #19\n\`\`\`\nCloses #12 ${MARK}\nKeep me`;
-    const { runner, calls } = makeRunner([
-      okPermission(), okJson(JSON.stringify({ body })), okJson(JSON.stringify({ body })), okJson(''),
-    ]);
+    const read = okJson(JSON.stringify({ body, state: 'OPEN' }));
+    const { runner, calls } = makeRunner([okPermission(), read, read, okJson('')]);
     ghPrs.setGhRunner(runner);
 
     const res = await ghPrs.editLinkedIssues(87, { remove: [12] }, PINNED);
@@ -1091,9 +1093,8 @@ describe('merge and the body edit fail closed on missing facts', () => {
     // S2/D27: only a marked line is ever deleted. A declaration the human wrote
     // stays exactly where it is, even for the same number.
     const body = `Intro\nCloses #12\nCloses #12 ${MARK}\nKeep me\n`;
-    const { runner, calls } = makeRunner([
-      okPermission(), okJson(JSON.stringify({ body })), okJson(JSON.stringify({ body })), okJson(''),
-    ]);
+    const read = okJson(JSON.stringify({ body, state: 'OPEN' }));
+    const { runner, calls } = makeRunner([okPermission(), read, read, okJson('')]);
     ghPrs.setGhRunner(runner);
 
     const res = await ghPrs.editLinkedIssues(87, { remove: [12] }, PINNED);
@@ -1586,7 +1587,9 @@ function bodyRunner(holder) {
     if (call.argv[0] === 'api' && call.argv[1] === 'graphql') return okPermission();
     if (call.argv[0] === 'pr' && call.argv[1] === 'view') {
       const body = typeof holder.body === 'function' ? holder.body() : holder.body;
-      return okJson(JSON.stringify({ body }));
+      // The body read answers the pull request STATE with the body (S2/T18): a
+      // re-read that proves no state is refused, so every fixture answers OPEN.
+      return okJson(JSON.stringify({ body, state: 'OPEN' }));
     }
     return okJson('');
   };

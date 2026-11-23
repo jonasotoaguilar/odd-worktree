@@ -59,7 +59,8 @@ function clientMock({ permission = 'WRITE', state = 'OPEN', body = 'PR body', re
         },
       });
     }
-    if (argv[0] === 'pr' && argv[1] === 'view') return ok({ body });
+    // The body read answers the pull request STATE with the body (S2/T18).
+    if (argv[0] === 'pr' && argv[1] === 'view') return ok({ body, state: 'OPEN' });
     writes.push(argv.slice());
     return ok('');
   };

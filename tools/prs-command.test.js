@@ -686,6 +686,29 @@ describe('/prs overlay and reads (S1, S3)', () => {
     assert.equal(view.repo, 'github.com/myfork/project');
   });
 
+  test('T20: the linked-issues candidate seam asks the pinned repository\'s open issues', async () => {
+    installBridge();
+    const b = await boot();
+    await warmGate(b.loaded);
+    const root = makeCheckout();
+    const capture = captureView(b.loaded.mod, 'prs-view.js', 'createPrsView');
+    const { ctx } = makeCtx(root);
+    await mountCommand(b.loaded, 'prs', '', ctx, { capture });
+    assert.equal(typeof capture.options.loadIssueCandidates, 'function', 'the view is wired to a candidate seam');
+    const page = await capture.options.loadIssueCandidates({ after: null, pageSize: 2 });
+    assert.equal(page.ok, true);
+    assert.deepEqual(page.rows, [
+      { number: 1, title: 'One', state: 'open' },
+      { number: 2, title: 'Two', state: 'open' },
+    ]);
+    const call = b.gh.calls[b.gh.calls.length - 1];
+    const search = gqlField(call.argv, 'search');
+    assert.ok(search.includes('repo:myfork/project'), `the read is scoped to the pinned repository (saw ${search})`);
+    assert.ok(search.includes('is:issue') && search.includes('is:open'), 'only open issues are candidates');
+    assert.ok(search.includes('sort:updated-desc'), 'the list is hottest-updated first');
+    assert.equal(call.repo, 'github.com/myfork/project', 'the pinned identity binds the read');
+  });
+
   test('the o opener runs gh pr view <n> --web -R <pinned>', async () => {
     installBridge();
     const b = await boot();

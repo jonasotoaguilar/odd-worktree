@@ -8850,6 +8850,30 @@ async function openPrsPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, pi)
     if (pinned.ok !== true) return pinned;
     return await prs.listAssignableUsers(pinned.args);
   };
+  // T20: the linked-issues editor's candidate list. It asks the ISSUE client's
+  // search page for the pinned repository's open issues, hottest-updated first,
+  // one bounded cursor page at a time — the view never imports a client file.
+  // `getIssuePage` already pins `repo:<pinned> is:issue is:open` and the
+  // `sort:updated-desc` order, and answers one row cursor per issue, so the
+  // continuation is the last row's own cursor.
+  const loadIssueCandidates = (request = {}) => {
+    const after = request.after == null || request.after === "" ? null : String(request.after);
+    const asked = Number(request.pageSize);
+    const pageSize = Number.isFinite(asked) ? Math.min(PRS_PAGE_MAX, Math.max(1, Math.floor(asked))) : PRS_PAGE_MAX;
+    return issuesWrapFailure((async () => {
+      const pinned = await pinnedReadArgs();
+      if (pinned.ok !== true) return pinned;
+      const page = await issues.getIssuePage({ query: "", after, first: pageSize }, pinned.args);
+      if (!page || page.ok !== true) {
+        return { ok: false, error: (page && page.error) || "cannot read the repository's open issues" };
+      }
+      const source = Array.isArray(page.issues) ? page.issues : [];
+      const rows = source.map((row) => ({ number: row.number, title: row.title, state: row.state }));
+      const last = source[source.length - 1];
+      const cursor = last && typeof last.cursor === "string" && last.cursor !== "" ? last.cursor : null;
+      return { ok: true, rows, hasMore: page.hasNextPage === true && cursor !== null, cursor };
+    })(), "cannot read the repository's open issues");
+  };
   const helpersPromise = Promise.resolve()
     .then(() => issuesTuiLoader())
     .catch(() => null);
@@ -8944,6 +8968,7 @@ async function openPrsPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, pi)
             : { initialPullRequest, ...(hintedBucket === null ? {} : { initialBucket: hintedBucket }) }),
           loadLabels,
           loadAssignees,
+          loadIssueCandidates,
           prefetchBuckets: true,
           // `includeMetadata` is what carries the permissions, the merge methods
           // and the linked issues into the pane: without it the view sees no

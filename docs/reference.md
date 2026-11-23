@@ -223,7 +223,7 @@ Request (<n>)`, `Needs My Review (<n>)` and `Involved (<n>)`; `All` is again the
 | `l` | Labels editor: apply or remove an existing label | triage and a loaded pull request |
 | `a` | Assignee editor — a toggle, so it assigns and unassigns | triage and a loaded pull request |
 | `c` | Comment | read access and a loaded pull request |
-| `i` | Linked-issues editor (the Development relation) | write and a loaded pull request |
+| `i` | Linked-issues editor (the Development relation); `n` inside it opens the repository's open issues to pick from | write and a loaded pull request |
 | `x` (and `X`) | Close the pull request, after the host's confirmation; only `x` rides the legend | write and a loaded pull request |
 | `m` | Merge: the confirmation step described below | write, a non-draft pull request and at least one method the repository allows |
 | `enter` | Insert the focused pull request into the chat input as `PR #87`, and close the panel; inside the search box, an editor, the merge step or the close confirmation the same key keeps that step's meaning | a loaded pull request |
@@ -238,8 +238,9 @@ prs` and `esc close` stay. A sub-mode replaces that row with its own keys:
 `space toggle · n new · ctrl+s apply · esc back` for labels, `space toggle ·
 ctrl+s apply · esc back` for assignees, `enter newline · ctrl+s post · esc
 discard` for a comment, `space toggle · n add · ctrl+s apply · esc back` for the
-linked issues, `enter add · esc cancel` while naming a new label or a new linked
-issue, and `↑↓ field · ←→ method · enter select · ctrl+s merge · esc cancel` for
+linked issues (and `space toggle · ctrl+j/k scroll · enter keep · esc discard`
+inside the candidate list `n` opens), `enter add · esc cancel` while naming a new
+label, and `↑↓ field · ←→ method · enter select · ctrl+s merge · esc cancel` for
 the merge step.
 
 ## The deletion guard, and its honest limit
@@ -617,9 +618,23 @@ again`.
   users plus every current assignee, `space` toggles one and `ctrl+s` sends the
   add/remove delta — so the same editor assigns and unassigns you.
 - **The linked issues are the Development relation, and GitHub has no mutation
-  for it.** `i` opens `Linked issues` over the pull request's current numbers
-  (`[x] #63`), `space` toggles one, `n` adds a number (`enter add`), `esc back`
-  leaves and `ctrl+s apply` sends the add/remove delta. The pane says what the
+  for it.** `i` opens `Linked issues` over the pull request's current numbers,
+  one `[x] #63 Title` row each — the editor names every issue by NUMBER AND
+  TITLE, never by a bare number. The titles come from the same candidate read
+  described next, fetched once when the editor opens; a title that read cannot
+  answer leaves the row as `#63` instead of blocking the editor. `space` toggles
+  one, `n` opens the candidate list, `esc back` leaves and `ctrl+s apply` sends
+  the add/remove delta. `n` lists the repository's OPEN issues instead of asking
+  for a number: the links the draft already holds come FIRST, checked, with
+  their real titles, then every other open issue in the seam's own
+  hottest-updated order. `space` toggles the focused row, the list scrolls with
+  the panel's own scroll keys (`ctrl+j`/`ctrl+k`, `pgUp`/`pgDn`, `ctrl+d`/`ctrl+u`,
+  and `]`/`[`) and reads the next page as it scrolls, `enter` keeps the selection
+  and returns to the toggles, and `esc` leaves the list without keeping the
+  picks it made. A failed read paints its own `issues unreadable: …` line and
+  keeps the toggles. A candidate the pull request already links is toggled, never
+  added a second time, and the toggles keep working exactly as before, so a link
+  unchecked there is still removed on `ctrl+s apply`. The pane says what the
   write really is: `closes #N lines in the body`. GitHub exposes no mutation for
   that panel, so the client writes a `Closes #N` line in the pull request body
   through `gh pr edit --body` and preserves every other byte of it — line

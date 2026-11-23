@@ -7742,36 +7742,6 @@ function issuesScopeDriftLine(currentName, pinnedName, command = "/issues") {
 // open reads as a cut. Pi's own suspend passes the same option when it is in
 // fullscreen mode. A host that is not on the alternate screen ignores it, and a
 // host without `stop()` keeps the previous behaviour untouched.
-function withSuspendedTerminal(hostTui, run) {
-  let suspended = false;
-  try {
-    if (hostTui && typeof hostTui.stop === "function") {
-      hostTui.stop({ preserveScreen: true });
-      suspended = true;
-    }
-  } catch {
-    suspended = false;
-  }
-  const resume = () => {
-    if (!suspended) return;
-    suspended = false;
-    try {
-      if (hostTui && typeof hostTui.start === "function") hostTui.start();
-    } catch {
-      // A host that cannot restart still gets the repaint attempt below.
-    }
-    try {
-      if (hostTui && typeof hostTui.requestRender === "function") hostTui.requestRender(true);
-    } catch {
-      // A repaint failure never breaks the open.
-    }
-  };
-  return Promise.resolve()
-    .then(run)
-    .catch((err) => ({ ok: false, error: (err && err.message) || "open failed" }))
-    .finally(resume);
-}
-
 // The `o`-key browser opener: `gh issue view <n> --web` through the file's own
 // fixed-argv runner (never a shell, never xdg-open). `-R <owner/name>` is the
 // repository the LIST was loaded from, bound when the list loads and passed at
@@ -7801,7 +7771,13 @@ function githubItemOpenInBrowser(hostTui, cwd, kind, number, pinnedIdentity) {
     }
     const bin = gh && typeof gh.ghBinary === "function" ? gh.ghBinary({}) : "gh";
     const argv = [label, "view", String(number), "--web", "-R", normalized.identity];
-    return withSuspendedTerminal(hostTui, async () => {
+    // The child runs on pipes and never touches the terminal, so the host TUI is
+    // NOT suspended for it: stopping and restarting Pi's renderer to open a URL
+    // left the screen on the plain shell, repainting nothing (the reported bug,
+    // and why this is a plain bounded read now). Opening a browser is not an
+    // interactive child; `lib/open-external.js` stays the one opener that
+    // suspends, because an editor really does need the terminal.
+    return (async () => {
       const res = await git.runArgvAsync(bin, argv, { cwd, timeoutMs: 30000 });
       if (!res) return { ok: false, error: `cannot open ${label} #${number} in the browser` };
       if (res.error) return { ok: false, error: res.error };
@@ -7810,7 +7786,7 @@ function githubItemOpenInBrowser(hostTui, cwd, kind, number, pinnedIdentity) {
         return { ok: false, error: stderr || `cannot open ${label} #${number} in the browser (gh exited with status ${res.status})` };
       }
       return { ok: true };
-    });
+    })();
   } catch (err) {
     return Promise.resolve({ ok: false, error: (err && err.message) || `cannot open ${label} #${number} in the browser` });
   }
@@ -8308,7 +8284,7 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, 
 
 // The four buckets the reader's tabs and its lazy `g` view name. The client
 // derives the search qualifier from the bucket id (`author:@me`,
-// `review-requested:@me`, `involves:@me`) and reads the repository's own
+// `review-requested:@me`, `involves:@me -author:@me`) and reads the repository's own
 // pull-request connection for an unfiltered `all`, exactly like the issues
 // client. `lazy` keeps `all` out of the tab bar, the tab cycle and the prefetch.
 const PRS_INTERACTIVE_BUCKETS = [
@@ -8390,6 +8366,32 @@ async function loadStoredRailPullRequests(identity) {
   prsRailStoredIdentity = identity;
   prsRailStoredEntry = stored && Array.isArray(stored.mine) && Array.isArray(stored.review) ? stored : null;
   return prsRailStoredEntry;
+}
+
+// S1/S8 (T22): `/issues` paints its first frame from the rail's in-process cache
+// (`issuesSidebarCachedPages`), and `/prs` must open just as fast. The rail's
+// pull-request read and the stored-entry load both land in the same in-memory
+// pair, so this reader is synchronous — no child, no disk read on the open path —
+// and it answers only for the identity the panel just PROVED, never for another
+// repository's rows. A bucket with no rows seeds nothing, so every page keeps
+// exactly the behaviour it had before this seed existed.
+function prsRailCachedPages(identity) {
+  if (typeof identity !== "string" || identity.length === 0) return null;
+  if (prsRailStaleIdentities.has(identity)) return null;
+  if (prsRailStoredIdentity !== identity) return null;
+  const entry = prsRailStoredEntry;
+  if (!entry || typeof entry !== "object") return null;
+  const counts = storedRailCounts(entry);
+  const pages = new Map();
+  for (const id of ["mine", "review"]) {
+    const rows = Array.isArray(entry[id]) ? entry[id] : [];
+    if (rows.length === 0) continue;
+    const total = counts && Number.isFinite(Number(counts[id])) ? Number(counts[id]) : rows.length;
+    // A total below its own rows is not a count: the store already refuses one,
+    // and this reader never invents one either.
+    pages.set(id, { rows, total: total >= rows.length ? total : rows.length });
+  }
+  return pages.size === 0 ? null : pages;
 }
 
 // T10b (S4, D15): the bucket totals a stored entry carries, or `null` when it
@@ -8874,6 +8876,30 @@ async function openPrsPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, pi)
     if (pinned.ok !== true) return pinned;
     return await prs.listAssignableUsers(pinned.args);
   };
+  // T20: the linked-issues editor's candidate list. It asks the ISSUE client's
+  // search page for the pinned repository's open issues, hottest-updated first,
+  // one bounded cursor page at a time — the view never imports a client file.
+  // `getIssuePage` already pins `repo:<pinned> is:issue is:open` and the
+  // `sort:updated-desc` order, and answers one row cursor per issue, so the
+  // continuation is the last row's own cursor.
+  const loadIssueCandidates = (request = {}) => {
+    const after = request.after == null || request.after === "" ? null : String(request.after);
+    const asked = Number(request.pageSize);
+    const pageSize = Number.isFinite(asked) ? Math.min(PRS_PAGE_MAX, Math.max(1, Math.floor(asked))) : PRS_PAGE_MAX;
+    return issuesWrapFailure((async () => {
+      const pinned = await pinnedReadArgs();
+      if (pinned.ok !== true) return pinned;
+      const page = await issues.getIssuePage({ query: "", after, first: pageSize }, pinned.args);
+      if (!page || page.ok !== true) {
+        return { ok: false, error: (page && page.error) || "cannot read the repository's open issues" };
+      }
+      const source = Array.isArray(page.issues) ? page.issues : [];
+      const rows = source.map((row) => ({ number: row.number, title: row.title, state: row.state }));
+      const last = source[source.length - 1];
+      const cursor = last && typeof last.cursor === "string" && last.cursor !== "" ? last.cursor : null;
+      return { ok: true, rows, hasMore: page.hasNextPage === true && cursor !== null, cursor };
+    })(), "cannot read the repository's open issues");
+  };
   const helpersPromise = Promise.resolve()
     .then(() => issuesTuiLoader())
     .catch(() => null);
@@ -8889,6 +8915,9 @@ async function openPrsPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, pi)
     }
     return;
   }
+  // T22: the identity this open PROVED is the only key that may seed the first
+  // frame, read once so every page of this mount comes from the same entry.
+  const seededPrsPages = pinnedRepo && pinnedRepo.ok === true ? prsRailCachedPages(pinnedRepo.identity) : null;
   // The overlay factory's own host object is what the browser opener suspends.
   let hostTuiRef = null;
   // S6: the panel's own close, captured from the host's factory, so a cross-panel
@@ -8953,12 +8982,24 @@ async function openPrsPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, pi)
           }
         };
         return libRequire("prs-view.js").createPrsView({
-          pages: PRS_INTERACTIVE_BUCKETS.map((spec) => ({
-            id: spec.id,
-            label: spec.label,
-            rows: null,
-            lazy: spec.lazy === true,
-          })),
+          // S8/T22: a bucket the rail already read (or the store answers) is
+          // seeded, so the first frame paints its rows instead of `loading…`.
+          // The seed is never the last word: the mount still reads the visible
+          // bucket and every seeded page carries no `loaded` stamp, so its first
+          // activation reads it and `r` re-reads the one on screen.
+          pages: PRS_INTERACTIVE_BUCKETS.map((spec) => {
+            const seeded = seededPrsPages === null ? null : seededPrsPages.get(spec.id);
+            if (!seeded) {
+              return { id: spec.id, label: spec.label, rows: null, lazy: spec.lazy === true };
+            }
+            return {
+              id: spec.id,
+              label: spec.label,
+              rows: seeded.rows,
+              total: seeded.total,
+              lazy: spec.lazy === true,
+            };
+          }),
           loadPullRequestPage,
           // S1/T4: a numbered open starts on the bucket the rail's click named,
           // with that pull request pending selection; the command already
@@ -8968,6 +9009,7 @@ async function openPrsPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, pi)
             : { initialPullRequest, ...(hintedBucket === null ? {} : { initialBucket: hintedBucket }) }),
           loadLabels,
           loadAssignees,
+          loadIssueCandidates,
           prefetchBuckets: true,
           // `includeMetadata` is what carries the permissions, the merge methods
           // and the linked issues into the pane: without it the view sees no

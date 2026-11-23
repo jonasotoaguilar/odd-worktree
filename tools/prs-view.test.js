@@ -116,6 +116,7 @@ function makeView(opts = {}) {
       || ((number) => ({ ok: true, pullRequest: pullRequest(number), comments: [] })),
     loadLabels: opts.loadLabels,
     loadAssignees: opts.loadAssignees,
+    loadIssueCandidates: opts.loadIssueCandidates,
     permissions: opts.permissions,
     labels: opts.labels,
     actions,
@@ -160,6 +161,23 @@ function deferred() {
   let resolve = () => {};
   const promise = new Promise((res) => { resolve = res; });
   return { promise, resolve };
+}
+
+// T20: the linked-issues candidate seam. `pages` is one entry per read, each
+// with the rows it answers, the cursor that continues AFTER it, and whether the
+// repository has more; every request is recorded. A read request with `after`
+// continues from the page whose cursor it names.
+function candidateSource(pages, options = {}) {
+  const calls = [];
+  const load = async (request) => {
+    calls.push(request);
+    if (typeof options.fail === 'string') return { ok: false, error: options.fail };
+    const after = request.after == null ? null : request.after;
+    const at = after === null ? 0 : pages.findIndex((page) => page.cursor === after) + 1;
+    const page = pages[at] || { rows: [], hasMore: false, cursor: null };
+    return { ok: true, rows: page.rows, hasMore: page.hasMore === true, cursor: page.cursor ?? null };
+  };
+  return { load, calls };
 }
 
 // S3: the reader asks view-layout for the smaller 30% list share, so every
@@ -1016,29 +1034,233 @@ describe('prs view writes (S2)', () => {
   test('i edits the linked issues as add/remove deltas', async () => {
     const applied = [];
     const source = pageSource({ mine: [pullRequest(6)], review: [], involved: [] });
+    // T20: `n` opens the candidate list, so the added number is PICKED there and
+    // never typed into a bare field.
+    const candidates = candidateSource([{
+      rows: [
+        { number: 12, title: 'Twelve', state: 'open' },
+        { number: 14, title: 'Fourteen', state: 'open' },
+        { number: 77, title: 'Seventy seven', state: 'open' },
+      ],
+      hasMore: false,
+      cursor: null,
+    }]);
     const { view } = makeView({
       loadPullRequestPage: source.load,
       loadPullRequest: (number) => ({ ok: true, pullRequest: pullRequest(number, { permissions: EDITABLE }), comments: [] }),
+      loadIssueCandidates: candidates.load,
       actions: { editLinkedIssues: (number, delta) => { applied.push({ number, delta }); return { ok: true }; } },
     });
     await tick();
     view.handleInput('i');
+    await tick();
     assert.equal(view.state.mode, 'linkedIssues');
     let pane = rightOf(view, 150);
-    assert.match(pane, /\[x\] #12/);
-    assert.match(pane, /\[x\] #14/);
+    assert.match(pane, /\[x\] #12 Tw/);
+    assert.match(pane, /\[x\] #14 Fo/);
     view.handleInput('down');
     view.handleInput('space');
     view.handleInput('n');
-    view.handleInput('7');
-    view.handleInput('7');
+    await tick();
+    view.handleInput('down');
+    view.handleInput('down');
+    view.handleInput('space');
     view.handleInput('enter');
     pane = rightOf(view, 150);
-    assert.match(pane, /\[x\] #77/, 'the added number is part of the draft');
+    assert.match(pane, /\[x\] #77 Se/, 'the picked number is part of the draft');
     view.handleInput('ctrl+s');
     await tick();
     assert.deepEqual(applied, [{ number: 6, delta: { add: [77], remove: [14] } }]);
     assert.equal(view.state.mode, 'list');
+  });
+
+  test('T20: the linked toggles name each issue by number and title', async () => {
+    const source = pageSource({ mine: [pullRequest(6)], review: [], involved: [] });
+    const candidates = candidateSource([{
+      rows: [
+        { number: 61, title: 'TEMP: rail check 1', state: 'open' },
+        { number: 77, title: 'Another linked issue', state: 'open' },
+      ],
+      hasMore: false,
+      cursor: null,
+    }]);
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({
+        ok: true,
+        pullRequest: pullRequest(number, { permissions: EDITABLE, linkedIssues: [61, 77] }),
+        comments: [],
+      }),
+      loadIssueCandidates: candidates.load,
+    });
+    await tick();
+    view.handleInput('i');
+    await tick();
+    const pane = rightOf(view, 150);
+    assert.match(pane, /\[x\] #61 TEMP: rail check 1/, 'the toggle is `#N title`, never a bare number');
+    assert.match(pane, /\[x\] #77 Another linked issue/);
+    assert.equal(candidates.calls.length, 1, 'the titles are read once when the editor opens');
+    assert.deepEqual(candidates.calls[0], { after: null, pageSize: 18 });
+  });
+
+  test('T20: n lists the repository issues with the linked ones first and checked', async () => {
+    const source = pageSource({ mine: [pullRequest(6)], review: [], involved: [] });
+    // The seam answers hotspots first; the linked numbers must still come first.
+    const candidates = candidateSource([{
+      rows: [
+        { number: 20, title: 'Newest open issue', state: 'open' },
+        { number: 12, title: 'Twelve', state: 'open' },
+        { number: 14, title: 'Fourteen', state: 'open' },
+      ],
+      hasMore: false,
+      cursor: null,
+    }]);
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({ ok: true, pullRequest: pullRequest(number, { permissions: EDITABLE }), comments: [] }),
+      loadIssueCandidates: candidates.load,
+    });
+    await tick();
+    view.handleInput('i');
+    await tick();
+    view.handleInput('n');
+    await tick();
+    const pane = rightRows(view, 150).join('\n');
+    assert.match(pane, /\[x\] #12 Twelve/);
+    assert.match(pane, /\[x\] #14 Fourteen/);
+    assert.match(pane, /\[ \] #20 Newest open issue/);
+    const linkedAt = pane.indexOf('[x] #12');
+    const otherAt = pane.indexOf('[ ] #20');
+    assert.ok(linkedAt >= 0 && otherAt > linkedAt, 'the linked issues are painted before the rest');
+  });
+
+  test('T20: the candidate list reads the next page as it scrolls', async () => {
+    const source = pageSource({ mine: [pullRequest(6)], review: [], involved: [] });
+    const row = (number) => ({ number, title: `Issue ${number}`, state: 'open' });
+    const candidates = candidateSource([
+      { rows: [1, 2, 3, 4].map(row), hasMore: true, cursor: 'c4' },
+      { rows: [5, 6, 7, 8].map(row), hasMore: false, cursor: null },
+    ]);
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({ ok: true, pullRequest: pullRequest(number, { permissions: EDITABLE, linkedIssues: [] }), comments: [] }),
+      loadIssueCandidates: candidates.load,
+      rows: 10,
+    });
+    await tick();
+    view.handleInput('i');
+    await tick();
+    view.handleInput('n');
+    await tick();
+    assert.equal(candidates.calls.length, 1, 'the editor open read the first page once');
+    assert.equal(candidates.calls[0].after, null);
+    assert.equal(candidates.calls[0].pageSize, 4, 'a page is the pane row budget');
+    view.handleInput('ctrl+j');
+    await tick();
+    assert.equal(candidates.calls.length, 2, 'scrolling down reads the next page');
+    assert.equal(candidates.calls[1].after, 'c4', 'the continuation is the previous page cursor');
+    assert.match(rightOf(view, 150, 10), /#5 Issue 5/, 'the next page joins the list');
+  });
+
+  test('T20: space toggles a candidate, enter keeps it and esc discards it', async () => {
+    const source = pageSource({ mine: [pullRequest(6)], review: [], involved: [] });
+    const candidates = candidateSource([{
+      rows: [
+        { number: 12, title: 'Twelve', state: 'open' },
+        { number: 20, title: 'Twenty', state: 'open' },
+      ],
+      hasMore: false,
+      cursor: null,
+    }]);
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({ ok: true, pullRequest: pullRequest(number, { permissions: EDITABLE, linkedIssues: [12] }), comments: [] }),
+      loadIssueCandidates: candidates.load,
+    });
+    await tick();
+    view.handleInput('i');
+    await tick();
+    view.handleInput('n');
+    await tick();
+    view.handleInput('down');
+    view.handleInput('space');
+    assert.match(rightOf(view, 150), /\[x\] #20 Twenty/, 'space toggles the focused row');
+    view.handleInput('enter');
+    let pane = rightOf(view, 150);
+    assert.match(pane, /\[x\] #12 Twelve/);
+    assert.match(pane, /\[x\] #20 Twenty/, 'enter keeps the selection back in the toggles');
+    // A second, fresh draft: the list's own pick is discarded on esc.
+    view.handleInput('escape');
+    view.handleInput('i');
+    await tick();
+    view.handleInput('n');
+    await tick();
+    view.handleInput('down');
+    view.handleInput('space');
+    assert.match(rightOf(view, 150), /\[x\] #20 Twenty/);
+    view.handleInput('escape');
+    pane = rightOf(view, 150);
+    assert.match(pane, /\[x\] #12 Twelve/);
+    assert.doesNotMatch(pane, /#20/, 'esc leaves the list without keeping the pick');
+  });
+
+  test('T20: a failed candidate read keeps the toggles and paints the error', async () => {
+    const source = pageSource({ mine: [pullRequest(6)], review: [], involved: [] });
+    const candidates = candidateSource([], { fail: 'rate limited' });
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({ ok: true, pullRequest: pullRequest(number, { permissions: EDITABLE }), comments: [] }),
+      loadIssueCandidates: candidates.load,
+    });
+    await tick();
+    view.handleInput('i');
+    await tick();
+    let pane = rightOf(view, 150);
+    assert.match(pane, /\[x\] #12/);
+    assert.match(pane, /\[x\] #14/);
+    assert.match(pane, /issues unreadable: rate limited/);
+    view.handleInput('n');
+    await tick();
+    pane = rightOf(view, 150);
+    assert.match(pane, /issues unreadable: rate limited/);
+    assert.match(pane, /\[x\] #12/, 'the linked toggles are still part of the draft');
+    view.handleInput('escape');
+    pane = rightOf(view, 150);
+    assert.match(pane, /\[x\] #12/);
+  });
+
+  test('T20: picked candidates save ONE delta and never duplicate a linked number', async () => {
+    const applied = [];
+    const source = pageSource({ mine: [pullRequest(6)], review: [], involved: [] });
+    const candidates = candidateSource([{
+      rows: [
+        { number: 12, title: 'Twelve', state: 'open' },
+        { number: 20, title: 'Twenty', state: 'open' },
+      ],
+      hasMore: false,
+      cursor: null,
+    }]);
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({ ok: true, pullRequest: pullRequest(number, { permissions: EDITABLE, linkedIssues: [12] }), comments: [] }),
+      loadIssueCandidates: candidates.load,
+      actions: { editLinkedIssues: (number, delta) => { applied.push({ number, delta }); return { ok: true }; } },
+    });
+    await tick();
+    view.handleInput('i');
+    await tick();
+    view.handleInput('n');
+    await tick();
+    view.handleInput('space');
+    view.handleInput('space');
+    view.handleInput('down');
+    view.handleInput('space');
+    view.handleInput('space');
+    view.handleInput('space');
+    view.handleInput('enter');
+    view.handleInput('ctrl+s');
+    await tick();
+    assert.deepEqual(applied, [{ number: 6, delta: { add: [20], remove: [] } }]);
   });
 
   test('o opens the pull request on the web and r asks the list to be read again', async () => {
@@ -1459,4 +1681,127 @@ describe('prs view editors re-check their capability at save time (S2)', () => {
       assert.match(bodyOf(view, 150), new RegExp(sentence));
     });
   }
+});
+
+// S6 follow-up: the same link geometry answers the pointer. Pi's TUI delivers
+// `type: "move"` events to `handleMouse`, so hovering a linked issue number
+// paints exactly that number in the role the rail gives a hovered row, moving
+// off clears it, and a repaint happens only when the target actually changes.
+describe('S6: a move over a linked issue number highlights it', () => {
+  // A theme that RECORDS which role each string was painted with and paints
+  // every role with its own SGR code, so a frame can be read for the role
+  // behind a token instead of an eyeballed colour.
+  const ROLE_SGR = { accent: 96, customMessageLabel: 33, muted: 90, dim: 2, border: 34, error: 91, text: 39 };
+  function recordingTheme() {
+    const calls = [];
+    const code = (role) => ROLE_SGR[role] ?? 95;
+    return {
+      calls,
+      fg(role, text) {
+        calls.push({ role, text: String(text) });
+        return `\x1b[${code(role)}m${text}\x1b[0m`;
+      },
+      bold(text) {
+        calls.push({ role: 'bold', text: String(text) });
+        return `\x1b[1m${text}\x1b[22m`;
+      },
+      bg(role, text) {
+        calls.push({ role: `bg:${role}`, text: String(text) });
+        return String(text);
+      },
+    };
+  }
+
+  function moveMouse(view, cell, offset = 0) {
+    return view.handleMouse({
+      type: 'move',
+      button: 'none',
+      x: cell.x + offset,
+      y: cell.y,
+      width: cell.widthCells,
+      height: cell.rows,
+    });
+  }
+
+  function hoverView() {
+    const theme = recordingTheme();
+    const opened = [];
+    const source = pageSource({ mine: [pullRequest(87)], review: [], involved: [] });
+    const made = makeView({
+      loadPullRequestPage: source.load,
+      theme,
+      actions: { openLinked: (target) => opened.push(target) },
+    });
+    return { view: made.view, paints: made.paints, theme, opened };
+  }
+
+  // The roles the LAST render asked for, so an assertion is about this frame.
+  function hoveredNumbers(view, theme, width = 150) {
+    const mark = theme.calls.length;
+    const lines = view.render(width);
+    const roles = theme.calls.slice(mark)
+      .filter((call) => call.role === 'accent' && /^#\d+$/.test(call.text))
+      .map((call) => call.text);
+    return { roles, lines };
+  }
+
+  test('a move over one number paints exactly that range, and moving off clears it', async () => {
+    const { view, theme } = hoverView();
+    await tick();
+    const linked = paneCell(view, 150, '#12');
+    assert.deepEqual(moveMouse(view, linked), { handled: true, render: true },
+      'the move is consumed and asks for a repaint');
+
+    let hovered = hoveredNumbers(view, theme);
+    assert.deepEqual(hovered.roles, ['#12'], 'only the hovered number takes the hover role');
+    const row = hovered.lines.find((line) => strip(line).includes('linked issues:'));
+    assert.ok(row.includes('\x1b[96m#12'), 'the hovered number is painted with the accent role');
+    assert.ok(!row.includes('\x1b[96m#14'), 'the other number keeps its plain text');
+    assert.match(strip(row), /linked issues: #12, #14/, 'painting never changes the row the click expects');
+
+    const off = paneCell(view, 150, 'linked issues:');
+    assert.deepEqual(moveMouse(view, off), { handled: true, render: true },
+      'moving onto the row label is a change of target');
+    hovered = hoveredNumbers(view, theme);
+    assert.deepEqual(hovered.roles, [], 'nothing is highlighted once the pointer leaves the number');
+  });
+
+  test('a move to another number moves the highlight with it', async () => {
+    const { view, theme } = hoverView();
+    await tick();
+    assert.deepEqual(moveMouse(view, paneCell(view, 150, '#12')), { handled: true, render: true });
+    assert.deepEqual(hoveredNumbers(view, theme).roles, ['#12']);
+    assert.deepEqual(moveMouse(view, paneCell(view, 150, '#14')), { handled: true, render: true });
+    assert.deepEqual(hoveredNumbers(view, theme).roles, ['#14'], 'the highlight follows the pointer');
+  });
+
+  test('the same target twice does not repaint, and a move outside clears the hover', async () => {
+    const { view, theme, paints } = hoverView();
+    await tick();
+    const linked = paneCell(view, 150, '#12');
+    moveMouse(view, linked);
+    const painted = paints.length;
+    assert.deepEqual(moveMouse(view, linked), { handled: true, render: false },
+      'the hovered target did not change, so no repaint is asked for');
+    assert.equal(paints.length, painted, 'and none is issued');
+
+    assert.deepEqual(moveMouse(view, { ...linked, x: 3 }), { handled: true, render: true },
+      'a move onto the list column lands on no link and clears the hover');
+    assert.deepEqual(hoveredNumbers(view, theme).roles, []);
+    assert.deepEqual(view.handleMouse({
+      type: 'move', button: 'none', x: linked.x, y: linked.y, width: 100, height: linked.rows,
+    }), { handled: true, render: false }, 'a move from another frame geometry lands nowhere');
+  });
+
+  test('the same geometry serves the click and the hover', async () => {
+    const { view, opened } = hoverView();
+    await tick();
+    const linked = paneCell(view, 150, '#12');
+    assert.deepEqual(moveMouse(view, linked), { handled: true, render: true });
+    // The cell the pointer highlighted is exactly the cell that opens #12.
+    assert.deepEqual(click(view, linked), { handled: true, render: false });
+    assert.deepEqual(opened, [{ kind: 'issue', number: 12 }]);
+    assert.deepEqual(moveMouse(view, linked, 3), { handled: true, render: true },
+      'a move onto the separator clears the hover');
+  });
 });

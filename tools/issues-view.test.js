@@ -6125,3 +6125,133 @@ describe('S6: each linked PR is its own click range', () => {
     assert.deepEqual(calls, []);
   });
 });
+
+// S6 follow-up: the same link geometry answers the pointer. Pi's TUI delivers
+// `type: "move"` events to `handleMouse`, so hovering a linked PR number paints
+// exactly that number in the role the rail gives a hovered row, moving off
+// clears it, and a repaint happens only when the target actually changes.
+describe('S6: a move over a linked PR number highlights it', () => {
+  const PANE_START = (width) => 5 + readerPanes(width).left;
+  const BODY_TOP = 4;
+
+  function moveEvent(overrides = {}) {
+    return {
+      type: 'move',
+      button: 'none',
+      x: 0,
+      y: 0,
+      width: 120,
+      height: 24,
+      shift: false,
+      alt: false,
+      ctrl: false,
+      ...overrides,
+    };
+  }
+
+  // The frame cell of `needle` inside the RIGHT pane, read off the frame the
+  // view just painted, so the test never assumes the pane's columns or rows.
+  function cellOf(view, width, needle, offset = 0) {
+    const lines = view.render(width);
+    const panes = readerPanes(width);
+    for (let y = BODY_TOP; y < lines.length - 2; y += 1) {
+      const pane = [...strip(lines[y])].slice(PANE_START(width), PANE_START(width) + panes.right).join('');
+      const at = pane.indexOf(needle);
+      if (at < 0) continue;
+      return { x: PANE_START(width) + at + offset, y, width, height: lines.length };
+    }
+    assert.fail(`no pane row carries ${JSON.stringify(needle)}`);
+  }
+
+  function hoverView() {
+    const theme = recordingTheme();
+    const calls = [];
+    const rows = [issue(7)];
+    const made = makeView({
+      rows: 24,
+      theme,
+      pages: pagesOf([rows, [], []]),
+      issues: rows,
+      loadIssue: () => ({
+        ok: true,
+        issue: issue(7, { title: 'linked issue', linkedPullRequests: [69, 77], body: 'the body' }),
+        comments: [],
+      }),
+      actions: { openLinked: (target) => calls.push(target) },
+    });
+    return { view: made.view, paints: made.paints, theme, calls };
+  }
+
+  // The roles the LAST render asked for, so an assertion is about this frame.
+  function hoveredNumbers(view, theme, width = 120) {
+    const mark = theme.calls.length;
+    const lines = view.render(width);
+    const roles = theme.calls.slice(mark)
+      .filter((call) => call.role === 'accent' && /^#\d+$/.test(call.text))
+      .map((call) => call.text);
+    return { roles, lines };
+  }
+
+  test('a move over one number paints exactly that range, and moving off clears it', async () => {
+    const { view, theme } = hoverView();
+    await tick();
+    const linked = cellOf(view, 120, '#69');
+    assert.deepEqual(view.handleMouse(moveEvent(linked)), { handled: true, render: true },
+      'the move is consumed and asks for a repaint');
+
+    let hovered = hoveredNumbers(view, theme);
+    assert.deepEqual(hovered.roles, ['#69'], 'only the hovered number takes the hover role');
+    const row = hovered.lines.find((line) => strip(line).includes('linked PRs:'));
+    assert.ok(row.includes('\x1b[96m#69'), 'the hovered number is painted with the accent role');
+    assert.ok(!row.includes('\x1b[96m#77'), 'the other number keeps its plain text');
+    assert.match(strip(row), /linked PRs: #69, #77/, 'painting never changes the row the click expects');
+
+    const off = cellOf(view, 120, 'linked PRs:');
+    assert.deepEqual(view.handleMouse(moveEvent(off)), { handled: true, render: true },
+      'moving onto the row label is a change of target');
+    hovered = hoveredNumbers(view, theme);
+    assert.deepEqual(hovered.roles, [], 'nothing is highlighted once the pointer leaves the number');
+  });
+
+  test('a move to another number moves the highlight with it', async () => {
+    const { view, theme } = hoverView();
+    await tick();
+    assert.deepEqual(view.handleMouse(moveEvent(cellOf(view, 120, '#69'))), { handled: true, render: true });
+    assert.deepEqual(hoveredNumbers(view, theme).roles, ['#69']);
+    assert.deepEqual(view.handleMouse(moveEvent(cellOf(view, 120, '#77'))), { handled: true, render: true });
+    assert.deepEqual(hoveredNumbers(view, theme).roles, ['#77'], 'the highlight follows the pointer');
+  });
+
+  test('the same target twice does not repaint, and a move outside clears the hover', async () => {
+    const { view, theme, paints } = hoverView();
+    await tick();
+    const linked = cellOf(view, 120, '#69');
+    view.handleMouse(moveEvent(linked));
+    const painted = paints.length;
+    assert.deepEqual(view.handleMouse(moveEvent(linked)), { handled: true, render: false },
+      'the hovered target did not change, so no repaint is asked for');
+    assert.equal(paints.length, painted, 'and none is issued');
+
+    assert.deepEqual(view.handleMouse(moveEvent({ x: 3, y: linked.y })), { handled: true, render: true },
+      'a move onto the list column lands on no link and clears the hover');
+    assert.deepEqual(hoveredNumbers(view, theme).roles, []);
+    assert.deepEqual(view.handleMouse(moveEvent({ width: 100 })), { handled: true, render: false },
+      'a move from another frame geometry lands nowhere and changes nothing');
+  });
+
+  test('the same geometry serves the click and the hover', async () => {
+    const { view, calls, theme } = hoverView();
+    await tick();
+    const linked = cellOf(view, 120, '#69');
+    assert.deepEqual(view.handleMouse(moveEvent(linked)), { handled: true, render: true });
+    // The cell the pointer highlighted is exactly the cell that opens #69.
+    assert.deepEqual(view.handleMouse({ ...moveEvent(linked), type: 'click', button: 'left' }),
+      { handled: true, render: false });
+    assert.deepEqual(calls, [{ kind: 'pullRequest', number: 69 }]);
+    // And the separator right after the number is neither hovered nor clicked:
+    // leaving the number clears the highlight with a repaint.
+    assert.deepEqual(view.handleMouse(moveEvent({ ...linked, x: linked.x + 3 })), { handled: true, render: true },
+      'a move onto the separator clears the hover');
+    assert.deepEqual(hoveredNumbers(view, theme).roles, [], 'no number is left highlighted');
+  });
+});

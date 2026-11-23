@@ -1209,11 +1209,14 @@ describe('/issues actions (S3,S4)', () => {
       ['issue', 'view', '76', '--web', '-R', 'github.com/jonasotoaguilar/herdr-gentle-shell']);
     assert.equal(gitCalls[0].cwd, root, 'the opener runs in this checkout');
     assert.ok(!gitCalls[0].argv.join(' ').includes('xdg-open'), 'never an invented opener');
-    assert.deepEqual(run.host.lifecycle, ['stop', 'start', 'render'],
-      'the TUI is suspended for the browser open and taken back afterwards');
-    assert.deepEqual(run.host.stops, [{ preserveScreen: true }],
-      'the suspend preserves the screen: a bare stop stamps the whole alt-screen frame into scrollback');
-    assert.deepEqual(run.host.paints, [true], 'the terminal is forced to repaint on resume');
+    // Regression: the opener used to stop the host TUI and start it again. `gh`
+    // here runs on pipes and never touches the terminal, and in Pi the
+    // stop/start pair left the render loop dead (the screen kept the plain shell
+    // and stopped repainting). Opening a browser is not an interactive child, so
+    // the TUI is never suspended for it.
+    assert.deepEqual(run.host.lifecycle, [], 'the browser opener never stops or restarts the TUI');
+    assert.deepEqual(run.host.stops, [], 'nothing suspends the screen to open a URL');
+    assert.deepEqual(run.host.paints, [], 'no resume repaint is needed because nothing was suspended');
   });
 
   test('r re-reads the current page fresh, and the removed state toggle reads nothing', async () => {

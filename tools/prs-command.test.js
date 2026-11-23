@@ -652,6 +652,32 @@ describe('/prs overlay and reads (S1, S3)', () => {
     assert.equal(b.gh.calls[b.gh.calls.length - 1].repo, 'github.com/myfork/project', 'the pinned identity binds the page');
   });
 
+  test('S8/T22: the rail cache seeds the first frame, so /prs opens as fast as /issues', async () => {
+    const b = await boot({ railMine: [{ number: 69, title: 'mine sixty-nine' }], railReview: [{ number: 70, title: 'review seventy' }] });
+    const { registered } = installBridge();
+    await warmGate(b.loaded);
+    const root = makeCheckout();
+    const ctx = sessionCtx(root);
+    // The first start publishes the surface; the second is the session whose rail
+    // reads, which is the in-memory entry `/prs` seeds from. Nothing is opened in
+    // between, so this is exactly the state a click on the rail finds.
+    await fireSessionStart(b.loaded.hooks, sessionCtx(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-prs-seed-')))));
+    await fireSessionStart(b.loaded.hooks, ctx);
+    await drawSection(registered[0], ctx);
+    await waitFor(() => String(registered[0].meta(ctx)).includes(' pr'));
+
+    const capture = captureView(b.loaded.mod, 'prs-view.js', 'createPrsView');
+    await mountCommand(b.loaded, 'prs', '', ctx, { capture });
+
+    const pages = capture.options.pages;
+    const mine = pages.find((page) => page.id === 'mine');
+    const review = pages.find((page) => page.id === 'review');
+    assert.deepEqual(mine.rows.map((row) => row.number), [69], 'the authored bucket paints the rail row it already read');
+    assert.deepEqual(review.rows.map((row) => row.number), [70], 'and so does the review bucket');
+    assert.equal(mine.total, 1, 'the seeded page carries the count it can prove');
+    assert.equal(pages.find((page) => page.id === 'involved').rows, null, 'a bucket the rail never read keeps its own read');
+  });
+
   test('the lazy all bucket reads the repository connection', async () => {
     installBridge();
     const b = await boot();
@@ -684,6 +710,29 @@ describe('/prs overlay and reads (S1, S3)', () => {
     assert.deepEqual(view.argv.slice(0, 3), ['pr', 'view', '69']);
     assert.ok(view.argv.some((part) => part.includes('closingIssuesReferences')), 'the linked issues ride the detail read');
     assert.equal(view.repo, 'github.com/myfork/project');
+  });
+
+  test('T20: the linked-issues candidate seam asks the pinned repository\'s open issues', async () => {
+    installBridge();
+    const b = await boot();
+    await warmGate(b.loaded);
+    const root = makeCheckout();
+    const capture = captureView(b.loaded.mod, 'prs-view.js', 'createPrsView');
+    const { ctx } = makeCtx(root);
+    await mountCommand(b.loaded, 'prs', '', ctx, { capture });
+    assert.equal(typeof capture.options.loadIssueCandidates, 'function', 'the view is wired to a candidate seam');
+    const page = await capture.options.loadIssueCandidates({ after: null, pageSize: 2 });
+    assert.equal(page.ok, true);
+    assert.deepEqual(page.rows, [
+      { number: 1, title: 'One', state: 'open' },
+      { number: 2, title: 'Two', state: 'open' },
+    ]);
+    const call = b.gh.calls[b.gh.calls.length - 1];
+    const search = gqlField(call.argv, 'search');
+    assert.ok(search.includes('repo:myfork/project'), `the read is scoped to the pinned repository (saw ${search})`);
+    assert.ok(search.includes('is:issue') && search.includes('is:open'), 'only open issues are candidates');
+    assert.ok(search.includes('sort:updated-desc'), 'the list is hottest-updated first');
+    assert.equal(call.repo, 'github.com/myfork/project', 'the pinned identity binds the read');
   });
 
   test('the o opener runs gh pr view <n> --web -R <pinned>', async () => {

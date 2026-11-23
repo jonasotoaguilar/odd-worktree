@@ -468,7 +468,8 @@ read and refuses on drift, as above.
 `/prs` is the same reader for pull requests: the list on the left, the pull
 request on the right, and the same frame, search row and note row. Opening it
 reads the three scoped buckets only — `My Pull Request` (`author:@me`), `Needs My
-Review` (`review-requested:@me`) and `Involved` (`involves:@me`) — one cursor page
+Review` (`review-requested:@me`) and `Involved` (`involves:@me -author:@me`, so a
+pull request you opened never repeats there, as in `/issues`) — one cursor page
 each, open pull requests, newest update first. `All` costs nothing until you ask
 for it: the `g` view is the repository's own pull-request connection
 (`pullRequests(states: OPEN)`), read on first entry, reused on the way back and

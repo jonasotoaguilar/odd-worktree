@@ -8308,7 +8308,7 @@ async function openIssuesPanel(rawArgs, ctx, releaseOpen, resolvedCheckoutRoot, 
 
 // The four buckets the reader's tabs and its lazy `g` view name. The client
 // derives the search qualifier from the bucket id (`author:@me`,
-// `review-requested:@me`, `involves:@me`) and reads the repository's own
+// `review-requested:@me`, `involves:@me -author:@me`) and reads the repository's own
 // pull-request connection for an unfiltered `all`, exactly like the issues
 // client. `lazy` keeps `all` out of the tab bar, the tab cycle and the prefetch.
 const PRS_INTERACTIVE_BUCKETS = [

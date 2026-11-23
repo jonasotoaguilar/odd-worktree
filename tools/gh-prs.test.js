@@ -180,7 +180,11 @@ describe('the three buckets read through the repository search', () => {
   });
 
   test('the review and involved buckets carry their own qualifier', async () => {
-    for (const [bucket, qualifier] of [['review', 'review-requested:@me'], ['involved', 'involves:@me']]) {
+    // S1: `involved` excludes what you AUTHORED, exactly as the issues reader
+    // does (`involves:@me -author:@me`). GitHub's `involves:@me` includes your
+    // own pull requests, and repeating them under `Involved` hides the ones you
+    // are merely part of.
+    for (const [bucket, qualifier] of [['review', 'review-requested:@me'], ['involved', 'involves:@me -author:@me']]) {
       const { runner, calls } = makeRunner(okJson(fixture('gh-pr-search-page.json')));
       ghPrs.setGhRunner(runner);
 

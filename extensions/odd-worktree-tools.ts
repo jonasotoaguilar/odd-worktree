@@ -7742,36 +7742,6 @@ function issuesScopeDriftLine(currentName, pinnedName, command = "/issues") {
 // open reads as a cut. Pi's own suspend passes the same option when it is in
 // fullscreen mode. A host that is not on the alternate screen ignores it, and a
 // host without `stop()` keeps the previous behaviour untouched.
-function withSuspendedTerminal(hostTui, run) {
-  let suspended = false;
-  try {
-    if (hostTui && typeof hostTui.stop === "function") {
-      hostTui.stop({ preserveScreen: true });
-      suspended = true;
-    }
-  } catch {
-    suspended = false;
-  }
-  const resume = () => {
-    if (!suspended) return;
-    suspended = false;
-    try {
-      if (hostTui && typeof hostTui.start === "function") hostTui.start();
-    } catch {
-      // A host that cannot restart still gets the repaint attempt below.
-    }
-    try {
-      if (hostTui && typeof hostTui.requestRender === "function") hostTui.requestRender(true);
-    } catch {
-      // A repaint failure never breaks the open.
-    }
-  };
-  return Promise.resolve()
-    .then(run)
-    .catch((err) => ({ ok: false, error: (err && err.message) || "open failed" }))
-    .finally(resume);
-}
-
 // The `o`-key browser opener: `gh issue view <n> --web` through the file's own
 // fixed-argv runner (never a shell, never xdg-open). `-R <owner/name>` is the
 // repository the LIST was loaded from, bound when the list loads and passed at
@@ -7801,7 +7771,13 @@ function githubItemOpenInBrowser(hostTui, cwd, kind, number, pinnedIdentity) {
     }
     const bin = gh && typeof gh.ghBinary === "function" ? gh.ghBinary({}) : "gh";
     const argv = [label, "view", String(number), "--web", "-R", normalized.identity];
-    return withSuspendedTerminal(hostTui, async () => {
+    // The child runs on pipes and never touches the terminal, so the host TUI is
+    // NOT suspended for it: stopping and restarting Pi's renderer to open a URL
+    // left the screen on the plain shell, repainting nothing (the reported bug,
+    // and why this is a plain bounded read now). Opening a browser is not an
+    // interactive child; `lib/open-external.js` stays the one opener that
+    // suspends, because an editor really does need the terminal.
+    return (async () => {
       const res = await git.runArgvAsync(bin, argv, { cwd, timeoutMs: 30000 });
       if (!res) return { ok: false, error: `cannot open ${label} #${number} in the browser` };
       if (res.error) return { ok: false, error: res.error };
@@ -7810,7 +7786,7 @@ function githubItemOpenInBrowser(hostTui, cwd, kind, number, pinnedIdentity) {
         return { ok: false, error: stderr || `cannot open ${label} #${number} in the browser (gh exited with status ${res.status})` };
       }
       return { ok: true };
-    });
+    })();
   } catch (err) {
     return Promise.resolve({ ok: false, error: (err && err.message) || `cannot open ${label} #${number} in the browser` });
   }

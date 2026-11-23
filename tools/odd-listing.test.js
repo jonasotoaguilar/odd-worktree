@@ -16,10 +16,14 @@
 //   (or another label) takes ` #2`, ` #3`. Every label in the listing is unique.
 // - Order: ONE comparator (`compareEntries`) — `mtimeMs` descending, then name in
 //   code units, then path in code units, exactly the rule lib/odd-docs.js's
-//   `orderDocs` and lib/odd-group.js's `compareDocs` already use. The menu is the
-//   panel's order flattened group by group, main's group first, so picking the
-//   first entry opens what the panel's first row shows (L11 defect: `/odd`'s
-//   degraded menu order had regressed against 53ae2b2).
+//   `orderDocs` and lib/odd-group.js's `compareDocs` already use. A caller that
+//   hands an entry a finite `order` keeps ITS sequence (the extension passes main's
+//   lib/odd-docs.js rank, whose commit recency is not mtime), with
+//   `compareEntries` breaking ties; a caller that hands nothing gets the
+//   comparator's order, exactly as before. The menu is the panel's order flattened
+//   group by group, main's group first, so picking the first entry opens what the
+//   panel's first row shows (L11 defect: `/odd`'s degraded menu order had regressed
+//   against 53ae2b2, whose menu read a main checkout's documents in that rank).
 // - Fail closed: junk is skipped, never thrown on; a document with no readable
 //   mtime is the oldest (`mtimeMs` 0) and still appears; an empty group vanishes.
 // - Pure: no fs, no git, no clock, and the inputs are never mutated.
@@ -305,6 +309,51 @@ describe('order: ONE comparator, flattened group by group', () => {
       'each group’s entries in comparator order; the groups keep the panel’s order');
     assert.deepEqual(result.menu.map((row) => row.name), result.groups.flatMap((group) => group.entries.map((entry) => entry.name)),
       'the menu is exactly the panel list flattened — one order, never two');
+  });
+
+  // L11/T16: the order a caller HANDS OVER is preserved. Main's documents are
+  // ranked by lib/odd-docs.js (commit recency, then display name) and the caller
+  // passes that rank as each entry's `order`; the listing must not re-rank them by
+  // mtime, or the menu's first entry opens a different file than the rank named.
+  test('a caller’s per-entry order is the PRIMARY key, and compareEntries only breaks ties', () => {
+    const result = buildListing({
+      groups: [checkoutGroup('main', MAIN_ROOT, [
+        { ...doc(MAIN_ROOT, 'main-two', 2000), order: 1 },
+        { ...doc(MAIN_ROOT, 'main-one', 1000), order: 0 },
+        { ...doc(MAIN_ROOT, 'main-three', 3000), order: 2 },
+      ], true)],
+    });
+    assert.deepEqual(result.menu.map((row) => row.name), ['main-one', 'main-two', 'main-three'],
+      'mtime alone would read main-three, main-two, main-one');
+    assert.deepEqual(result.groups[0].entries.map((entry) => entry.name), ['main-one', 'main-two', 'main-three'],
+      'the panel list and the menu draw the one preserved order');
+    assert.deepEqual(Object.keys(result.groups[0].entries[0]).sort(), ['label', 'mtimeMs', 'name', 'path'],
+      'the order signal stays out of the entry value');
+  });
+
+  test('a tied order falls back to compareEntries, and an unordered entry comes last', () => {
+    const result = buildListing({
+      groups: [checkoutGroup('main', MAIN_ROOT, [
+        doc(MAIN_ROOT, 'unranked-old', 9000),
+        { ...doc(MAIN_ROOT, 'tied-b', 500), order: 0 },
+        { ...doc(MAIN_ROOT, 'tied-a', 700), order: 0 },
+      ], true)],
+    });
+    assert.deepEqual(result.menu.map((row) => row.name), ['tied-a', 'tied-b', 'unranked-old'],
+      'a tie is compareEntries’ answer, and a caller that ordered nothing stays behind what was ordered');
+  });
+
+  // The fallback half of the same rule: a caller that gives NO order signal gets
+  // exactly the comparator order this module answered before the signal existed.
+  test('a caller who gives NO order gets compareEntries’ order', () => {
+    const docs = [
+      doc(MAIN_ROOT, 'main-two', 2000),
+      doc(MAIN_ROOT, 'main-one', 1000),
+      doc(MAIN_ROOT, 'main-three', 3000),
+    ];
+    const result = buildListing({ groups: [checkoutGroup('main', MAIN_ROOT, docs, true)] });
+    assert.deepEqual(result.menu.map((row) => row.name), ['main-three', 'main-two', 'main-one']);
+    assert.deepEqual(result.menu.map((row) => row.name), docs.slice().sort(compareEntries).map((entry) => entry.name));
   });
 
   test('compareEntries is the ONE comparator and it sorts a copy without mutating it', () => {

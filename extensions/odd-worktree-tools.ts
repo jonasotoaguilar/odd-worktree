@@ -6924,6 +6924,9 @@ function oddModelIsEmpty(groups) {
 // told apart by the shortest path segments that distinguish them — so no two
 // labels can collide and the menu can never drift from the panel. Nothing here
 // sorts, dedupes or labels anything of its own: the module is the only authority.
+// A document carrying `order` keeps the sequence its caller handed over (T16);
+// nothing in this file puts one there for the panel, whose order comes from the
+// model, and `oddMenuListing` below is the one caller that does.
 function oddListingFor(groups) {
   const empty = { groups: [], menu: [] };
   let buildListing;
@@ -6951,11 +6954,17 @@ function oddListingFor(groups) {
 // inside an UNREGISTERED linked checkout may never be offered that checkout's
 // private documents, so this is main's `odd/tasks` and nothing else — and with no
 // main root, or nothing under it, it is EMPTY rather than this checkout's.
-function oddMainListing(mainRoot) {
+// `ranked` is main's own ranking when a Git walk answered (T16): the documents keep
+// ITS order — each carries the index it was ranked at — instead of the mtime order
+// the cheap scan gives them. A caller that passes none gets the scan, exactly as
+// before.
+function oddMainListing(mainRoot, ranked) {
   if (typeof mainRoot !== "string" || mainRoot.length === 0) return { groups: [], menu: [] };
-  const scanned = oddDocsLocal(mainRoot);
+  const handed = Array.isArray(ranked) ? ranked : null;
+  const scanned = handed === null ? oddDocsLocal(mainRoot) : null;
+  const source = handed !== null ? handed : (Array.isArray(scanned && scanned.docs) ? scanned.docs : []);
   const docs = [];
-  for (const doc of Array.isArray(scanned && scanned.docs) ? scanned.docs : []) {
+  for (const doc of source) {
     if (!doc || typeof doc.path !== "string") continue;
     let mtimeMs = 0;
     try {
@@ -6965,9 +6974,30 @@ function oddMainListing(mainRoot) {
       // An unreadable time is the oldest instant there is; it never hides a
       // document (the listing's own rule).
     }
-    docs.push({ path: doc.path, name: doc.name, mtimeMs });
+    const row = { path: doc.path, name: doc.name, mtimeMs };
+    docs.push(handed === null ? row : { ...row, order: docs.length });
   }
   return oddListingFor([{ checkoutName: "main", checkoutRoot: mainRoot, isMain: true, docs }]);
+}
+
+// S13/T15 (L11/T16): the DEGRADED MENU's listing. 53ae2b2's menu listed a main
+// checkout's documents in the order lib/odd-docs.js ranks them — commit recency,
+// then display name — and that sequence is kept here: main's own documents are
+// read through the SAME awaited ranking the panel's `r` uses, handed to main's
+// group (`oddGroupsWithRankedMain`), and each carries the index it landed at so
+// `buildListing` PRESERVES the rank instead of re-deriving one from mtime. This is
+// the only place in this file that passes an order signal; it never re-ranks by
+// hand and never reads a commit itself. A walk that cannot answer (or finds
+// nothing) leaves `listed` exactly as it is — the documented mtime fallback, never
+// an empty menu.
+async function oddMenuListing(groups, mainRoot, listed) {
+  const model = Array.isArray(groups) ? groups : null;
+  const root = oddMainRoot(model, mainRoot);
+  const ranked = await oddDocsOrdered(root);
+  if (!ranked || ranked.ok !== true || !Array.isArray(ranked.docs) || ranked.docs.length === 0) return listed;
+  const ordered = ranked.docs.map((doc, order) => ({ ...doc, order }));
+  if (model === null) return oddMainListing(root, ordered);
+  return oddListingFor(oddGroupsWithRankedMain(model, ordered));
 }
 
 // S6/S13/T15: the document a listing carries at this absolute target, as the
@@ -7389,12 +7419,12 @@ async function executeOdd(rawArgs, ctx) {
       );
     } catch {
       // A host that rejects the overlay degrades to the menu below — the SAME
-      // listing the panel would have drawn.
-      await runOddFallback(ctx, listed);
+      // listing the panel would have drawn, in main's ranked order (T16).
+      await runOddFallback(ctx, await oddMenuListing(groups, mainRoot, listed));
     }
     return;
   }
-  await runOddFallback(ctx, listed);
+  await runOddFallback(ctx, await oddMenuListing(groups, mainRoot, listed));
 }
 
 // `/odd` (odd-viewer S1-S8): a two-pane viewer of this checkout's odd/

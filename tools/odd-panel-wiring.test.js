@@ -1473,9 +1473,18 @@ test('B4: the degraded menu is `listing.menu`, in that order, reporting that ent
   writeTask(a, 'collision', '# First copy');
   writeTask(b, 'collision', '# Second copy');
   // The model the command reads for this session, and the ONE listing value the
-  // panel and the menu must both draw from.
+  // panel and the menu must both draw from. L11/T16: main's group carries
+  // lib/odd-docs.js's rank (commit recency, then display name) and the listing
+  // PRESERVES it, so the model this test lists from is main's group in that ranked
+  // order — both fixture documents come from ONE commit, so the rank is by name.
   const groups = await e.mod.libModule('odd-group.js').groupOddDocs({ repoRoot: repo, roots: [a, b] });
-  const listing = e.mod.libModule('odd-listing.js').buildListing({ groups });
+  const rankedMain = (await e.mod.libModule('odd-docs.js').listOddDocsAsync(repo)).docs;
+  const rankedGroups = groups.map((group) => (group && group.isMain === true
+    ? { ...group, docs: rankedMain.map((doc, order) => ({ ...doc, order })) }
+    : group));
+  const listing = e.mod.libModule('odd-listing.js').buildListing({ groups: rankedGroups });
+  assert.equal(listing.menu[0].name, 'main-one',
+    'the fixture really ranks main-one before main-two (one commit, so by name)');
   assert.equal(new Set(listing.menu.map((row) => row.label)).size, listing.menu.length,
     'the listing really disambiguates the repeated basenames');
   const result = await chooseMenu(e, repo, [a, b], (choices) => choices[0]);
@@ -1488,9 +1497,47 @@ test('B4: the degraded menu is `listing.menu`, in that order, reporting that ent
     const picked = await chooseMenu(e, repo, [a, b], (choices) => choices[index]);
     assert.deepEqual(picked.notifications, [['info', listing.menu[index].path]], `index ${index}`);
   }
-  // A unique name keeps the plain label the baseline had.
+  // A unique name keeps the plain label the baseline had. L11/T16: the sequence is
+  // main's RANK, which for two documents of one commit is by name — 53ae2b2's menu
+  // read main-one first, not the later mtime's main-two.
   const plain = await chooseMenu(e, repo, [], (choices) => choices[0]);
-  assert.deepEqual(plain.labels, ['main-two', 'main-one'],
-    'unique names stay undecorated, in the listing order main first');
+  assert.deepEqual(plain.labels, ['main-one', 'main-two'],
+    'unique names stay undecorated, in the ranked order main first');
   t.diagnostic(`menu ${JSON.stringify(result.labels)}`);
+});
+
+// L11/T16 (regression): 53ae2b2's degraded menu listed a main checkout's documents
+// in the order lib/odd-docs.js ranks them — commit recency, then display name — and
+// this fixture's two documents come from the SAME commit while their mtimes differ
+// (`makeRepo` stamps main-two LATER). A menu that orders them by mtime reads
+// main-two first, so picking its first entry opens a different file than the
+// baseline opened. The listing must PRESERVE the rank main's group is handed,
+// never re-rank it — and this pin builds the fixture itself, so it reads no git
+// history and no fixed commit.
+test('T16: the degraded menu keeps the ranked order, not mtime (L11 regression)', async () => {
+  const e = await load();
+  const repo = makeRepo();
+  const mainOne = path.join(repo, 'odd', 'tasks', 'main-one.md');
+  const mainTwo = path.join(repo, 'odd', 'tasks', 'main-two.md');
+  // The fixture really does have the mtime order that used to leak into the menu,
+  // and one commit behind both documents, so the rank ties on recency.
+  const times = [mainOne, mainTwo].map((doc) => fs.statSync(doc).mtimeMs);
+  assert.ok(times[0] < times[1], 'main-two is the LATER mtime, so a mtime sort reads it first');
+  assert.equal(git(repo, ['log', '--format=%H', '--', 'odd/tasks']).split('\n').filter(Boolean).length, 1,
+    'both documents come from the one commit, so the rank breaks the tie by name');
+
+  const host = mountHost();
+  delete host.ui.custom;
+  const menus = [];
+  host.ui.select = (title, choices) => {
+    menus.push({ title, choices: choices.slice() });
+    return choices[0];
+  };
+  await e.commands.get('odd').handler('', ctxFor(repo, host, []));
+  assert.equal(menus.length, 1, 'the degraded path answers with one menu');
+  assert.equal(menus[0].title, 'Odd documents');
+  assert.deepEqual(menus[0].choices, ['main-one', 'main-two'],
+    'the ranked sequence (same commit, so by name) — exactly what 53ae2b2 showed');
+  assert.deepEqual(host.notifications, [['info', mainOne]],
+    'and the first entry opens main-one, the document the baseline opened');
 });

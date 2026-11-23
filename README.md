@@ -125,3 +125,7 @@ The full rules of each step, including every refusal, are in [Create, list, move
 - Run `/warp` in a repository with at least one other checkout to see the selector, then `worktree_list` from the agent to confirm both surfaces agree.
 - Install `gh` and run `gh auth login` once if you want `/issues`, `/prs` and the `GITHUB` rail section.
 - Read [the reference](docs/reference.md) before changing a panel key, a guard or a card.
+
+## License
+
+[MIT](LICENSE) © 2026 Jonathan Soto.

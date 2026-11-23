@@ -1831,3 +1831,38 @@ test('doubled separators still identify the listed document', async () => {
     assert.match(frameText(host.mounts[0].component), /body of main-one/);
   } finally { await closePanel(host, pending); }
 });
+
+// ---------------------------------------------------------------------------
+// T19 (odd-rail-section, L13): the ONE round-8 finding that is not gated on a
+// separated git directory. A symlinked directory under `odd/tasks` makes
+// `<link>/../<name>.md` name ANOTHER tree's inode: `path.resolve` collapses the
+// `..` lexically, so a lexical comparison against the listing happily opened the
+// LOCAL document the spelling claims to be, and the command reported success
+// while the target the reader named was never the one on screen. The document's
+// identity is its REAL path, so a target the listing does not carry by realpath
+// is the unknown option it always was, and nothing is mounted.
+//
+// The verifier's appendix test (T6 regression, `/tmp/oddv.*/t6-regression-appendix.js`)
+// is ported here with this suite's helper names and its assertions verbatim. The
+// separated-git-dir cases in that appendix are NOT ported: L13 declares that
+// layout out of support.
+// ---------------------------------------------------------------------------
+test('T19/F4: a lexical dot-dot match cannot open another inode', async () => {
+  const e = await load(), root = makeRepo();
+  const other = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-distinct-inode-')));
+  const otherDoc = writeTask(other, 'main-one', '# Distinct inode');
+  const sub = path.join(path.dirname(otherDoc), 'sub');
+  fs.mkdirSync(sub);
+  const tasks = path.join(root, 'odd/tasks'), wanted = path.join(tasks, 'main-one.md');
+  fs.symlinkSync(sub, path.join(tasks, 'cross'), 'dir');
+  const raw = `${tasks}/cross/../main-one.md`;
+  assert.equal(path.resolve(raw), wanted);
+  assert.equal(fs.realpathSync.native(raw), otherDoc);
+  assert.notEqual(fs.statSync(raw).ino, fs.statSync(wanted).ino);
+  const h = mountHost(), pending = doOdd(e, raw, ctxFor(root, h));
+  try {
+    await waitFor(() => h.mounts.length || h.notifications.length, 'distinct target reply');
+    assert.equal(h.mounts.length, 0);
+    assert.deepEqual(h.notifications, [['error', `Unknown option "${raw}". Use /odd.`]]);
+  } finally { await closePanel(h, pending); }
+});

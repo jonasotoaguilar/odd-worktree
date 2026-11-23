@@ -7041,16 +7041,43 @@ async function oddMenuListing(groups, mainRoot, listed) {
   return oddListingFor(oddGroupsWithRankedMain(model, ordered));
 }
 
-// S6/S13/T15: the document a listing carries at this absolute target, as the
+// S6/S13/T15/T19: a document's identity is its REAL path, never its spelling.
+// `fs.realpathSync` on its own is not enough here: its JavaScript implementation
+// collapses a `..` that FOLLOWS a symlink lexically, which is exactly the case
+// this rule exists for (`<link>/../<name>.md` names the linked tree's inode, not
+// the local document the spelling collapses to). The platform's own `realpath`
+// is asked FIRST and only a runtime without it falls back. `null` is a path the
+// filesystem cannot resolve, which matches nothing — hence a STRICT helper of its
+// own rather than `oddRealPathOf`, whose documented fallback is the resolved
+// spelling and whose callers compare directories, not documents.
+function oddDocumentRealPath(target) {
+  try {
+    if (typeof fs.realpathSync.native === "function") return fs.realpathSync.native(target);
+    return fs.realpathSync(target);
+  } catch {
+    return null;
+  }
+}
+
+// S6/S13/T15/T19: the document a listing carries at this absolute target, as the
 // LISTED spelling — so a path with a `.` component opens the document the listing
 // names, never whatever string the reader typed. `null` means the listing does
 // NOT offer it, which is what refuses a private target of an unregistered
-// checkout even when the grouped model could not be read.
+// checkout even when the grouped model could not be read. The match is by REAL
+// path: a target that traverses a symlink names whatever inode that link reaches,
+// so comparing the resolved spellings alone opened the LOCAL document while the
+// reader's target was another tree's file (L13's one non-layout-gated finding). A
+// listed document reached without a symlink realpaths to itself, so the `.`,
+// `..` and `//` spellings that name the same inode keep opening. The target is
+// realpath'd as the reader WROTE it: `path.resolve` collapses a `..` that follows
+// a symlink lexically, which is what destroyed the evidence in the first place.
 function oddListedEntry(listed, target) {
-  const wanted = path.resolve(target);
+  const written = path.isAbsolute(target) ? target : path.resolve(target);
+  const real = oddDocumentRealPath(written);
+  if (real === null) return null;
   for (const group of listed.groups) {
     for (const entry of group.entries) {
-      if (typeof entry.path === "string" && path.resolve(entry.path) === wanted) return entry;
+      if (typeof entry.path === "string" && oddDocumentRealPath(entry.path) === real) return entry;
     }
   }
   return null;

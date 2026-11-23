@@ -897,6 +897,33 @@ describe('T17/F1: main is elected from the listing’s attributes, never its pos
       'the row shape is unchanged (no invented status for main)');
   });
 
+  // T18/F1 (L11): the METADATA record is never a checkout. A separate git dir lists
+  // that directory in the record Git would print for the working tree, and a session
+  // standing in a LINKED checkout of such a repository used to elect it: bare /odd
+  // answered "no documents" for a repository whose main checkout owns one, and a
+  // document written into the metadata tree appeared as main's instead of the real
+  // one. Main is the working tree that OWNS the common dir.
+  test('F1: a linked session of a separate git dir elects the real working tree, never the metadata tree', async (t) => {
+    const repo = separateGitDirRepo('linked-session');
+    const owned = path.join(repo.base, 'checkout-worktrees', 'linked-one');
+    runGit(['worktree', 'add', '-b', 'feat/linked-one', owned], repo.checkout);
+    writeDoc(owned, 'private', { at: '2020-03-01T00:00:00.000Z' });
+    // The metadata tree is not a checkout, so a document under its own `odd/tasks` is
+    // nobody's document — the case that made it "appear as main".
+    writeDoc(repo.meta, 'metadata-only', { at: '2020-05-01T00:00:00.000Z' });
+    const listed = runGit(['worktree', 'list', '--porcelain'], owned);
+    t.diagnostic(`git's own record: ${JSON.stringify(listed)}`);
+
+    const groups = await groupOddDocs({ repoRoot: owned, roots: [], runAsync: realSeam(), failClosed: true });
+
+    assert.ok(Array.isArray(groups), 'the listing answered, so there is a model');
+    assert.equal(groups.length, 1, 'nothing is registered, so main is the only group');
+    assert.equal(groups[0].checkoutRoot, repo.checkout,
+      'main is the working tree that owns the common dir, not the metadata record');
+    assert.deepEqual(groups[0].docs.map((doc) => doc.name), ['main-one'],
+      'and the metadata tree is not a checkout: its document is not main\u2019s');
+  });
+
   test('F1 preserve: a standard repository elects the same main it always did', async () => {
     const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-group-standard-')));
     roots.push(base);

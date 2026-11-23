@@ -1759,3 +1759,75 @@ test('T16: the degraded menu keeps the ranked order, not mtime (L11 regression)'
   assert.deepEqual(host.notifications, [['info', mainOne]],
     'and the first entry opens main-one, the document the baseline opened');
 });
+
+// Append to tools/odd-panel-wiring.test.js. S6/S10/S11/S13, L11.
+test('separated git dir: healthy linked session still lists real main', async () => {
+  const e = await load(), { root } = separateMetadataRepo('healthy-linked');
+  const linked = addWorktree(root, 'private-linked');
+  fs.unlinkSync(path.join(linked, 'odd/tasks/main-one.md'));
+  writeTask(linked, 'private', '# Not in the session scope');
+  const host = mountHost(), pending = doOdd(e, '', ctxFor(linked, host));
+  try {
+    await waitFor(() => host.mounts.length || host.notifications.length, 'reply');
+    assert.deepEqual(host.notifications, []);
+    assert.equal(host.mounts.length, 1);
+    const frame = frameText(host.mounts[0].component);
+    assert.match(frame, /body of main-one/);
+    assert.doesNotMatch(frame, /Not in the session scope/);
+  } finally { await closePanel(host, pending); }
+});
+
+test('separated git dir named .git does not admit documents outside a checkout', async () => {
+  const root = makeRepo(), parent = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-meta-parent-')));
+  git(root, ['init', '--separate-git-dir', path.join(parent, '.git')]);
+  const linked = addWorktree(root, 'private-linked'), e = await load();
+  const unrelated = writeTask(parent, 'not-in-main', '# Not a checkout document');
+  const g = e.mod.libModule('worktree-git.js'), real = g.runArgvAsync;
+  const exits = [];
+  g.runArgvAsync = async (bin, args, opts) => {
+    if (!isList(args)) return real(bin, args, opts);
+    const answer = await real(bin, ['worktree', 'list', '--odd-regression-invalid'], opts);
+    exits.push(answer.status);
+    return answer;
+  };
+  const host = mountHost(), pending = doOdd(e, unrelated, ctxFor(linked, host));
+  try {
+    await waitFor(() => host.mounts.length || host.notifications.length, 'target reply');
+    assert.deepEqual([...new Set(exits)], [129]);
+    assert.equal(host.mounts.length, 0);
+    assert.deepEqual(host.notifications, [['error', `Unknown option "${unrelated}". Use /odd.`]]);
+  } finally { g.runArgvAsync = real; await closePanel(host, pending); }
+});
+
+test('round-trip scope toggle preserves ranked order with identical rows', async () => {
+  const e = await load(), root = makeRepo(), host = mountHost();
+  addWorktree(root, 'unchanged');
+  const degraded = await chooseMenu(e, root, [], (labels) => labels[0]);
+  const pending = doOdd(e, '', ctxFor(root, host));
+  try {
+    await waitFor(() => host.mounts.length, 'mount');
+    const view = host.mounts[0].component;
+    await waitFor(() => rowLabels(view).join(',') === 'main-one,main-two', 'ranked order');
+    assert.deepEqual(rowLabels(view), degraded.labels);
+    view.handleInput('a');
+    await waitFor(() => frameText(view).includes('a session only'), 'all applied');
+    view.handleInput('a');
+    await waitFor(() => frameText(view).includes('a all worktrees'), 'session applied');
+    assert.deepEqual(rowLabels(view), degraded.labels);
+  } finally { await closePanel(host, pending); }
+});
+
+// S6/F4: pin the corrected normalization rule, not byte spelling.
+test('doubled separators still identify the listed document', async () => {
+  const e = await load(), root = makeRepo(), host = mountHost();
+  const listed = path.join(root, 'odd/tasks/main-one.md'), raw = `${path.dirname(listed)}//main-one.md`;
+  assert.equal(path.resolve(raw), listed);
+  assert.equal(fs.statSync(raw).ino, fs.statSync(listed).ino);
+  const pending = doOdd(e, raw, ctxFor(root, host));
+  try {
+    await waitFor(() => host.mounts.length || host.notifications.length, 'reply');
+    assert.deepEqual(host.notifications, []);
+    assert.equal(host.mounts.length, 1);
+    assert.match(frameText(host.mounts[0].component), /body of main-one/);
+  } finally { await closePanel(host, pending); }
+});

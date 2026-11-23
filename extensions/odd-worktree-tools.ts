@@ -7076,12 +7076,18 @@ function oddListedName(listed, name) {
 // linked root "main", so a failed listing offered that checkout's private documents
 // as main's. There is no such fallback now.
 //
-// A listing that cannot answer still leaves one SOUND derivation, and only one: when
-// the common dir IS a `.git` directory, its parent is the checkout that owns the
-// repository — true for a principal AND for a linked worktree, whose common dir is
-// `<principal>/.git`, so it can never name a linked root. That keeps an ordinary
-// single-root repository answering exactly as it did. Anything else is `null`:
-// nothing is offered rather than this checkout's own listing.
+// A listing that cannot answer still leaves one SOUND derivation (T18/F2, L11), and it
+// has to be SOUND twice over: a directory is named only when it is VERIFIABLY this
+// clone's main working tree — it carries its own `.git` marker, that marker resolves to
+// the same common dir, and it is not the common dir itself. Git cannot arbitrate this
+// on its own: with `git init --separate-git-dir storage/.git` it reports the metadata
+// directory's PARENT as a worktree (`rev-parse --show-toplevel` answers that parent,
+// because Git derives the worktree from the git dir), so a common dir whose basename is
+// `.git` proves nothing. What separates the two claimants is which one was RE-POINTED at
+// the common dir: the real checkout's marker is a link FILE naming it, and the package's
+// own layout (`<repo-parent>/<repo-name>-worktrees/<odd>`) names that checkout for a
+// session standing in one of its worktrees. Anything else is `null`: nothing is offered
+// rather than this checkout's own listing or a metadata parent's.
 async function oddPrincipalRootAsync(cwd) {
   try {
     const git = libRequire("worktree-git.js");
@@ -7095,11 +7101,96 @@ async function oddPrincipalRootAsync(cwd) {
     }
     const identity = await git.repoIdentityAsync(cwd, { runAsync });
     const common = identity && typeof identity.commonDir === "string" ? identity.commonDir : "";
-    if (common.length > 0 && path.basename(common) === ".git") return path.resolve(path.dirname(common));
+    const checkoutRoot = identity && typeof identity.root === "string" ? identity.root : "";
+    if (common.length === 0) return null;
+    return oddMainCheckoutOf(checkoutRoot, common);
   } catch {
     // Not a checkout, or git cannot answer: no main root, so nothing is offered.
   }
   return null;
+}
+
+/** The `.git` marker a checkout root carries, resolved: `{ target, link }`, or null. */
+function oddGitMarkerOf(root) {
+  if (typeof root !== "string" || root.length === 0) return null;
+  const marker = path.join(root, ".git");
+  let stats = null;
+  try {
+    stats = fs.statSync(marker);
+  } catch {
+    return null;
+  }
+  if (stats.isDirectory()) return { target: oddRealPathOf(marker), link: false };
+  if (!stats.isFile()) return null;
+  let text = "";
+  try {
+    text = fs.readFileSync(marker, "utf8");
+  } catch {
+    return null;
+  }
+  const line = text.split("\n").map((value) => value.trim()).find((value) => value.length > 0) ?? "";
+  if (!line.toLowerCase().startsWith("gitdir:")) return null;
+  const name = line.slice("gitdir:".length).trim();
+  if (name.length === 0) return null;
+  // A link file may spell the git dir relative to the checkout that holds it.
+  return { target: oddRealPathOf(path.resolve(root, name)), link: true };
+}
+
+/** Two paths mean the same directory, trailing separators aside. */
+function oddSamePath(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (a.length <= 1 || b.length <= 1) return false;
+  return a.replace(/[\\/]+$/, "") === b.replace(/[\\/]+$/, "");
+}
+
+/** The real path of `target` when the system can answer, its resolved spelling otherwise. */
+function oddRealPathOf(target) {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return path.resolve(target);
+  }
+}
+
+/**
+ * T18/F2: the main checkout this package's OWN layout names for a session standing in one
+ * of its worktrees — a create only ever lands at `<repo-parent>/<repo-name>-worktrees/
+ * <odd>` (S3), so that directory's sibling is the checkout that owns it. `null` for a
+ * checkout this package did not create.
+ */
+function oddOwnedPrincipalOf(checkoutRoot) {
+  if (typeof checkoutRoot !== "string" || checkoutRoot.length === 0) return null;
+  const owned = path.dirname(checkoutRoot);
+  const suffix = "-worktrees";
+  const name = path.basename(owned);
+  if (!name.endsWith(suffix) || name.length <= suffix.length) return null;
+  const candidate = path.join(path.dirname(owned), name.slice(0, -suffix.length));
+  return oddSamePath(candidate, checkoutRoot) ? null : candidate;
+}
+
+/**
+ * T18/F2: the fallback main root — the verified candidate, or null. A candidate is
+ * verified when it carries its own `.git` marker and that marker resolves to this same
+ * common dir; a checkout RE-POINTED at it by `--separate-git-dir` (a marker link file)
+ * wins over a directory that merely contains the git dir under the `.git` name.
+ */
+function oddMainCheckoutOf(checkoutRoot, common) {
+  const wanted = oddRealPathOf(common);
+  const candidates = [];
+  const owned = oddOwnedPrincipalOf(checkoutRoot);
+  if (owned !== null) candidates.push(owned);
+  if (path.basename(common) === ".git") candidates.push(path.dirname(common));
+  const verified = [];
+  for (const candidate of candidates) {
+    if (oddSamePath(candidate, wanted)) continue;
+    const marker = oddGitMarkerOf(candidate);
+    if (marker === null || !oddSamePath(marker.target, wanted)) continue;
+    if (verified.some((seen) => oddSamePath(seen.root, candidate))) continue;
+    verified.push({ root: path.resolve(candidate), link: marker.link === true });
+  }
+  const rePointed = verified.find((entry) => entry.link === true);
+  if (rePointed) return rePointed.root;
+  return verified.length > 0 ? verified[0].root : null;
 }
 
 // S6/S13/T15: the ONE degraded menu. Its choices ARE the listing's labels and its
@@ -7335,6 +7426,17 @@ async function executeOdd(rawArgs, ctx) {
       ? main.entries.map((entry) => ({ path: entry.path, name: entry.name, mtimeMs: entry.mtimeMs, label: entry.label }))
       : [];
   };
+  // T18/L11: the model a load hands the view with main's RANKED order — main's own
+  // documents read through lib/odd-docs.js's reader (commit recency, then display name),
+  // exactly the order the startup rank and `r` land, merged into main's group by
+  // `oddGroupsWithRankedMain`. Nothing is re-ranked here. `null` answers a generation a
+  // newer load has already superseded, so a read that lost the race is never applied.
+  const oddRankedMain = async (generation, groups) => {
+    const ranked = await oddDocsFor(oddMainRoot(groups, mainRoot));
+    if (!oddLoadIsLatest(generation)) return null;
+    if (!ranked || ranked.ok !== true || !Array.isArray(ranked.docs)) return groups;
+    return oddGroupsWithRankedMain(groups, ranked.docs);
+  };
   if (helpers && ctx && ctx.ui && typeof ctx.ui.custom === "function") {
     try {
       await ctx.ui.custom(
@@ -7386,18 +7488,20 @@ async function executeOdd(rawArgs, ctx) {
                 checkoutRoot,
                 scope ? undefined : registeredRootsNow(),
                 scope,
-              )).then((next) => {
-                // T13/S11: the load's own scope travels with it, so the hint can
-                // only ever describe the data that was actually applied.
-                const load = Array.isArray(next) ? { groups: next, scope: { all: scope } } : null;
+              )).then(async (next) => {
                 if (!oddLoadIsLatest(generation)) return undefined;
-                applyOddLoad(generation, load);
-                if (load !== null) return true;
-                // S11 (T15): the view returns its REQUESTED mode to the value it
-                // held before this press when the answer is `false`, so the next
-                // press asks for the scope this one asked for — in every release
-                // order. This file holds no copy of that value to drift from it.
-                return false;
+                if (!Array.isArray(next)) return false;
+                // T13/S11: the load's own scope travels with it, so the hint can
+                // only ever describe the data that was actually applied. T18/L11:
+                // a load that RETURNS to the session's scope carries main's RANKED
+                // order — the one the first frame and `r` already have — instead of
+                // the cheap scan's mtime order, so `a` twice cannot reorder a listing
+                // whose rows did not change. `a` into the all-worktrees mode keeps the
+                // scan, whose own walk ranks nothing.
+                const groups = scope ? next : await oddRankedMain(generation, next);
+                if (groups === null || !oddLoadIsLatest(generation)) return undefined;
+                applyOddLoad(generation, { groups, scope: { all: scope } });
+                return true;
               }, () => {
                 if (!oddLoadIsLatest(generation)) return undefined;
                 return false;

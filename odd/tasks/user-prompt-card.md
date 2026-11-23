@@ -15,8 +15,10 @@ Branch `feat/user-prompt-card`, worktree `user-prompt-card`. Lives in this packa
 
 ## Tasks
 
-- [ ] T1 (S1-S7) route: worker. Module `lib/user-prompt-card.js` (card + gate + prototype shim), wiring in `extensions/odd-worktree-tools.ts`, tests in `tools/user-prompt-card.test.js`, `package-surface` expectations. Commit: pending
-- [ ] T2 (S1-S6) route: inline. Docs: `docs/codebase/code-map.md`, `docs/codebase/invariants.md` (new invariant), `docs/codebase/mental-model.md` (invariant count), `docs/reference.md`, `README.md`. Commit: pending
+- [x] T1 (S1-S7) route: worker. Module `lib/user-prompt-card.js` (card + gate + prototype shim), wiring in `extensions/odd-worktree-tools.ts`, tests in `tools/user-prompt-card.test.js`, `package-surface` expectations. Commits: `52236f6` (card + tests), `53adbd5` (wiring + package-surface), `8f4c363` (session boundary), `34c1935` (teardown ownership as a precondition).
+- [x] T2 (S1-S7) route: inline. Docs: `docs/codebase/code-map.md`, `docs/codebase/invariants.md` (invariant 29), `docs/codebase/mental-model.md`, `docs/reference.md`, `README.md`, `AGENTS.md`. Commit: `5d45562`.
+
+Slice boundary: the code landed as three commits — `52236f6` is the module with its tests (1285 authored lines, past the ~400-line slice on purpose: one module and the behaviour it proves cannot be split without a commit that ships dead code), `53adbd5` is the integration, `8f4c363` the lifecycle correction — and the docs as `5d45562`. Delivery shape is the user's call when publishing.
 
 ## Log
 

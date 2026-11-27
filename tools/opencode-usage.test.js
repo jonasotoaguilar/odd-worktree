@@ -17,7 +17,11 @@ const {
   fetchOpenCodeGoUsage,
   parseOpenCodeGoUsage,
 } = require('../lib/opencode-usage.js');
-const { formatPeakState, peakStateAt } = require('../lib/opencode-peak.js');
+// The plan literals below are asserted against the engine that produces them, for the provider the
+// source publishes: DeepSeek's schedule. The engine is provider-agnostic now (lib/peak-schedule.js
+// reads the registry), so the same call takes the provider explicitly.
+const { providerById } = require('../lib/peak-providers.js');
+const { formatPeakState, peakStateFor } = require('../lib/peak-schedule.js');
 
 const NOW = Date.parse('2026-09-23T12:00:00Z');
 // 2026-09-23 is a Wednesday: 03:40 UTC is inside the first peak window, 04:30 UTC between them.
@@ -245,7 +249,7 @@ describe('the source it registers', () => {
     ]) {
       const usage = await source.fetch('secret', async () => response(), now);
       assert.equal(usage?.plan, expected, String(now));
-      assert.equal(usage?.plan, formatPeakState(peakStateAt(now), now));
+      assert.equal(usage?.plan, formatPeakState(peakStateFor(providerById('deepseek'), now), now));
       // The window labels stay exactly as read: the schedule rides only on the provider line.
       assert.deepEqual(
         usage?.limits[0].windows.map((window) => window.label),

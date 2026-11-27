@@ -122,7 +122,11 @@ const presentGh = (run) => withGhPath('present', run);
 
 const handlersOf = (loaded, event) => loaded.hooks.filter(([name]) => name === event).map(([, handler]) => handler);
 
-function ctxOf(entries = [], calls = []) {
+// T4 (odd-rail-session-scope S3): the association is read from the ACTIVE branch
+// (`getBranch()`), so the double answers both: `entries` is the append-only list
+// (`getEntries()`) and `branch` is the path the session is actually on. The default
+// is the same list, which is what an unbranched session holds.
+function ctxOf(entries = [], calls = [], branch = entries) {
   return {
     cwd: CWD,
     hasUI: false,
@@ -132,12 +136,57 @@ function ctxOf(entries = [], calls = []) {
         calls.push('getEntries');
         return entries;
       },
+      getBranch: () => {
+        calls.push('getBranch');
+        return branch;
+      },
       getSessionFile: () => undefined,
       getSessionId: () => 'session-1',
       getLeafId: () => null,
     },
   };
 }
+
+// A manager that cannot answer the branch at all: the restore falls back to the
+// append-only list rather than losing the session's own touches.
+function ctxWithoutBranch(entries = []) {
+  const ctx = ctxOf(entries);
+  delete ctx.sessionManager.getBranch;
+  return ctx;
+}
+
+// The transcript entries a real session file holds (docs/session-format.md): an
+// assistant message with a `write`/`edit` toolCall, and the toolResult that says
+// whether it landed. A branch's write is associated by its NAME.
+function callEntry(id, name, target) {
+  return {
+    type: 'message',
+    id: `call-${id}`,
+    parentId: null,
+    timestamp: new Date(1000).toISOString(),
+    message: { role: 'assistant', content: [{ type: 'toolCall', id, name, arguments: { path: target } }], timestamp: 1000 },
+  };
+}
+function resultEntry(id, isError = false, toolName = 'write') {
+  return {
+    type: 'message',
+    id: `result-${id}`,
+    parentId: `call-${id}`,
+    timestamp: new Date(1000).toISOString(),
+    message: { role: 'toolResult', toolCallId: id, toolName, isError, content: [], timestamp: 1000 },
+  };
+}
+const reportEntry = (content) => ({
+  type: 'custom_message',
+  id: 'report',
+  parentId: null,
+  timestamp: new Date(1000).toISOString(),
+  customType: 'gentle-agents.result',
+  content,
+  display: true,
+});
+
+const associated = (loaded) => [...loaded.mod.oddAssociated].sort();
 
 // The host's own delivery: every handler of that event, in registration order, one at
 // a time, awaited the way the host awaits them.
@@ -414,6 +463,144 @@ describe('the module switch and the neighbouring observations', () => {
       assert.ok(results.length >= 4, 'the naming observer and the guards are all still there');
       for (const result of results) assert.equal(result, undefined, 'nothing blocks a write on an odd document');
       assert.deepEqual(touches(loaded), [], 'a call that has not finished is not a touch');
+    });
+  });
+});
+
+// T4 (odd-rail-session-scope S2-S4): the association the rail filters by. It is
+// rebuilt from the session's OWN ACTIVE branch — so an old session, written before
+// the touch entry existed, and a resumed one both show their ODDs — and grown by the
+// live touch record. A subagent's work reaches the parent as a persisted
+// `gentle-agents.result`, which is the moment the parent re-reads its branch.
+describe('the association rebuilt from the active branch (S3, S4)', () => {
+  test('session_start associates what an old session wrote or edited, with no touch entry at all', async () => {
+    await presentGh(async () => {
+      publishBridge(undefined);
+      const loaded = await loadModule();
+      assert.deepEqual(associated(loaded), [], 'nothing yet');
+      const history = [
+        callEntry('call-1', 'edit', path.join(TASKS, 'alpha.md')),
+        resultEntry('call-1', false, 'edit'),
+        callEntry('call-2', 'write', 'odd/tasks/beta.md'),
+        resultEntry('call-2', false, 'write'),
+      ];
+      await fire(loaded, 'session_start', { reason: 'resume' }, ctxOf(history));
+      assert.deepEqual(associated(loaded), ['alpha', 'beta'],
+        'the branch history names them, which is what an old session has instead of an entry');
+    });
+  });
+
+  test('a FAILED call is not associated, and the association is not a restore of the record', async () => {
+    await presentGh(async () => {
+      publishBridge(undefined);
+      const loaded = await loadModule();
+      const history = [
+        callEntry('call-1', 'write', path.join(TASKS, 'alpha.md')),
+        resultEntry('call-1', true),
+        callEntry('call-2', 'write', path.join(TASKS, 'beta.md')),
+      ];
+      await fire(loaded, 'session_start', { reason: 'new' }, ctxOf(history));
+      assert.deepEqual(associated(loaded), [], 'a failed or unanswered write names nothing');
+      assert.deepEqual(touches(loaded), [], 'and the touch record still holds only persisted touches');
+    });
+  });
+
+  test('the abandoned branch is not read: only the active branch associates', async () => {
+    await presentGh(async () => {
+      publishBridge(undefined);
+      const loaded = await loadModule();
+      const abandoned = [
+        callEntry('call-1', 'write', path.join(TASKS, 'alpha.md')),
+        resultEntry('call-1'),
+      ];
+      // `getEntries()` still holds the abandoned path — that is the whole defect
+      // `getBranch()` fixes — and the active branch is a different one.
+      await fire(loaded, 'session_start', { reason: 'resume' }, ctxOf(abandoned, [], []));
+      assert.deepEqual(associated(loaded), [], 'an abandoned branch’s write is not this session’s work');
+    });
+  });
+
+  test('a live touch joins the association immediately', async () => {
+    await presentGh(async () => {
+      publishBridge(undefined);
+      const loaded = await loadModule();
+      await fire(loaded, 'session_start', { reason: 'new' }, ctxOf([]));
+      assert.deepEqual(associated(loaded), []);
+      await fire(loaded, 'tool_result', writeEvent('odd/tasks/gamma.md'), ctxOf([]));
+      assert.deepEqual(associated(loaded), ['gamma'], 'the row can show before anything is resumed');
+      await fire(loaded, 'session_start', { reason: 'resume' }, ctxOf([]));
+      assert.deepEqual(associated(loaded), [], 'and a session boundary replaces it, never merges it');
+    });
+  });
+
+  test('a persisted subagent report associates its files_changed paths', async () => {
+    await presentGh(async () => {
+      publishBridge(undefined);
+      const loaded = await loadModule();
+      await fire(loaded, 'session_start', { reason: 'new' }, ctxOf([]));
+
+      const report = [
+        'status: completed',
+        'files_changed:',
+        `  - ${path.join(TASKS, 'alpha.md')}: the change`,
+        '  - odd/tasks/beta.md: another change',
+      ].join('\n');
+      const branch = [reportEntry(report)];
+      await fire(
+        loaded,
+        'message_end',
+        { message: { role: 'custom', customType: 'gentle-agents.result', content: report, display: true } },
+        ctxOf(branch),
+      );
+      assert.deepEqual(associated(loaded), ['alpha', 'beta'], 'the parent reads its own history, not the child');
+
+      // Somebody else's custom message is not a subagent report.
+      await fire(
+        loaded,
+        'message_end',
+        { message: { role: 'custom', customType: 'some.other', content: 'files_changed:\n  - odd/tasks/gamma.md: x\n', display: true } },
+        ctxOf([reportEntry(report), reportEntry('files_changed:\n  - odd/tasks/gamma.md: x\n')]),
+      );
+      assert.deepEqual(associated(loaded), ['alpha', 'beta'], 'no association from a message that is not one');
+    });
+  });
+
+  test('a resumed session restores touches, reports and Spec lines alike', async () => {
+    await presentGh(async () => {
+      publishBridge(undefined);
+      const loaded = await loadModule();
+      const task = 'Do the work.\n\nSpec: odd/tasks/delta.md, T1\n';
+      const history = [
+        {
+          type: 'custom',
+          id: 'touch',
+          parentId: null,
+          timestamp: new Date(1000).toISOString(),
+          customType: ENTRY_TYPE,
+          data: { path: path.join(TASKS, 'alpha.md'), at: 1000 },
+        },
+        reportEntry('files_changed:\n  - odd/tasks/beta.md: x\n'),
+        callEntry('call-1', 'subagent_run', 'odd/tasks/ignored.md'),
+        resultEntry('call-1', false, 'subagent_run'),
+      ];
+      // The Spec line travels in the task ARGUMENT, which callEntry does not carry.
+      history[2].message.content[0].arguments = { task };
+      await fire(loaded, 'session_start', { reason: 'resume' }, ctxOf(history));
+      assert.deepEqual(associated(loaded), ['alpha', 'beta', 'delta']);
+    });
+  });
+
+  test('a manager that cannot answer the branch keeps the append-only fallback', async () => {
+    await presentGh(async () => {
+      publishBridge(undefined);
+      const loaded = await loadModule();
+      const history = [
+        callEntry('call-1', 'edit', path.join(TASKS, 'alpha.md')),
+        resultEntry('call-1', false, 'edit'),
+      ];
+      await fire(loaded, 'session_start', { reason: 'resume' }, ctxWithoutBranch(history));
+      assert.deepEqual(associated(loaded), ['alpha'],
+        'a host without `getBranch` restores what it can rather than nothing');
     });
   });
 });

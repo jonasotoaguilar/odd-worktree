@@ -999,11 +999,11 @@ a pull request in both buckets counts once.
 
 ## The `ODD` rail section
 
-A second sidebar section, beside the `GITHUB` one and titled `ODD`, listing the ODD
-this machine is working on across every checkout the session knows about. It is
+A second sidebar section, beside the `GITHUB` one and titled `ODD`, listing the ODDs
+THIS SESSION is associated with, across the checkouts it knows about. It is
 placed right after the host's own `AGENTS` rail part (`placement: { after: "agents" }`),
-never at the top. Rows are the ODD documents under `odd/tasks/`, read from the same
-grouped model `/odd` draws.
+never at the top. Rows are the associated ODD documents under `odd/tasks/`, read
+from the same grouped model `/odd` draws.
 
 - **One row per ODD NAME, never one per checkout.** An ODD that exists in main and in
 a worktree is ONE entry, and the row's right-hand column — the bridge's own muted
@@ -1011,22 +1011,41 @@ a worktree is ONE entry, and the row's right-hand column — the bridge's own mu
 never a path. Which copy that is: the most recently modified document, and on an
 exact tie `main`, because `main` is a group label and a tie-break, not an override.
 Two worktrees at the same instant are settled by the model's own group order.
-- **The scope is the session's registered worktrees.** The section lists main's ODDs
-always, plus the ODDs of the checkouts this session registered through the host's
+- **The scope is the session's ASSOCIATION, inside its registered worktrees.** The
+rail lists only the ODDs this session is associated with — never every document on
+disk. Association is by ODD NAME (`odd/tasks/<name>.md`), and it is rebuilt from the
+session's own history: a successful `write` or `edit` toolCall on that document (its
+matching `toolResult` by `toolCallId` must not be an error), the persisted
+`odd-worktree.odd-touch` entries, the `files_changed:` paths of a
+`gentle-agents.result` report, and the `Spec: odd/tasks/<name>.md` line of a
+successful `subagent_run`/`subagent_continue` task — so a subagent's write counts for
+the parent. It reads the ACTIVE branch (`getBranch()`, not the append-only
+`getEntries()`), which is what makes an OLD session written before the touch entry
+existed and a RESUMED one show their ODDs; an abandoned branch's write is not this
+session's work. The live touch record is unioned in, so a document the session just
+wrote shows at once. A path with `..`, or one that is not exactly
+`odd/tasks/<name>.md`, associates nothing, and a touched name no longer on disk stays
+hidden. **With nothing associated the body says so:** one dim row reading
+`no ODD associated`, the same shape as the `GITHUB` section's `no open issues` line.
+Within that scope, the checkouts are the session's registered worktrees: main's ODDs
+plus the ODDs of the worktrees this session registered through the host's
 `worktree_register` tool — the same session entries the files panel and `/odd`
 read — so the rail and the panel answer from one set and stay in sync. A registered
 worktree whose `odd/tasks` has nothing new or different from main contributes
-nothing at all: no row and no group, since a row is an ODD and not a checkout.
+nothing at all: no row and no group, since a row is an ODD and not a checkout. A
+worktree registered only on an abandoned branch is out of scope for the same reason.
 - **Four rows, then `N more`.** The body holds at most four ODDs; with more, the
 fifth line reads `<N> more`, in the dim tone, and is inert — there is no panel
 behind "the rest". Exactly four ODDs paint four rows and no elision line.
-- **The ODDs this session wrote or edited come first.** A `write` or an `edit` whose
-target is an `odd/tasks/*.md` document is recorded against the session, and that
-record ORDERS the rail and asks for an immediate re-read; it never adds a row, never
-removes one and never decides where an ODD lives. Touched names come first, by their
-own touch instant; an exact tie on touch time follows the order the touches were
-recorded. For everything untouched the order is recency (`mtimeMs` descending) and
-then the name in code units, so the sequence is the same on every host.
+- **Attribution is the filter AND the order.** A `write` or an `edit` whose target is
+an `odd/tasks/*.md` document is recorded against the session, and that record is part
+of what the rail lists and what puts a name first, and it asks for an immediate
+re-read. It is never what decides that an ODD exists or where it lives — the grouped
+model answers that, and a touched name with no document on disk draws nothing. Within
+the association, touched names come first, by their own touch instant; an exact tie
+on touch time follows the order the touches were recorded. For everything else the
+order is recency (`mtimeMs` descending) and then the name in code units, so the
+sequence is the same on every host.
 - **A click opens `/odd` on that document; it does not mount a panel itself.**
 Clicking a row sends `/odd <absolute document path>` to the host at once, so the
 viewer opens on that ODD — the copy the row's `meta` named — and the panel decides
@@ -1037,8 +1056,11 @@ if the host never ran it. A path holding spaces is one argument, exactly as type
 - **A frame never runs `git`.** `lines()` reads one in-process snapshot and only ever
 SCHEDULES the read: the grouped model (`git worktree list`, then one comparison per
 worktree with something to compare) is read off the frame, behind the section's own
-TTL, and again — immediately — when the session records a touch or the host announces
-that a worktree was registered. A `session_start` does not read anything itself: it drops
+TTL, and again — immediately — when the session records a touch, when a subagent
+result is persisted (the `gentle-agents.result` message is what the parent reads its
+own history from), or when the host announces
+that a worktree was registered. A `session_start` does not read anything itself: it
+rebuilds the session's association and drops
 the previous session's rows, so the next drawn frame schedules the read instead of
 waiting out the TTL. A hidden section schedules no read of its own — a drawn frame
 is what owns the timer and the staleness path — but the session's own recorded touch

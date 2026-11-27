@@ -1865,6 +1865,39 @@ and start a new session to apply` — because a reload alone is not enough: the 
 carries the prompt text and the registered guards. Choosing the value a line already has changes nothing
 and says nothing. A missing, malformed or unreadable document keeps both On.
 
+## The OpenCode Go usage source and the DeepSeek peak row
+
+`gentle-pi:usage-source/v1` is how Gentle Shell's usage reader learns a provider it does not ship
+itself. This package registers `opencode-go` on that event, so `/gentle:usage` (behind `alt+u`), the
+status-bar usage segment and the panel's own `r` refresh treat it exactly like a built-in provider: the
+shell owns the refresh schedule and nothing here polls. The panel prints `plan` between the provider
+name and its `updated …` note, so the peak schedule rides there whether the window is peak or off-peak,
+and the window rows keep their plain `go 5h` / `go week` / `go month` names.
+
+The schedule is OpenCode Go's: peak `01:00–04:00` and `06:00–10:00` UTC, Monday to Friday, billed at
+double rate for the DeepSeek family; every other hour and both weekend days are off-peak. A missing API
+key proves the provider unreadable — the panel says `opencode-go · press r to fetch` and no row is drawn
+— while a timeout, a network error or a malformed response never marks it unusable.
+
+**The row above the editor** is the alert itself, one line: `peak · 2× deepseek · until 04:00`. It
+exists only while the provider is readable AND the window is peak, and one timer re-arms at the exact
+boundary, so it appears and disappears with the window instead of on the next turn. Off-peak has no
+row at all rather than an off-peak one.
+
+### The `Alert` page
+
+`/gentle:customize` gains an `Alert` page with ONE Off/On line, `Deepseek peak`, **On by default on a
+first run**. The page opens between `Notifications` and `Layout`: the provider asks for that position
+with `categoryPlacement: { after: "Notifications" }`, because the bridge derives its page list from the
+order of the rows while it builds the menu. A bridge older than `0.16.1` ignores the field and the page
+opens at the end instead — everything else works the same.
+
+`Off` withholds the row above the editor and nothing else: the usage panel, the status-bar segment and
+the `plan` line are untouched. The value is read on every sync — including the switch's own action — so
+a change applies to the session in progress with no `/reload` and no new session. It lives in the
+bridge's own store (`odd-worktree` → `alerts`), and a missing, malformed or unreadable document reads
+On.
+
 ## The list
 
 `worktree_list` prints the main checkout first and unnumbered, as the `base: <branch>@<sha>`

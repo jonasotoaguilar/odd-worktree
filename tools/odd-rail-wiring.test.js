@@ -178,18 +178,69 @@ function sectionOf(loaded) {
   return loaded.sections.find((section) => section && section.id === RAIL_ID);
 }
 
-function ctxFor(repo, registeredRoots = []) {
+// The session the section reads. T4 (odd-rail-session-scope S2-S5): the rail draws
+// only the ODDs the session is ASSOCIATED with, so the context carries an
+// association; `associated` names are handed over as the persisted touch entries a
+// real session has, which is the same evidence `associatedFromHistory` reads.
+//
+// `getEntries()` is the append-only list and `getBranch()` is the path the session is
+// on, so a case can put a registration or a write on an abandoned branch. Both
+// answer the same rows unless a case says otherwise.
+function ctxFor(repo, registeredRoots = [], options = {}) {
+  const opts = options !== null && typeof options === 'object' ? options : {};
+  const registrations = opts.registeredInBranch === false
+    ? []
+    : registeredRoots.map((root) => ({
+      type: 'custom',
+      customType: SESSION_WORKTREE_CUSTOM_TYPE,
+      data: { sessionId: 'thread-1', root, evidence: 'session:tool' },
+    }));
+  // The association as a real session HAS it: an `edit` the session made on the
+  // document, with the successful result that vouches for it. It is history, not a
+  // touch, so it decides WHICH rows exist and never their order (S9's ordering is
+  // the live record's alone).
+  const association = (Array.isArray(opts.associated) ? opts.associated : []).flatMap((name) => {
+    const id = `call-${name}`;
+    const target = path.join(repo, 'odd', 'tasks', `${name}.md`);
+    return [
+      {
+        type: 'message',
+        id: `assistant-${name}`,
+        parentId: null,
+        message: { role: 'assistant', content: [{ type: 'toolCall', id, name: 'edit', arguments: { path: target } }] },
+      },
+      {
+        type: 'message',
+        id: `result-${name}`,
+        parentId: `assistant-${name}`,
+        message: { role: 'toolResult', toolCallId: id, toolName: 'edit', isError: false, content: [] },
+      },
+    ];
+  });
+  const branch = [
+    ...registrations,
+    ...association,
+    ...(Array.isArray(opts.branchEntries) ? opts.branchEntries : []),
+  ];
+  const entries = opts.registeredInBranch === false
+    ? [
+      ...registeredRoots.map((root) => ({
+        type: 'custom',
+        customType: SESSION_WORKTREE_CUSTOM_TYPE,
+        data: { sessionId: 'thread-1', root, evidence: 'session:tool' },
+      })),
+      ...association,
+      ...(Array.isArray(opts.entries) ? opts.entries : []),
+    ]
+    : [...branch, ...(Array.isArray(opts.entries) ? opts.entries : [])];
   return {
     cwd: repo,
     hasUI: true,
     mode: 'tui',
     sessionManager: {
       getSessionId: () => 'thread-1',
-      getEntries: () => registeredRoots.map((root) => ({
-        type: 'custom',
-        customType: SESSION_WORKTREE_CUSTOM_TYPE,
-        data: { sessionId: 'thread-1', root, evidence: 'session:tool' },
-      })),
+      getEntries: () => entries,
+      getBranch: () => branch,
     },
     ui: { notify: () => {}, custom: undefined, select: undefined },
   };
@@ -290,7 +341,7 @@ describe('the rows the rail draws (S5, S12, S13)', () => {
   test('main only when no worktree is registered, and one row per name with `main` as meta', async () => {
     const loaded = await load();
     const repo = makeRepo();
-    const ctx = ctxFor(repo, []);
+    const ctx = ctxFor(repo, [], { associated: ['first', 'second'] });
     startSession(loaded, ctx);
     const section = sectionOf(loaded);
     const rows = await waitForRows(section, ctx, 2);
@@ -309,7 +360,7 @@ describe('the rows the rail draws (S5, S12, S13)', () => {
       for (const name of ['first', 'second']) {
         writeTask(worktree, name, fs.readFileSync(path.join(repo, 'odd', 'tasks', `${name}.md`), 'utf8'), 300);
       }
-      const ctx = ctxFor(repo, [worktree]);
+      const ctx = ctxFor(repo, [worktree], { associated: ['first', 'second'] });
       startSession(loaded, ctx);
       const section = sectionOf(loaded);
       const mainOnly = await waitForRows(section, ctx, 2);
@@ -323,7 +374,7 @@ describe('the rows the rail draws (S5, S12, S13)', () => {
       shutdown(loaded, ctx);
       // A fresh load for a fresh projection: the section is a new binding.
       const again = await load();
-      const ctxAgain = ctxFor(repo, [worktree]);
+      const ctxAgain = ctxFor(repo, [worktree], { associated: ['first', 'second', 'wt-only'] });
       startSession(again, ctxAgain);
       const rows = await waitForRows(sectionOf(again), ctxAgain, 3);
       const byName = new Map(rows.map((row) => [row.label, row]));
@@ -345,7 +396,7 @@ describe('the rows the rail draws (S5, S12, S13)', () => {
     }
     git(repo, ['add', '-A']);
     git(repo, ['commit', '-m', 'more']);
-    const ctx = ctxFor(repo, []);
+    const ctx = ctxFor(repo, [], { associated: ['first', 'second', 'third', 'fourth', 'fifth', 'sixth'] });
     startSession(loaded, ctx);
     const section = sectionOf(loaded);
     const deadline = Date.now() + 20_000;
@@ -366,7 +417,7 @@ describe('attribution and the click (S6, S9)', () => {
   test('a write recorded by T8 sends its ODD first and forces the refresh', async () => {
     const loaded = await load();
     const repo = makeRepo();
-    const ctx = ctxFor(repo, []);
+    const ctx = ctxFor(repo, [], { associated: ['first', 'second'] });
     startSession(loaded, ctx);
     const section = sectionOf(loaded);
     const before = await waitForRows(section, ctx, 2);
@@ -391,7 +442,7 @@ describe('attribution and the click (S6, S9)', () => {
   test('a click dispatches ONE /odd message, a second click inside the guard dispatches nothing', async () => {
     const loaded = await load();
     const repo = makeRepo();
-    const ctx = ctxFor(repo, []);
+    const ctx = ctxFor(repo, [], { associated: ['first', 'second'] });
     startSession(loaded, ctx);
     const section = sectionOf(loaded);
     const rows = await waitForRows(section, ctx, 2);
@@ -419,7 +470,7 @@ describe('attribution and the click (S6, S9)', () => {
     const loaded = await load();
     const repo = makeRepo();
     const spaced = writeTask(repo, 'with space', '# body of with space\n');
-    const ctx = ctxFor(repo, []);
+    const ctx = ctxFor(repo, [], { associated: ['first', 'second', 'with space'] });
     startSession(loaded, ctx);
     const section = sectionOf(loaded);
     const deadline = Date.now() + 20_000;
@@ -462,7 +513,7 @@ describe('the rail follows its session (S13)', () => {
   test('a session_start drops the previous rows, so the next frame reloads', async () => {
     const loaded = await load();
     const repo = makeRepo();
-    const ctx = ctxFor(repo, []);
+    const ctx = ctxFor(repo, [], { associated: ['first', 'second', 'third'] });
     startSession(loaded, ctx);
     const section = sectionOf(loaded);
     const first = await waitForRows(section, ctx, 2);
@@ -480,7 +531,7 @@ describe('the rail follows its session (S13)', () => {
   test('a fired worktree-registration event forces a refresh', async () => {
     const loaded = await load();
     const repo = makeRepo();
-    const ctx = ctxFor(repo, []);
+    const ctx = ctxFor(repo, [], { associated: ['first', 'second', 'third'] });
     startSession(loaded, ctx);
     const section = sectionOf(loaded);
     await waitForRows(section, ctx, 2);
@@ -496,7 +547,7 @@ describe('the rail follows its session (S13)', () => {
   test('a host without pi.events still registers the rail and draws its rows', async () => {
     const loaded = await load({ noEvents: true });
     const repo = makeRepo();
-    const ctx = ctxFor(repo, []);
+    const ctx = ctxFor(repo, [], { associated: ['first', 'second'] });
     startSession(loaded, ctx);
     const section = sectionOf(loaded);
     assert.ok(section, 'the rail registers on a host with no event seam');
@@ -508,7 +559,7 @@ describe('the rail follows its session (S13)', () => {
   test('a host whose event seam throws still registers the rail', async () => {
     const loaded = await load({ eventsOnThrows: true });
     const repo = makeRepo();
-    const ctx = ctxFor(repo, []);
+    const ctx = ctxFor(repo, [], { associated: ['first', 'second'] });
     startSession(loaded, ctx);
     const section = sectionOf(loaded);
     assert.ok(section, 'a throwing listener registration costs only the listener');
@@ -523,7 +574,7 @@ describe('teardown (S6, S9)', () => {
     const observed = observeGit(loaded.mod);
     try {
       const repo = makeRepo();
-      const ctx = ctxFor(repo, []);
+      const ctx = ctxFor(repo, [], { associated: ['first', 'second'] });
       startSession(loaded, ctx);
       const section = sectionOf(loaded);
       const rows = await waitForRows(section, ctx, 2);
@@ -548,7 +599,7 @@ test('T6 round 4: a failed worktree-list refresh never labels an unregistered ch
   const repo = makeRepo();
   const linked = addWorktree(repo, 'linked');
   writeTask(linked, 'linked-private', '# Never in session scope\n');
-  const ctx = ctxFor(linked, []);
+  const ctx = ctxFor(linked, [], { associated: ['first', 'second'] });
   startSession(e, ctx);
   const section = sectionOf(e);
   const gitLib = e.mod.libModule('worktree-git.js');
@@ -569,4 +620,172 @@ test('T6 round 4: a failed worktree-list refresh never labels an unregistered ch
     gitLib.runArgvAsync = real;
     shutdown(e, ctx);
   }
+});
+
+// T4 (odd-rail-session-scope S1-S5): the rail is the SESSION's, drawn from the
+// association rebuilt off the active branch. Everything below speaks only the host's
+// language — the entries a session file holds and the rows the section paints.
+describe('the rail is scoped to the session’s association (S1-S5)', () => {
+  // One assistant `edit` toolCall and the toolResult that says whether it landed.
+  // This is what an OLD session has instead of the persisted touch entry.
+  function editHistory(repo, name, isError = false) {
+    const id = `call-${name}`;
+    return [
+      {
+        type: 'message',
+        id: `assistant-${name}`,
+        parentId: null,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'toolCall', id, name: 'edit', arguments: { path: path.join(repo, 'odd', 'tasks', `${name}.md`) } }],
+        },
+      },
+      {
+        type: 'message',
+        id: `result-${name}`,
+        parentId: `assistant-${name}`,
+        message: { role: 'toolResult', toolCallId: id, toolName: 'edit', isError, content: [] },
+      },
+    ];
+  }
+  const report = (text) => ({ type: 'custom_message', id: 'report', parentId: null, customType: 'gentle-agents.result', content: text, display: true });
+
+  test('a NEW session draws the one dim line, not the four ODDs on disk (S1, S2)', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    // The disk holds two documents; the session is associated with none of them.
+    const ctx = ctxFor(repo, []);
+    startSession(loaded, ctx);
+    const rows = await waitForRows(sectionOf(loaded), ctx, 1);
+    assert.deepEqual(rows, [{ label: 'no ODD associated', tone: 'dim' }],
+      'the same dim line the GITHUB section draws when it has nothing');
+    assert.equal('onClick' in rows[0], false, 'and it is inert');
+  });
+
+  test('an OLD session’s successful edit draws its ODD, with no touch entry anywhere (S3)', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    const branch = editHistory(repo, 'second');
+    assert.equal(branch.some((entry) => entry.customType === 'odd-worktree.odd-touch'), false,
+      'the fixture really carries no persisted touch: the history is the only evidence');
+    const ctx = ctxFor(repo, [], { branchEntries: branch });
+    startSession(loaded, ctx);
+    const rows = await waitForRows(sectionOf(loaded), ctx, 1);
+    assert.deepEqual(rows.map((row) => [row.label, row.meta]), [['second', 'main']],
+      'only the ODD that session worked on, not the one it never touched');
+  });
+
+  test('a FAILED write is not associated, so only the successful one draws (S3)', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    const ctx = ctxFor(repo, [], {
+      branchEntries: [...editHistory(repo, 'first'), ...editHistory(repo, 'second', true)],
+    });
+    startSession(loaded, ctx);
+    const rows = await waitForRows(sectionOf(loaded), ctx, 1);
+    assert.deepEqual(rows.map((row) => row.label), ['first'], 'a write that never landed is no association');
+  });
+
+  test('an abandoned branch’s write is not associated: only the active branch counts (S3)', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    // The abandoned path still sits in the append-only list; the ACTIVE branch does
+    // not contain it — that is the whole difference `getBranch()` makes.
+    const ctx = ctxFor(repo, [], { branchEntries: [], entries: editHistory(repo, 'second') });
+    startSession(loaded, ctx);
+    const rows = await waitForRows(sectionOf(loaded), ctx, 1);
+    assert.deepEqual(rows, [{ label: 'no ODD associated', tone: 'dim' }],
+      'the branch the session is not on never claims an ODD');
+  });
+
+  test('a subagent’s report and its `Spec:` line associate their ODDs (S4)', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    writeTask(repo, 'third', '# body of third\n', 300);
+    writeTask(repo, 'fourth', '# body of fourth\n', 400);
+    const task = `Do the work.\n\nSpec: odd/tasks/fourth.md, T1, T2\n\n## Allowed edit surfaces\n- lib/x.js`;
+    const branch = [
+      report('status: completed\nfiles_changed:\n  - odd/tasks/third.md: the change\n'),
+      {
+        type: 'message',
+        id: 'assistant-subagent',
+        parentId: null,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'toolCall', id: 'call-subagent', name: 'subagent_run', arguments: { task } }],
+        },
+      },
+      {
+        type: 'message',
+        id: 'result-subagent',
+        parentId: 'assistant-subagent',
+        message: { role: 'toolResult', toolCallId: 'call-subagent', toolName: 'subagent_run', isError: false, content: [] },
+      },
+    ];
+    const ctx = ctxFor(repo, [], { branchEntries: branch });
+    startSession(loaded, ctx);
+    const rows = await waitForRows(sectionOf(loaded), ctx, 2);
+    assert.deepEqual(rows.map((row) => row.label).sort(), ['fourth', 'third'],
+      'the parent reads its own history: both the report and the task’s Spec line');
+  });
+
+  test('a RESUMED session restores its association from the branch (S3)', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    const touch = {
+      type: 'custom',
+      id: 'touch',
+      parentId: null,
+      customType: 'odd-worktree.odd-touch',
+      data: { path: path.join(repo, 'odd', 'tasks', 'second.md'), at: 1000 },
+    };
+    const ctx = ctxFor(repo, [], { branchEntries: [touch] });
+    startSession(loaded, { ...ctx, sessionManager: { ...ctx.sessionManager, getEntries: () => [] } });
+    const rows = await waitForRows(sectionOf(loaded), ctx, 1);
+    assert.deepEqual(rows.map((row) => row.label), ['second'],
+      'resuming reads the branch, not the append-only list');
+  });
+
+  test('a persisted subagent result refreshes the rail without any draw or TTL wait (S4)', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    const branch = editHistory(repo, 'first');
+    const ctx = ctxFor(repo, [], { branchEntries: branch });
+    startSession(loaded, ctx);
+    const section = sectionOf(loaded);
+    const before = await waitForRows(section, ctx, 1);
+    assert.deepEqual(before.map((row) => row.label), ['first']);
+
+    // The subagent's ODD did not exist when the rail read: only a forced refresh
+    // can show it, so the rows below prove the message_end hook asked for one.
+    writeTask(repo, 'third', '# body of third\n');
+    const later = [
+      ...branch,
+      report('files_changed:\n  - odd/tasks/third.md: done\n'),
+    ];
+    const laterCtx = ctxFor(repo, [], { branchEntries: later });
+    for (const [event, handler] of loaded.hooks) {
+      if (event !== 'message_end') continue;
+      await handler({ message: { role: 'custom', customType: 'gentle-agents.result', content: 'x' } }, laterCtx);
+    }
+    const rows = await waitForRows(section, ctx, 2, 3000);
+    assert.deepEqual(rows.map((row) => row.label), ['third', 'first'],
+      'the report’s ODD appeared, which only a forced read can do');
+  });
+
+  test('a worktree registered only on an abandoned branch is out of scope (S5)', async () => {
+    const loaded = await load();
+    const repo = makeRepo();
+    const worktree = addWorktree(repo, 'wt-abandoned');
+    writeTask(worktree, 'abandoned-only', '# Never in this session’s scope\n');
+    const ctx = ctxFor(repo, [worktree], {
+      registeredInBranch: false,
+      branchEntries: editHistory(repo, 'first'),
+    });
+    startSession(loaded, ctx);
+    const rows = await waitForRows(sectionOf(loaded), ctx, 1);
+    assert.deepEqual(rows.map((row) => row.label), ['first']);
+    assert.equal(rows.some((row) => row.label === 'abandoned-only'), false,
+      'a registration the session abandoned never keeps its documents in scope');
+  });
 });

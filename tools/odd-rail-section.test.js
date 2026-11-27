@@ -522,3 +522,43 @@ test('the refresh timer is unref\'d, reads once per floor, and stops itself outs
   disposed.dispose();
   assert.equal(disposeTimers.active().length, 0, 'dispose clears the floor timer');
 });
+
+// ---------------------------------------------------------------------------
+// S1 (odd-rail-session-scope): an empty body says so.
+// ---------------------------------------------------------------------------
+
+test('S1: a ready list with no associated ODD draws ONE dim `no ODD associated` row', async () => {
+  const opened = [];
+  const sched = manualSchedule();
+  const handle = createOddRailSection({
+    load: async () => [],
+    open: (target) => { opened.push(target); },
+    schedule: sched.schedule,
+  });
+  await handle.refresh();
+
+  const rows = handle.section.lines({});
+  // Exactly the `EMPTY_ROW` of lib/issues-section.js: one dim line, a copy per
+  // frame, and no click — there is nothing behind it to open.
+  assert.deepEqual(rows, [{ label: 'no ODD associated', tone: 'dim' }]);
+  assert.equal('onClick' in rows[0], false, 'the empty line is inert, like the issues one');
+  assert.deepEqual(opened, [], 'drawing the empty line opens nothing');
+});
+
+test('S1: the empty line is a state, not a failure: another frame inside the TTL keeps it, and a later list replaces it', async () => {
+  let items = [];
+  const handle = createOddRailSection({
+    load: async () => items,
+    open: () => {},
+    schedule: () => {},
+  });
+  await handle.refresh();
+  assert.deepEqual(handle.section.lines({}), [{ label: 'no ODD associated', tone: 'dim' }]);
+  // A second frame reads the same snapshot: no read, the same one line.
+  assert.deepEqual(handle.section.lines({}), [{ label: 'no ODD associated', tone: 'dim' }]);
+
+  items = FOUR;
+  await handle.refresh();
+  assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['alpha', 'beta', 'gamma', 'delta'],
+    'a list replaces the empty line, and its rows keep their own shape');
+});

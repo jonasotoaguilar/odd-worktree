@@ -8,16 +8,20 @@ The question this page answers: which rules must every change preserve, and what
 2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
    invariants 18 and 19 allow.** No customize COMMAND, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
-   `herdr-gentle:` command name. This package owns NO preference of its own: its
-   customize-side contribution is the two DESIGNS (`activity` and `color`) on
+   `herdr-gentle:` command name. This package owns exactly FOUR preferences, each an
+   Off/On row registered through the bridge and stored in the bridge's own store:
+   `Codegraph+`, `Worktrees+` (`Tools` page), `Deepseek peak` and `Claude peak`
+   (`Alert` page). All four read Off until the human turns them on.
+   Everything else it contributes to `/gentle:customize` is a DESIGN: the two
+   (`activity` and `color`) on
    gentle-shell-bridge's own `Cards` page — a `Card activity` line, or its `Card bash`
    line on a bridge older than 0.6.0, and a `Card diff` line on 0.9.0 and later
    (invariant 3). The skill/ODD file cards obey the `activity` design's line
    (invariant 23) and contribute no row of their own, and never the `color` one; neither design is a
-   preference here, because the bridge owns those choices and its store. It registers no command, no page, no setting, no
-   settings file and no key of its own beyond the TWO host shortcuts, the file
-   picker's `alt+p` and the issues panel's `alt+i` (invariant 3), and no other
-   setting is read, written or offered. CodeGraph
+   preference here, because the bridge owns those choices and its store. It registers no customize
+   COMMAND, no settings file of its own and no key of its own beyond the TWO host shortcuts, the file
+   picker's `alt+p` and the issues panel's `alt+i` (invariant 3): its two menu pages (`Tools`, `Alert`)
+   are row providers on the bridge's menu, never a command and never a store of this package's own. CodeGraph
    adds no command and no model-facing tool: no `/codegraph-*` command, no tool
    named `codegraph`, no override of another extension's tool.
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
@@ -72,7 +76,7 @@ The question this page answers: which rules must every change preserve, and what
    worktree's delta). `filesSessionWorktreeRoots` reads the same active branch, so a
    worktree registered only on an abandoned branch is out of scope.
 
-   **Two halves are optional, and nothing else is.** The `Tools` page of
+   **Three switches are optional, and nothing else is.** The `Tools` page of
    `/gentle:customize` (`lib/modules.js`, a plain `registerRows` provider) holds the
    `Codegraph+` and `Worktrees+` Off/On lines. They are read once, when the surface
    registers, from the package's own store; `Worktrees+` Off leaves out `/warp`, its
@@ -80,6 +84,18 @@ The question this page answers: which rules must every change preserve, and what
    out the CodeGraph wiring, prompt text and reminders. The CodeGraph CARD is not one of
    these: it is a design of the `Card activity` line and follows that switch. A change lands on
    the next load, so each one says so. Neither adds a command or a tool name.
+
+   **The peak rows have one switch per provider, applied live.** `lib/alert-rows.js`
+   contributes the `Alert` page of `/gentle:customize` with one line per entry of
+   `lib/peak-providers.js` — `Deepseek peak`, `Claude peak` — every one of them Off on a
+   first run, placed `categoryPlacement: { after: "Notifications" }` so the page opens
+   between `Notifications` and `Layout`. A switch gates ONLY its provider's row above the
+   editor: the `opencode-go` usage source, its panel, its status-bar segment and the other
+   providers are unaffected, and nothing here depends on the session's model or on a usage
+   key being present. Unlike the two module switches these land in the session in progress:
+   the extension reads them on every sync, and a row's own action re-syncs. The values are
+   booleans in the bridge's own store (`odd-worktree` → `alerts` → `{ peaks: { … } }`), and an
+   absent, malformed or unreadable document reads Off; nothing is written at load.
 
    **The sections reach the host only through gentle-shell-bridge.** Both the issues
    rail and the ODD rail are published through that package's sidebar-section API alone: the object read from

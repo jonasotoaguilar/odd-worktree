@@ -338,6 +338,16 @@ test('a code read in the session checkout gets one reminder part appended, and t
   assert.deepEqual(patch.structuredContent, { output: 'source' }, 'the structured content of the result is kept');
 });
 
+test('a child is not reminded', async () => {
+  const { run } = setup({
+    toplevel: checkoutMap(),
+    env: { GENTLE_PI_AGENTS_CHILD: '1', GENTLE_PI_AGENTS_REQUESTED_TOOLS: 'read,grep,mcp__codegraph__codegraph_explore' },
+    argv: ['node', '/tmp/gentle-pi-subagent-gentle-ai-worker-ab12cd/instructions.md'],
+  });
+  await run('before_agent_start', { systemPromptOptions: { selectedTools: [] } });
+  assert.equal(await run('tool_result', readEvent('src/a.ts')), undefined);
+});
+
 test('ODD_WORKTREE_PROMPT=0 silences the reminders too, because they cite the rule that variable suppresses', async () => {
   const { run } = setup({ toplevel: checkoutMap(), env: { ODD_WORKTREE_PROMPT: '0' } });
   await run('before_agent_start', SESSION_TOOLS);
@@ -400,14 +410,14 @@ test('a new request re-arms the one reminder of the checkout (S3, S7)', async ()
   assert.equal(next.content[1].text, NATIVE_REMINDER, 'the first search of the next request hears it again');
 });
 
-test('a worker child is told to call the MCP tool, and a review agent is told nothing', async () => {
+test('a worker child and a review agent are told nothing', async () => {
   const worker = setup({
     env: { GENTLE_PI_AGENTS_CHILD: '1', GENTLE_PI_AGENTS_REQUESTED_TOOLS: 'read,bash,mcp__codegraph__codegraph_explore' },
     argv: ['node', '/tmp/gentle-pi-subagent-gentle-ai-worker-a1b2c3/bin.js'],
     toplevel: checkoutMap(),
   });
   const workerPatch = await worker.run('tool_result', readEvent('src/a.ts'));
-  assert.equal(workerPatch.content[1].text, MCP_REMINDER);
+  assert.equal(workerPatch, undefined);
 
   const reviewer = setup({
     env: { GENTLE_PI_AGENTS_CHILD: '1', GENTLE_PI_AGENTS_REQUESTED_TOOLS: 'read,bash,mcp__codegraph__codegraph_explore' },

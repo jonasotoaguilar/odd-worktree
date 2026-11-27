@@ -1962,6 +1962,10 @@ reaching them.
   <path> — read skill files with the `read` tool instead.`` Not refused: general `*.md` and `docs/**`, ODD
   artifacts, a skill path inside quoted text (`echo`, `git commit -m`), a heredoc body, `grep`/`rg` over
   skills, writes (`sed -i`, `cat >`, `tee`) and `ls skills/`. The worktree guard decides first.
+- **They judge the orchestrator, not a subagent child.** Creating a worktree and leaving the default
+  branch are the primary session's actions (a child is handed the worktree it works in), so a session
+  started as a child (`GENTLE_PI_AGENTS_CHILD=1`) is judged by neither this guard nor the `edit` and
+  `write` guard below. The skill-read guard still applies to every session.
 - `ODD_WORKTREE_GUARD=0` turns them off for the process, like `ODD_WORKTREE_PROMPT=0`
   for the prompt blocks. No other value does, and nothing else configures them.
 
@@ -2060,7 +2064,7 @@ advises and runs nothing; what the package does with CodeGraph itself is in
 
 ## The two CodeGraph reminders
 
-A session that already holds a CodeGraph tool also gets two short reminders, appended as one extra
+The primary session, when it already holds a CodeGraph tool, also gets two short reminders, appended as one extra
 text part to the result of a finished tool call. They are advice in the same words the prompt block
 uses: they never block a call, never replace a result, never arrive as a separate message, and add no
 tool or command. Both are gated exactly like the prompt block — only with the `codegraph` CLI installed
@@ -2087,21 +2091,20 @@ fires for the same project's other worktree and for another repository alike, an
 child. It stays silent, using up no slot, for a checkout this session already explored with
 `projectPath` since the last compaction.
 
-**Guard 2, the session's own checkout.** The primary session and every child except the `review-*`
-agents. It fires on the first search of the checkout the session is in, while CodeGraph is unused:
+**Guard 2, the session's own checkout.** The primary session alone: a child lives a message or two and
+its own `## CodeGraph` text already says the rule. It fires on the first search of the checkout the session is in, while CodeGraph is unused:
 
 ```text
 Follow the CodeGraph rule: run `codegraph` `query` or `explore` first.
 ```
 
-for the primary session and the explore agent (the native wording only when that role holds the
-native tool), and
+for the primary session (the native wording only when it holds the native tool), and
 
 ```text
 Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first.
 ```
 
-for every other role. It fires once per checkout per request, on that checkout's first search while the
+when it holds only the MCP tool. It fires once per checkout per request, on that checkout's first search while the
 graph is unused: no later search of the same request repeats it, and using `codegraph` or the MCP tool
 after it changes nothing. Its first-search slot and its "already used" flag are per request: every new
 request re-arms guard 2 with both, while guard 1's slots and the explored checkouts stay per session,

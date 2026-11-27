@@ -3301,12 +3301,20 @@ function guardSkillReadBashCall(event) {
 // the identity and the default branch memoized per checkout, the current branch read
 // on demand, so the hot path costs one `Map` hit per call plus one git read for a
 // switch.
+// Worktree creation and the principal checkout's branch are the ORCHESTRATOR's actions: a subagent child is
+// handed the worktree it works in and never creates one or leaves the default branch, so neither worktree
+// guard judges a child (`GENTLE_PI_AGENTS_CHILD`, the signal the prompt blocks use).
+function oddChildSession() {
+  return process.env.GENTLE_PI_AGENTS_CHILD === "1";
+}
+
 function guardWorktreeBashCall(event, ctx) {
   try {
     // `ODD_WORKTREE_GUARD=0` turns the guards off for this process, the way
     // `ODD_WORKTREE_PROMPT=0` turns off the prompt blocks. Read per call: a guard is
     // cheap, and an escape hatch that needs a restart is not one.
     if (process.env.ODD_WORKTREE_GUARD === "0") return undefined;
+    if (oddChildSession()) return undefined;
     if (!event || event.toolName !== "bash") return undefined;
     const guard = libRequire("worktree-guard.js");
     if (!guard || typeof guard.decideBashGuard !== "function") return undefined;
@@ -3348,6 +3356,7 @@ const WRITE_GUARD_TOOLS = new Set(["edit", "write"]);
 function guardWorktreeWriteCall(event, ctx) {
   try {
     if (process.env.ODD_WORKTREE_GUARD === "0") return undefined;
+    if (oddChildSession()) return undefined;
     const toolName = oddToolNameOf(event);
     if (!WRITE_GUARD_TOOLS.has(toolName)) return undefined;
     const paths = oddTouchedPaths(oddArgsOf(event));

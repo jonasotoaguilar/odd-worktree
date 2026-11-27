@@ -697,6 +697,26 @@ describe('the tool_call handler the extension registers', () => {
     }
   });
 
+  test('a subagent child is judged by neither worktree guard: they are the orchestrator\'s actions', async () => {
+    const before = process.env.GENTLE_PI_AGENTS_CHILD;
+    try {
+      process.env.GENTLE_PI_AGENTS_CHILD = '1';
+      assert.equal(await callTool(loaded.hooks, bash('git worktree add ../odd-b'), principal), undefined, 'worktree add');
+      assert.equal(await callTool(loaded.hooks, bash('git checkout -b feat/odd-b'), principal), undefined, 'branch switch');
+      const file = path.join(principal, 'src', 'a.js');
+      assert.equal(await callTool(loaded.hooks, { toolName: 'write', input: { path: file, content: 'x' } }, principal), undefined, 'write');
+      assert.equal(await callTool(loaded.hooks, { toolName: 'edit', input: { path: file, oldText: 'a', newText: 'b' } }, principal), undefined, 'edit');
+    } finally {
+      if (before === undefined) delete process.env.GENTLE_PI_AGENTS_CHILD;
+      else process.env.GENTLE_PI_AGENTS_CHILD = before;
+    }
+    assert.deepEqual(
+      await callTool(loaded.hooks, bash('git worktree add ../odd-b'), principal),
+      { block: true, reason: WORKTREE_ADD_REFUSAL },
+      'the primary session is still judged',
+    );
+  });
+
   test('refuses the switches that leave the principal checkout\'s default branch', async () => {
     const expected = [
       ['git checkout -b feat/odd-b', BRANCH_SWITCH_REFUSAL],

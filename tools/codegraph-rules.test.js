@@ -36,7 +36,12 @@ describe('the seven texts on disk', () => {
       for (const binary of ['fd', 'find', 'rg', 'grep', 'read', 'cat']) {
         assert.ok(text.includes(`\`${binary}\``), `${variant} names ${binary}`);
       }
-      assert.match(text, /other tools stay|may skip it/, `${variant} leaves the other tools available`);
+      // S1: the primary and the generic texts carry no permission sentence; the five role texts keep theirs.
+      if (variant === 'orchestrator' || variant === 'generic') {
+        assert.doesNotMatch(text, /other tools stay|rather than a lookup|answer is a map|not proof/i, `${variant} has no escape hatch`);
+      } else {
+        assert.match(text, /other tools stay|may skip it/, `${variant} leaves the other tools available`);
+      }
     }
   });
 
@@ -81,9 +86,10 @@ describe('the orchestrator and explore texts stay inside their role', () => {
 
   test('the orchestrator calls the graph first for a where/who/how/what-reaches question, with one exemption and one literal call', () => {
     const text = prose('orchestrator');
-    assert.match(text, /to answer where code lives, who calls it, how it works, or what a change reaches, call CodeGraph first/, text);
+    assert.match(text, /to answer where code lives, who calls it, how it works, or what a change reaches, your first call is CodeGraph/, text);
     assert.match(text, /`codegraph` with `operation: "explore"` and `query: "<symbols or the question>"`/, 'the literal call');
-    assert.match(text, /Skip it only for an exact string or a file path the user gave you/, 'one exemption');
+    assert.match(text, /The one exemption is an exact string or a file path the user gave you/, 'one exemption');
+    assert.equal((text.match(/exemption|skip/gi) || []).length, 1, 'and only one');
     assert.match(text, /what scope, size and any handoff depend on/, 'the sizing use is kept');
   });
 

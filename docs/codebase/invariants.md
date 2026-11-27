@@ -518,7 +518,7 @@ The question this page answers: which rules must every change preserve, and what
     this same line, never a module switch;
     this package registers no other tool-renderer resolver for `bash`.
 
-21. **The two CodeGraph reminders advise; they never block and never add a surface.**
+21. **The two CodeGraph reminders advise, never block, add no surface, and belong to the primary session.**
     `lib/codegraph-guard.js` decides, and `lib/codegraph-session.js` appends its
     sentence as ONE extra text part to the result of that finished tool call — never
     a separate message, never a block, and the result (its own parts and its
@@ -537,7 +537,8 @@ The question this page answers: which rules must every change preserve, and what
     `<path>` the checkout's real git toplevel. It stays silent, using up no slot, for
     a checkout this session already explored with that tool's `projectPath` since the
     last compaction.
-    **Guard 2** is the primary session's and every child's except a `review-*` agent.
+    **Guard 2** is the primary session's alone: a child lives a message or two and its own
+    `## CodeGraph` text already states the rule, so it hears no reminder at all.
     It fires once per checkout per request, on the first search of the session's own
     checkout while CodeGraph is unused in that request (keyed by the checkout, so a
     `/warp` re-arms it); no later search of the same request repeats it, and a use of
@@ -545,12 +546,10 @@ The question this page answers: which rules must every change preserve, and what
     Its first-search slot and its `used` flag are per request: every
     new request (`before_agent_start`) forgets them, while guard 1's slots and the
     explored checkouts stay per session, and a compaction or a new session forgets
-    everything. The primary session and
-    the explore agent get `Follow the CodeGraph rule: run codegraph query or explore
-    first.` (`codegraph`, `query` and `explore` in backticks, the native wording only
-    for a role that holds the native tool), every other role `Follow the CodeGraph
-    rule: call mcp__codegraph__codegraph_explore first.`
-    (`mcp__codegraph__codegraph_explore` in backticks). It is advice: it never blocks.
+    everything. The primary session gets `Follow the CodeGraph rule: run codegraph query
+    or explore first.` (`codegraph`, `query` and `explore` in backticks; with only the MCP
+    tool, `Follow the CodeGraph rule: call mcp__codegraph__codegraph_explore first.`).
+    It is advice: it never blocks.
 
     **A call that failed is no subject at all**: the model got no result to read, so
     no reminder rides an error result, no once-per-key slot is spent, and a failed
@@ -611,6 +610,11 @@ The question this page answers: which rules must every change preserve, and what
     `offset` and `limit` DELETED from the host's `event.input` before the tool runs, so a skill or an
     ODD is delivered whole and never half a procedure. It blocks nothing and answers nothing. Both
     observations follow the `Worktrees+` module switch with the guards above.
+
+    **Both worktree guards (the `bash` one and the `edit`/`write` one) judge the primary session only**:
+    creating a worktree and leaving the default branch are the orchestrator's actions, so a subagent
+    child (`GENTLE_PI_AGENTS_CHILD=1`, read per call) passes both. The skill-read guard and the
+    whole-read rule still apply to every session.
 
     No guard ever throws (a throwing `tool_call` handler blocks the tool), an
     unreadable repository leaves only the `bash` worktree refusal active, and the

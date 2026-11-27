@@ -1,25 +1,27 @@
 'use strict';
-// S1/S2/S4 (opencode-usage-alert): what the extension registers and draws for the two halves
-// absorbed from `pi-opencode-gs`. The libs are unit-tested on their own; this suite is the
-// WIRING — the exact event payload, where the row above the editor comes from, and the fact
-// that the `Deepseek peak` switch withholds that row in the running session.
+// S1/S5/S7/S8 (opencode-usage-alert): what the extension registers and draws for the halves
+// absorbed from `pi-opencode-gs`. The engine and the rows are unit-tested on their own; this
+// suite is the WIRING — the exact event payload, and the fact that the peak rows above the
+// editor are one row per provider, gated by that provider's own switch and by its window, never
+// by the model this session uses and never by a usage key.
 //
-// The instant is pinned by replacing `Date.now` alone: the sync reads the clock through it,
-// and every schedule function takes the instant it reasons about as an argument, so nothing
-// else in the process has to be frozen.
+// The instants are pinned by replacing `Date.now` alone: the sync reads the clock through it,
+// and every schedule function takes the instant it reasons about as an argument.
 const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
 
 const { BRIDGE_SLOT, defaultBridge, loadExtension } = require('./fixtures/load-extension.js');
 
-// Tuesday 02:00 UTC is inside the first peak window; 05:00 UTC is the gap between the two.
-const PEAK = Date.UTC(2026, 10, 24, 2, 0, 0);
-const OFF_PEAK = Date.UTC(2026, 10, 24, 5, 0, 0);
+// Tuesday, inside DeepSeek's first UTC window (01:00–04:00) and outside Claude's.
+const DEEPSEEK_PEAK = Date.UTC(2026, 10, 24, 2, 0, 0);
+// The same Tuesday afternoon: Claude's window in Pacific STANDARD time (13:00–19:00 UTC here),
+// which is where DeepSeek is off-peak. The two windows never overlap today, which is why each
+// case pins only the provider it names.
+const CLAUDE_PEAK = Date.UTC(2026, 10, 24, 15, 0, 0);
 
 const WIDGET_KEY = 'opencode-go-peak-widget';
 
-/** A payload the reader accepts: three known windows, each with a reset instant. */
 function usagePayload() {
   const reset = '2026-11-24T09:00:00Z';
   return {
@@ -50,7 +52,7 @@ function capturingUi() {
 }
 
 /** A bridge whose own-store `alerts` document is the one handed in. */
-async function load(alertsDocument, host) {
+async function load(alertsDocument) {
   const bridge = defaultBridge();
   let document = alertsDocument;
   bridge.api.createStore = () => ({
@@ -66,7 +68,6 @@ async function load(alertsDocument, host) {
   globalThis[BRIDGE_SLOT] = bridge.api;
   const loaded = await loadExtension({
     events: { emit: (name, payload) => emitted.push({ name, payload }) },
-    ...host,
   });
   return { ...loaded, bridge, emitted, storeDocument: () => document };
 }
@@ -88,24 +89,22 @@ function atFixedInstant(instant, run) {
   }
 }
 
-/** The same, for work that awaits: the readiness report syncs while it is still pending. */
-async function atFixedInstantAsync(instant, run) {
-  const realNow = Date.now;
-  Date.now = () => instant;
-  try {
-    return await run();
-  } finally {
-    Date.now = realNow;
-  }
+/** The session boundary, at one instant, exactly as the host calls it. */
+function startSessionAt(loaded, ui, instant) {
+  const ctx = { ui, cwd: os.tmpdir() };
+  atFixedInstant(instant, () => {
+    for (const [name, hook] of loaded.hooks) if (name === 'session_start') hook({}, ctx);
+  });
+  return ctx;
 }
 
+const alertRowsOf = (bridge) => bridge.rows.find((provider) => provider.category === 'Alert');
+
 describe('the OpenCode Go usage source', () => {
-  test('registers one payload with the four contract keys, at load and at every session start', async () => {
-    const { emitted, hooks } = await load(undefined);
-    const starts = hooks.filter(([name]) => name === 'session_start').length;
-    assert.ok(starts > 0, 'the extension observes session starts');
+  test('registers one payload with the four contract keys', async () => {
+    const { emitted } = await load(undefined);
     const registrations = emitted.filter((entry) => entry.name === 'gentle-pi:usage-source/v1');
-    assert.equal(registrations.length, 1, 'one source per load, before any session starts');
+    assert.equal(registrations.length, 1, 'one source per load');
     const payload = registrations[0].payload;
     assert.deepEqual(Object.keys(payload).sort(), ['fetch', 'pendingNote', 'provider', 'schema']);
     assert.equal(payload.schema, 'gentle-pi.usage-source/v1');
@@ -117,8 +116,8 @@ describe('the OpenCode Go usage source', () => {
   test('the fetch carries the peak schedule in its plan field, off-peak included', async () => {
     const { emitted } = await load(undefined);
     const source = emitted.find((entry) => entry.name === 'gentle-pi:usage-source/v1').payload;
-    const peak = await source.fetch('key', OK_FETCH, PEAK);
-    const off = await source.fetch('key', OK_FETCH, OFF_PEAK);
+    const peak = await source.fetch('key', OK_FETCH, DEEPSEEK_PEAK);
+    const off = await source.fetch('key', OK_FETCH, CLAUDE_PEAK);
     assert.match(peak.plan, /^peak /);
     assert.match(off.plan, /^off-peak /);
     assert.deepEqual(
@@ -128,81 +127,126 @@ describe('the OpenCode Go usage source', () => {
     );
   });
 
-  test('only a missing key marks the provider unreadable', async () => {
+  test('a missing key never stops the source from existing', async () => {
     const { emitted } = await load(undefined);
     const source = emitted.find((entry) => entry.name === 'gentle-pi:usage-source/v1').payload;
-    const failing = async () => ({ ok: false, status: 500, redirected: false, url: 'https://opencode.ai/zen/go/v1/usage' });
-    assert.equal(await source.fetch(undefined, OK_FETCH, PEAK), undefined, 'no key, no snapshot');
-    assert.equal(await source.fetch('key', failing, PEAK), undefined, 'an http failure, no snapshot');
+    assert.equal(await source.fetch(undefined, OK_FETCH, DEEPSEEK_PEAK), undefined, 'no key, no snapshot');
+    assert.equal(typeof source.pendingNote, 'string', 'and the panel still has its pending line');
   });
 });
 
-describe('the DeepSeek peak row', () => {
-  test('is drawn over the editor while the window is peak and the provider answered', async () => {
-    const { hooks, emitted } = await load(undefined);
-    const { ui, lastFor } = capturingUi();
-    const ctx = { ui, cwd: os.tmpdir() };
-    // The session binds its seam first; the source it emits is what the shell then fetches with.
-    for (const [name, hook] of hooks) if (name === 'session_start') hook({}, ctx);
-    const source = emitted.filter((entry) => entry.name === 'gentle-pi:usage-source/v1').pop().payload;
-    await atFixedInstantAsync(PEAK, () => source.fetch('key', OK_FETCH, PEAK));
-    const paint = lastFor(WIDGET_KEY);
-    assert.ok(paint, 'the row is painted at all');
-    assert.equal(paint.options.placement, 'aboveEditor');
-    assert.ok(Array.isArray(paint.content) && paint.content.length === 1, 'one line, not a block');
-    assert.match(paint.content[0], /peak/);
-    assert.match(paint.content[0], /until /);
-  });
-
-  test('is absent off-peak, and absent before any fetch proved the provider', async () => {
-    const { hooks, emitted } = await load(undefined);
-    const { ui, lastFor } = capturingUi();
-    const ctx = { ui, cwd: os.tmpdir() };
-    for (const [name, hook] of hooks) if (name === 'session_start') hook({}, ctx);
-    const source = emitted.filter((entry) => entry.name === 'gentle-pi:usage-source/v1').pop().payload;
-    // The answer proves the provider readable; the clock is what says the window has closed.
-    await atFixedInstantAsync(OFF_PEAK, () => source.fetch('key', OK_FETCH, PEAK));
-    assert.equal(lastFor(WIDGET_KEY).content, undefined, 'off-peak owns no row at all');
-
-    const fresh = await load(undefined);
-    const second = capturingUi();
-    for (const [name, hook] of fresh.hooks) {
-      if (name === 'session_start') hook({}, { ui: second.ui, cwd: os.tmpdir() });
-    }
-    assert.equal(second.lastFor(WIDGET_KEY).content, undefined, 'no proof of a key, no row');
-  });
-
-  test('the Alert page is one provider on its own category, placed after Notifications', async () => {
+describe('the Alert page', () => {
+  test('is one provider, one Off/On pair, in the registry order, both Off by default', async () => {
     const { bridge } = await load(undefined);
-    const alerts = bridge.rows.filter((provider) => provider.category === 'Alert');
-    assert.equal(alerts.length, 1);
-    assert.deepEqual(alerts[0].categoryPlacement, { after: 'Notifications' });
-    const rows = alerts[0].rows({});
+    const alerts = alertRowsOf(bridge);
+    assert.ok(alerts, 'the page is registered');
+    assert.deepEqual(alerts.categoryPlacement, { after: 'Notifications' });
+    const rows = alerts.rows({});
     assert.deepEqual(
       rows.map((row) => `${row.choice.setting} ${row.choice.value}`),
-      ['Deepseek peak Off', 'Deepseek peak On'],
+      ['Deepseek peak Off', 'Deepseek peak On', 'Claude peak Off', 'Claude peak On'],
+      'a first run reads Off for every provider',
+    );
+    assert.deepEqual(
+      rows.filter((row) => row.choice.current()).map((row) => row.choice.value),
+      ['Off', 'Off'],
+      'no provider is On until the human says so',
     );
   });
 
-  test('Off withholds the row in the running session, and On brings it back', async () => {
-    const { hooks, bridge, emitted, storeDocument } = await load(undefined);
-    const alerts = bridge.rows.find((provider) => provider.category === 'Alert');
+  test('each provider reads and writes its own value, leaving the other alone', async () => {
+    const { bridge, storeDocument } = await load(undefined);
+    const alerts = alertRowsOf(bridge);
+    const claudeOn = alerts.rows({}).find((row) => row.choice.setting === 'Claude peak' && row.choice.value === 'On');
+    claudeOn.action({});
+    assert.deepEqual(storeDocument(), { peaks: { claude: true } });
+    const current = alerts.rows({}).filter((row) => row.choice.current());
+    assert.deepEqual(
+      current.map((row) => `${row.choice.setting} ${row.choice.value}`),
+      ['Deepseek peak Off', 'Claude peak On'],
+      'DeepSeek stays Off',
+    );
+  });
+});
+
+describe('the peak rows above the editor', () => {
+  test('draw nothing while every switch is Off, whatever the clock says', async () => {
+    const loaded = await load(undefined);
     const { ui, lastFor } = capturingUi();
-    const ctx = { ui, cwd: os.tmpdir() };
-    for (const [name, hook] of hooks) if (name === 'session_start') hook({}, ctx);
-    const source = emitted.filter((entry) => entry.name === 'gentle-pi:usage-source/v1').pop().payload;
-    await atFixedInstantAsync(PEAK, () => source.fetch('key', OK_FETCH, PEAK));
-
-    const off = alerts.rows({}).find((row) => row.choice.value === 'Off');
-    atFixedInstant(PEAK, () => off.action({}));
-    assert.equal(storeDocument().deepseekPeak, false, 'the choice is persisted');
-    assert.equal(lastFor(WIDGET_KEY).content, undefined, 'Off withholds the row at once');
-
-    const on = alerts.rows({}).find((row) => row.choice.value === 'On');
-    atFixedInstant(PEAK, () => on.action({}));
-    const paint = lastFor(WIDGET_KEY);
-    assert.equal(storeDocument().deepseekPeak, true);
-    assert.ok(Array.isArray(paint.content), 'On restores the row with no /reload and no new session');
+    startSessionAt(loaded, ui, DEEPSEEK_PEAK);
+    assert.equal(lastFor(WIDGET_KEY).content, undefined, 'Off owns no row');
   });
 
+  test('one provider in peak draws exactly its own row, with no fetch and no key', async () => {
+    const loaded = await load({ peaks: { claude: true } });
+    const { ui, lastFor } = capturingUi();
+    startSessionAt(loaded, ui, CLAUDE_PEAK);
+    const paint = lastFor(WIDGET_KEY);
+    assert.equal(paint.options.placement, 'aboveEditor');
+    assert.equal(paint.content.length, 1, 'one row for one provider');
+    assert.match(paint.content[0], /claude/);
+    assert.match(paint.content[0], /until /);
+  });
+
+  test('DeepSeek and Claude are independent: each switch draws only its own row', async () => {
+    const deepseek = await load({ peaks: { deepseek: true } });
+    const first = capturingUi();
+    startSessionAt(deepseek, first.ui, DEEPSEEK_PEAK);
+    assert.equal(first.lastFor(WIDGET_KEY).content.length, 1);
+    assert.match(first.lastFor(WIDGET_KEY).content[0], /2× deepseek/);
+    // The same switch at Claude's instant draws nothing: a window is a window.
+    atFixedInstant(CLAUDE_PEAK, () => {
+      for (const [name, hook] of deepseek.hooks) {
+        if (name === 'turn_end') hook({}, { ui: first.ui, cwd: os.tmpdir() });
+      }
+    });
+    assert.equal(first.lastFor(WIDGET_KEY).content, undefined, 'DeepSeek off-peak, no row');
+
+    const claude = await load({ peaks: { claude: true } });
+    const second = capturingUi();
+    startSessionAt(claude, second.ui, DEEPSEEK_PEAK);
+    assert.equal(second.lastFor(WIDGET_KEY).content, undefined, 'Claude off-peak at 02:00 UTC');
+    atFixedInstant(CLAUDE_PEAK, () => {
+      for (const [name, hook] of claude.hooks) {
+        if (name === 'turn_end') hook({}, { ui: second.ui, cwd: os.tmpdir() });
+      }
+    });
+    assert.equal(second.lastFor(WIDGET_KEY).content.length, 1);
+    assert.match(second.lastFor(WIDGET_KEY).content[0], /claude/);
+  });
+
+  test('Off withholds one row in the running session and On brings it back', async () => {
+    const loaded = await load({ peaks: { deepseek: true } });
+    const { bridge, storeDocument } = loaded;
+    const alerts = alertRowsOf(bridge);
+    const { ui, lastFor } = capturingUi();
+    startSessionAt(loaded, ui, DEEPSEEK_PEAK);
+    assert.ok(Array.isArray(lastFor(WIDGET_KEY).content));
+
+    const off = alerts.rows({}).find((row) => row.choice.setting === 'Deepseek peak' && row.choice.value === 'Off');
+    atFixedInstant(DEEPSEEK_PEAK, () => off.action({}));
+    assert.equal(storeDocument().peaks.deepseek, false, 'the choice is persisted');
+    assert.equal(lastFor(WIDGET_KEY).content, undefined, 'Off withholds the row at once');
+
+    const on = alerts.rows({}).find((row) => row.choice.setting === 'Deepseek peak' && row.choice.value === 'On');
+    atFixedInstant(DEEPSEEK_PEAK, () => on.action({}));
+    assert.equal(storeDocument().peaks.deepseek, true);
+    assert.ok(Array.isArray(lastFor(WIDGET_KEY).content), 'On restores it with no /reload');
+  });
+
+  // The two real windows never overlap today (DeepSeek 01:00–04:00 and 06:00–10:00 UTC, Claude
+  // 12:00–18:00 UTC under PDT and 13:00–19:00 UTC under PST), so "two rows at once" is proved where
+  // it can be: on the engine, with two providers told apart (tools/peak-schedule.test.js). What the
+  // wiring owes that engine is the loop, and the case below is its shape — every provider whose own
+  // switch is On contributes its own line, in the registry's order, and nothing merges them.
+  test('the rows are built per provider, never merged into one line', async () => {
+    const loaded = await load({ peaks: { deepseek: true, claude: true } });
+    const { ui, lastFor } = capturingUi();
+    startSessionAt(loaded, ui, CLAUDE_PEAK);
+    const content = lastFor(WIDGET_KEY).content;
+    assert.equal(content.length, 1, 'only Claude is inside its window at 15:00 UTC');
+    assert.match(content[0], /^.*claude/);
+    assert.doesNotMatch(content[0], /deepseek/, 'the off-peak provider is not mentioned');
+    assert.equal(new Set(content).size, content.length, 'one entry per line, no duplicates');
+  });
 });

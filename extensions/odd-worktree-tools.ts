@@ -11363,35 +11363,32 @@ function registerModuleRows(api) {
   }
 }
 
-// opencode-usage-alert: the OpenCode Go usage source this package now carries, and
-// the DeepSeek peak row above the editor that the `Alert` page's `Deepseek peak`
-// switch owns. The two halves are one story, so they live together:
+// opencode-usage-alert: the OpenCode Go usage source this package carries, and the peak
+// rows above the editor that the `Alert` page owns. The two halves are one story:
 //
-// - The source registers `opencode-go` on `gentle-pi:usage-source/v1`, the same
-//   event a built-in reader uses, so Gentle Shell keeps owning the refresh
-//   schedule, the status-bar segment and the `/gentle:usage` panel. That panel
-//   prints `plan` between the provider name and its `updated …` note, so the
-//   schedule rides there whether the window is peak or not.
-// - The row above the editor is this package's own. It appears only while the
-//   provider is proven usable AND the schedule is peak, and the `Deepseek peak`
-//   switch can withhold it. That switch is read on every sync, so turning it off
-//   takes effect in the running session without `/reload`.
+// - The source registers `opencode-go` on `gentle-pi:usage-source/v1`, the same event a
+//   built-in reader uses, so Gentle Shell keeps owning the refresh schedule, the status-bar
+//   segment and the `/gentle:usage` panel. That panel prints `plan` between the provider
+//   name and its `updated …` note, so the schedule rides there whether the window is peak
+//   or not.
+// - The rows above the editor belong to this package. `lib/peak-providers.js` is the
+//   registry: today DeepSeek (fixed UTC windows, a published 2× price) and Claude (weekdays
+//   05:00–11:00 Pacific, no published price multiplier — its window drains the subscription
+//   faster instead), and a third provider needs no change here: one row per provider in
+//   peak, in the registry's own order, each gated by its own switch.
 //
-// Nothing here polls: the only timer goes to the next schedule boundary and
-// re-arms itself there, so the row appears and disappears with the window instead
-// of on the next turn.
+// A row never depends on the model this session uses, on the provider being the session's, or
+// on a usage key being present: the switch and the window are its only gates. Every switch is
+// read on every sync, so a change lands in the running session without `/reload`.
+//
+// Nothing here polls: ONE timer goes to the earliest boundary among the ENABLED providers — a
+// window that is closing or one that is about to open — and re-arms itself there.
 const OPENCODE_ALERT_PLACEMENT = "aboveEditor";
 
-// Unknown until a fetch proves otherwise: a session whose key is missing must not
-// draw a peak row for a provider it cannot read.
-let opencodeProviderReady = false;
 let opencodeAlertTimer = null;
-// Only the bound `setWidget` seam is held, never the context around it: the timer
-// can outlive the turn that armed it.
+// Only the bound `setWidget` seam is held, never the context around it: the timer can outlive
+// the turn that armed it.
 let opencodeAlertWidgetUi = null;
-// The session this alert belongs to. A fetch outlives the session that asked for it, so its answer
-// is dropped unless the epoch still matches: the replacement session decides for itself.
-let opencodeSessionEpoch = 0;
 
 function opencodeAlertLib(name) {
 	try {
@@ -11401,20 +11398,20 @@ function opencodeAlertLib(name) {
 	}
 }
 
-// Off is an explicit `false` in the store; anything unreadable — no bridge, no
-// document, a malformed one — answers the documented default, On.
-function opencodePeakAlertEnabled() {
+// One provider's switch: On only when the stored value says On, and an unreadable store answers
+// the documented default, Off — the same answer a first run gets.
+function opencodePeakAlertEnabled(providerId) {
 	const mode = opencodeAlertLib("alert-mode.js");
-	if (!mode || typeof mode.readDeepseekPeak !== "function") return true;
+	if (!mode || typeof mode.readPeakAlert !== "function") return false;
 	try {
-		return mode.readDeepseekPeak(issuesSidebarBridge()) === true;
+		return mode.readPeakAlert(issuesSidebarBridge(), providerId) === true;
 	} catch {
-		return true;
+		return false;
 	}
 }
 
 function opencodeAlertKey() {
-	const labels = opencodeAlertLib("opencode-labels.js");
+	const labels = opencodeAlertLib("peak-labels.js");
 	return labels && typeof labels.PEAK_WIDGET_KEY === "string" ? labels.PEAK_WIDGET_KEY : null;
 }
 
@@ -11434,52 +11431,46 @@ function clearOpenCodeAlertTimer() {
 	opencodeAlertTimer = null;
 }
 
-// The row and the timer, in one place: no row is ever left behind by a state it no
-// longer describes, and the timer always points at the boundary of the state that
-// was just drawn.
+// The rows and the timer, in one place: no row is ever left behind by a state it no longer
+// describes, and the timer always points at the nearest boundary of an ENABLED provider.
 function syncOpenCodePeakAlert(now = Date.now()) {
 	clearOpenCodeAlertTimer();
 	const key = opencodeAlertKey();
 	if (key === null) return;
-	// A session that is over owns no seam, and a late answer must never arm a timer for a UI that no
-	// longer exists: the next `session_start` binds one again and syncs from there.
+	// A session that is over owns no seam, so nothing arms a timer for a UI that no longer exists:
+	// the next `session_start` binds one again and syncs from there.
 	if (opencodeAlertWidgetUi === null) return;
-	const peak = opencodeAlertLib("opencode-peak.js");
-	const labels = opencodeAlertLib("opencode-labels.js");
-	if (!peak || typeof peak.peakStateAt !== "function" || typeof labels.peakWidgetLine !== "function") {
+	const peak = opencodeAlertLib("peak-schedule.js");
+	const labels = opencodeAlertLib("peak-labels.js");
+	const registry = opencodeAlertLib("peak-providers.js");
+	if (!peak || !labels || !registry || !Array.isArray(registry.PROVIDERS)) {
 		paintOpenCodeAlert(key, undefined);
 		return;
 	}
-	// Off, or a provider this session cannot read, owns no row and no timer: there is
-	// nothing to wait for, and a re-enable syncs through the row's own action.
-	if (!opencodeProviderReady || !opencodePeakAlertEnabled()) {
-		paintOpenCodeAlert(key, undefined);
-		return;
+	const lines = [];
+	let earliest = Infinity;
+	for (const provider of registry.PROVIDERS) {
+		// Besides the window itself, the switch is the only gate — never the session's model.
+		if (!opencodePeakAlertEnabled(provider.id)) continue;
+		const state = peak.peakStateFor(provider, now);
+		if (state.kind === "peak") lines.push(labels.peakWidgetLine(provider, state, now));
+		// A provider that is off-peak still owns the instant its window opens.
+		if (Number.isFinite(state.until) && state.until > now && state.until < earliest) earliest = state.until;
 	}
-	const state = peak.peakStateAt(now);
-	if (state.kind === "peak") {
-		paintOpenCodeAlert(key, [labels.peakWidgetLine(state, now)]);
+	if (lines.length === 0) {
+		paintOpenCodeAlert(key, undefined);
 	} else {
-		paintOpenCodeAlert(key, undefined);
+		// One row per provider, in the registry's order: they read as a list instead of one
+		// truncated sentence, and a third provider costs no layout change.
+		paintOpenCodeAlert(key, lines);
 	}
-	const until = Number.isFinite(state.until) ? state.until : now;
+	if (!Number.isFinite(earliest)) return;
 	// The timer goes to the boundary ITSELF. A timer that fires a hair early finds the same state and
-	// re-arms for the remainder, so the row never outlives the window it describes.
-	const delay = Math.max(1, until - now);
+	// re-arms for the remainder, so no row outlives the window it describes.
+	const delay = Math.max(1, earliest - now);
 	opencodeAlertTimer = setTimeout(() => syncOpenCodePeakAlert(), delay);
 	const timer = opencodeAlertTimer;
 	if (timer && typeof timer.unref === "function") timer.unref();
-}
-
-// The readiness verdict of the last fetch: only `missing-key` proves the provider
-// is unusable. A timeout, a network error or a malformed response says nothing
-// about the key, so it leaves readiness exactly as it was.
-function markOpenCodeProviderReady(verdict) {
-	const next = verdict === "ready" ? true : verdict === "missing-key" ? false : opencodeProviderReady;
-	if (next === opencodeProviderReady) return;
-	opencodeProviderReady = next;
-	// A readiness change must appear without waiting for the next turn.
-	syncOpenCodePeakAlert();
 }
 
 function registerOpenCodeUsageSource(pi) {
@@ -11487,28 +11478,18 @@ function registerOpenCodeUsageSource(pi) {
 		if (!pi || !pi.events || typeof pi.events.emit !== "function") return;
 		const usage = opencodeAlertLib("opencode-usage.js");
 		if (!usage || typeof usage.createUsageSource !== "function") return;
-		// The epoch this registration belongs to: an answer that lands after the session that asked
-		// for it ended must decide nothing for its replacement.
-		const epoch = opencodeSessionEpoch;
-		// Re-registering replaces the source, so this is safe on every session start and
-		// keeps this extension's load order irrelevant.
-		pi.events.emit(
-			"gentle-pi:usage-source/v1",
-			usage.createUsageSource({
-				onReadiness: (verdict) => {
-					if (epoch !== opencodeSessionEpoch) return;
-					markOpenCodeProviderReady(verdict);
-				},
-			}),
-		);
+		// Re-registering replaces the source, so this is safe on every session start and keeps
+		// this extension's load order irrelevant. Nothing here gates a row: whether the panel can
+		// read the key is the panel's business, and an alert follows the switch and the clock.
+		pi.events.emit("gentle-pi:usage-source/v1", usage.createUsageSource());
 	} catch {
 		// The source is optional: a host without the seam keeps every other surface.
 	}
 }
 
-// S3/S4 (opencode-usage-alert): the `Alert` page's one switch. It reads the live
-// value on every build and applies through `onChange`, so the running session shows
-// or hides the row the moment the human picks On or Off.
+// S5/S8 (opencode-usage-alert): the `Alert` page's switches, one line per registry entry.
+// Each reads its own live value on every build and applies through `onChange`, so the running
+// session shows or hides that provider's row the moment the human picks On or Off.
 function registerAlertRows(api) {
 	try {
 		if (!api || typeof api.registerRows !== "function") return;
@@ -11517,12 +11498,11 @@ function registerAlertRows(api) {
 		api.registerRows(
 			alerts.alertRowsProvider({
 				api,
-				notify: notifyModulesChange,
 				onChange: () => syncOpenCodePeakAlert(),
 			}),
 		);
 	} catch {
-		// The page is optional: a bridge that refuses it leaves the row gated by the
+		// The page is optional: a bridge that refuses it leaves every row gated by the
 		// documented default alone.
 	}
 }
@@ -12474,11 +12454,8 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // nothing registered to use the answer, so no probe is dispatched at all — no
     // child, no network, nothing said.
     if (!ISSUES_GH_CLI_ABSENT) dispatchIssuesGate(ctx);
-    // opencode-usage-alert: the source is re-targeted at every session boundary, and the row
-    // above the editor belongs to the session that draws it. A new session also proves nothing
-    // yet, and an answer from the session that ended is dropped by the epoch moved here.
-    opencodeSessionEpoch += 1;
-    opencodeProviderReady = false;
+    // opencode-usage-alert: the source is re-targeted at every session boundary, and the rows
+    // above the editor belong to the session that draws them.
     bindOpenCodeAlertUi(ctx);
     registerOpenCodeUsageSource(pi);
     syncOpenCodePeakAlert();
@@ -12527,10 +12504,8 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // T4 (odd-rail-session-scope S2): the association is this session's alone, so the
     // ended session leaves none behind for a frame drawn before the next start.
     oddAssociated = new Set();
-    // opencode-usage-alert: the schedule timer and the row belong to the session
-    // that armed them, so the ended session leaves neither behind, and its pending
-    // answers are dropped by the epoch.
-    opencodeSessionEpoch += 1;
+    // opencode-usage-alert: the schedule timer and the rows belong to the session that armed
+    // them, so the ended session leaves neither behind.
     teardownOpenCodePeakAlert();
     // S7: the prompt card's teardown belongs to the lifecycle pair registered before the
     // bridge gate — the same owner as its install, so a session whose bridge was never

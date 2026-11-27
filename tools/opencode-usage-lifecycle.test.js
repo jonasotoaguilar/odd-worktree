@@ -1,5 +1,4 @@
 'use strict';
-'use strict';
 // S2 (opencode-usage-alert): the LIFECYCLE of the peak row's one timer, written against the
 // independent verification of `c41914c` — the timer reaches the window boundary and stops there
 // (a fired timer at the exact off-peak instant must already show no row), the re-arm skips the
@@ -12,7 +11,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const os = require('node:os');
-const { loadExtension, BRIDGE_SLOT } = require('./fixtures/load-extension.js');
+const { loadExtension, BRIDGE_SLOT, defaultBridge } = require('./fixtures/load-extension.js');
 
 const FRIDAY_END = Date.parse('2026-11-27T10:00:00Z');
 const MONDAY_START = Date.parse('2026-11-30T01:00:00Z');
@@ -27,6 +26,15 @@ const reply = () => ({ ok: true, json: async () => ({ usage: Object.fromEntries(
 async function fixture(t) {
   const previous = [globalThis[BRIDGE_SLOT], Date.now, setTimeout, clearTimeout];
   t.after(() => { [globalThis[BRIDGE_SLOT], Date.now, global.setTimeout, global.clearTimeout] = previous; });
+  // The rows are Off until the human says On, so this suite turns DeepSeek's switch on: what it
+  // tests is the timer, not the default.
+  const bridge = defaultBridge();
+  bridge.api.createStore = () => ({
+    get: (key, fallback) => (key === 'alerts' ? { peaks: { deepseek: true } } : fallback),
+    set: () => {},
+    delete: () => {},
+  });
+  globalThis[BRIDGE_SLOT] = bridge.api;
   const sources = [];
   const { hooks } = await loadExtension({ events: { emit(name, payload) {
     if (name === 'gentle-pi:usage-source/v1') sources.push(payload);
@@ -88,7 +96,15 @@ for (const replacement of [false, true]) {
     }
     deliver(reply());
     assert.ok(await stale, 'the old caller still gets its snapshot');
-    assert.equal(f.rows.has(WIDGET), false);
-    assert.deepEqual(f.alerts(), []);
+    if (!replacement) {
+      assert.equal(f.rows.has(WIDGET), false);
+      assert.deepEqual(f.alerts(), []);
+      return;
+    }
+    // The replacement session owns its own row and its own timer — the switch and the window are
+    // its gates, not the key of the session that ended. What the late answer must NOT do is add a
+    // second timer or change what that row says.
+    assert.equal(f.alerts().length, 1, 'one timer, the running session\'s own');
+    assert.equal(f.rows.get(WIDGET).length, 1, 'one row, unchanged by the late answer');
   });
 }

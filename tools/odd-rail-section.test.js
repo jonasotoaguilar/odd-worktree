@@ -4,8 +4,8 @@
 // Contract under test, through the public surface only:
 // - the section is the `ODD` card, labelled `odd`, visible by default, and it
 //   carries `placement: { after: "agents" }` so the host puts it right after the
-//   native AGENTS rail part (S1); it carries no `meta`, because nothing asked for
-//   a header count;
+//   native AGENTS rail part (S1), and its heading carries the count — `N odd` — as
+//   `meta`, the way the CHANGES card reads `1 file` (S7 of odd-panel-groups);
 // - the rows are the ODDs `load()` resolved, in THAT order (the walk and the
 //   dedupe belong to the caller), at most FOUR of them (S2); more than four adds
 //   ONE fifth row reading `N more`, dim and inert, while exactly four paint four
@@ -140,9 +140,9 @@ test('S1: the section is the ODD card, placed right after the native AGENTS part
     'the placement is exactly what puts the card after the AGENTS part');
   assert.deepEqual(Object.keys(handle.section.placement), ['after']);
   assert.equal(typeof handle.section.lines, 'function', 'the host draws the card through lines()');
-  assert.equal('meta' in handle.section, false, 'nothing asked for a header count, so there is no meta');
+  assert.equal(typeof handle.section.meta, 'function', 'the heading draws its `N odd` through meta()');
   assert.deepEqual(Object.keys(handle.section).sort(),
-    ['defaultVisible', 'id', 'lines', 'placement', 'rowLabel', 'title'],
+    ['defaultVisible', 'id', 'lines', 'meta', 'placement', 'rowLabel', 'title'],
     'the section is exactly the shape the bridge registers');
   assert.equal(typeof handle.invalidate, 'function', 'the session boundary has its seam');
 });
@@ -561,4 +561,66 @@ test('S1: the empty line is a state, not a failure: another frame inside the TTL
   await handle.refresh();
   assert.deepEqual(handle.section.lines({}).map((row) => row.label), ['alpha', 'beta', 'gamma', 'delta'],
     'a list replaces the empty line, and its rows keep their own shape');
+});
+
+// ---------------------------------------------------------------------------
+// S7 (odd-panel-groups): the heading carries the count, like the CHANGES card's
+// `1 file` — `N odd`, lowercase and in the host's muted role.
+// ---------------------------------------------------------------------------
+
+test('S7: the heading answers `N odd`, and nothing before a read', async () => {
+  const items = [oddItem('alpha', 'main'), oddItem('beta', 'wt-a'), oddItem('gamma', 'main')];
+  const handle = createOddRailSection({
+    load: async () => items,
+    open: () => {},
+    schedule: () => {},
+  });
+
+  assert.equal(handle.section.meta({}), undefined, 'no read yet: no count is invented');
+  await handle.refresh();
+  assert.equal(handle.section.meta({}), '3 odd', 'the count is every ODD the rows are made of');
+  assert.equal(typeof handle.section.meta, 'function', 'the host draws it through meta()');
+});
+
+test('S7: one ODD and an empty list both read as a lowercase count', async () => {
+  const one = createOddRailSection({ load: async () => [oddItem('alpha', 'main')], open: () => {}, schedule: () => {} });
+  await one.refresh();
+  assert.equal(one.section.meta({}), '1 odd', 'the singular number keeps the same word');
+
+  const none = createOddRailSection({ load: async () => [], open: () => {}, schedule: () => {} });
+  await none.refresh();
+  assert.equal(none.section.meta({}), '0 odd', 'an empty section still counts nothing honestly');
+});
+
+test('S7: the count is every loaded ODD, not only the four the card can draw', async () => {
+  const items = Array.from({ length: 9 }, (_, index) => oddItem(`odd-${index}`, index === 0 ? 'main' : 'wt'));
+  const handle = createOddRailSection({ load: async () => items, open: () => {}, schedule: () => {} });
+  await handle.refresh();
+  assert.equal(handle.section.meta({}), '9 odd', 'the cap on DRAWN rows never caps the count');
+});
+
+test('S7: a stale list says so, and a failed first read answers no count', async () => {
+  let fail = false;
+  const items = [oddItem('alpha', 'main'), oddItem('beta', 'wt-a')];
+  const handle = createOddRailSection({ load: async () => { if (fail) throw new Error('read failed'); return items; }, open: () => {}, schedule: () => {} });
+  await handle.refresh();
+  assert.equal(handle.section.meta({}), '2 odd');
+  fail = true;
+  await handle.refresh();
+  assert.equal(handle.section.meta({}), '2 odd · stale', 'the rows on screen are not live, and the count says so');
+
+  const broken = createOddRailSection({ load: async () => { throw new Error('read failed'); }, open: () => {}, schedule: () => {} });
+  await broken.refresh();
+  assert.equal(broken.section.meta({}), undefined, 'no successful read, no count');
+});
+
+test('S7: the heading only READS the snapshot — it never starts a load', async () => {
+  let reads = 0;
+  const handle = createOddRailSection({
+    load: async () => { reads += 1; return [oddItem('alpha', 'main')]; },
+    open: () => {},
+    schedule: () => {},
+  });
+  assert.equal(handle.section.meta({}), undefined);
+  assert.equal(reads, 0, 'a collapsed card draws its heading alone and pays no read for it');
 });

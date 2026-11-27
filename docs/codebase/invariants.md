@@ -940,3 +940,19 @@ The question this page answers: which rules must every change preserve, and what
     `tools/session-auto-name.test.js` pins the label shape, the re-name on every write,
     the ownership cases and the resume path; `tools/session-auto-name-wiring.test.js`
     pins that the primary checkout names too.
+
+31. **The ODD panel folds by default, counts what it lists, and lines a document up
+    under its group's name.** `lib/odd-view.js` keeps the OPENED checkouts in one
+    set (`expandedCheckouts`), so a group is folded unless something opened it: the
+    panel mounts with every group folded, and a target expands ONLY the group that
+    owns that document. Each header carries its group's TOTAL as `(N odd)`, the title
+    sums those totals (folding never moves the number), and a document row is
+    indented so its text starts at the column its group's name starts at — the flat,
+    ungrouped listing stays byte-identical, which is what the pinned frames measure.
+    A group whose filtered rows are empty is not drawn, no worktree group means a flat
+    listing, and two drawn groups sharing a name are qualified with their parent
+    directory so a folded header is never its twin's equal. The rail's heading answers
+    the same count through `meta()` — `N odd`, `N odd · stale` — and starts no read.
+    `tools/odd-view.test.js` (S1-S5 of odd-panel-groups) and
+    `tools/odd-rail-section.test.js` (S7) pin the shapes; `tools/odd-panel-wiring.test.js`
+    pins that a scope is read from the headers it draws.

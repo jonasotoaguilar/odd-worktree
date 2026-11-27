@@ -42,6 +42,8 @@ Worktree `native-bridge`, branch `feat/native-bridge`, base `main@588ac3b`.
 
 Slice note: the 2 commits before this one are 59k lines because `67530be` is the verbatim vendor copy (reviewed by diff against the source, not by line); the wiring and docs commits are the reviewable ones.
 
+Verify (independent `gentle-ai-verify`, Risk item 5): S1-S3 pass; S4 flagged the incompatible-slot case — the vendored bridge still reports a foreign slot object and keeps `/bridge-status`, so the docs now say that instead of "silent"; stale 22.18 wording and the "armed before" claim fixed; opt-in real-host test `tools/native-bridge-rpc.test.js` added (NATIVE_BRIDGE_PI). One parallel-run flake (`issues-section.test.js` 4 !== 3) did not reproduce (serial runs 0 fail).
+
 ## Log
 
 - **L1** — "ya no quiero depender de /home/jona/dev/projects/gentle-shell-bridge para este plugin asi que lo que

@@ -820,7 +820,7 @@ a pull request in both buckets counts once.
   no runtime dependency and no import by package name, and nothing has to be
   installed beside this package for the section to exist (invariant 32). An
   INCOMPATIBLE object already on the slot — another plugin published first —
-  registers nothing of this package's surface and says nothing. A host that
+  registers nothing of this package's surface; the vendored bridge reports the foreign object once and keeps `/bridge-status`. A host that
   has the bridge but draws no rail registers the section and never paints it — that
   is the bridge's answer to a host without a sidebar, not a failure here. Its
   `/gentle:customize` → `Sections` visibility toggle belongs to the bridge, so a
@@ -2419,7 +2419,7 @@ The suite uses Node builtins only — no install step, no lockfile, no network �
 and adding a dependency so a test passes is not an option. Node 18 is the floor
 `engines` declares; CI additionally runs 20, 22 and 24. The vendored bridge's suite
 is TypeScript, so it is its own gate (`npm run test:bridge`, the same two globs CI
-runs) and it needs type stripping: Node 22.18 is the first 22.x that has it, which is
+runs) and it needs type stripping: type stripping is on by default from Node 22.18, which is
 why the plain-JS suite stubs that one import
 (`tools/fixtures/load-extension.js`) and stays runnable below that. Keep both green
 at the

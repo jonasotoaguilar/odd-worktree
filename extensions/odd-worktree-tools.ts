@@ -12179,7 +12179,8 @@ export default function (pi) {
   }
   // S18 (T14): the slot check. The object is read after its own schema and version
   // gate; an absent or INCOMPATIBLE slot (another plugin published first) leaves this
-  // package's surface unregistered and says nothing.
+  // package's surface unregistered. Nothing is said here: the vendored bridge reports the
+  // foreign object itself and keeps `/bridge-status`.
   if (issuesSidebarBridge() !== null) {
     // S7: the prompt card's session boundary is owned here, before the surface registers, so
     // this load always has the shutdown hook that closes the session it belongs to.

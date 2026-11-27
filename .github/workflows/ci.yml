@@ -47,8 +47,8 @@ jobs:
         run: node --test tools/*.test.js
 
       # native-bridge T3: the vendored bridge's suite. It is TypeScript, so it
-      # needs type stripping — Node 22.18 is the first 22.x that has it — and it
-      # is skipped below that rather than failing on a syntax error.
+      # needs type stripping, which is on by default from Node 22.18, and it is
+      # skipped below that rather than failing on a syntax error.
       - name: Run the vendored bridge's suite
         if: matrix.node == '22.x' || matrix.node == '24.x'
         run: node --test lib/bridge/test/*.test.ts lib/bridge/test/*.test.mjs

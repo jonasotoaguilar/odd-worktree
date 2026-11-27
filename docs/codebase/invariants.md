@@ -114,8 +114,10 @@ The question this page answers: which rules must every change preserve, and what
    exist, the slot is published at module load, and the package is reached by
    RELATIVE import, never by the package name and never through a runtime
    dependency. An INCOMPATIBLE object on the slot — another plugin published
-   first — leaves this package's surface unregistered and says NOTHING: no
-   warning, no notice, no second registration. What the host still supplies is
+   first — leaves this package's surface unregistered: no section, no
+   design, no row, no second attempt. This package says nothing of its own; the
+   vendored bridge still reports the foreign object once in its own words and
+   keeps `/bridge-status` for diagnosing it. What the host still supplies is
    `gentle-pi`, the package registering `/gentle:customize`: the vendored factory
    arms the rows and the rail only when the context has a UI AND that host is
    present, and without it it arms nothing and warns once, naming `gentle-pi`, in
@@ -1000,12 +1002,13 @@ The question this page answers: which rules must every change preserve, and what
     working through this package alone and a user keeps every saved choice. The
     entry loads it FIRST — `extensions/odd-worktree-tools.ts` imports
     `../lib/bridge/src/extension.ts` and calls that factory before any surface of
-    its own — so the bridge is armed before anything here looks for its object.
+    its own — so the slot is published before anything here looks for its object (the bridge arms at `session_start`).
     There is NO external dependency and NO import by package name anywhere: the
     bridge is this package's own code, and the root manifest names no
     `dependencies` at all. An incompatible object already on the slot (another
-    plugin published first) leaves this package's surface UNREGISTERED and silent —
-    no warning, no partial surface, no second attempt. Its surfaces still arm only
+    plugin published first) leaves this package's surface UNREGISTERED — no
+    section, no design, no row, no second attempt — while the vendored bridge
+    reports the foreign object once and keeps `/bridge-status`. Its surfaces still arm only
     for a host that has `gentle-pi`: without it the vendored factory arms nothing
     and warns once in its own words. What comes with it is the bridge's own
     suite — `node --test lib/bridge/test/*.test.ts lib/bridge/test/*.test.mjs`,

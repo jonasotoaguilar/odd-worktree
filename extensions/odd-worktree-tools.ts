@@ -2870,13 +2870,13 @@ function observeOddWriteForNaming(event, ctx, pi, allowPhaseTrigger) {
     return;
   }
   const rows = registry.checkoutRows(live);
-  if (rows.length === 0) return;
-  const entry = oddEntryForCwd(rows, cwd);
-  if (!entry) return; // The principal checkout names nothing (D6).
+  // The checkout this call names FROM: a registered worktree first (the longest
+  // match wins), else the principal checkout itself. An ODD write from the principal
+  // checkout renames the session exactly like one from a worktree — the rule follows
+  // the document, not the checkout it lives in.
+  const entry = oddEntryForCwd(rows, cwd) || principalEntryFor(cwd, principalRoot);
+  if (!entry) return;
   const touched = [];
-  // The absolute path behind each touched rel, so the naming step can read
-  // the document's own heading without re-resolving path logic here.
-  const absByRel = new Map();
   // The per-call leg applies to the read/edit/write tools, which carry a
   // single document path. Every other tool (notably `bash`) carries no
   // reliably parseable path and contributes nothing.
@@ -2886,19 +2886,51 @@ function observeOddWriteForNaming(event, ctx, pi, allowPhaseTrigger) {
       const rel = oddRelFor(abs, entry.path, principalRoot);
       if (!rel) continue;
       touched.push(rel);
-      if (!absByRel.has(rel)) absByRel.set(rel, abs);
     }
   }
   // T2/D2-D7: the touched rels name the session after the ODD task document
   // being WRITTEN. The naming decision (write-only, own name only,
   // idempotent) lives in lib/session-auto-name.js; this is the call site.
   const sessionId = oddSessionId(ctx);
-  autoNameSessionFromWrite(pi, entry, oddToolNameOf(event), touched, absByRel, sessionId);
+  autoNameSessionFromWrite(pi, oddToolNameOf(event), touched, sessionId);
   // D3: an ODD phase transition carries no feature of its own, so it only
   // re-applies the label this session last derived from a write. It is
   // observed on `tool_result` (a gentle-pi tool, not a host event).
   if (allowPhaseTrigger === true) {
-    autoNameSessionFromPhase(pi, entry, sessionId, oddToolNameOf(event));
+    autoNameSessionFromPhase(pi, sessionId, oddToolNameOf(event));
+  }
+}
+
+// The principal checkout as a naming target, in the shape a registry row has (`path`),
+// so ONE rel resolution serves both. Naming needs no branch (the name is the ODD's
+// own), and the rail's row election is untouched: this shape never reaches it.
+function principalEntryFor(cwd, principalRoot) {
+  if (typeof principalRoot !== "string" || principalRoot.length === 0) return null;
+  let resolved;
+  try {
+    resolved = path.resolve(cwd);
+  } catch {
+    return null;
+  }
+  const root = path.resolve(principalRoot);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) return null;
+  return { path: root };
+}
+
+// The ODD names this session already WROTE, newest first, read from the durable touch
+// record (`odd-worktree.odd-touch`) the rail already keeps. Naming reads that ONE
+// record as the proof that a name this process did not write is still its own, which
+// is what survives a resume (D5). A host without the record simply has less evidence.
+function oddTouchedNames() {
+  try {
+    if (oddSession === null) return [];
+    const names = [];
+    for (const row of oddSession.touched()) {
+      if (row && typeof row.name === "string" && row.name.length > 0) names.push(row.name);
+    }
+    return names;
+  } catch {
+    return [];
   }
 }
 
@@ -2920,31 +2952,16 @@ function oddSessionId(ctx) {
   }
 }
 
-// The document text behind a touched rel, or null when it cannot be read
-// (the file may not exist yet on `tool_call`, or the write failed). A null
-// text falls back to the filename slug inside the module.
-function readOddDocumentText(absByRel, rel) {
-  if (!absByRel || typeof absByRel.get !== "function") return null;
-  const abs = absByRel.get(rel);
-  if (typeof abs !== "string" || abs.length === 0) return null;
-  try {
-    return fs.readFileSync(abs, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-function autoNameSessionFromWrite(pi, entry, toolName, touched, absByRel, sessionId) {
+function autoNameSessionFromWrite(pi, toolName, touched, sessionId) {
   try {
     if (!pi || typeof pi.getSessionName !== "function" || typeof pi.setSessionName !== "function") return;
     const auto = libRequire("session-auto-name.js");
     const label = auto.planSessionRename({
       rels: touched,
       isWrite: auto.isWriteToolName(toolName),
-      branch: entry && typeof entry.branch === "string" ? entry.branch : "",
       currentName: pi.getSessionName(),
       sessionId,
-      readDocument: (rel) => readOddDocumentText(absByRel, rel),
+      touchedNames: oddTouchedNames(),
     });
     if (typeof label === "string" && label.length > 0) pi.setSessionName(label);
   } catch {
@@ -2956,15 +2973,15 @@ function autoNameSessionFromWrite(pi, entry, toolName, touched, absByRel, sessio
 // derived from an ODD write. The phase names no feature, so nothing is
 // invented here; a session that never wrote an ODD document has nothing to
 // re-apply and is left alone.
-function autoNameSessionFromPhase(pi, entry, sessionId, toolName) {
+function autoNameSessionFromPhase(pi, sessionId, toolName) {
   try {
     if (!pi || typeof pi.getSessionName !== "function" || typeof pi.setSessionName !== "function") return;
     const auto = libRequire("session-auto-name.js");
     if (toolName !== auto.ODD_PHASE_TOOL_NAME) return;
     const label = auto.planPhaseSessionRename({
       sessionId,
-      branch: entry && typeof entry.branch === "string" ? entry.branch : "",
       currentName: pi.getSessionName(),
+      touchedNames: oddTouchedNames(),
     });
     if (typeof label === "string" && label.length > 0) pi.setSessionName(label);
   } catch {

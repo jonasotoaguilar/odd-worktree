@@ -1605,8 +1605,13 @@ test('F3 preserve: a standard single-root repository still paints plain document
   const pending = doOdd(e, '', ctxFor(repo, host, []));
   try {
     await waitFor(() => host.mounts.length === 1, 'the panel mounts');
-    assert.deepEqual(rowLabels(host.mounts[0].component), ['main-two', 'main-one'],
-      'unique names keep their exact plain text, in the recency order the panel always used');
+    // The fixture's mtimes are deliberately the OPPOSITE of its rank (T16 depends on that),
+    // and the panel can paint the cheap mtime scan before the ranked listing lands, so the
+    // frame read here has to be the settled one: wait for the rank, then assert it.
+    await waitFor(() => rowLabels(host.mounts[0].component).join('|') === 'main-one|main-two',
+      'the settled frame is the ranked listing');
+    assert.deepEqual(rowLabels(host.mounts[0].component), ['main-one', 'main-two'],
+      'unique names keep their exact plain text, in the rank the panel reads');
   } finally {
     await closePanel(host, pending);
   }

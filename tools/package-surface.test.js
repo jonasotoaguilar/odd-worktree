@@ -1,6 +1,6 @@
 'use strict';
-// S4 surface: the standalone package always registers /warp, /odd, /files
-// and /issues plus the TWO agent worktree tools (S3/S4: `worktree_delete` and
+// S4 surface: the standalone package always registers /warp, /odd, /files,
+// /issues and /identity plus the TWO agent worktree tools (S3/S4: `worktree_delete` and
 // `worktree_warp` are not registered, so `/warp` is the only front that moves
 // the session and the panel's ctrl+d the only one that removes a checkout),
 // loads in plain Pi with git as its only external dependency, and ships none of
@@ -13,9 +13,10 @@
 // worktree↔issue association.
 //
 // The bash activity is not a preference here: it is a design on gentle-shell-bridge's
-// own `Card activity` line, so the shipped surface is exactly five commands, two tools, TWO
+// own `Card activity` line, so the shipped surface is exactly six commands, two tools, TWO
 // sidebar sections, one tools design and the one `Cards` row group the two file-card
-// switches carry.
+// switches carry. `/identity` is the name the person stores for their own prompt card and
+// the orchestrator prompt: transversal like `/files`, so no module switch gates it.
 //
 // Everything here reads the observable surface: the registered command and
 // tool objects, the manifest, the files on disk. No internal state is read.
@@ -85,11 +86,11 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
-  test('registers /warp, /odd, /files, /issues, /prs and the two worktree tools', async () => {
+  test('registers /warp, /odd, /files, /issues, /prs, /identity and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['files', 'issues', 'odd', 'prs', 'warp'], 'the command list is exactly the five panels');
+    assert.deepEqual(registered, ['files', 'identity', 'issues', 'odd', 'prs', 'warp'], 'the command list is exactly the six panels');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });

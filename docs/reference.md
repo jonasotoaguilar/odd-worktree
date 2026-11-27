@@ -810,17 +810,17 @@ a pull request in both buckets counts once.
   refused, the identity could not be proven, the dispatch threw), or after a
   bounded safety interval of about ten seconds if the host never ran the command
   at all. A typed `/issues` is never held back.
-- **It reaches the host only through gentle-shell-bridge.** The section is read
-  from that package's published sidebar-section API — the object in the
+- **It reaches the host only through the bridge, which ships in this package.** The
+  section is read from the published sidebar-section API — the object in the
   `Symbol.for("gentle-shell-bridge/api/v1")` slot, after its schema and version gate
-  — or from the one `gentle-shell-bridge:ready` announcement when the bridge
-  publishes later. There is no dependency on that package and no import of it. With
-  no bridge the section never appears at all: nothing is registered and no other
-  surface changes. The one thing you are told is how to get it — a single warning
-  per process, from a primary session only, naming
-  `pi install npm:gentle-shell-bridge`; an empty slot at `session_start` may still
-  be a bridge that has not loaded yet, so the warning waits out the announcement
-  window, and a host with no event bus to announce on is told at once. A host that
+  — or from the one `gentle-shell-bridge:ready` announcement when a bridge
+  publishes later. That bridge is VENDORED here: `lib/bridge/` is a verbatim copy of
+  `gentle-shell-bridge` 0.16.2 imported by the entry as
+  `../lib/bridge/src/extension.ts`, so it publishes the slot at module load, there is
+  no runtime dependency and no import by package name, and nothing has to be
+  installed beside this package for the section to exist (invariant 32). An
+  INCOMPATIBLE object already on the slot — another plugin published first —
+  registers nothing of this package's surface and says nothing. A host that
   has the bridge but draws no rail registers the section and never paints it — that
   is the bridge's answer to a host without a sidebar, not a failure here. Its
   `/gentle:customize` → `Sections` visibility toggle belongs to the bridge, so a
@@ -837,7 +837,9 @@ a pull request in both buckets counts once.
   where it sits in the rail): the GITHUB card goes after every native card, which
   is where it always went and the bridge's own default, said out loud so it does
   not depend on a default another release could change; a bridge that predates the
-  field ignores it.
+  field ignores it. The shipped copy is `0.16.2`, so every version gate this
+  reference names — `0.6.0`, `0.7.0`, `0.9.0`, `0.12.1`, `0.13.0` — is always
+  satisfied; they stay documented because the code still answers them.
 - **A frame never waits on `gh`.** The host calls `lines()` and `meta()` once per
   frame and both return synchronously: they read one in-memory snapshot and only
   ever schedule the refresh. The session's `gh` gate is dispatched startup work,
@@ -977,8 +979,8 @@ a pull request in both buckets counts once.
   reader nor hands its state over.
 - **What it needs.** `gh`, authenticated (`gh auth login`); a checkout whose own
   repository can be proven — a failed proof is the error row and makes no `gh`
-  call; and a Gentle Shell whose `gentle-shell-bridge` published its API and draws
-  a rail. `gh` decides whether the GitHub surfaces EXIST at all: without it on
+  call; and a Gentle Shell that
+  draws a rail. `gh` decides whether the GitHub surfaces EXIST at all: without it on
   `PATH`, `/issues` and `/prs` are never registered and this section is never added
   to the rail — no child, no read, no timer, nothing to refuse and no line to draw.
   Every other surface (`/warp`, `/odd`, `/files`, the tools, the cards, the bash
@@ -1116,7 +1118,7 @@ announced later registers it through the one `ready` subscription. `session_shut
 disposes it — the bridge's unregister and the section's own `dispose()` — so the
 ended session leaves no read and no click behind.
 - **What it needs.** A checkout whose repository git can be read, and a Gentle Shell
-whose `gentle-shell-bridge` published its API and draws a rail. No `gh`: unlike the
+that draws a rail. No `gh`: unlike the
 `GITHUB` section, this one has no CLI of its own, no network and nothing to refuse.
 
 ## `/files`: the picker, its scopes and its orders
@@ -1266,7 +1268,9 @@ value, and it is bound once for the life of the process. The same seam binds
 seam, or one that refuses the key, gets no shortcut and no message about it, and
 `/files` keeps working as the command it is. The picker is contributed to no
 shell surface of its own: this package claims no row a plugin would have to
-publish, and nothing here needs `gentle-shell-bridge` to open. It mounts its own
+publish, and nothing here needs an external bridge to open: the bridge that
+publishes the API its shortcut is registered through is this package's own. It
+mounts its own
 overlay, so a host without `ctx.ui.custom` gets one line saying the picker needs
 an interactive session with overlay support, and no second surface in its place.
 
@@ -2399,7 +2403,8 @@ or row of its own, and the file
 picker's `alt+p` and the issues panel's `alt+i` are bound on the host directly
 rather than contributed to any shell surface. There is
 nothing to configure here, and `/warp`, `/odd`, `/files`, `/identity`, `/issues` and `/prs` are
-always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
+always on — the seventh command, `/bridge-status`, is the shipped bridge's own. Paths,
+branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 
 ## Tests
@@ -2407,11 +2412,17 @@ never as a shell string.
 ```bash
 node --test tools/*.test.js                # the whole suite (package.json `test`)
 node --test tools/issues-command.test.js   # one suite while iterating
+npm run test:bridge                        # the vendored bridge's own suite, Node >= 22.18
 ```
 
 The suite uses Node builtins only — no install step, no lockfile, no network —
 and adding a dependency so a test passes is not an option. Node 18 is the floor
-`engines` declares; CI additionally runs 20, 22 and 24. Keep it green at the
+`engines` declares; CI additionally runs 20, 22 and 24. The vendored bridge's suite
+is TypeScript, so it is its own gate (`npm run test:bridge`, the same two globs CI
+runs) and it needs type stripping: Node 22.18 is the first 22.x that has it, which is
+why the plain-JS suite stubs that one import
+(`tools/fixtures/load-extension.js`) and stays runnable below that. Keep both green
+at the
 whole-suite level: run the focused file while iterating, then the full command.
 
 - **Test the public surface.** Assert what a caller observes: the registered
@@ -2438,7 +2449,7 @@ whole-suite level: run the focused file while iterating, then the full command.
 
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
-| `ci.yml` | push to `main`, every pull request | `node --test tools/*.test.js` on Node 18, 20, 22 and 24 — the range `engines` declares, 18 as its floor |
+| `ci.yml` | push to `main`, every pull request | `node --test tools/*.test.js` on Node 18, 20, 22 and 24 — the range `engines` declares, 18 as its floor — plus the vendored bridge's TypeScript suite (`node --test lib/bridge/test/*.test.ts lib/bridge/test/*.test.mjs`) on 22 and 24, the two versions that strip types |
 | `pr-check.yml` | pull request opened, edited, reopened or synchronized | the PR title and every non-merge commit subject must follow [Conventional Commits](https://www.conventionalcommits.org/), plus one suite run on Node 22 |
 | `release.yml` | tag `v*` push (a `v*-*` tag is excluded), or a manual dispatch naming an existing tag | tag/`package.json` version parity, the suite, the GitHub Release, then `npm publish`, then verification |
 

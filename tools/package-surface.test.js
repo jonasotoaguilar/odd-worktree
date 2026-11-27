@@ -12,10 +12,11 @@
 // are shipped; `/issues` is the T3 command that mounts them, without any
 // worktree↔issue association.
 //
-// The bash activity is not a preference here: it is a design on gentle-shell-bridge's
-// own `Card activity` line, so the shipped surface is exactly six commands, two tools, TWO
-// sidebar sections, one tools design and the one `Cards` row group the two file-card
-// switches carry. `/identity` is the name the person stores for their own prompt card and
+// The bash activity is not a preference here: it is a design on the shipped bridge's
+// own `Card activity` line, so the surface this package registers is exactly six
+// commands, two tools, TWO sidebar sections and the two designs (`activity`, `color`),
+// and the vendored bridge adds the seventh command, `/bridge-status`. `/identity` is the
+// name the person stores for their own prompt card and
 // the orchestrator prompt: transversal like `/files`, so no module switch gates it.
 //
 // Everything here reads the observable surface: the registered command and
@@ -38,17 +39,37 @@ after(() => {
 });
 
 describe('manifest', () => {
-  test('declares one Pi extension entry point and ships only that surface', () => {
+  test('declares one Pi extension entry point and ships only that surface (invariant 8)', () => {
     assert.equal(PKG.name, 'pi-odd-worktree');
     assert.ok(PKG.keywords.includes('pi-package'), 'keywords name the pi-package kind');
     assert.deepEqual(PKG.pi.extensions, ['./extensions/odd-worktree-tools.ts']);
-    for (const entry of ['extensions', 'lib', 'tools', 'README.md']) {
-      assert.ok(PKG.files.includes(entry), `files ships ${entry}`);
-    }
+    // native-bridge T3 (invariant 8): `lib` now carries the vendored bridge, so the list is
+    // EXACT — the two negations keep its suite and its images out of the tarball while its
+    // source, docs and examples ship (npm pack, T3).
+    assert.deepEqual(PKG.files, ['extensions', 'lib', '!lib/bridge/test', '!lib/bridge/assets', 'tools', 'README.md'],
+      'files ships extensions, lib, tools and README.md, minus the bridge suite and assets');
     assert.equal(PKG.peerDependencies['@earendil-works/pi-coding-agent'], '*');
     assert.equal(PKG.peerDependencies['@earendil-works/pi-tui'], '*');
     assert.ok(!('dependencies' in PKG), 'no runtime dependencies are installed');
     assert.equal(/herdr/i.test(JSON.stringify(PKG)), false, 'the manifest claims no integration the package does not have');
+    // native-bridge T3: `test` is the plain-JS gate it always was, and the bridge's
+    // TypeScript suite is its own script — the same two globs CI runs.
+    assert.equal(PKG.scripts.test, 'node --test tools/*.test.js', 'the plain-JS gate is unchanged');
+    assert.equal(PKG.scripts['test:bridge'], 'node --test lib/bridge/test/*.test.ts lib/bridge/test/*.test.mjs',
+      'the bridge suite has its own script');
+  });
+
+  // native-bridge T3 (invariant 1): the vendored bridge is a NESTED package. Its `package.json`
+  // carries its own `pi` manifest, which is NOT a Pi entry point — Pi reads the ROOT manifest
+  // only — so the root entry stays exactly one file while the bridge keeps its own manifest for
+  // its attribution, its `exports` and its own suite.
+  test('the vendored bridge is a nested package, never a Pi entry point (invariant 1)', () => {
+    const nested = JSON.parse(fs.readFileSync(path.join(ROOT, 'lib/bridge/package.json'), 'utf8'));
+    assert.equal(nested.name, 'gentle-shell-bridge', 'the vendored copy keeps its own name');
+    assert.deepEqual(nested.pi.extensions, ['./src/extension.ts'], 'the nested manifest names the bridge own factory');
+    assert.deepEqual(PKG.pi.extensions, ['./extensions/odd-worktree-tools.ts'], 'Pi reads only the root manifest');
+    assert.ok(fs.existsSync(path.join(ROOT, 'lib/bridge/src/extension.ts')), 'the entry can import the vendored factory');
+    assert.ok(fs.existsSync(path.join(ROOT, 'lib/bridge/docs/contract.md')), 'the bridge contract ships for plugin authors');
   });
 
   test('ships no module for the removed commands', () => {
@@ -86,11 +107,19 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
+  // S2/S4 (native-bridge T3): the SHIPPED surface is SEVEN commands, because the vendored bridge
+  // registers `/bridge-status` from its own factory. This plain-JS suite cannot import a `.ts`
+  // file, so the fixture stubs the bridge import (a no-op factory) and what it observes here is
+  // the SIX this package registers itself; the seventh is pinned on the vendored source, and its
+  // wiring on the `bridgeExtension(pi)` call asserted below.
   test('registers /warp, /odd, /files, /issues, /prs, /identity and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['files', 'identity', 'issues', 'odd', 'prs', 'warp'], 'the command list is exactly the six panels');
+    assert.deepEqual(registered, ['files', 'identity', 'issues', 'odd', 'prs', 'warp'], 'the six commands this package registers itself');
+    const bridgeSource = fs.readFileSync(path.join(ROOT, 'lib/bridge/src/extension.ts'), 'utf8');
+    assert.ok(bridgeSource.includes('STATUS_COMMAND = "bridge-status"'), 'the vendored bridge brings the seventh command, /bridge-status');
+    assert.equal(stubbedSource().includes('bridgeExtension(pi)'), true, 'and the entry calls that factory, which registers it');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });

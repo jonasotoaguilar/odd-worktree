@@ -4,7 +4,11 @@ The question this page answers: which rules must every change preserve, and what
 
 1. **One extension entry point.** `package.json` `pi.extensions` is exactly
    `["./extensions/odd-worktree-tools.ts"]`, and `extensions/` holds no other
-   file. A second entry point changes what the host loads.
+   file. A second entry point changes what the host loads. `lib/bridge/package.json`
+   carries a nested `pi` manifest of its own (`./src/extension.ts`), and it is NOT a
+   Pi entry point: Pi reads only the root manifest, so the vendored copy is reached
+   through the root entry's own import and never loaded as a second package
+   (invariant 32).
 2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
    invariants 18 and 19 allow.** No customize COMMAND, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
@@ -27,9 +31,11 @@ The question this page answers: which rules must every change preserve, and what
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
-3. **The shipped surface is exactly six commands, two tools, TWO sidebar
+3. **The shipped surface is exactly seven commands, two tools, TWO sidebar
    sections and two tool designs.** `/warp`, `/odd`,
-   `/files`, `/identity`, `/issues`, `/prs`; `worktree_create`, `worktree_list`; the one fourth kind of
+   `/files`, `/identity`, `/issues`, `/prs` and `/bridge-status` — the last one
+   registered by the vendored bridge's own factory, a read-only status panel that
+   adds no state of this package's (invariant 32); `worktree_create`, `worktree_list`; the one fourth kind of
    surface, a sidebar section — and there are TWO of them, each neither a command nor a
    tool and each registering no name the host or the agent can call: the issues rail
    (`lib/issues-section.js`, id `odd-worktree.issues`, headed `GITHUB`, `rowLabel`
@@ -97,18 +103,24 @@ The question this page answers: which rules must every change preserve, and what
    booleans in the bridge's own store (`odd-worktree` → `alerts` → `{ peaks: { … } }`), and an
    absent, malformed or unreadable document reads Off; nothing is written at load.
 
-   **The sections reach the host only through gentle-shell-bridge.** Both the issues
-   rail and the ODD rail are published through that package's sidebar-section API alone: the object read from
-   its `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
-   gate, or the one `gentle-shell-bridge:ready` announcement when the bridge
-   publishes later. There is NO dependency on that package and no import of it
-   anywhere in this repo. Without a bridge this package loads NOTHING — no command,
-   no tool, no message or entry renderer, no card, no rail, no hook and no prompt
-   append: the whole surface is deferred behind that gate and registers the moment
-   the bridge is known present (published at load, or announced later), at most
-   once. What stays registered while the gate is closed is the ONE `session_start`
-   observer the missing-plugin notice needs, because `ctx.ui.notify` lives on a
-   session; it is released when the surface registers. A host
+   **The bridge is NATIVE, and the sections reach the host only through it.** Both
+   the issues rail and the ODD rail are published through the bridge's
+   sidebar-section API alone: the object read from its
+   `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
+   gate, or the one `gentle-shell-bridge:ready` announcement when a bridge
+   publishes later. That bridge SHIPS IN THIS PACKAGE — vendored verbatim at
+   `lib/bridge/` and imported by the entry as `../lib/bridge/src/extension.ts`
+   (invariant 32) — so no host installs anything for this package's surface to
+   exist, the slot is published at module load, and the package is reached by
+   RELATIVE import, never by the package name and never through a runtime
+   dependency. An INCOMPATIBLE object on the slot — another plugin published
+   first — leaves this package's surface unregistered and says NOTHING: no
+   warning, no notice, no second registration. What the host still supplies is
+   `gentle-pi`, the package registering `/gentle:customize`: the vendored factory
+   arms the rows and the rail only when the context has a UI AND that host is
+   present, and without it it arms nothing and warns once, naming `gentle-pi`, in
+   its own text — not this package's, and never an install line for a bridge.
+   A host
    that HAS the bridge but draws no rail registers the section and never paints it,
    which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the bridge, not by this package (invariant 2 keeps every customize
@@ -117,16 +129,12 @@ The question this page answers: which rules must every change preserve, and what
    preview: every `Sections` row draws the host's one shared list of active sections
    and the bridge adds this section's `rowLabel` to it itself, shown or left out
    with the row's own hypothetical (`registerSection` has no `preview` field — do
-   not add one). A host without the bridge otherwise hears nothing about it;
-   the one warning it can get is discoverability — once per process, from a primary
-   session only (`GENTLE_PI_AGENTS_CHILD` is not `1`), naming
-   `pi install npm:gentle-shell-bridge`, timed after the announcement window because
-   an empty slot at `session_start` may still be a bridge that has not loaded, and
-   immediate on a host with no event bus to announce on. That warning is the ONLY
-   thing a host without the bridge ever receives from this package.
-   `tools/issues-section.test.js` pins the gate from the outside — no bridge and no
-   bus registers nothing, an announcement alone registers nothing until it fires —
-   and `tools/package-surface.test.js` pins that the bridge is never imported.
+   not add one).
+   `tools/issues-section.test.js` pins the slot gate from the outside — an
+   incompatible object registers nothing and says nothing, an announcement alone
+   registers nothing until it fires —
+   and `tools/package-surface.test.js` pins that the bridge is imported from the
+   vendored copy only and never by the package name.
 
    **`/files` is a panel and nothing else.** It mounts its OWN overlay through
    `ctx.ui.custom` (the scope step's small card, then the picker), and a host with
@@ -279,7 +287,12 @@ The question this page answers: which rules must every change preserve, and what
    true for a pull request that is not a draft in a repository that allows at least
    one merge method, with the merge form's chosen method re-checked against the freshly read `mergeMethods` before the seam. A refused key paints no hint and reaches no seam;
    `tools/prs-view.test.js` pins every refusal sentence and that no seam is called.
-8. **The package ships only `extensions`, `lib`, `tools`, `README.md`.** Adding a
+8. **The package ships `extensions`, `lib`, `tools`, `README.md` and nothing else
+   of its own.** `files[]` is exactly `["extensions", "lib", "!lib/bridge/test",
+   "!lib/bridge/assets", "tools", "README.md"]`: `lib` carries the vendored bridge,
+   and its two negations keep that copy's suite and its images out of the tarball
+   while its source, its `docs/`, its `examples/` and its `README.md` ship for
+   plugin authors (invariant 32). Adding a
    shipped path means changing `files[]` and the package-surface test together.
 9. **Fixed argv, never a shell string.** Every child (`git`, `gh`, package
    managers) gets a binary plus an argument array with a bounded timeout. Both
@@ -972,3 +985,34 @@ The question this page answers: which rules must every change preserve, and what
     `tools/odd-view.test.js` (S1-S5 of odd-panel-groups) and
     `tools/odd-rail-section.test.js` (S7) pin the shapes; `tools/odd-panel-wiring.test.js`
     pins that a scope is read from the headers it draws.
+
+32. **The bridge is native and verbatim.** `lib/bridge/` is a VERBATIM copy of
+    `gentle-shell-bridge` 0.16.2 — its own `package.json`, `src/`, `test/`,
+    `docs/`, `examples/`, `skills/` and `README.md` — and it changes only by
+    RE-VENDORING: nobody hand-edits a file under `lib/bridge/`, and a fix there is
+    made upstream and copied in whole. What that buys is the API, unchanged:
+    `lib/bridge/src/api.ts` publishes the frozen object at
+    `Symbol.for("gentle-shell-bridge/api/v1")` at module load (schema
+    `gentle-shell-bridge/api`, version 1, twelve members), and every
+    `Symbol.for("gentle-shell-bridge…")` key and the
+    `<config home>/gentle-shell-bridge` store directory stay exactly as they were,
+    so a third-party plugin that reads the slot or calls `bridgeApi()` keeps
+    working through this package alone and a user keeps every saved choice. The
+    entry loads it FIRST — `extensions/odd-worktree-tools.ts` imports
+    `../lib/bridge/src/extension.ts` and calls that factory before any surface of
+    its own — so the bridge is armed before anything here looks for its object.
+    There is NO external dependency and NO import by package name anywhere: the
+    bridge is this package's own code, and the root manifest names no
+    `dependencies` at all. An incompatible object already on the slot (another
+    plugin published first) leaves this package's surface UNREGISTERED and silent —
+    no warning, no partial surface, no second attempt. Its surfaces still arm only
+    for a host that has `gentle-pi`: without it the vendored factory arms nothing
+    and warns once in its own words. What comes with it is the bridge's own
+    suite — `node --test lib/bridge/test/*.test.ts lib/bridge/test/*.test.mjs`,
+    Node >= 22.18 because the suite is TypeScript — while its core never runs in
+    the plain-JS suite at all (the fixture stubs the one import). The one
+    coexistence cost is a standalone `gentle-shell-bridge` installed beside this
+    package: both copies share every piece of global state ("first wins") and
+    nothing else breaks, but the command name `bridge-status` is registered twice,
+    so `/bridge-status` stops resolving. Uninstalling the standalone package is the
+    whole fix; it is no longer needed.

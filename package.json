@@ -24,6 +24,8 @@
   "files": [
     "extensions",
     "lib",
+    "!lib/bridge/test",
+    "!lib/bridge/assets",
     "tools",
     "README.md"
   ],
@@ -33,6 +35,7 @@
     ]
   },
   "scripts": {
-    "test": "node --test tools/*.test.js"
+    "test": "node --test tools/*.test.js",
+    "test:bridge": "node --test lib/bridge/test/*.test.ts lib/bridge/test/*.test.mjs"
   }
 }

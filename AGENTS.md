@@ -13,11 +13,12 @@ When working on this project, load the relevant skill(s) BEFORE doing the work t
 
 | Document | Use when | Path |
 | --- | --- | --- |
-| Codebase mental model | You need the package's boundaries, its 29 invariants in one line each, or where to start tracing a change. | [`docs/codebase/mental-model.md`](docs/codebase/mental-model.md) |
+| Codebase mental model | You need the package's boundaries, its 32 invariants in one line each, or where to start tracing a change. | [`docs/codebase/mental-model.md`](docs/codebase/mental-model.md) |
 | Code map | You need to know which file owns a responsibility before opening code. | [`docs/codebase/code-map.md`](docs/codebase/code-map.md) |
 | Invariants | You are about to change the package and must know which rule a change may not break, or you are following an `invariant N` citation. | [`docs/codebase/invariants.md`](docs/codebase/invariants.md) |
 | Reference | You need a panel key, a refusal sentence, the test rules, or how one surface behaves in detail. | [`docs/reference.md`](docs/reference.md) |
 | README | You are installing, checking requirements, or reading the shipped surface at a glance. | [`README.md`](README.md) |
 | CI matrix | You need to know which Node versions the suite runs on. | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+| Bridge contract | You are writing a plugin that extends gentle-shell through this package's bridge API, or you are changing `lib/bridge/`. | [`lib/bridge/docs/contract.md`](lib/bridge/docs/contract.md) |
 | PR gates | You are writing a commit subject or a PR title that must pass. | [`.github/workflows/pr-check.yml`](.github/workflows/pr-check.yml) |
 | Release flow | You are cutting a release or checking what publishing does. | [`.github/workflows/release.yml`](.github/workflows/release.yml) |

@@ -935,3 +935,40 @@ The question this page answers: which rules must every change preserve, and what
     gate and its live flip on
     one instance, the byte-for-byte native answers, the accent cells in both styles,
     the zone markers and the wrap-once/uninstall-by-reference claims.
+
+30. **A session is named after the ODD it writes, and a name it cannot prove it
+    wrote is never touched.** `lib/session-auto-name.js` derives the label from the
+    document's own name — `odd/tasks/prompt-card-fix.md` is `Prompt card fix`, with
+    `-`, `_` and the `/` of a nested feature read as word breaks, the first letter
+    capitalized and the rest left exactly as the document named it — on every
+    `write`/`edit` landing on an `odd/tasks/*.md` document, from the primary checkout
+    and from a worktree alike, and never on a `read` or on any other path. The prose
+    INSIDE the document is not a source: a heading is its author's sentence, not the
+    ODD's identity, and a document that does not exist yet names the session the same.
+    The branch is not part of the name, so two checkouts of one ODD carry one label.
+    Ownership is what keeps the guarantee: the plugin writes only an empty name or one
+    it can prove it produced — the label it just derived, the label of an ODD this
+    session already wrote (the durable `odd-worktree.odd-touch` record, which is why a
+    resume keeps working), or the two shapes earlier versions wrote (`<slug>` and
+    `<slug> @ <branch>`). Anything else was typed by a human and is untouchable,
+    including by the `gentle_odd_phase` re-apply, which invents nothing for a session
+    that never wrote an ODD.
+    `tools/session-auto-name.test.js` pins the label shape, the re-name on every write,
+    the ownership cases and the resume path; `tools/session-auto-name-wiring.test.js`
+    pins that the primary checkout names too.
+
+31. **The ODD panel folds by default, counts what it lists, and lines a document up
+    under its group's name.** `lib/odd-view.js` keeps the OPENED checkouts in one
+    set (`expandedCheckouts`), so a group is folded unless something opened it: the
+    panel mounts with every group folded, and a target expands ONLY the group that
+    owns that document. Each header carries its group's TOTAL as `(N odd)`, the title
+    sums those totals (folding never moves the number), and a document row is
+    indented so its text starts at the column its group's name starts at — the flat,
+    ungrouped listing stays byte-identical, which is what the pinned frames measure.
+    A group whose filtered rows are empty is not drawn, no worktree group means a flat
+    listing, and two drawn groups sharing a name are qualified with their parent
+    directory so a folded header is never its twin's equal. The rail's heading answers
+    the same count through `meta()` — `N odd`, `N odd · stale` — and starts no read.
+    `tools/odd-view.test.js` (S1-S5 of odd-panel-groups) and
+    `tools/odd-rail-section.test.js` (S7) pin the shapes; `tools/odd-panel-wiring.test.js`
+    pins that a scope is read from the headers it draws.

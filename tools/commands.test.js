@@ -620,8 +620,9 @@ describe('S8 (T6): the naming observer’s git probes', () => {
   });
 
   // PRESERVE: the filter above must not stop the naming it filters FOR. A write
-  // of an `odd/tasks/*.md` document still names the session after that document
-  // and its branch — the behaviour the observer existed for.
+  // of an `odd/tasks/*.md` document still names the session after that document —
+  // the behaviour the observer existed for — and the name is the ODD's OWN file name
+  // (not the heading inside it, and with no branch suffix).
   test('a write of an odd/tasks document still names the session', async () => {
     const repo = makeRepo();
     const created = await tools.get('worktree_create').execute(
@@ -647,7 +648,7 @@ describe('S8 (T6): the naming observer’s git probes', () => {
       const out = handler({ toolName: 'write', input: { path: documentPath }, toolResults: [] }, ctx);
       if (out && typeof out.then === 'function') await out;
     }
-    assert.equal(name, 'Named session @ feat/named', 'the write still names the session after its document');
+    assert.equal(name, 'Named', 'the write still names the session after its document');
   });
 
   test('a checkout created moments ago is still seen by the next naming step', async () => {    const repo = makeRepo();

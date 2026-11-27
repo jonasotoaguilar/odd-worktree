@@ -2472,10 +2472,19 @@ describe('createOddView grouped listing (T9: S10,S11,S13)', () => {
   const rowsOf = (lines) => listCells(lines)
     .map((cell) => cell.trim().replace(/^▸\s*/, ''))
     .filter((cell) => cell !== '');
+  // The focused row's label. The CURSOR is the first cell after the frame's
+  // `│ `, so it sits at index 1 of the pane cell, while a folded group's own
+  // marker is indented past it: a folded header is not mistaken for the cursor
+  // (odd-panel-groups S1 makes every group folded by default).
   const focusedRow = (lines) => {
-    const cell = listCells(lines).map((value) => value.trim()).find((value) => value.startsWith('▸'));
-    return cell === undefined ? null : cell.replace(/^▸\s*/, '');
+    const cell = listCells(lines).find((value) => value[1] === '▸');
+    return cell === undefined ? null : cell.trim().replace(/^▸\s*/, '');
   };
+  // The list rows as LABELS, with the cursor and the fold marker removed, so a row
+  // reads the same however it is drawn.
+  const labelsOf = (lines) => listCells(lines)
+    .map((cell) => cell.replace(/[▸▾]/g, '').trim().replace(/\s+/g, ' '))
+    .filter((cell) => cell !== '');
   const bodyOf = (lines) => strip(lines.join('\n'));
   const footerOf = (lines) => strip(lines[lines.length - 2]);
 
@@ -2538,54 +2547,52 @@ describe('createOddView grouped listing (T9: S10,S11,S13)', () => {
     assert.ok(!bodyOf(groupedFrame).includes('▾'), 'and no header is painted');
   });
 
-  test('S10: a header row per checkout, in order, each followed by its own documents', async () => {
-    const view = build({ groups: [MAIN, RAIL] });
+  test('S1: a header row per checkout, in order, and Enter opens each one', async () => {
+    const view = build({ groups: [MAIN, RAIL], initialDoc: '/wt/main/odd/tasks/alpha.md' });
     await tick();
-    const lines = view.render(100);
-    assert.deepEqual(rowsOf(lines), ['▾ main', 'alpha', 'bravo', '▾ odd-rail', 'delta'],
-      'the main group, its documents, then the worktree group and its documents');
-    assert.equal(focusedRow(lines), 'alpha', 'the first DOCUMENT is focused, not the header');
-    assert.match(bodyOf(lines), /body of alpha/, 'and its document is the one painted');
-    assert.match(bodyOf(lines), /✎ Odd · 3 documents/, 'the title counts the listed documents');
+    assert.deepEqual(labelsOf(view.render(100)), ['main (2 odd)', 'alpha', 'bravo', 'odd-rail (1 odd)'],
+      'main first with its documents, then the worktree group, still folded');
+    // From alpha, two steps reach the odd-rail header; Enter opens it.
+    view.handleInput('down');
+    view.handleInput('down');
+    view.handleInput('enter');
+    assert.deepEqual(labelsOf(view.render(100)), ['main (2 odd)', 'alpha', 'bravo', 'odd-rail (1 odd)', 'delta'],
+      'the opened worktree group follows main with its own document');
   });
 
   test('S13: a worktree group with no documents of its own is dropped', async () => {
     const view = build({ groups: [MAIN, RAIL, checkout('odd-fix', '/wt/odd-fix', false, [])] });
     await tick();
     const lines = view.render(100);
-    assert.deepEqual(rowsOf(lines), ['▾ main', 'alpha', 'bravo', '▾ odd-rail', 'delta'],
+    assert.deepEqual(labelsOf(lines), ['main (2 odd)', 'odd-rail (1 odd)'],
       'the empty worktree contributes neither header nor rows');
     assert.ok(!bodyOf(lines).includes('odd-fix'), 'and it is never named');
   });
 
-  test('S10: Enter on a header collapses the group, hides its documents and keeps the focus on it', async () => {
+  test('S10: Enter on a header opens it, Enter again closes it, and the focus stays on it', async () => {
     const view = build({ groups: [MAIN, RAIL] });
     await tick();
-    // Rows: [header main, alpha, bravo, header odd-rail, delta]; the mount
-    // focuses alpha (index 1), so two steps reach the worktree header.
-    for (let step = 0; step < 2; step += 1) view.handleInput('down');
-    assert.equal(focusedRow(view.render(100)), '▾ odd-rail', 'the premise: the header is focused');
+    // The folded default paints two headers; one step reaches the worktree header.
+    view.handleInput('down');
+    assert.equal(focusedRow(view.render(100)), '▸ odd-rail (1 odd)', 'the premise: the folded header is focused');
     view.handleInput('enter');
-    const collapsed = view.render(100);
-    assert.deepEqual(rowsOf(collapsed), ['▾ main', 'alpha', 'bravo', '▸ odd-rail'],
-      'the header stays and its documents are gone');
-    assert.equal(focusedRow(collapsed), '▸ odd-rail', 'the focus stays on the header');
-    assert.equal(view.state.index, 3, 'and so does its row');
-    assert.ok(!bodyOf(collapsed).includes('delta'), 'the collapsed documents are hidden');
+    const opened = view.render(100);
+    assert.deepEqual(labelsOf(opened), ['main (2 odd)', 'odd-rail (1 odd)', 'delta'], 'its document appears');
+    assert.equal(focusedRow(opened), '▾ odd-rail (1 odd)', 'and the focus stays on the header');
+    assert.equal(view.state.index, 1, 'which is still its row');
     view.handleInput('enter');
-    assert.deepEqual(rowsOf(view.render(100)), ['▾ main', 'alpha', 'bravo', '▾ odd-rail', 'delta'],
-      'Enter again reopens it');
+    assert.deepEqual(labelsOf(view.render(100)), ['main (2 odd)', 'odd-rail (1 odd)'], 'Enter again closes it');
   });
 
   test('Enter on a document keeps today\'s no-op: nothing folds and nothing moves', async () => {
-    const view = build({ groups: [MAIN, RAIL] });
+    const view = build({ groups: [MAIN, RAIL], initialDoc: '/wt/main/odd/tasks/alpha.md' });
     await tick();
     view.handleInput('down');
     const before = view.render(100);
     assert.equal(focusedRow(before), 'bravo', 'the premise: a document is focused');
     view.handleInput('enter');
     const after = view.render(100);
-    assert.deepEqual(rowsOf(after), rowsOf(before), 'no group folded around the focused document');
+    assert.deepEqual(labelsOf(after), labelsOf(before), 'no group folded around the focused document');
     assert.equal(view.state.index, 2, 'and the selection did not move');
   });
 
@@ -2663,12 +2670,15 @@ describe('createOddView grouped listing (T9: S10,S11,S13)', () => {
   });
 
   test('S11: the reloaded grouping re-applies the selection when the document is still there', async () => {
-    const view = build({ groups: [MAIN, RAIL], onToggleAll: () => {} });
+    const view = build({
+      groups: [MAIN, RAIL],
+      initialDoc: '/wt/odd-rail/odd/tasks/delta.md',
+      onToggleAll: () => {},
+    });
     await tick();
-    for (let step = 0; step < 3; step += 1) view.handleInput('down');
     assert.equal(focusedRow(view.render(100)), 'delta', 'the premise: delta is the document being read');
     // The caller answered the `a` toggle with every worktree: delta is still
-    // there, in a different place of a longer listing.
+    // there, in a longer listing, and its group is still the one open.
     view.applyGroups([
       MAIN,
       checkout('odd-rail', '/wt/odd-rail', false, [
@@ -2678,7 +2688,7 @@ describe('createOddView grouped listing (T9: S10,S11,S13)', () => {
     ]);
     await tick();
     const lines = view.render(100);
-    assert.deepEqual(rowsOf(lines), ['▾ main', 'alpha', 'bravo', '▾ odd-rail', 'zulu', 'delta']);
+    assert.deepEqual(labelsOf(lines), ['main (2 odd)', 'odd-rail (2 odd)', 'zulu', 'delta']);
     assert.equal(focusedRow(lines), 'delta', 'the reader keeps the SAME document');
     assert.match(bodyOf(lines), /body of delta/, 'and its pane is still the one being read');
   });
@@ -2705,9 +2715,87 @@ describe('createOddView grouped listing (T9: S10,S11,S13)', () => {
     await tick();
     const lines = view.render(100);
     assert.equal(focusedRow(lines), 'delta', 'the highlight is on the requested document row');
-    assert.equal(view.state.index, 3, 'across the group it lives in');
+    assert.equal(view.state.index, 2, 'across the group it lives in, which is the only one open');
     assert.match(bodyOf(lines), /body of delta/, 'the right pane starts on the requested document');
     assert.equal(view.state.scroll, 0, 'and at the top of it');
+  });
+
+  // -------------------------------------------------------------------------
+  // odd-panel-groups (S1-S5): the panel OPENS folded, expands the ONE group the
+  // requested ODD lives in, aligns a document's text with its group's text and
+  // counts every group and the whole listing.
+  // -------------------------------------------------------------------------
+  test('S1: every group opens folded, with no document row painted', async () => {
+    const view = build({ groups: [MAIN, RAIL] });
+    await tick();
+    const lines = view.render(100);
+    assert.deepEqual(labelsOf(lines), ['main (2 odd)', 'odd-rail (1 odd)'],
+      'the two headers and nothing under them');
+    assert.equal(view.state.index, 0, 'the cursor opens on the first header');
+    assert.equal(listCells(lines)[0][1], '▸', 'drawn as the focused row');
+    assert.match(bodyOf(lines), /enter opens this group/, 'and the pane says how to open one');
+  });
+
+  test('S2: the requested document expands its OWN group only, and is selected', async () => {
+    const view = build({ groups: [MAIN, RAIL], initialDoc: '/wt/odd-rail/odd/tasks/delta.md' });
+    await tick();
+    const lines = view.render(100);
+    assert.deepEqual(labelsOf(lines), ['main (2 odd)', 'odd-rail (1 odd)', 'delta'],
+      'main stays folded; the group of the requested ODD is the only one open');
+    assert.equal(focusedRow(lines), 'delta', 'and its document is the selection');
+    assert.match(bodyOf(lines), /body of delta/, 'the pane is on it');
+  });
+
+  test('S2: a request for a document of main expands main and leaves the worktree folded', async () => {
+    const view = build({ groups: [MAIN, RAIL], initialDoc: '/wt/main/odd/tasks/bravo.md' });
+    await tick();
+    const lines = view.render(100);
+    assert.deepEqual(labelsOf(lines), ['main (2 odd)', 'alpha', 'bravo', 'odd-rail (1 odd)'],
+      'main is open, the worktree group stays closed');
+    assert.equal(focusedRow(lines), 'bravo');
+  });
+
+  test('S1: Enter opens the focused group and closes it again', async () => {
+    const view = build({ groups: [MAIN, RAIL] });
+    await tick();
+    view.handleInput('enter');
+    assert.deepEqual(labelsOf(view.render(100)), ['main (2 odd)', 'alpha', 'bravo', 'odd-rail (1 odd)'],
+      'Enter on the folded header opens that group only');
+    view.handleInput('enter');
+    assert.deepEqual(labelsOf(view.render(100)), ['main (2 odd)', 'odd-rail (1 odd)'],
+      'Enter again closes it');
+  });
+
+  test('S3: a document reads at the column its group name starts at', async () => {
+    const view = build({ groups: [MAIN, RAIL], initialDoc: '/wt/main/odd/tasks/alpha.md' });
+    await tick();
+    const cells = listCells(view.render(100));
+    const header = cells.find((cell) => cell.includes('main (2 odd)'));
+    const child = cells.find((cell) => cell.includes('alpha'));
+    assert.ok(header !== undefined && child !== undefined, 'both rows are painted');
+    assert.equal(child.indexOf('alpha'), header.indexOf('main'),
+      'the document starts at the column the group name starts at');
+    assert.ok(header.indexOf('main') > 2, 'and the disclosure marker keeps a column of its own');
+  });
+
+  test('S4/S5: each header carries its count and the title sums every group', async () => {
+    const view = build({ groups: [MAIN, RAIL], initialDoc: '/wt/main/odd/tasks/alpha.md' });
+    await tick();
+    const text = bodyOf(view.render(100));
+    assert.match(text, /▾ main \(2 odd\)/, 'the main group names how many it lists');
+    assert.match(text, /▸ odd-rail \(1 odd\)/, 'and so does the folded worktree group');
+    assert.match(text, /✎ Odd · 3 documents/, '2 of main + 1 of the worktree = 3, never 2');
+  });
+
+  test('S4: a group with one document says `1 odd`, never `1 odds`', async () => {
+    const view = build({
+      groups: [checkout('main', '/wt/main', true, [groupDoc('alpha')]), RAIL],
+      initialDoc: '/wt/main/odd/tasks/alpha.md',
+    });
+    await tick();
+    const text = bodyOf(view.render(100));
+    assert.match(text, /▾ main \(1 odd\)/);
+    assert.ok(!text.includes('odds'), 'the count is `odd` at every size');
   });
 });
 

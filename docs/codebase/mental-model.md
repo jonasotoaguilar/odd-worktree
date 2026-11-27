@@ -164,8 +164,8 @@ Work on a branch, never on `main`: an ODD gets its own checkout at
 | A file card or the bridge gate it obeys | `lib/file-card.js`, `lib/skill-odd-card.js`, `lib/file-card-markdown.js`, `lib/file-card-resolver.js` |
 | The card of a background-job tool | `lib/jobs-card.js`, `lib/jobs-card-resolver.js` |
 | The two advisory message cards | `lib/message-card.js` |
-| The `opencode-go` usage source, or its peak row above the editor | `lib/opencode-usage.js`, `lib/opencode-peak.js`, `lib/opencode-labels.js` |
-| The `Alert` page or its `Deepseek peak` switch | `lib/alert-rows.js`, `lib/alert-mode.js` |
+| The `opencode-go` usage source, or the peak rows above the editor | `lib/opencode-usage.js`, `lib/peak-schedule.js`, `lib/peak-providers.js`, `lib/peak-labels.js` |
+| The `Alert` page or one of its peak switches | `lib/alert-rows.js`, `lib/alert-mode.js` |
 | Prompt text the model reads | `lib/odd-prompt/odd-worktrees.md`, `lib/codegraph-prompt/*.md` via `lib/odd-worktrees-prompt.js` and `lib/codegraph-rules.js` |
 | `/issues`, its tabs or its capabilities | `lib/gh-issues.js`, `lib/issues-view.js`, `lib/issue-preview.js` |
 | `/prs`, its tabs, its merge step or its capabilities | `lib/gh-prs.js`, `lib/prs-view.js`, `lib/pr-preview.js` |

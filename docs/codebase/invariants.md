@@ -8,9 +8,10 @@ The question this page answers: which rules must every change preserve, and what
 2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
    invariants 18 and 19 allow.** No customize COMMAND, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
-   `herdr-gentle:` command name. This package owns exactly THREE preferences, each an
+   `herdr-gentle:` command name. This package owns exactly FOUR preferences, each an
    Off/On row registered through the bridge and stored in the bridge's own store:
-   `Codegraph+`, `Worktrees+` (`Tools` page) and `Deepseek peak` (`Alert` page).
+   `Codegraph+`, `Worktrees+` (`Tools` page), `Deepseek peak` and `Claude peak`
+   (`Alert` page). All four read Off until the human turns them on.
    Everything else it contributes to `/gentle:customize` is a DESIGN: the two
    (`activity` and `color`) on
    gentle-shell-bridge's own `Cards` page — a `Card activity` line, or its `Card bash`
@@ -84,14 +85,17 @@ The question this page answers: which rules must every change preserve, and what
    these: it is a design of the `Card activity` line and follows that switch. A change lands on
    the next load, so each one says so. Neither adds a command or a tool name.
 
-   **The peak alert has its own switch, applied live.** `lib/alert-rows.js` contributes the `Alert`
-   page of `/gentle:customize` with ONE line, `Deepseek peak`, On by default on a first run and placed
-   `categoryPlacement: { after: "Notifications" }` so it opens between `Notifications` and `Layout`.
-   Unlike the two module switches this one lands in the session in progress: the extension reads it on
-   every sync, and the row's own action re-syncs the row above the editor. Off withholds ONLY that row
-   — the `opencode-go` usage source, its panel and its status-bar segment are unaffected. The value is
-   one boolean in the bridge's own store (`odd-worktree` → `alerts`), and an absent, malformed or
-   unreadable document reads On; it is never written at load.
+   **The peak rows have one switch per provider, applied live.** `lib/alert-rows.js`
+   contributes the `Alert` page of `/gentle:customize` with one line per entry of
+   `lib/peak-providers.js` — `Deepseek peak`, `Claude peak` — every one of them Off on a
+   first run, placed `categoryPlacement: { after: "Notifications" }` so the page opens
+   between `Notifications` and `Layout`. A switch gates ONLY its provider's row above the
+   editor: the `opencode-go` usage source, its panel, its status-bar segment and the other
+   providers are unaffected, and nothing here depends on the session's model or on a usage
+   key being present. Unlike the two module switches these land in the session in progress:
+   the extension reads them on every sync, and a row's own action re-syncs. The values are
+   booleans in the bridge's own store (`odd-worktree` → `alerts` → `{ peaks: { … } }`), and an
+   absent, malformed or unreadable document reads Off; nothing is written at load.
 
    **The sections reach the host only through gentle-shell-bridge.** Both the issues
    rail and the ODD rail are published through that package's sidebar-section API alone: the object read from

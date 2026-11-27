@@ -4,7 +4,7 @@ A Pi package that gives an agent session Git worktrees, ODD documents, GitHub is
 
 ## What It Does
 
-Two agent tools, five panels, the `/identity` command, the vendored bridge's `/bridge-status`, two sidebar sections and two tool designs, loaded from one extension entry point. Each ODD feature gets its own checkout beside the clone, and you move between checkouts and read your ODD documents, files, issues and pull requests without leaving Pi.
+Two agent tools, five panels, the `/identity` command, two sidebar sections and two tool designs, loaded from one extension entry point. Each ODD feature gets its own checkout beside the clone, and you move between checkouts and read your ODD documents, files, issues and pull requests without leaving Pi.
 
 | Surface | Kind | What it does |
 | --- | --- | --- |
@@ -14,13 +14,12 @@ Two agent tools, five panels, the `/identity` command, the vendored bridge's `/b
 | `/odd` | panel | Reads `odd/tasks/*.md`: list on the left, styled markdown on the right — main's whole listing, plus one collapsible group per worktree the session registered with only what that worktree has that main does not, and `a` toggles between the session's checkouts and every worktree. One optional target — an ODD name or an ODD's name or the absolute path of a document that main or a worktree the session registered lists — opens it on that ODD; anything else is refused. |
 | `/files` | panel | Browses one checkout's files with a live, language-coloured preview: `enter` pastes the chosen paths into your prompt, `ctrl+e` opens the file in `$EDITOR`. |
 | `/identity` | command | Stores your name: `/identity Jona` heads your prompt cards with it instead of `You` and appends one line about it to the orchestrator's prompt, `/identity clear` unsets it, and `/identity` alone says which name is stored. |
-| `/bridge-status` | command | The shipped bridge's own status panel: what it registered, what it refused, and why. |
 | `/issues` | panel | Reads this checkout's GitHub issues — the three scoped tabs on open, every open issue behind `g` — and, when your role allows it, edits them. `enter` inserts the focused issue into the chat input as `ISSUE #63`, and each linked pull request in the pane is its own click that opens that pull request in `/prs`. |
 | `/prs` | panel | The same reader for pull requests: `My Pull Request`, `Needs My Review` and `Involved` on open, every open pull request of the repository behind `g`, the pane's `Changes` and `Checks` summaries, and — when your role allows it — comment, labels, assignees, the linked issues, merge (after a confirmation naming the method and the commit message) and close. `enter` inserts the focused pull request as `PR #87`, and each linked issue in the pane is its own click that opens that issue in `/issues`. |
 | `GITHUB` rail section | sidebar section | Lists the open issues of this checkout's repository you authored or are assigned, seven at a time plus a count of the rest, and its header counts the pull requests beside them (`7 issues · 3 pr`: your own plus the ones awaiting your review). A click opens that issue in `/issues` on `Assigned` — or, when the issue carries a linked pull request, that pull request in `/prs` on the bucket it belongs to; the overflow row opens `/issues`. Needs `gh`. |
 | `ODD` rail section | sidebar section | Lists the ODDs this session is ASSOCIATED with — the ones it (or a subagent it ran) wrote or edited, rebuilt from its own active branch, so old and resumed sessions show theirs too — four at a time plus a count of the rest, right after the host's `AGENTS` part. One row per ODD name across main and the worktrees the session registered, with `main` or the worktree's own name at the far right saying which copy the click opens (the most recently modified one; `main` breaks an exact tie), and with nothing associated it draws one dim `no ODD associated` line instead of listing the disk. A click opens `/odd` on that document; the associated ODDs this session wrote or edited come first. Does not need `Worktrees+`: registration is what scopes it. Needs the rail a Gentle Shell draws. |
-| `activity` card design | design on the bridge's `Card activity` line | Optional, and selected for you on the first run: a bash card's heading names the activity its command does, each family in its own theme colour, and — while that line answers for the tool being painted — the skill/ODD file cards, the background-job cards and the two advisory messages follow it. |
-| `color` diff design | design on the bridge's `Card diff` line | Optional, and selected for you on the first run: redraws `write` and `edit` as an IDE pane — a write's content behind a line-number gutter, an edit's diff — in the active theme's own syntax roles. |
+| `activity` card design | design on the shell API's `Card activity` line | Optional, and selected for you on the first run: a bash card's heading names the activity its command does, each family in its own theme colour, and — while that line answers for the tool being painted — the skill/ODD file cards, the background-job cards and the two advisory messages follow it. |
+| `color` diff design | design on the shell API's `Card diff` line | Optional, and selected for you on the first run: redraws `write` and `edit` as an IDE pane — a write's content behind a line-number gutter, an edit's diff — in the active theme's own syntax roles. |
 
 Moving the session and removing a checkout are human actions: only `/warp` does either, and no agent tool can. A checkout has one identity, its ODD: the directory name is the ODD it serves, and `branch` is only the git branch.
 
@@ -32,13 +31,13 @@ Moving the session and removing a checkout are human actions: only `/warp` does 
 | --- | --- |
 | Pi (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`) | Peer dependencies supplied by the host; the package installs no runtime dependencies. |
 | Node.js >= 18 and `git` | Every repository operation is a `git` child process. |
-| Gentle Shell (`gentle-pi`) | Supplies the session records the deletion guard reads to see other sessions, the rail the `GITHUB` and `ODD` sections are drawn in, and the `/gentle:customize` command the bridge checks before it arms any row or rail. Without it the package's commands, tools and cards still load; the customize rows and both rails do not arm. |
+| Gentle Shell (`gentle-pi`) | Supplies the session records the deletion guard reads to see other sessions, the rail the `GITHUB` and `ODD` sections are drawn in, the `/gentle:customize` command the shell API checks before it arms any row, section or design, and the host theme those draw with. Without it the six commands, the two tools and this package's own cards still load; the customize rows, both rails and the `Card activity`/`Card diff` designs stay off, and the package says so once, naming `gentle-pi`. |
 | `gh`, authenticated (`gh auth login`) | `/issues`, `/prs` and the `GITHUB` rail section, and them alone. Without `gh` on `PATH` none of the three is registered at all — `/issues` and `/prs` never load and the section is never added to the rail, so there is nothing to refuse and no line to draw — and every other surface keeps working. |
 
 ### Install
 
-`pi-odd-worktree` is the only install: the bridge API and runtime it registers through ship inside
-it, so nothing else goes first.
+`pi-odd-worktree` is the only install. It carries its own extension point for gentle-shell —
+the shell API in `lib/shell-api/` — so nothing else goes first and no second plugin is needed.
 
 ```bash
 pi install npm:pi-odd-worktree
@@ -52,44 +51,48 @@ gentle-shell install npm:pi-odd-worktree
 
 From a local clone, `pi install .` installs the working copy, and `gentle-shell install .` does the same from inside a Gentle Shell session.
 
-An older install of the standalone
-[`gentle-shell-bridge`](https://github.com/jonasotoaguilar/gentle-shell-bridge) is no longer
-needed and can be uninstalled, but it does not have to be: both copies share the same global
-state ("first wins"), and this package holds its own `/bridge-status` until the first
-`session_start`, registering it only when no other copy already owns the name.
+The standalone `gentle-shell-bridge` is no longer needed: this package publishes the same global
+API state, and an older copy left installed shares it ("first wins") instead of conflicting with it.
 
 ### Expected result
 
-`/warp`, `/odd`, `/files`, `/identity`, `/issues`, `/prs` and `/bridge-status` are available as
-commands — `/issues` and `/prs` only where `gh` is on `PATH` — the agent is offered
-`worktree_create` and `worktree_list`, a Gentle Shell whose rail is drawn shows a `GITHUB`
-section for this checkout and an `ODD` section listing the ODDs the session is working on, and
-its `/gentle:customize` → `Cards` page offers `activity` on its `Card activity` line.
+`/warp`, `/odd`, `/files`, `/identity`, `/issues` and `/prs` are available as commands — `/issues`
+and `/prs` only where `gh` is on `PATH` — the agent is offered `worktree_create` and
+`worktree_list`, a Gentle Shell whose rail is drawn shows a `GITHUB` section for this checkout and an
+`ODD` section listing the ODDs the session is working on, and its `/gentle:customize` → `Cards` page
+offers `activity` on its `Card activity` line.
 
-### Bridge versions
+### Shell API version
 
-The bridge this package ships is `0.16.2`, so every floor the [reference](docs/reference.md)
-names below it is already satisfied. The per-version notes there describe gates that exist in
-the code, not a choice you make at install time.
+The shell API this package publishes reports `VERSION` `0.16.2`, so every floor the
+[reference](docs/reference.md) names below it is already satisfied. The per-version notes there
+describe gates that exist in the code, not a choice you make at install time.
 
 ## Extend gentle-shell through odd-worktree
 
-This package publishes the bridge API at the same process-global slot —
-`Symbol.for("gentle-shell-bridge/api/v1")`, schema `gentle-shell-bridge/api`, version 1 — with
-the same members and the same store directory (`<config home>/gentle-shell-bridge`), so a
-plugin that extends gentle-shell keeps working with no standalone bridge installed:
+A plugin reaches gentle-shell through this package alone. Read the slot:
 
 ```ts
 const api = globalThis[Symbol.for("gentle-shell-bridge/api/v1")];
 ```
 
-[`lib/bridge/docs/contract.md`](lib/bridge/docs/contract.md) is the contract the shipped copy is
-held to, with [`architecture.md`](lib/bridge/docs/architecture.md),
-[`state.md`](lib/bridge/docs/state.md) and a worked example in
-[`lib/bridge/examples/bash-card.ts`](lib/bridge/examples/bash-card.ts). The bridge arms its
-rows and its rail only on a host that has `gentle-pi` — the package registering
-`/gentle:customize` — and warns once, naming it, when that host is missing. `/bridge-status`
-reports what the bridge registered and what it refused.
+Its identity is `schema: "gentle-shell-bridge/api"`, `version: 1` and `VERSION` `0.16.2`, and it
+offers settings rows and pages, sidebar sections, card styles, transcript transforms, per-tool and
+per-message card designs, a repaint request and a small namespaced store. The contract is
+[`docs/shell-api/contract.md`](https://github.com/jonasotoaguilar/odd-worktree/blob/main/docs/shell-api/contract.md),
+with
+[`architecture.md`](https://github.com/jonasotoaguilar/odd-worktree/blob/main/docs/shell-api/architecture.md),
+[`state.md`](https://github.com/jonasotoaguilar/odd-worktree/blob/main/docs/shell-api/state.md) and a
+worked example in
+[`examples/bash-card.ts`](https://github.com/jonasotoaguilar/odd-worktree/blob/main/docs/shell-api/examples/bash-card.ts);
+start at [`docs/shell-api/README.md`](https://github.com/jonasotoaguilar/odd-worktree/blob/main/docs/shell-api/README.md).
+Those pages live in the repository, not in the published tarball.
+
+The surfaces are still DRAWN by `gentle-pi`, the package registering `/gentle:customize`: without it
+the API arms nothing, and this package says so once, naming `gentle-pi` and the rows, sections and
+designs that are off. If another plugin published an incompatible object on the slot first, the
+package's own surfaces stay unregistered and it says that once too, naming the slot. Nothing else of
+the package is affected in either case, and neither message is silent.
 
 ## Core Workflow
 
@@ -102,7 +105,7 @@ The full rules of each step, including every refusal, are in [Create, list, move
 
 ## Key Capabilities
 
-- **Two halves are optional.** On the bridge's `Tools` page in `/gentle:customize` there is an Off/On line for `Codegraph+` (the CodeGraph prompt text, reminders and wiring; its card follows the `Card activity` line like every other card) and one for `Worktrees+` (the worktree tools, `/warp`, the worktree guards and prompt text). Both are On by default; a change needs `/reload` and a new session. See [the module switches](docs/reference.md#the-module-switches).
+- **Two halves are optional.** On the shell API's `Tools` page in `/gentle:customize` there is an Off/On line for `Codegraph+` (the CodeGraph prompt text, reminders and wiring; its card follows the `Card activity` line like every other card) and one for `Worktrees+` (the worktree tools, `/warp`, the worktree guards and prompt text). Both are On by default; a change needs `/reload` and a new session. See [the module switches](docs/reference.md#the-module-switches).
 - **OpenCode Go usage comes built in, and every peak window has its own switch.** The `opencode-go` provider is registered on Gentle Shell's own usage event, so `/gentle:usage`, the status-bar segment and the panel's `r` refresh work exactly as they do for the providers the shell ships. Above the editor, one row per provider whose peak window is running, in the registry's order: `peak · 2× deepseek · until 04:00` (OpenCode Go bills DeepSeek at double rate in weekdays 01:00–04:00 and 06:00–10:00 UTC) and `peak · claude · until 10:00` (weekdays 05:00–11:00 Pacific; Anthropic publishes no price multiplier there — the subscription window drains faster instead). A row never depends on the model the session uses or on a usage key: only that provider's switch and its window matter. `/gentle:customize` → `Alert`, between `Notifications` and `Layout`, holds one Off/On line per provider — `Deepseek peak`, `Claude peak` — **all Off on a first run**, applied without `/reload`. A third provider costs no change outside the registry. See [the usage source and the peak rows](docs/reference.md#the-opencode-go-usage-source-and-the-peak-rows-above-the-editor).
 - **A create is instant and writes no state.** The directory is the whole record; there is no list file and no lock file.
 - **Deleting refuses on a live session.** The guard reads Gentle Shell's presence records, discloses what it could not resolve, and never auto-warps. Removal is `git worktree remove` and the branch is kept. See [the deletion guard](docs/reference.md#the-deletion-guard-and-its-honest-limit).
@@ -129,7 +132,7 @@ The full rules of each step, including every refusal, are in [Create, list, move
 - **Three blocks in the system prompt.** `## ODD worktrees` tells the agent how worktrees and ODDs work. `## CodeGraph` tells a session that already holds a CodeGraph tool how to use it, with one text per role. `## User identity` states your name in one line, and it is there only while a name is stored. All three are appended after the host's own text; `ODD_WORKTREE_PROMPT=0` suppresses the first two, and the third is the stored name's business alone. See [the prompt block](docs/reference.md#the--odd-worktrees-block-in-the-system-prompt) and [the user identity block](docs/reference.md#the--user-identity-block-in-the-system-prompt).
 - **CodeGraph stays fresh, only when its CLI is installed.** At session start the package creates or syncs the checkout's index and warms its daemon, and makes sure your global `mcp.json` has the `codegraph` entry. It also syncs after a compaction, after a native `codegraph init` and after an `edit` or `write`, in the background and without ever blocking you. See [CodeGraph](docs/reference.md#codegraph-index-daemon-and-mcp-entry).
 - **Two reminders keep a session on the CodeGraph rule.** The first `grep`, `find`, `ls`, `read` or `bash` search in a checkout gets one sentence appended to its result: use `codegraph` first, or — for another checkout — call `mcp__codegraph__codegraph_explore` with that path as `projectPath`. Neither is ever a block, and a subagent child hears neither. See [the reminders](docs/reference.md#the-two-codegraph-reminders).
-- **Deliberately absent.** No customize panel of its own, no plugin-tools toggles, no companion-app integration and no worktree-to-issue association. There is nothing to configure here: the card designs are chosen on the bridge's own lines, so this package owns no preference of its own. See [deliberately absent](docs/reference.md#deliberately-absent).
+- **Deliberately absent.** No customize panel of its own, no plugin-tools toggles, no companion-app integration and no worktree-to-issue association. There is nothing to configure here: the card designs are chosen on the shell API's own lines, so this package owns no preference of its own. See [deliberately absent](docs/reference.md#deliberately-absent).
 
 ## Documentation
 
@@ -140,7 +143,7 @@ The full rules of each step, including every refusal, are in [Create, list, move
 | Understand a create, a warp or a delete in detail | [Reference](docs/reference.md) |
 | Run the suite or see what CI and releases do | [Tests](docs/reference.md#tests), [CI and releases](docs/reference.md#ci-and-releases) |
 | Change the package, follow its invariants or cut a release | [`docs/codebase/mental-model.md`](docs/codebase/mental-model.md) |
-| Extend gentle-shell from your own plugin | [`lib/bridge/docs/contract.md`](lib/bridge/docs/contract.md) |
+| Extend gentle-shell from your own plugin | [`docs/shell-api/README.md`](https://github.com/jonasotoaguilar/odd-worktree/blob/main/docs/shell-api/README.md), then [`contract.md`](https://github.com/jonasotoaguilar/odd-worktree/blob/main/docs/shell-api/contract.md) |
 | Report a bug or request a feature | [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) |
 | Open a pull request | [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) |
 

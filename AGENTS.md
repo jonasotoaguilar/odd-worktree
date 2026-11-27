@@ -19,6 +19,6 @@ When working on this project, load the relevant skill(s) BEFORE doing the work t
 | Reference | You need a panel key, a refusal sentence, the test rules, or how one surface behaves in detail. | [`docs/reference.md`](docs/reference.md) |
 | README | You are installing, checking requirements, or reading the shipped surface at a glance. | [`README.md`](README.md) |
 | CI matrix | You need to know which Node versions the suite runs on. | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
-| Bridge contract | You are writing a plugin that extends gentle-shell through this package's bridge API, or you are changing `lib/bridge/`. | [`lib/bridge/docs/contract.md`](lib/bridge/docs/contract.md) |
+| Shell API | You are writing a plugin that extends gentle-shell through this package (`docs/shell-api/README.md` first, then `contract.md`), or you are changing `lib/shell-api/`. | [`docs/shell-api/README.md`](docs/shell-api/README.md), [`docs/shell-api/contract.md`](docs/shell-api/contract.md) |
 | PR gates | You are writing a commit subject or a PR title that must pass. | [`.github/workflows/pr-check.yml`](.github/workflows/pr-check.yml) |
 | Release flow | You are cutting a release or checking what publishing does. | [`.github/workflows/release.yml`](.github/workflows/release.yml) |

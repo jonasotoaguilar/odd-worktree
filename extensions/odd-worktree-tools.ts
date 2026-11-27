@@ -34,14 +34,14 @@
 
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
-// S2/S4 (native-bridge T2): the bridge API and runtime are VENDORED in this package
-// (`lib/bridge/`). Importing it publishes the frozen API object at
+// S2/S4 (native-bridge T5): the shell API is THIS PACKAGE'S OWN CODE (`lib/shell-api/`), not a
+// second plugin. Importing it publishes the frozen API object at
 // `Symbol.for("gentle-shell-bridge/api/v1")` at MODULE LOAD — before any `session_start`,
 // and with no external plugin required — which is why the slot is already published when
 // the factory below runs. A plain-JS host stubs this one import
 // (`tools/fixtures/load-extension.js`), which is what keeps `tools/*.test.js` free of
 // TypeScript.
-import bridgeExtension from "../lib/bridge/src/extension.ts";
+import bridgeExtension from "../lib/shell-api/extension.ts";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -8531,12 +8531,11 @@ let issuesGateOpen = null;
 let issuesGateProbe = null;
 let issuesGateGeneration = 0;
 
-// S3 (issues-sidebar): the rail section beside the `/issues` reader. The bridge
-// RUNTIME is this package's own (`lib/bridge/`, native since T2) and the API OBJECT
-// is still read from its published slot, exactly as a third-party plugin reads it;
-// the section reads ONE in-process snapshot per frame and refreshes on its frame
-// TTL and on the session's own activity behind the floor below — never at
-// `session_start`, and never while it is hidden (T13).
+// S3 (issues-sidebar): the rail section beside the `/issues` reader. The shell API's
+// RUNTIME is this package's own code (`lib/shell-api/`), and the API OBJECT is read from its
+// published slot, exactly as a third-party plugin reads it; the section reads ONE in-process
+// snapshot per frame and refreshes on its frame TTL and on the session's own activity behind
+// the floor below — never at `session_start`, and never while it is hidden (T13).
 const ISSUES_SIDEBAR_BRIDGE_SLOT = Symbol.for("gentle-shell-bridge/api/v1");
 const ISSUES_SIDEBAR_READY_EVENT = "gentle-shell-bridge:ready";
 // S3 (activity floor): a frame only exists when the host has a reason to produce
@@ -12122,21 +12121,20 @@ function oddSessionStillCurrent(ctx) {
   return event === undefined || event === current;
 }
 // ---------------------------------------------------------------------------
-// S18 (T14, L13; native-bridge T2): the bridge is NATIVE. `lib/bridge/` is this
-// package's OWN copy of the bridge API and runtime, and importing it — the static
-// import at the top of this file — publishes the compatible API object at the
-// process-global slot BEFORE any `session_start`, so the rail, the bash design,
-// the `Cards` rows and `/bridge-status` all exist with no external plugin
-// installed. There is no gate to wait on, no ready-event hold and no install hint:
-// the bridge is not something a host could be missing any more.
+// S18 (T14, L13; native-bridge T5): the shell API is this package's OWN code.
+// `lib/shell-api/` holds it as ordinary modules, never a nested package, and importing it —
+// the static import at the top of this file — publishes the compatible API object at the
+// process-global slot BEFORE any `session_start`, so the rail, the bash design, the `Cards`
+// rows and the card designs all exist with no external plugin installed. There is no gate to
+// wait on, no ready-event hold and no install hint: the API is not something a host could be
+// missing any more.
 //
 // What SURVIVES is the slot check, because the slot is process-global and another
-// plugin — a standalone bridge included — may have published an INCOMPATIBLE
-// object first ("first wins"). A slot holding such an object leaves every surface
-// of this package silently UNREGISTERED: no command, no tool, no message or entry
-// renderer, no card, no rail, no prompt append — and no notice, because there is
-// nothing left to install. Nothing retries it either: the slot is read once per
-// factory call and the observer that used to wait for a later publication is gone.
+// plugin may have published an INCOMPATIBLE object first ("first wins"). A slot holding such
+// an object leaves every surface of this package silently UNREGISTERED: no command, no tool,
+// no message or entry renderer, no card, no rail, no prompt append — the shell API records
+// the foreign object as a notice instead. Nothing retries it either: the slot is read once
+// per factory call and the observer that used to wait for a later publication is gone.
 //
 // `subscribeBridgeReady` stays (the rail and the bash design rebind on a
 // republished object, which is generic and harmless), and nothing may register
@@ -12164,23 +12162,20 @@ export default function (pi) {
   // `/reload` and expects the same surfaces again, which is why the episode starts
   // HERE, so nothing can register the surface twice.
   oddSurfaceRegistered = false;
-  // S2/S3 (native-bridge T2): the VENDORED bridge factory FIRST. It republishes the
-  // slot object and announces it on `pi.events`, arms the rows and the rail on
-  // `session_start` and registers `/bridge-status`, so the bridge is armed before any
-  // surface of this package looks for its object. A bridge that throws on the way out
-  // is never fatal: every other surface of this package still loads.
-  // The bridge gets `libRequire("bridge-host.js").bridgeHost(pi)`, not the raw `pi`: the same
-  // host with its `/bridge-status` registration held until `session_start`, so a standalone
-  // bridge that is still installed never shares that command name with this copy.
+  // S2/S3 (native-bridge T5): this package's own shell API factory FIRST. It republishes the
+  // slot object and announces it on `pi.events`, and on `session_start` it arms the rows, the
+  // rail and the card designs, so those surfaces exist before any part of this package looks for
+  // the object. A shell API that throws on the way out is never fatal: every other surface of
+  // this package still loads.
   try {
-    bridgeExtension(libRequire("bridge-host.js").bridgeHost(pi));
+    bridgeExtension(pi);
   } catch {
-    // The bridge is this package's own, but its failure still leaves the rest alone.
+    // The shell API is this package's own code, but its failure still leaves the rest alone.
   }
   // S18 (T14): the slot check. The object is read after its own schema and version
   // gate; an absent or INCOMPATIBLE slot (another plugin published first) leaves this
-  // package's surface unregistered. Nothing is said here: the vendored bridge reports the
-  // foreign object itself and keeps `/bridge-status`.
+  // package's surface unregistered. Nothing is said here: the shell API records the foreign
+  // object itself as a notice.
   if (issuesSidebarBridge() !== null) {
     // S7: the prompt card's session boundary is owned here, before the surface registers, so
     // this load always has the shutdown hook that closes the session it belongs to.

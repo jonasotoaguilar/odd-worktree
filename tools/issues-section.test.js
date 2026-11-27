@@ -26,7 +26,7 @@
 //   except a session cwd that is not a repository (S12/T11), whose one line is
 //   exactly `not a git repository` in the `dim` tone, never `error`;
 // - a host with an ABSENT or INCOMPATIBLE slot gets no install hint, no warning and no
-//   notice at all: the bridge is native (vendored at `lib/bridge/`) since T2, so there is
+//   notice at all: the shell API is native (this package's `lib/shell-api/`) since T2, so there is
 //   nothing to install and nobody to warn;
 // - `lines()`/`meta()` are synchronous frames over an in-process snapshot: a
 //   never-settled read still answers, two stale frames schedule ONE refresh,
@@ -55,7 +55,7 @@
 //   never a throw;
 // - the extension reaches the rail ONLY through the bridge API's published object
 //   (read from its Symbol slot; the runtime itself is this package's own
-//   `lib/bridge/`): a compatible object registers one section, an absent or
+//   `lib/shell-api/`): a compatible object registers one section, an absent or
 //   incompatible one registers nothing and says nothing;
 // - the drawn section reads the checkout's own repository ONCE:
 //   `checkoutRepoScope({cwd})` then ONE combined `gh api graphql` read of the
@@ -1733,7 +1733,7 @@ test('S2: a published bridge receives exactly one section with the decided ident
 // RE-SCOPED (was "with no bridge and no events, nothing registers and nothing
 // throws", which asserted that `/issues` and both worktree tools still registered
 // without a bridge — the old policy, where only the bridge surfaces waited).
-// S18 (T2): the bridge is NATIVE (vendored at `lib/bridge/`), so the only case that
+// S18 (T2): the shell API is NATIVE (this package's `lib/shell-api/`), so the only case that
 // still ships nothing is an ABSENT or INCOMPATIBLE slot — and that case says nothing
 // either: no observer, no install hint, no warn slot.
 test('S18 (T2): with no bridge and no events, NOTHING registers, nothing is said and nothing throws', async () => {
@@ -2246,8 +2246,8 @@ test('S4 (T9): a row without a cross-referenced pull request carries no marker a
 });
 
 // ---------------------------------------------------------------------------
-// T2 (S18): the install hint is GONE. The bridge is NATIVE (vendored at `lib/bridge/`
-// and imported by the entry), so there is nothing to install and nobody to warn: no
+// T2 (S18): the install hint is GONE. The shell API is NATIVE (this package's
+// `lib/shell-api/`, imported by the entry), so there is nothing to install and nobody to warn: no
 // announcement window, no per-process warn slot and no `session_start` observer. What
 // this block proves instead is the SILENCE — an absent slot says nothing, a published
 // bridge registers and says nothing, and a child session says nothing.

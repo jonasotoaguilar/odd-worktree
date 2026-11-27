@@ -322,8 +322,8 @@ test('S36: a complete bridge receives no keymap row and no palette row for files
 });
 
 // ---------------------------------------------------------------------------
-// S18 (T14) as amended by native-bridge T2: the bridge is NATIVE (vendored at
-// `lib/bridge/`), so an ABSENT or INCOMPATIBLE slot is the only case left where this
+// S18 (T14) as amended by native-bridge T2/T5: the shell API is NATIVE (this package's
+// own `lib/shell-api/`), so an ABSENT or INCOMPATIBLE slot is the only case left where this
 // package ships nothing. The policy the human chose for that case, "Desactivar todo el
 // plugin", still holds — no command, no tool, no renderer, no card, no rail, no hook, no
 // prompt append and no key — and nothing is SAID either: there is no install hint, no

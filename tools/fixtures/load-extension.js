@@ -28,13 +28,13 @@ const TYPE_STUB = [
 // The stubbed source is read once per process; a test that asserts on the
 // source itself can read SRC directly.
 //
-// S2/S3 (native-bridge T2): the entry statically imports the VENDORED bridge from
-// `../lib/bridge/src/extension.ts`, which publishes the API slot at module load and owns
-// the bridge's runtime. A plain-JS suite may import neither a `.ts` file nor the bridge's
-// own TypeScript graph, so that import is stubbed here exactly like the two Pi package
-// imports: the scratch `.mjs` gets a no-op factory and the slot is whatever the fixture
-// publishes (see `installDefaultBridge`).
-const BRIDGE_IMPORT = 'import bridgeExtension from "../lib/bridge/src/extension.ts";';
+// S2/S3 (native-bridge T5): the entry statically imports the shell API from
+// `../lib/shell-api/extension.ts` — odd-worktree's own code, which publishes the API slot at
+// module load and arms the shell surfaces. A plain-JS suite may import neither a `.ts` file nor
+// its TypeScript graph, so that import is stubbed here exactly like the two Pi package imports:
+// the scratch `.mjs` gets a no-op factory and the slot is whatever the fixture publishes (see
+// `installDefaultBridge`).
+const BRIDGE_IMPORT = 'import bridgeExtension from "../lib/shell-api/extension.ts";';
 const BRIDGE_STUB = 'const bridgeExtension = () => {};';
 
 function stubOnce(source, needle, replacement) {
@@ -58,8 +58,8 @@ function stubbedSource() {
   return cached;
 }
 
-// S18 (issues-startup-performance T14) as amended by native-bridge T2: the bridge is
-// NVATIVE (vendored at `lib/bridge/`, stubbed out of this plain-JS copy), so a host double
+// S18 (issues-startup-performance T14) as amended by native-bridge T2/T5: the shell API is
+// NATIVE (`lib/shell-api/`, stubbed out of this plain-JS copy), so a host double
 // that publishes nothing on the slot gets an extension that registers NOTHING — every suite
 // here would then be asserting nothing. The fake host therefore HAS the bridge:
 // `defaultBridge()` is the published object with the schema and version the code validates

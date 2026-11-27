@@ -810,21 +810,21 @@ a pull request in both buckets counts once.
   refused, the identity could not be proven, the dispatch threw), or after a
   bounded safety interval of about ten seconds if the host never ran the command
   at all. A typed `/issues` is never held back.
-- **It reaches the host only through the bridge, which ships in this package.** The
+- **It reaches the host only through this package's shell API.** The
   section is read from the published sidebar-section API — the object in the
   `Symbol.for("gentle-shell-bridge/api/v1")` slot, after its schema and version gate
-  — or from the one `gentle-shell-bridge:ready` announcement when a bridge
-  publishes later. That bridge is VENDORED here: `lib/bridge/` is a verbatim copy of
-  `gentle-shell-bridge` 0.16.2 imported by the entry as
-  `../lib/bridge/src/extension.ts`, so it publishes the slot at module load, there is
-  no runtime dependency and no import by package name, and nothing has to be
-  installed beside this package for the section to exist (invariant 32). An
+  — or from the one `gentle-shell-bridge:ready` announcement when the API
+  publishes later. That API is this package's own code: `lib/shell-api/`, imported by
+  the entry as `../lib/shell-api/extension.ts`, so it publishes the slot at module
+  load, there is no runtime dependency and no import by package name, and nothing has
+  to be installed beside this package for the section to exist (invariant 32). An
   INCOMPATIBLE object already on the slot — another plugin published first —
-  registers nothing of this package's surface; the vendored bridge reports the foreign object once and keeps `/bridge-status`. A host that
-  has the bridge but draws no rail registers the section and never paints it — that
-  is the bridge's answer to a host without a sidebar, not a failure here. Its
-  `/gentle:customize` → `Sections` visibility toggle belongs to the bridge, so a
-  host without the bridge has neither the section nor the toggle. The section
+  registers nothing of this package's surface, and the package says so once in its own
+  words, naming the slot. A host that
+  has the API but draws no rail registers the section and never paints it — that
+  is the API's answer to a host without a sidebar, not a failure here. Its
+  `/gentle:customize` → `Sections` visibility toggle belongs to the shell API, so a
+  host without the API has neither the section nor the toggle. The section
   declares no preview of its own: every `Sections` row draws the host's single
   shared list of active sections — `[changes] [rdd] [agents] [todo] [usageCost] …` —
   and the bridge appends that section's `rowLabel` — `github` for this one, `odd`
@@ -835,9 +835,10 @@ a pull request in both buckets counts once.
   `Sections` row shows. The section also
   declares `placement: 'end'` (gentle-shell-bridge `0.13.0` lets a section name
   where it sits in the rail): the GITHUB card goes after every native card, which
-  is where it always went and the bridge's own default, said out loud so it does
-  not depend on a default another release could change; a bridge that predates the
-  field ignores it. The shipped copy is `0.16.2`, so every version gate this
+  is where it always went and the shell API's own default, said out loud so it does
+  not depend on a default another release could change; an older published object
+  ignores the field. The API this package publishes reports `VERSION` `0.16.2`, so
+  every version gate this
   reference names — `0.6.0`, `0.7.0`, `0.9.0`, `0.12.1`, `0.13.0` — is always
   satisfied; they stay documented because the code still answers them.
 - **A frame never waits on `gh`.** The host calls `lines()` and `meta()` once per
@@ -1387,7 +1388,7 @@ order, so a `0.6.0-rc.1` bridge falls back to the single `tool: "bash"` design �
 release of this package still accepted the grouped shape, a deliberate narrowing because a
 prerelease is BELOW its own release. Which shape is sent is decided from the
 bridge's own `VERSION` before anything is registered, because a grouped registration on an
-older one is refused and reported in `/bridge-status`. A release string that cannot be read
+older one is refused outright, so the shape is decided before anything is registered. A release string that cannot be read
 is not guessed: the bridge is asked once, with a throwaway design nobody selects and a line
 no plugin would use, which is registered and immediately disposed, so the capability is the
 bridge's own answer instead of a version number. A bridge without `registerToolDesign` gets
@@ -2178,7 +2179,7 @@ session stands in it. Moving the session stays the human's.
 
 It is **appended**, never substituted: the block rides
 `systemPromptOptions.appendSystemPrompt`, so whatever Gentle Shell (or any other
-extension) put there is preserved verbatim and our text lands after it. There is
+extension) put there is preserved as it was and our text lands after it. There is
 one text for the primary session, read from `lib/odd-prompt/odd-worktrees.md` at load.
 A child gets nothing, and neither does a named agent: they work where the primary
 session's handoff put them (its `workspace_root`), so the rule is the primary session's to
@@ -2403,7 +2404,8 @@ or row of its own, and the file
 picker's `alt+p` and the issues panel's `alt+i` are bound on the host directly
 rather than contributed to any shell surface. There is
 nothing to configure here, and `/warp`, `/odd`, `/files`, `/identity`, `/issues` and `/prs` are
-always on — the seventh command, `/bridge-status`, is the shipped bridge's own. Paths,
+always on: six commands, and no diagnostics command among them — what the shell API has to say
+it says as one notice, once per process (invariant 32). Paths,
 branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 
@@ -2412,14 +2414,15 @@ never as a shell string.
 ```bash
 node --test tools/*.test.js                # the whole suite (package.json `test`)
 node --test tools/issues-command.test.js   # one suite while iterating
-npm run test:bridge                        # the vendored bridge's own suite, Node >= 22.18
+npm run test:shell-api                     # the shell API's own suite, Node >= 22.18
 ```
 
 The suite uses Node builtins only — no install step, no lockfile, no network —
 and adding a dependency so a test passes is not an option. Node 18 is the floor
-`engines` declares; CI additionally runs 20, 22 and 24. The vendored bridge's suite
-is TypeScript, so it is its own gate (`npm run test:bridge`, the same two globs CI
-runs) and it needs type stripping: type stripping is on by default from Node 22.18, which is
+`engines` declares; CI additionally runs 20, 22 and 24. The shell API's suite
+is TypeScript (`tools/shell-api/*.test.ts`, `.test.mjs`), so it is its own gate
+(`npm run test:shell-api`, the same two globs CI runs) and it needs type stripping:
+type stripping is on by default from Node 22.18, which is
 why the plain-JS suite stubs that one import
 (`tools/fixtures/load-extension.js`) and stays runnable below that. Keep both green
 at the
@@ -2449,7 +2452,7 @@ whole-suite level: run the focused file while iterating, then the full command.
 
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
-| `ci.yml` | push to `main`, every pull request | `node --test tools/*.test.js` on Node 18, 20, 22 and 24 — the range `engines` declares, 18 as its floor — plus the vendored bridge's TypeScript suite (`node --test lib/bridge/test/*.test.ts lib/bridge/test/*.test.mjs`) on 22 and 24, the two versions that strip types |
+| `ci.yml` | push to `main`, every pull request | `node --test tools/*.test.js` on Node 18, 20, 22 and 24 — the range `engines` declares, 18 as its floor — plus the shell API's TypeScript suite (`node --test tools/shell-api/*.test.ts tools/shell-api/*.test.mjs`, also `npm run test:shell-api`) on 22 and 24, the two versions that strip types |
 | `pr-check.yml` | pull request opened, edited, reopened or synchronized | the PR title and every non-merge commit subject must follow [Conventional Commits](https://www.conventionalcommits.org/), plus one suite run on Node 22 |
 | `release.yml` | tag `v*` push (a `v*-*` tag is excluded), or a manual dispatch naming an existing tag | tag/`package.json` version parity, the suite, the GitHub Release, then `npm publish`, then verification |
 
@@ -2481,7 +2484,7 @@ afterwards by editing the published release
 `pr-check.yml` enforces Conventional Commits on the PR title (which becomes the
 squash subject) and on every non-merge commit subject:
 
-```
+```text
 <type>(<optional-scope>): <subject>
 feat(warp): keep the current checkout out of the selector
 fix(issues)!: refuse a mutation after the remote moves

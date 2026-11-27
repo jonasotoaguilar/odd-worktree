@@ -1893,6 +1893,33 @@ to go stale.
 The listing is **read-only**: it reads Git's own worktree set, writes nothing and
 prunes nothing.
 
+## The ODD session name
+
+Writing or editing an `odd/tasks/<name>.md` document names the session after that
+document, from the primary checkout and from a worktree alike:
+`odd/tasks/prompt-card-fix.md` names it `Prompt card fix`. The name IS the ODD's own —
+the separators a feature name uses (`-`, `_`, and the `/` of a nested feature) become
+spaces, the first letter is capitalized, the rest keeps the case the document gave it,
+and a name too long to read at a glance is cut at the last whole word inside 48
+characters. `odd/tasks/perf/plan.md` is `Perf plan`. The prose inside the document
+never names the session, so writing a document that does not exist yet names it just
+the same.
+
+Every write or edit re-derives the name: move on to another ODD and the session is
+renamed to that one. A `read` never renames, and neither does any path that is not
+`odd/tasks/*.md`. The branch is not part of the name, so two checkouts of the same ODD
+carry the same label; the session file, not the name, tells them apart.
+
+A name a person typed is never overwritten. The plugin writes only an empty name or
+one it can prove it produced: the label it just derived, the label of any ODD this
+session already wrote, or the two shapes earlier versions wrote — the dashed slug
+(`prompt-card-fix`) and that slug with a branch suffix
+(`prompt-card-fix @ feat/prompt-card-fix`). The proof comes from the session's own
+`odd-worktree.odd-touch` record, so it survives a resume, and a `gentle_odd_phase`
+transition re-applies the session's own label while a session that never wrote an ODD
+gets nothing invented for it. The admitted consequence: naming a session exactly like
+an ODD you wrote yourself gives that name to the plugin.
+
 ## Where state lives
 
 Nowhere for worktrees. A create always lands at

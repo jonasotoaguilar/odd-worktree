@@ -426,6 +426,27 @@ describe('the association rebuilt from history (S3, S4)', () => {
     assert.deepEqual(names(associated), ['delta', 'gamma']);
   });
 
+  test('a quoted example document is a placeholder, never an ODD', () => {
+    // Prose that shows the rule reaches a transcript as an ordinary path: the
+    // harness quotes `Spec: odd/tasks/<existing>.md, T<n>`. Electing it would name
+    // an ODD that cannot exist.
+    const associated = associatedFromHistory([
+      assistant('a1', [
+        toolCall('c1', 'subagent_run', { task: 'Do it.\n\nSpec: odd/tasks/<existing>.md, T2, S1' }),
+        toolCall('c2', 'subagent_run', { task: 'Do it.\n\nSpec: odd/tasks/real-one.md, T2, S1' }),
+      ]),
+      result('r1', 'c1', false, 'subagent_run'),
+      result('r2', 'c2', false, 'subagent_run'),
+      resultMessage('files_changed:\n  - odd/tasks/<name>.md: what changed'),
+    ]);
+    assert.deepEqual(names(associated), ['real-one']);
+    // A space is a real name, not a placeholder: the rail must still list it.
+    assert.deepEqual(
+      names(associatedFromHistory([assistant('a2', [toolCall('c3', 'write', { path: 'odd/tasks/with space.md' })]), result('r3', 'c3')])),
+      ['with space'],
+    );
+  });
+
   test('garbage entries, garbage blocks and garbage content are skipped instead of thrown on', () => {
     const associated = associatedFromHistory([
       null,

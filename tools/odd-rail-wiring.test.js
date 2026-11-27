@@ -129,8 +129,9 @@ async function load(options = {}) {
     return disposer;
   };
   globalThis[BRIDGE_SLOT] = bridge.api;
-  // A host with no bridge registers nothing, so the case below removes the object
-  // and then publishes one late, exactly like the plugin's own `ready` event.
+  // A host that publishes no bridge registers nothing (native-bridge T2): the slot is read ONCE,
+  // in the factory, so a case below removes the object to model it and a later publication is
+  // NOT a wake-up path — `noBridge` is therefore never combined with an expectation of a surface.
   if (opts.noBridge === true) delete globalThis[BRIDGE_SLOT];
   return withGhPath('present', async () => {
     process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
@@ -321,19 +322,24 @@ describe('registration (S1, corrected S7)', () => {
     assert.ok(loaded.commands.has('odd'), 'and `/odd` is still the command a click dispatches');
   });
 
-  test('with no bridge nothing is registered, and a late publication registers it', async () => {
+  test('with no bridge nothing is registered, and a publication after the load is picked up by the next load', async () => {
     const loaded = await load({ noBridge: true });
     assert.equal(globalThis[BRIDGE_SLOT], undefined, 'the slot really is empty');
     assert.deepEqual(loaded.sections, [], 'nothing is contributed without a bridge');
+    assert.deepEqual(loaded.hooks, [], 'no hook either: the gate observer is gone');
+    assert.deepEqual(loaded.ready, [], 'and no ready announcement is listened to');
 
-    // The plugin publishes afterwards and announces it: the ONE subscription the
-    // extension made answers with the section.
+    // The plugin publishes afterwards and announces it: this load already read the slot, so
+    // NEITHER the section nor a subscription answers.
     globalThis[BRIDGE_SLOT] = loaded.bridge.api;
-    const ready = loaded.ready.filter((entry) => entry.event === 'gentle-shell-bridge:ready');
-    assert.equal(ready.length, 1, 'one subscription for the announcement');
-    for (const entry of ready) entry.handler();
-    assert.equal(loaded.sections.filter((section) => section.id === RAIL_ID).length, 1,
-      'the late publication registers the rail once');
+    assert.deepEqual(loaded.sections, [], 'a late publication contributes no section to this load');
+    assert.deepEqual(loaded.ready, [], 'and nothing subscribes to the announcement');
+
+    // The NEXT load is the one that sees the bridge, with the rail it always had.
+    const next = await load();
+    const rail = next.sections.find((section) => section.id === RAIL_ID);
+    assert.ok(rail, 'the published bridge brings the rail');
+    assert.equal(rail.title, 'ODD');
   });
 });
 

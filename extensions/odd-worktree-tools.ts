@@ -34,6 +34,14 @@
 
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
+// S2/S4 (native-bridge T2): the bridge API and runtime are VENDORED in this package
+// (`lib/bridge/`). Importing it publishes the frozen API object at
+// `Symbol.for("gentle-shell-bridge/api/v1")` at MODULE LOAD — before any `session_start`,
+// and with no external plugin required — which is why the slot is already published when
+// the factory below runs. A plain-JS host stubs this one import
+// (`tools/fixtures/load-extension.js`), which is what keeps `tools/*.test.js` free of
+// TypeScript.
+import bridgeExtension from "../lib/bridge/src/extension.ts";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -8523,25 +8531,14 @@ let issuesGateOpen = null;
 let issuesGateProbe = null;
 let issuesGateGeneration = 0;
 
-// S3 (issues-sidebar): the rail section beside the `/issues` reader. The
-// bridge is read from its published slot, never imported; the section reads ONE
-// in-process snapshot per frame and refreshes on its frame TTL and on the
-// session's own activity behind the floor below — never at `session_start`, and
-// never while it is hidden (T13).
+// S3 (issues-sidebar): the rail section beside the `/issues` reader. The bridge
+// RUNTIME is this package's own (`lib/bridge/`, native since T2) and the API OBJECT
+// is still read from its published slot, exactly as a third-party plugin reads it;
+// the section reads ONE in-process snapshot per frame and refreshes on its frame
+// TTL and on the session's own activity behind the floor below — never at
+// `session_start`, and never while it is hidden (T13).
 const ISSUES_SIDEBAR_BRIDGE_SLOT = Symbol.for("gentle-shell-bridge/api/v1");
 const ISSUES_SIDEBAR_READY_EVENT = "gentle-shell-bridge:ready";
-// S2 amended (T11): the ONE hint a host without the bridge gets. It names the
-// install command verbatim, because the user's own words were "pone el comando
-// de instalacion".
-const ISSUES_SIDEBAR_INSTALL_HINT = "the issues rail needs the gentle-shell-bridge plugin: install it with pi install npm:gentle-shell-bridge";
-// The announcement window. An empty slot at `session_start` is "not yet" — the
-// bridge publishes from its own extension load — so the check waits this long
-// before it is honest to call the plugin missing.
-const ISSUES_SIDEBAR_INSTALL_WINDOW_MS = 2000;
-// "One warning per process" includes a `/reload`, which builds a NEW instance of
-// this module: the fact that the human was already told lives on a process-wide
-// slot, exactly like the bridge's own published object does.
-const ISSUES_SIDEBAR_WARN_SLOT = Symbol.for("odd-worktree/issues-sidebar/install-warned");
 // S3 (activity floor): a frame only exists when the host has a reason to produce
 // one, so the TTL never fires on a session that is merely in use. The session's
 // own events ask for a read at most once per this floor.
@@ -8614,12 +8611,6 @@ let issuesSidebarCacheGeneration = 0;
 // the cache can ignore an answer that is older than the last one applied for the
 // same identity — a full read that finishes late never overwrites a newer one.
 let issuesSidebarReadSequence = 0;
-// T11: one hint per process. `Armed` keeps two session starts from arming two
-// checks; `Announced` is what a late publication sets, so the deferred check
-// never speaks over a bridge that arrived; the "already told the human" fact
-// itself lives on the process-wide slot above, so `/reload` is silent too.
-let issuesSidebarInstallArmed = false;
-let issuesSidebarInstallAnnounced = false;
 // S1 (issues-sidebar-click T1): ONE rail open at a time. A click on a row (or on
 // the overflow row) takes this token SYNCHRONOUSLY before `sendUserMessage`, so
 // two clicks in the same tick cannot both pass, and a click while it is held does
@@ -10099,8 +10090,9 @@ function issuesGateMessage(error) {
 //
 // Every other surface keeps working without `gh` — `/warp`, `/odd`, `/files`,
 // the tools, the cards, the bash design, the prompt append and CodeGraph — because
-// "no desactiva todo el plugin, eso dije". The only plugin-wide switch in this
-// package is the missing `gentle-shell-bridge` (S18).
+// "no desactiva todo el plugin, eso dije". The bridge is this package's own now
+// (native-bridge S2), so the only plugin-wide switch left is the published
+// object's own schema and version gate (S18): an INCOMPATIBLE slot registers nothing.
 //
 // The guards below stay as DEFENCE IN DEPTH, not as the policy: a `gh` that
 // disappears after the extension loaded still fails the gate and the rail's read
@@ -11136,9 +11128,8 @@ let userPromptCardEpoch = 0;
 let userPromptCardPendingEpoch;
 // Whether the session that owns this shim is the live one. It starts CLOSED — Pi loads the
 // factory before any session exists — and `session_start` opens it. Every path into the host
-// package (the design registration, a `gentle-shell-bridge:ready` announcement, a gate observer
-// woken by a silent publication, a load that resolved late) checks it before arming and again
-// before patching.
+// package (the design registration, a `gentle-shell-bridge:ready` announcement, a load that
+// resolved late) checks it before arming and again before patching.
 let userPromptCardSessionLive = false;
 // Whether this load already owns the session boundary (the pair below). A load may arm an
 // install only once it owns the shutdown that unwraps it, whichever path got there first.
@@ -11235,15 +11226,14 @@ function requestPromptCardRepaintNow() {
 }
 
 /**
- * The prompt card's session boundary — registered ONCE per load, by whichever path can first arm
- * an install: the factory when a bridge is already published, the ready subscription, or the gate
- * observer when a silent publication wakes it.
+ * The prompt card's session boundary — registered ONCE per load, by the factory, which owns it
+ * beside the surface registration it gates.
  *
- * S7: the boundary may not live behind the surface's own registration (a gate-closed load with no
- * bus registered no surface and therefore no shutdown hook at all, so a session that woke the
+ * S7: the boundary may not live behind the surface's own registration (a load whose slot check
+ * failed registered no surface and therefore no shutdown hook at all, so a session that woke the
  * surface left the class wrapped), and a bridge announced during a shutdown must find a session
  * that is already closed. Registering the pair is not a SURFACE registration — it contributes no
- * command, tool, section, design or card — so a gate-closed load still ships nothing.
+ * command, tool, section, design or card — so a load that ships nothing still ships no surface.
  *
  * OWNING THE TEARDOWN IS A PRECONDITION OF INSTALLING, so the SHUTDOWN hook is registered FIRST
  * and a host that refuses it (or has no `pi.on`) owns nothing: the start hook is never registered
@@ -11273,9 +11263,8 @@ function registerUserPromptCardLifecycle(pi) {
       installUserPromptCard();
     });
   } catch {
-    // An accepted shutdown is still ownership: the teardown exists, so a session opened by the
-    // gate observer (a `session_start` it accepted) is still unwrapped. Nothing installs without
-    // one of those paths opening the session.
+    // An accepted shutdown is still ownership: the teardown exists, so a session this load
+    // opened is still unwrapped. Nothing installs without one of those paths opening the session.
   }
   userPromptCardLifecycleRegistered = true;
   return true;
@@ -11570,9 +11559,6 @@ function registerIssuesSidebar(pi) {
     }
     if (issuesSidebarSubscribed) return;
     const subscribed = subscribeBridgeReady(pi, () => {
-      // T11: a publication that arrives late makes the missing-plugin hint
-      // untrue, so it is recorded before anything else is attempted.
-      issuesSidebarInstallAnnounced = true;
       try {
         registerIssuesSidebar(pi);
       } catch {
@@ -11985,82 +11971,6 @@ function bindIssuesShortcut(pi) {
   }
 }
 
-// T11 (S2 amended, L10): discoverability is the ONE thing a host without the
-// bridge gets. Nothing throws today — every bridge call is guarded — so this is a
-// hint, not error handling: ONE warning per process, from a primary session only
-// (the same `GENTLE_PI_AGENTS_CHILD` signal the prompt block uses, so a subagent
-// never speaks for the human), naming the install command verbatim.
-function warnIssuesSidebarMissing(ctx) {
-  if (issuesSidebarInstallWarnedAlready()) return;
-  if (process.env.GENTLE_PI_AGENTS_CHILD === "1") return;
-  const notify = ctx && ctx.ui ? ctx.ui.notify : undefined;
-  // A host with no notice seam cannot be told anything; the flag stays clear so
-  // a later session that does have one still gets the single warning.
-  if (typeof notify !== "function") return;
-  markIssuesSidebarInstallWarned();
-  try {
-    notify(ISSUES_SIDEBAR_INSTALL_HINT, "warning");
-  } catch {
-    // A notice is best effort; it never breaks startup.
-  }
-}
-
-function issuesSidebarInstallWarnedAlready() {
-  try {
-    return globalThis[ISSUES_SIDEBAR_WARN_SLOT] === true;
-  } catch {
-    return false;
-  }
-}
-
-function markIssuesSidebarInstallWarned() {
-  try {
-    globalThis[ISSUES_SIDEBAR_WARN_SLOT] = true;
-  } catch {
-    // A frozen global still gets the warning; only the dedupe is lost.
-  }
-}
-
-// T11: the check itself, and the part that must be timed honestly. An empty slot
-// at `session_start` means "not yet": the bridge publishes from its own load, so
-// with a bus the check waits the announcement window and warns only if the slot
-// is STILL empty and no announcement arrived in between. A host with no bus can
-// never announce, so there it warns at once. The timer is unref'd: a hint never
-// holds the process open.
-function checkIssuesSidebarInstall(pi, ctx) {
-  try {
-    if (issuesSidebarInstallWarnedAlready()) return;
-    if (issuesSidebarBridge() !== null) return;
-    if (process.env.GENTLE_PI_AGENTS_CHILD === "1") return;
-    const events = pi && pi.events ? pi.events : null;
-    if (!events || typeof events.on !== "function") {
-      warnIssuesSidebarMissing(ctx);
-      return;
-    }
-    if (issuesSidebarInstallArmed) return;
-    issuesSidebarInstallArmed = true;
-    let timer;
-    try {
-      timer = setTimeout(() => {
-        issuesSidebarInstallArmed = false;
-        try {
-          if (issuesSidebarInstallAnnounced) return;
-          if (issuesSidebarBridge() !== null) return;
-          warnIssuesSidebarMissing(ctx);
-        } catch {
-          // A failed hint never breaks the session.
-        }
-      }, ISSUES_SIDEBAR_INSTALL_WINDOW_MS);
-    } catch {
-      issuesSidebarInstallArmed = false;
-      return;
-    }
-    if (timer && typeof timer.unref === "function") timer.unref();
-  } catch {
-    // The rail is optional: a failed hint never breaks startup.
-  }
-}
-
 function rememberIssuesSidebarSession(ctx) {
   if (!ctx || typeof ctx !== "object") return;
   issuesSidebarCtx = ctx;
@@ -12212,47 +12122,33 @@ function oddSessionStillCurrent(ctx) {
   return event === undefined || event === current;
 }
 // ---------------------------------------------------------------------------
-// S18 (T14, L13): the bridge gate. This package is a guest of
-// gentle-shell-bridge — the rail, the bash design and the `Cards` rows all live
-// on its published object (the picker's `alt+p` shortcut is bound on the host
-// itself, but only once this gate has registered the command it opens) — and the human's
-// answer for what to do without it was exactly "Desactivar todo el plugin":
-// register NOTHING. No command, no tool, no message or entry renderer, no card,
-// no rail, no hook, no prompt append.
+// S18 (T14, L13; native-bridge T2): the bridge is NATIVE. `lib/bridge/` is this
+// package's OWN copy of the bridge API and runtime, and importing it — the static
+// import at the top of this file — publishes the compatible API object at the
+// process-global slot BEFORE any `session_start`, so the rail, the bash design,
+// the `Cards` rows and `/bridge-status` all exist with no external plugin
+// installed. There is no gate to wait on, no ready-event hold and no install hint:
+// the bridge is not something a host could be missing any more.
 //
-// The bridge publishes ASYNCHRONOUSLY, and Pi may load this package before or after
-// it, so the registration is DEFERRED rather than eager: everything registers the
-// moment the bridge is known present (already on its slot at load, or announced on
-// its ready event later), and if the announcement never comes the package registers
-// nothing and only says how to install it. Nothing may register twice, whichever
-// path arrives first.
+// What SURVIVES is the slot check, because the slot is process-global and another
+// plugin — a standalone bridge included — may have published an INCOMPATIBLE
+// object first ("first wins"). A slot holding such an object leaves every surface
+// of this package silently UNREGISTERED: no command, no tool, no message or entry
+// renderer, no card, no rail, no prompt append — and no notice, because there is
+// nothing left to install. Nothing retries it either: the slot is read once per
+// factory call and the observer that used to wait for a later publication is gone.
 //
-// The one thing that is NOT deferred is the notice's observer: `ctx.ui.notify`
-// lives on a session, so the only way to name the missing plugin in a primary
-// session is to observe `session_start` until the gate opens — one hook, kept sole
-// while the gate is closed and released the moment the surface registers.
+// `subscribeBridgeReady` stays (the rail and the bash design rebind on a
+// republished object, which is generic and harmless), and nothing may register
+// twice, whichever moment arrives first.
 let oddSurfaceRegistered = false;
-let bridgeGateDisposer = null;
 
-function releaseBridgeGateObserver() {
-  const dispose = bridgeGateDisposer;
-  bridgeGateDisposer = null;
-  if (typeof dispose !== "function") return;
-  try {
-    dispose();
-  } catch {
-    // A host that will not release the observer still has a harmless one.
-  }
-}
-
-// ONE registration per gate episode. The flag is set FIRST, so a path that fails
-// half way can never re-register the parts that did land, and the two gate paths
-// (already published at load, announced later) share it: whichever arrives first
-// registers, the other is a no-op.
+// ONE registration per factory call. The flag is set FIRST, so a path that fails
+// half way can never re-register the parts that did land.
 function registerOddWorktreeSurface(pi) {
   if (oddSurfaceRegistered) return false;
-  // The bridge is the precondition, whichever path arrives: an announcement with
-  // no published object is not a bridge this package may load on.
+  // The slot is the precondition: an absent or incompatible published object is
+  // not a bridge this package may load on.
   if (issuesSidebarBridge() === null) return false;
   oddSurfaceRegistered = true;
   try {
@@ -12260,70 +12156,33 @@ function registerOddWorktreeSurface(pi) {
   } catch {
     // A host that refuses a registration keeps the rest of the surface.
   }
-  releaseBridgeGateObserver();
   return true;
-}
-
-// While the bridge is absent: ONE ready-announcement subscription (the bridge may
-// publish after us) and ONE session_start observer (the missing-plugin notice).
-// Nothing else is registered.
-function holdSurfaceForBridge(pi) {
-  let announced = false;
-  try {
-    announced = subscribeBridgeReady(pi, () => {
-      try {
-        registerOddWorktreeSurface(pi);
-      } catch {
-        // The gate stays closed; the announcement is not retried.
-      }
-    });
-  } catch {
-    announced = false;
-  }
-  // S7: with a bus, the bridge's announcement can wake the surface at ANY moment — a shutdown
-  // included — so the prompt card's session boundary has to exist from here on, even though no
-  // surface registered yet.
-  if (announced === true) registerUserPromptCardLifecycle(pi);
-  if (typeof pi?.on !== "function") return;
-  try {
-    const dispose = pi.on("session_start", (event, ctx) => {
-      // S7: the observer is a WAKE-UP path, not a session. The moment it wakes the surface it
-      // owns the session too — the boundary is acquired here and the session opened — so a
-      // silent publication on a host with no bus cannot leave the class wrapped after shutdown.
-      // Registering this pair is session bookkeeping, not a surface: a gate-closed load still
-      // registers no command, tool, section, design or card. A host that refuses the teardown
-      // owns nothing, so the session is NOT opened for it: no install, no patch.
-      if (registerUserPromptCardLifecycle(pi) === true) userPromptCardSessionLive = true;
-      // A bridge that was there all along, or arrived without an announcement,
-      // makes the notice untrue: register instead of warning.
-      if (issuesSidebarBridge() !== null) {
-        registerOddWorktreeSurface(pi);
-        return;
-      }
-      checkIssuesSidebarInstall(pi, ctx);
-    });
-    bridgeGateDisposer = typeof dispose === "function" ? dispose : null;
-  } catch {
-    // A host that refuses the observer still gets the install line nowhere else.
-  }
 }
 
 export default function (pi) {
   // A factory call is one registration episode. Pi builds a fresh registry for a
   // `/reload` and expects the same surfaces again, which is why the episode starts
-  // HERE; the gate's own two paths share the episode, so neither of them can
-  // register the surface twice.
+  // HERE, so nothing can register the surface twice.
   oddSurfaceRegistered = false;
-  // S18 (T14): no bridge, no package. The published object is read from its slot
-  // after its own schema and version gate — never imported, never a dependency.
+  // S2/S3 (native-bridge T2): the VENDORED bridge factory FIRST. It republishes the
+  // slot object and announces it on `pi.events`, arms the rows and the rail on
+  // `session_start` and registers `/bridge-status`, so the bridge is armed before any
+  // surface of this package looks for its object. A bridge that throws on the way out
+  // is never fatal: every other surface of this package still loads.
+  try {
+    bridgeExtension(pi);
+  } catch {
+    // The bridge is this package's own, but its failure still leaves the rest alone.
+  }
+  // S18 (T14): the slot check. The object is read after its own schema and version
+  // gate; an absent or INCOMPATIBLE slot (another plugin published first) leaves this
+  // package's surface unregistered and says nothing.
   if (issuesSidebarBridge() !== null) {
     // S7: the prompt card's session boundary is owned here, before the surface registers, so
     // this load always has the shutdown hook that closes the session it belongs to.
     registerUserPromptCardLifecycle(pi);
     registerOddWorktreeSurface(pi);
-    return;
   }
-  holdSurfaceForBridge(pi);
 }
 
 function registerOddWorktreeSurfaceEntries(pi) {
@@ -12451,12 +12310,8 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // S5 (T4/S5): dispatched, never awaited, and only while the rail is active.
     preloadIssuesSidebar(railHandleBefore, railWasDrawn);
     // S7: the prompt card's install belongs to the lifecycle pair the factory registers
-    // BEFORE the bridge gate (it must exist on a load that registered no surface), so this
-    // boundary leaves it alone: one owner for one session state.
-    // T11 (S2 amended): the missing-plugin hint. It is armed in the same
-    // boundary as the section's own state, and it says nothing yet when the
-    // host could still announce.
-    checkIssuesSidebarInstall(pi, ctx);
+    // BEFORE the surface (it exists on its own, one owner for one session state), so this
+    // boundary leaves it alone.
     // S5 (T8): the `gh` gate is DISPATCHED here, never awaited. The host awaits
     // every handler it is handed, one at a time, so awaiting it put the first
     // prompt behind `gh api user` + `gh repo view` and the checkout's own git
@@ -12524,9 +12379,8 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // opencode-usage-alert: the schedule timer and the rows belong to the session that armed
     // them, so the ended session leaves neither behind.
     teardownOpenCodePeakAlert();
-    // S7: the prompt card's teardown belongs to the lifecycle pair registered before the
-    // bridge gate — the same owner as its install, so a session whose bridge was never
-    // present still closes (and its ready announcement can no longer arm an install).
+    // S7: the prompt card's teardown belongs to the lifecycle pair the factory registers —
+    // the same owner as its install, so a session whose install never landed still closes.
   });
   // Nothing deferred survives its session: shutdown advances the startup epoch,
   // so startup work still in flight drops instead of writing into the session

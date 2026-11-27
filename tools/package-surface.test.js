@@ -24,7 +24,7 @@ const { test, describe, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { BRIDGE_SLOT, LIB_DIR, defaultBridge, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
+const { BRIDGE_IMPORT, BRIDGE_SLOT, BRIDGE_STUB, LIB_DIR, defaultBridge, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -122,10 +122,16 @@ describe('registration', () => {
     }
   });
 
-  test('the bridge is never imported, and the surface reaches it through its published object', async () => {
+  // native-bridge T2 (S2/S4): the bridge is NVATIVE — vendored at `lib/bridge/` and imported by
+  // the entry itself — and it is reached ONLY that way: never by the package's name, so no host
+  // has to install `gentle-shell-bridge` for this extension to have a bridge.
+  test('the bridge is imported from the vendored copy only, and the surface still reaches it through its published object', async () => {
     const source = stubbedSource();
-    assert.equal(/from\s+["']gentle-shell-bridge/.test(source), false, 'no import of the bridge package anywhere');
-    assert.equal(/require\(\s*["']gentle-shell-bridge/.test(source), false, 'no require of the bridge package anywhere');
+    const raw = fs.readFileSync(path.join(ROOT, 'extensions/odd-worktree-tools.ts'), 'utf8');
+    assert.ok(raw.includes(BRIDGE_IMPORT), 'the entry imports the vendored bridge extension');
+    assert.equal(source.includes(BRIDGE_STUB), true, 'and the plain-JS copy stubs that one import');
+    assert.equal(/from\s+["']gentle-shell-bridge/.test(raw), false, 'no import of the bridge package anywhere');
+    assert.equal(/require\(\s*["']gentle-shell-bridge/.test(raw), false, 'no require of the bridge package anywhere');
     assert.equal(source.split('api.registerSection(').length - 1, 2, 'exactly two sidebar sections are contributed');
     // T5 (S1): the count alone would drift silently, so the ids are asserted through
     // the bridge that received them: one `GITHUB` and one `ODD`, and nothing else.

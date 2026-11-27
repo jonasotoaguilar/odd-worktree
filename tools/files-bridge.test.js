@@ -1,7 +1,7 @@
 'use strict';
 // T19 (S36, S41), T2 (S5) and T14 (S18) together: the picker's and the issues
-// panel's keys are bound directly on the host, and the package itself loads only
-// when gentle-shell-bridge is published.
+// panel's keys are bound directly on the host, and the package itself loads only when a
+// compatible bridge object is on the published slot (native since native-bridge T2).
 //
 // What this file proves, all of it through the loaded extension:
 // - `alt+p` is bound with `pi.registerShortcut` at load — FIRST and complete —
@@ -14,14 +14,13 @@
 //   context the host hands a shortcut;
 // - a complete bridge is handed NO keymap and NO palette row for `files`, and is
 //   never asked to resolve a key, while the shortcut is still bound (S36);
-// - a late bridge announcement and a `session_start` never add those rows and
-//   never bind a second key;
+// - a `session_start` never adds those rows and never binds a second key;
 // - a host without `registerShortcut`, a host that throws from it, and a missing
 //   command handler never break the extension and say nothing;
-// - with NO bridge the package registers NOTHING — no command, no tool, no
-//   renderer, no hook, no key — and only ONE notice names the install line (S18,
-//   T14); a malformed bridge is the same silence, and the ONE ready announcement
-//   is what brings the whole surface to life, exactly once.
+// - with an ABSENT or INCOMPATIBLE slot the package registers NOTHING — no command, no
+//   tool, no renderer, no hook, no key — and says nothing either: the install hint, its
+//   warn slot and the ready-event hold are gone (S18, T2). The slot is read ONCE per load,
+//   so a publication that lands afterwards is picked up by the next load, not by this one.
 //
 // Where the two contracts meet (this is the merge of main's T15 with this
 // branch's S18): the key is bound at load, but it is bound inside the package's
@@ -40,7 +39,6 @@ const path = require('node:path');
 const { loadExtension, withGhPath } = require('./fixtures/load-extension.js');
 
 const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
-const READY_EVENT = 'gentle-shell-bridge:ready';
 // The one line `/files` answers a host with no overlay: the proof that the bound
 // key reached the command's own path.
 const NO_UI_LINE = 'files: the file picker needs an interactive session with overlay support';
@@ -324,43 +322,47 @@ test('S36: a complete bridge receives no keymap row and no palette row for files
 });
 
 // ---------------------------------------------------------------------------
-// S18 (T14): no bridge, no package. The policy the human chose, verbatim:
-// "Desactivar todo el plugin" — when gentle-shell-bridge is not published, this
-// extension registers NOTHING: no command, no tool, no renderer, no card, no rail,
-// no hook, no prompt append, and no key. The only thing that happens is ONE
-// notice naming the install line, in a primary session.
+// S18 (T14) as amended by native-bridge T2: the bridge is NATIVE (vendored at
+// `lib/bridge/`), so an ABSENT or INCOMPATIBLE slot is the only case left where this
+// package ships nothing. The policy the human chose for that case, "Desactivar todo el
+// plugin", still holds — no command, no tool, no renderer, no card, no rail, no hook, no
+// prompt append and no key — and nothing is SAID either: there is no install hint, no
+// notice and no observer left to say it with.
 // ---------------------------------------------------------------------------
 
-// The harness may itself run inside an agent child (`GENTLE_PI_AGENTS_CHILD=1`),
-// which is exactly the signal the notice's primary-session rule respects, so this
-// test owns it: cleared here, restored after.
-test('S18/S19 (T14): with no bridge NOTHING registers, and ONE notice names the install line', async () => {
+test('S18/S19 (T2): with no bridge NOTHING registers and NOTHING is said', async () => {
   delete globalThis[BRIDGE_SLOT];
   const savedChild = process.env.GENTLE_PI_AGENTS_CHILD;
   delete process.env.GENTLE_PI_AGENTS_CHILD;
   try {
+  const subscriptions = [];
   const host = installHost();
-  const loaded = await loadExtension(host.pi, { bridge: false });
+  const loaded = await loadExtension({
+    ...host.pi,
+    events: {
+      on: (event, handler) => {
+        subscriptions.push({ event, handler });
+        return () => {};
+      },
+    },
+  }, { bridge: false });
 
   assert.equal(host.shortcuts.length, 0, 'nothing is bound');
   assert.deepEqual([...loaded.commands.keys()], [], 'no command');
   assert.deepEqual([...loaded.tools.keys()], [], 'no tool');
   assert.deepEqual([...loaded.messageRenderers.keys()], [], 'no message renderer');
   assert.deepEqual([...loaded.entryRenderers.keys()], [], 'no entry renderer');
-  assert.deepEqual(loaded.hooks.map(([event]) => event), ['session_start'],
-    'the ONE observer the missing-plugin notice needs (notify lives on the session), and nothing else');
+  assert.deepEqual(loaded.hooks, [],
+    'and no hook at all: the missing-plugin observer the gate needed is gone');
   assert.equal(globalThis[BRIDGE_SLOT], undefined, 'nothing is published by this package');
+  assert.deepEqual(subscriptions, [], 'and no ready announcement is listened to either');
 
-  // The notice: the existing missing-plugin window, in a primary session.
+  // Nothing is ever said: a session start is impossible (no hook was registered) and a
+  // publication on the bus reaches no listener of this package.
   const sink = notifyHost();
   await fireSessionStart(loaded.hooks, sink.ctx);
-  assert.deepEqual(sink.notifications, [[
-    'warning',
-    'the issues rail needs the gentle-shell-bridge plugin: install it with pi install npm:gentle-shell-bridge',
-  ]], 'exactly one notice, naming npm:gentle-shell-bridge and its install line');
-
-  // And the session did not load a surface either.
-  assert.deepEqual([...loaded.commands.keys()], [], 'a session start without a bridge still registers no command');
+  assert.deepEqual(sink.notifications, [], 'no install hint, no warning, no notice');
+  assert.deepEqual([...loaded.commands.keys()], [], 'a session start without a bridge registers no command');
   assert.deepEqual([...loaded.tools.keys()], [], 'and no tool');
   assert.equal(host.shortcuts.length, 0, 'and binds nothing');
   } finally {
@@ -400,14 +402,16 @@ test('S18/S19: a malformed bridge is no bridge, and a bridge without the picker\
 });
 
 // ---------------------------------------------------------------------------
-// A bridge that publishes later, from the ONE ready announcement.
+// A publication that arrives AFTER the factory is not a wake-up path any more.
 // ---------------------------------------------------------------------------
 
-// RE-SCOPED (was "a bridge that publishes later lands both registrations from the
-// ready event", which assumed the whole package had already registered eagerly at
-// load and only the bridge surfaces waited). The announcement is now what brings
-// the ENTIRE surface to life, and it may bring it exactly once.
-test('S18/S19 (T14): the ready announcement registers the whole surface, exactly once', async () => {
+// RE-SCOPED (was "the ready announcement registers the whole surface, exactly once",
+// which was the deferred gate). The bridge is native and the entry imports it, so its
+// object is on the slot BEFORE the factory runs and the slot is read ONCE, in the factory:
+// there is no hold, no observer and no announcement subscription left to bring a surface
+// to life. A slot that is empty at factory time therefore stays empty for that load, and
+// the NEXT load (a `/reload` builds a new module instance) is what picks the bridge up.
+test('S18/S19 (T2): a bridge that publishes after the factory is not picked up by that load', async () => {
   delete globalThis[BRIDGE_SLOT];
   const subscriptions = [];
   const host = installHost();
@@ -421,52 +425,63 @@ test('S18/S19 (T14): the ready announcement registers the whole surface, exactly
     },
   }, { bridge: false });
 
-  // Nothing at all while the bridge is absent, and ONE subscription listening for it.
-  assert.deepEqual([...loaded.commands.keys()], [], 'no command before the announcement');
+  // Nothing at all while the slot is empty, and nothing listening for a later arrival.
+  assert.deepEqual([...loaded.commands.keys()], [], 'no command before the bridge exists');
   assert.deepEqual([...loaded.tools.keys()], [], 'no tool either');
-  assert.equal(host.shortcuts.length, 0, 'and no key: there is no surface for it to open');
-  const ready = subscriptions.filter((entry) => entry.event === READY_EVENT);
-  assert.equal(ready.length, 1, 'ONE shared announcement subscription carries the whole gate');
-  assert.equal(subscriptions.every((entry) => entry.event === READY_EVENT), true, 'and nothing else is listened to');
+  assert.deepEqual(loaded.hooks, [], 'no hook');
+  assert.equal(host.shortcuts.length, 0, 'and no key');
+  assert.deepEqual(subscriptions, [], 'and no announcement subscription: the wait is gone');
 
-  // The bridge publishes and announces.
+  // The bridge publishes afterwards: this load has already read the slot and is done.
   const bridge = installBridge();
-  for (const entry of ready) entry.handler();
+  assert.deepEqual([...loaded.commands.keys()], [], 'a late publication adds no command');
+  assert.deepEqual([...loaded.tools.keys()], [], 'no tool');
+  assert.deepEqual(loaded.hooks, [], 'no hook');
+  assert.equal(host.shortcuts.length, 0, 'and no key');
+  assert.deepEqual(subscriptions, [], 'still nothing listens');
 
-  assert.deepEqual([...loaded.commands.keys()].sort(), ['files', 'identity', 'issues', 'odd', 'prs', 'warp'],
-    'the six commands arrive with the bridge');
-  assert.deepEqual([...loaded.tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'the two tools');
-  assert.deepEqual([...loaded.messageRenderers.keys()], ['worktree-warp'], 'the message renderer');
-  assert.deepEqual([...loaded.entryRenderers.keys()].sort(), ['odd-worktree-issues-refusal', 'odd-worktree-warp-queue'],
-    'both entry renderers');
-  const hookNames = new Set(loaded.hooks.map(([event]) => event));
+  // The next load is the one that sees it, with the whole surface it always had.
+  const nextSubscriptions = [];
+  const nextHost = installHost();
+  const reloaded = await loadExtension({
+    ...nextHost.pi,
+    events: {
+      on: (event, handler) => {
+        nextSubscriptions.push({ event, handler });
+        return () => {};
+      },
+    },
+  });
+  assert.deepEqual([...reloaded.commands.keys()].sort(), ['files', 'identity', 'issues', 'odd', 'prs', 'warp'],
+    'the six commands arrive with the published bridge');
+  assert.deepEqual([...reloaded.tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'the two tools');
+  assert.deepEqual([...reloaded.messageRenderers.keys()], ['worktree-warp'], 'the message renderer');
+  assert.deepEqual([...reloaded.entryRenderers.keys()].sort(),
+    ['odd-worktree-issues-refusal', 'odd-worktree-warp-queue'], 'both entry renderers');
+  const hookNames = new Set(reloaded.hooks.map(([event]) => event));
   for (const name of ['session_start', 'session_shutdown', 'tool_call', 'tool_result', 'turn_end', 'before_agent_start']) {
-    assert.equal(hookNames.has(name), true, `the ${name} hooks arrive too`);
+    assert.equal(hookNames.has(name), true, `the ${name} hooks are registered`);
   }
 
-  // The picker's contribution to the BRIDGE is now none at all: the key is bound
-  // on the host, once, as part of that same registration episode.
-  assert.deepEqual(filesRows(bridge.keymaps), [], 'the late bridge is handed no keymap row');
+  // The picker's contribution to the BRIDGE is none at all: the key is bound on the host,
+  // once, as part of that same registration episode.
+  assert.deepEqual(filesRows(bridge.keymaps), [], 'the bridge is handed no keymap row');
   assert.deepEqual(filesRows(bridge.commands), [], 'nor a palette row');
   assert.deepEqual(bridge.resolved, [], 'and is never asked for a key');
-  assert.deepEqual(host.shortcuts.map((entry) => entry.key), ['alt+p', 'alt+i'],
+  assert.deepEqual(nextHost.shortcuts.map((entry) => entry.key), ['alt+p', 'alt+i'],
     'the episode binds the picker key and the issues key, once each');
 
   const sink = notifyHost();
-  await host.shortcuts[0].options.handler(sink.ctx);
-  assert.deepEqual(sink.notifications, [['info', NO_UI_LINE]], 'the late key reaches the picker path');
+  await nextHost.shortcuts[0].options.handler(sink.ctx);
+  assert.deepEqual(sink.notifications, [['info', NO_UI_LINE]], 'the key reaches the picker path');
 
   // A second announcement is a no-op: nothing registers twice, and no second key.
-  const commandCount = loaded.commands.size;
-  const toolCount = loaded.tools.size;
-  const hookCount = loaded.hooks.length;
-  for (const entry of ready) entry.handler();
-  assert.equal(loaded.commands.size, commandCount, 'a second announcement registers no second command');
-  assert.equal(loaded.tools.size, toolCount, 'no second tool');
-  assert.equal(loaded.hooks.length, hookCount, 'and no second hook');
+  for (const entry of nextSubscriptions) entry.handler();
+  assert.deepEqual([...reloaded.commands.keys()].sort(), ['files', 'identity', 'issues', 'odd', 'prs', 'warp'],
+    'a repeated announcement registers no second command');
+  assert.equal(nextHost.shortcuts.length, 2, 'and binds no second key');
   assert.deepEqual(bridge.keymaps, [], 'and no second keymap action');
   assert.deepEqual(bridge.commands, [], 'and no second palette row');
-  assert.equal(host.shortcuts.length, 2, 'the same two keys are still bound exactly once');
 });
 
 // ---------------------------------------------------------------------------

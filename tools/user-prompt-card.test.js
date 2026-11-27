@@ -830,10 +830,11 @@ test('S7: factory load does not arm a host import before session_start', async (
   }
 });
 
-test('S7: silent publication on a host without a bus acquires a shutdown owner', async () => {
-  // The gate observer is a WAKE-UP path, not a session: a bridge published silently wakes the
-  // surface from a `session_start`, and that same load must then own the shutdown that unwraps
-  // it. With no event bus the observer is the only way in.
+test('S7 (T2): with no bridge on the slot nothing is registered, and a silent publication never arms an install', async () => {
+  // The gate observer is gone (native-bridge T2): the vendored bridge publishes at module load, the
+  // factory reads the slot ONCE, and a load that found it empty keeps no observer to be woken by.
+  // What S7 still guarantees is the other half: a load that DID find the bridge owns the shutdown
+  // that unwraps the card, which is what the first test above proves.
   const previousBridge = globalThis[BRIDGE_API_SLOT];
   delete globalThis[BRIDGE_API_SLOT];
   class Host {
@@ -845,14 +846,12 @@ test('S7: silent publication on a host without a bus acquires a shutdown owner',
   const { hooks } = await loadExtensionModule(() => ({ UserMessageComponent: Host }));
   const emit = extensionSession(hooks);
   try {
-    assert.deepEqual(hooks.map(([event]) => event), ['session_start'], 'a gate-closed load keeps its ONE observer');
-    // A SILENT publication: nothing announces it, so `session_start` is what wakes the surface.
+    assert.deepEqual(hooks, [], 'a load with no bridge registers no hook at all');
+    // A SILENT publication: nothing announces it, and nothing is listening for it either.
     globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
     await emit('session_start');
     await drain();
-    assert.notEqual(Host.prototype.render, native, 'the waking session draws the card');
-    await emit('session_shutdown');
-    assert.equal(Host.prototype.render, native, 'and it owns the shutdown that unwraps it');
+    assert.equal(Host.prototype.render, native, 'nothing installs: no session boundary was owned');
   } finally {
     await emit('session_shutdown');
     if (previousBridge === undefined) delete globalThis[BRIDGE_API_SLOT];

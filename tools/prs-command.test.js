@@ -653,14 +653,15 @@ describe('/prs overlay and reads (S1, S3)', () => {
   });
 
   test('S8/T22: the rail cache seeds the first frame, so /prs opens as fast as /issues', async () => {
-    const b = await boot({ railMine: [{ number: 69, title: 'mine sixty-nine' }], railReview: [{ number: 70, title: 'review seventy' }] });
+    // T2 (native-bridge): the slot is read ONCE, in the factory, so the bridge a test measures is
+    // published BEFORE the load — a publication after it is not a wake-up path any more.
     const { registered } = installBridge();
+    const b = await boot({ railMine: [{ number: 69, title: 'mine sixty-nine' }], railReview: [{ number: 70, title: 'review seventy' }] });
     await warmGate(b.loaded);
     const root = makeCheckout();
     const ctx = sessionCtx(root);
-    // The first start publishes the surface; the second is the session whose rail
-    // reads, which is the in-memory entry `/prs` seeds from. Nothing is opened in
-    // between, so this is exactly the state a click on the rail finds.
+    // The rail's own read belongs to the session it serves: one start binds the session the section
+    // reads with, and nothing is opened in between, so this is exactly the state a click finds.
     await fireSessionStart(b.loaded.hooks, sessionCtx(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-prs-seed-')))));
     await fireSessionStart(b.loaded.hooks, ctx);
     await drawSection(registered[0], ctx);
@@ -1039,11 +1040,15 @@ describe('S5: the session-start preload is dispatched, never awaited', () => {
   }
 
   async function gatedBoot() {
+    // T2 (native-bridge): the bridge is published BEFORE the load, because the slot is read once,
+    // in the factory — a surface that arrives later does not exist.
+    installBridge();
     const b = await boot();
+    // A REPUBLISHED bridge is a NEW binding: the section the spy can see is the one the first
+    // `session_start` mounts on it, exactly as a shutdown-and-remount does.
     const { registered } = installBridge();
     const spy = spySectionFactory(b.loaded.mod);
-    // The first start publishes the surface (the bridge arrived after the load);
-    // the section exists from here on.
+    // The first start binds the republished section; it exists from here on.
     await fireSessionStart(b.loaded.hooks, sessionCtx(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-prs-gate-')))));
     const root = makeCheckout();
     const ctx = sessionCtx(root);

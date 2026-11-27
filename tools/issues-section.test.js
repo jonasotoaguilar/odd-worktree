@@ -25,9 +25,9 @@
 //   `<n> issues · stale` (T10), while a failed first read is still one error row —
 //   except a session cwd that is not a repository (S12/T11), whose one line is
 //   exactly `not a git repository` in the `dim` tone, never `error`;
-// - a host with no bridge gets ONE warning per process naming
-//   `pi install npm:gentle-shell-bridge` (T11), primary sessions only, after
-//   the announcement window and never once the bridge announced;
+// - a host with an ABSENT or INCOMPATIBLE slot gets no install hint, no warning and no
+//   notice at all: the bridge is native (vendored at `lib/bridge/`) since T2, so there is
+//   nothing to install and nobody to warn;
 // - `lines()`/`meta()` are synchronous frames over an in-process snapshot: a
 //   never-settled read still answers, two stale frames schedule ONE refresh,
 //   and `onRefreshed` fires once per landed refresh;
@@ -53,10 +53,10 @@
 //   four arguments it always had; DEFAULT_ROW_LABEL is `github` (S4),
 // - the three states are rows (`loading…`, `no open issues`, ONE error row),
 //   never a throw;
-// - the extension reaches the rail ONLY through gentle-shell-bridge's
-//   published object (read from its Symbol slot, never imported): present it
-//   registers one section, absent it subscribes to the ready announcement
-//   once and registers nothing;
+// - the extension reaches the rail ONLY through the bridge API's published object
+//   (read from its Symbol slot; the runtime itself is this package's own
+//   `lib/bridge/`): a compatible object registers one section, an absent or
+//   incompatible one registers nothing and says nothing;
 // - the drawn section reads the checkout's own repository ONCE:
 //   `checkoutRepoScope({cwd})` then ONE combined `gh api graphql` read of the
 //   three scoped buckets, and a failed resolution is the error row with NO `gh`
@@ -86,8 +86,8 @@ const { pathToFileURL } = require('node:url');
 const { createIssuesSection } = require('../lib/issues-section.js');
 
 const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
-// T11's "one warning per process" lives on a process-wide slot, so a test that
-// expects the warning must not inherit another test's.
+// The old "one warning per process" slot. Nothing sets it any more (T2 removed the hint),
+// and the tests assert it stays untouched — a stale delete here would hide a regression.
 const WARNED_SLOT = Symbol.for('odd-worktree/issues-sidebar/install-warned');
 const IDENTITY = 'github.com/myfork/project';
 
@@ -1733,24 +1733,25 @@ test('S2: a published bridge receives exactly one section with the decided ident
 // RE-SCOPED (was "with no bridge and no events, nothing registers and nothing
 // throws", which asserted that `/issues` and both worktree tools still registered
 // without a bridge — the old policy, where only the bridge surfaces waited).
-// S18 (T14, the human's "Desactivar todo el plugin"): with no bridge NOTHING of
-// this package loads, not one command, tool, renderer, card or rail.
-test('S18 (T14): with no bridge and no events, NOTHING registers and nothing throws', async () => {
+// S18 (T2): the bridge is NATIVE (vendored at `lib/bridge/`), so the only case that
+// still ships nothing is an ABSENT or INCOMPATIBLE slot — and that case says nothing
+// either: no observer, no install hint, no warn slot.
+test('S18 (T2): with no bridge and no events, NOTHING registers, nothing is said and nothing throws', async () => {
   delete globalThis[BRIDGE_SLOT];
   const loaded = await loadExtension({}, { bridge: false });
   assert.deepEqual([...loaded.commands.keys()], [], 'no command at all');
   assert.deepEqual([...loaded.tools.keys()], [], 'no tool at all');
   assert.deepEqual([...loaded.messageRenderers.keys()], [], 'no message renderer');
   assert.deepEqual([...loaded.entryRenderers.keys()], [], 'no entry renderer');
-  assert.deepEqual(loaded.hooks.map(([event]) => event), ['session_start'],
-    'only the observer the missing-plugin notice needs');
+  assert.deepEqual(loaded.hooks, [],
+    'and no hook at all: the missing-plugin observer the gate needed is gone');
 });
 
 // RE-SCOPED (was "with no bridge but events, the ready announcement is subscribed
-// once", which also asserted `/issues` was registered). The subscription is still
-// exactly one — it now carries the whole gate — and an announcement with no bridge
-// on the slot still registers nothing.
-test('S2/S18 (T14): with no bridge but events, the ready announcement is subscribed once and registers nothing yet', async () => {
+// once and registers nothing yet"). The hold is gone: the vendored bridge publishes its
+// object at module load, the factory reads the slot ONCE, and a publication that lands
+// afterwards is not a wake-up path any more — the next load is.
+test('S2/S18 (T2): with no bridge but events, nothing is subscribed and nothing registers', async () => {
   delete globalThis[BRIDGE_SLOT];
   const subscriptions = [];
   const loaded = await loadExtension({
@@ -1761,21 +1762,13 @@ test('S2/S18 (T14): with no bridge but events, the ready announcement is subscri
       },
     },
   }, { bridge: false });
-  assert.equal(subscriptions.length, 1);
-  assert.equal(subscriptions[0].event, 'gentle-shell-bridge:ready');
-  assert.deepEqual([...loaded.commands.keys()], [], 'still nothing registered');
-  subscriptions[0].handler();
-  assert.equal(subscriptions.length, 1, 'a ready announcement is never a second subscription');
-  assert.deepEqual([...loaded.commands.keys()], [], 'an announcement with no published bridge registers nothing');
+  assert.deepEqual(subscriptions, [], 'no ready announcement is listened to any more');
+  assert.deepEqual([...loaded.commands.keys()], [], 'nothing registered');
 
-  // The bridge publishes and the SAME subscription registers the surface, once.
+  // The bridge publishes afterwards: this load already read the slot and is done.
   installBridge();
-  subscriptions[0].handler();
-  assert.equal(loaded.commands.has('issues'), true, 'the published bridge brings the command');
-  assert.equal(loaded.tools.has('worktree_list'), true, 'and the tools');
-  const counted = loaded.hooks.length;
-  subscriptions[0].handler();
-  assert.equal(loaded.hooks.length, counted, 'a second announcement registers nothing twice');
+  assert.deepEqual([...loaded.commands.keys()], [], 'a late publication registers nothing here');
+  assert.deepEqual(subscriptions, [], 'and still nothing listens');
 });
 
 // S7 (T8): ONE combined read, and the rail draws the UNION of the two buckets the
@@ -2253,21 +2246,22 @@ test('S4 (T9): a row without a cross-referenced pull request carries no marker a
 });
 
 // ---------------------------------------------------------------------------
-// T11 (S2 amended, L10): a host without the bridge gets ONE warning per process,
-// primary sessions only, naming the install command. An empty slot at
-// `session_start` is "not yet" — the check waits the announcement window — while
-// a host with no bus can never announce and is warned at once.
+// T2 (S18): the install hint is GONE. The bridge is NATIVE (vendored at `lib/bridge/`
+// and imported by the entry), so there is nothing to install and nobody to warn: no
+// announcement window, no per-process warn slot and no `session_start` observer. What
+// this block proves instead is the SILENCE — an absent slot says nothing, a published
+// bridge registers and says nothing, and a child session says nothing.
 // ---------------------------------------------------------------------------
 
 function warningTexts(notices) {
   return notices.filter((notice) => notice.level === 'warning').map((notice) => notice.text);
 }
 
-// The gate and the section's own read still have to answer: a T11 test fires a
-// real `session_start`, so no child may ever reach the real `gh`.
+// The section's own read still has to answer: these tests fire a real `session_start`,
+// so no child may ever reach the real `gh`.
 async function bridgeWarnHarness({ events } = {}) {
   const checkout = makeCheckout();
-  // S18 (T14): the shared fixture publishes a default bridge, and this harness is
+  // S18 (T14/T2): the shared fixture publishes a default bridge, and this harness is
   // about the ABSENT one, so it opts out: the slot is exactly what the test left.
   const loaded = await loadExtension(events ? { events } : {}, { bridge: false });
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
@@ -2280,62 +2274,58 @@ async function bridgeWarnHarness({ events } = {}) {
   return { loaded, checkout, notices, ctx };
 }
 
-test('S2 (T11): with no bridge and no bus, ONE warning names the install command', async () => {
+// RE-SCOPED (was "with no bridge and no bus, ONE warning names the install command").
+// The hint, its announce window, its process-wide warn slot and the observer that used
+// to deliver it are removed; an absent slot is simply silent.
+test('S2 (S18/T2): an absent slot says nothing, and the install hint, its window and its warn slot are gone', async () => {
   delete globalThis[BRIDGE_SLOT];
   const { loaded, notices, ctx } = await bridgeWarnHarness();
 
   await fireSessionStart(loaded.hooks, ctx);
-  assert.deepEqual(warningTexts(notices), [
-    'the issues rail needs the gentle-shell-bridge plugin: install it with pi install npm:gentle-shell-bridge',
-  ], 'a host that can never announce is told at once, with the command');
+  assert.deepEqual(loaded.hooks, [], 'no observer is registered to warn from');
+  assert.deepEqual(warningTexts(notices), [], 'and no warning names an install command');
+  assert.equal(globalThis[WARNED_SLOT], undefined, 'the process-wide warn slot is never touched');
 
-  // One warning for the whole process: a second session start says nothing.
-  await fireSessionStart(loaded.hooks, ctx);
-  assert.equal(warningTexts(notices).length, 1, 'a second session_start never repeats the warning');
-
-  // And neither does a `/reload`, which builds a new instance of the extension:
-  // the human was already told, once, for this process.
+  // A reloaded extension (a NEW module instance, exactly like `/reload`) says nothing
+  // either, and nothing was deferred: no timer is left to fire later.
   const reloaded = await bridgeWarnHarness();
   await fireSessionStart(reloaded.loaded.hooks, reloaded.ctx);
-  assert.deepEqual(warningTexts(reloaded.notices), [], 'a reloaded extension stays silent');
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(warningTexts(notices).length, 1);
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.deepEqual(warningTexts(reloaded.notices), [], 'a reload is silent too');
+
+  // And the entry no longer contains any of it: no hint text, no window, no slot.
+  const source = stubbedSource();
+  for (const gone of [
+    'ISSUES_SIDEBAR_INSTALL_HINT',
+    'ISSUES_SIDEBAR_INSTALL_WINDOW_MS',
+    'ISSUES_SIDEBAR_WARN_SLOT',
+    'install-warned',
+    'checkIssuesSidebarInstall',
+  ]) {
+    assert.equal(source.includes(gone), false, `${gone} is gone from the entry`);
+  }
+  assert.equal(source.includes('pi install npm:gentle-shell-bridge'), false,
+    'no install command is ever printed');
 });
 
-test('S2 (T11): with a bus, a silent window warns once, and a late bridge cancels it', async () => {
-  // A host whose bus stays silent: the warning only lands after the window.
-  delete globalThis[BRIDGE_SLOT];
-  const silent = await bridgeWarnHarness({ events: { on: () => () => {} } });
-  const startedAt = Date.now();
-  await fireSessionStart(silent.loaded.hooks, silent.ctx);
-  assert.deepEqual(warningTexts(silent.notices), [],
-    'an empty slot at session_start is "not yet", never "not installed"');
-  await waitFor(
-    () => warningTexts(silent.notices).length === 1,
-    'the deferred check never warned',
-  );
-  assert.ok(Date.now() - startedAt >= 1000, 'the warning waits for the announcement window');
-  assert.match(warningTexts(silent.notices)[0], /pi install npm:gentle-shell-bridge/,
-    'the warning names the install command verbatim');
-
-  // A bridge that announces inside the window cancels the warning entirely.
+// RE-SCOPED (was "with a bus, a silent window warns once, and a late bridge cancels
+// it"). There is no window to wait for and no ready-announcement hold: an absent slot
+// subscribes to nothing and warns nothing.
+test('S2 (S18/T2): with a bus, an absent slot subscribes to nothing and warns nothing', async () => {
   delete globalThis[BRIDGE_SLOT];
   const subscriptions = [];
-  const latched = await bridgeWarnHarness({
+  const silent = await bridgeWarnHarness({
     events: { on: (event, handler) => { subscriptions.push({ event, handler }); return () => {}; } },
   });
-  await fireSessionStart(latched.loaded.hooks, latched.ctx);
-  assert.deepEqual(warningTexts(latched.notices), [], 'nothing is said before the window closes');
-  assert.equal(subscriptions.length, 1, 'the section is subscribed to the ready announcement');
-  subscriptions[0].handler();
-  await new Promise((resolve) => setTimeout(resolve, 2300));
-  assert.deepEqual(warningTexts(latched.notices), [],
-    'a late announcement cancels the warning the window would have produced');
+  await fireSessionStart(silent.loaded.hooks, silent.ctx);
+  assert.deepEqual(subscriptions, [], 'the ready-announcement wait is gone');
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.deepEqual(warningTexts(silent.notices), [], 'and no deferred warning lands either');
+  assert.equal(globalThis[WARNED_SLOT], undefined, 'no warn slot is set');
 });
 
-test('S2 (T11): a published bridge and a child session are never warned about', async () => {
-  // The bridge is installed: nothing is missing, so nothing is said, now or
-  // after the window.
+test('S2 (T11/T2): a published bridge and a child session are never warned about', async () => {
+  // The bridge is on the slot: nothing is missing, so nothing is said.
   const published = installBridge();
   const withBridge = await bridgeWarnHarness();
   await fireSessionStart(withBridge.loaded.hooks, withBridge.ctx);
@@ -2345,7 +2335,7 @@ test('S2 (T11): a published bridge and a child session are never warned about', 
   assert.deepEqual(warningTexts(withBridge.notices), []);
 
   // A child session never speaks for the human: the prompt block's own child
-  // signal is the test, and the warning stays silent.
+  // signal is the test, and nothing here says anything at all.
   delete globalThis[BRIDGE_SLOT];
   const child = await bridgeWarnHarness();
   const saved = process.env.GENTLE_PI_AGENTS_CHILD;

@@ -110,7 +110,8 @@ selectable, so the cursor only ever lands on a real checkout.
 | `r` | Reload the listing |
 | `esc`, `ctrl+c` | Close the panel |
 
-`/odd` — `↑`/`↓` select, `t` search (`T` and `/` also open the box), `o`
+`/odd` — `↑`/`↓` select, `enter` opens or closes the focused checkout's group,
+`t` search (`T` and `/` also open the box), `o`
 open the document in `$VISUAL`/`$EDITOR`, `s` toggles the order between `recent`
 and `name`, `r` reload, `esc` close. `←`/`→` and `[`/`]` scroll the list; the
 document pane pages with `ctrl+j`/`ctrl+k`.
@@ -997,6 +998,37 @@ a pull request in both buckets counts once.
   checkouts at a time, and everything is dropped at `session_shutdown`. A verdict that
   lands after its session was replaced is discarded.
 
+## The `/odd` panel: groups, folds and counts
+
+The panel draws the same grouped model the `ODD` rail reads: the `main` checkout
+first, carrying every ODD of main, then one group per checkout whose `odd/tasks`
+holds something main does not. A copy whose bytes are already in main is not a
+difference, so an ODD that a pull brought into main belongs to `main` and the
+worktree left with nothing draws **no group at all** — and with no worktree group
+the listing is flat, with no headers and no division.
+
+- **Groups open FOLDED.** A frame is a list of headers, each reading `main (40 odd)`
+or `<worktree> (N odd)`: how many ODDs that checkout is listing. `enter` opens the
+focused group and `enter` again closes it. A panel opened from a rail row, or from
+`/odd <target>`, opens with the group that OWNS that ODD expanded and every other
+group folded, and the cursor on that document; without a target nothing is expanded
+and the cursor rests on the first header, where the reading pane says
+`enter opens this group` instead of claiming a filter matched nothing.
+- **The title counts every document the panel is showing** — 40 in main plus 1 in a
+worktree reads `41 documents` — and folding never changes it, because the number is
+the sum of the groups' counts, not the rows on screen.
+- **A document starts at the column its group's name starts at.** The fold chevron
+has a column of its own, so `▾ main` sits over `  alpha`, the way the `CHANGES`
+panel draws a group over its files. Wrapped names carry the same indent.
+- **Two checkouts with the same name are qualified.** When two drawn groups would
+print the same name, each header adds the directory that holds it
+(`a/same checkout (1 odd)`), so a folded group is never indistinguishable from its
+twin.
+- **Freshness.** The panel re-reads the model every time it mounts and on `r`; the
+`ODD` rail re-reads on its own floor, on the session's touches and on the host's
+worktree registration announcement. Nothing polls in the background for the open
+panel.
+
 ## The `ODD` rail section
 
 A second sidebar section, beside the `GITHUB` one and titled `ODD`, listing the ODDs
@@ -1034,6 +1066,12 @@ read — so the rail and the panel answer from one set and stay in sync. A regis
 worktree whose `odd/tasks` has nothing new or different from main contributes
 nothing at all: no row and no group, since a row is an ODD and not a checkout. A
 worktree registered only on an abandoned branch is out of scope for the same reason.
+- **The heading carries the count.** The section's right-hand heading value reads
+`N odd` — lowercase, in the host's muted role, the way the `CHANGES` card reads
+`1 file`. It is every ODD the loaded rows are made of, never only the four the body
+can draw, and a list that is no longer live says `N odd · stale` instead of hiding
+that. The heading only reads the snapshot: it starts no read, so a collapsed
+section still costs nothing.
 - **Four rows, then `N more`.** The body holds at most four ODDs; with more, the
 fifth line reads `<N> more`, in the dim tone, and is inert — there is no panel
 behind "the rest". Exactly four ODDs paint four rows and no elision line.

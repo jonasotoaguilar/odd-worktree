@@ -143,6 +143,7 @@ function makeView(opts = {}) {
     loadIssue: opts.loadIssue,
     loadPages: opts.loadPages,
     loadIssuePage: opts.loadIssuePage,
+    prefetchBuckets: opts.prefetchBuckets,
     loadLabels: opts.loadLabels,
     loadAssignees: opts.loadAssignees,
     assigned: opts.assigned,
@@ -3515,6 +3516,51 @@ describe('issues view pending writes and comment caret (S10/S11)', () => {
     assert.deepEqual(calls, [[1, 'closed']], 'one close write');
     assert.ok(!leftColumn(view, 100).includes('issue title 1'), 'the closed issue leaves the open list');
     assert.match(leftColumn(view, 100), /issue title 2/, 'the remaining open issue stays listed');
+  });
+
+  test('a close drops the issue from every bucket that lists it, not only the one on screen (S10a)', async () => {
+    // The interactive host prefetches every tab, so each bucket stores its OWN
+    // copy of the same issue. One close on GitHub closes it in all of them, and
+    // a bucket that still paints its pre-write copy — and its pre-write count —
+    // until the reader happens to visit it is showing the reader a lie.
+    const closed = new Set();
+    const buckets = {
+      mine: [issue(1), issue(2)],
+      assigned: [issue(1), issue(3), issue(4), issue(5)],
+      involved: [],
+    };
+    const idOf = { p0: 'mine', p1: 'assigned', p2: 'involved' };
+    const { view } = makeView({
+      pages: [
+        { id: 'p0', label: 'My issues' },
+        { id: 'p1', label: 'Assigned' },
+        { id: 'p2', label: 'Involved' },
+      ],
+      prefetchBuckets: true,
+      loadIssuePage: (request) => pageResult(
+        (buckets[idOf[request.bucketId]] || []).filter((row) => !closed.has(row.number)),
+      ),
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { permissions: EDITABLE }), comments: [] }),
+      actions: { setState: (number) => { closed.add(number); return { ok: true }; } },
+    });
+    await tick();
+    assert.match(strip(view.render(100).join('\n')), /Assigned \(4\)/, 'the fixture lists #1 in both buckets');
+    view.handleInput('x');
+    view.handleInput('enter');
+    await tick();
+    const tabs = strip(view.render(100).join('\n'));
+    assert.match(tabs, /My issues \(1\)/, 'the bucket on screen drops it at once');
+    assert.match(tabs, /Assigned \(3\)/, 'the other bucket that lists it follows without waiting for a visit');
+    // Walking to that bucket never paints the closed issue again: not while its
+    // own read is in flight, and not after the answer lands.
+    view.handleInput('right');
+    const whileReading = leftColumn(view, 100);
+    assert.ok(!whileReading.includes('issue title 1'), 'the stale copy is gone before the read lands');
+    assert.match(whileReading, /issue title 3/, 'the open rows of that bucket stay painted meanwhile');
+    await tick();
+    const settled = leftColumn(view, 100);
+    assert.ok(!settled.includes('issue title 1'), 'the fresh answer agrees with the local edit');
+    assert.match(settled, /issue title 5/);
   });
 
   test('a failed save keeps the draft and its error, and the view is usable again', async () => {

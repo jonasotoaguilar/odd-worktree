@@ -1805,3 +1805,85 @@ describe('S6: a move over a linked issue number highlights it', () => {
       'a move onto the separator clears the hover');
   });
 });
+
+// ---------------------------------------------------------------------------
+// S10a: a write that closed a pull request closed it in EVERY bucket that lists
+// it, so no bucket keeps painting the pre-write row or its pre-write count until
+// the reader happens to visit it.
+// ---------------------------------------------------------------------------
+describe('prs view close reaches every bucket (S10a)', () => {
+  test('a close drops the pull request from every bucket that lists it, not only the one on screen', async () => {
+    const closed = new Set();
+    const buckets = {
+      mine: [pullRequest(87), pullRequest(88)],
+      review: [pullRequest(87), pullRequest(89), pullRequest(90)],
+      involved: [],
+    };
+    const { view } = makeView({
+      prefetchBuckets: true,
+      loadPullRequestPage: (request) => {
+        const rows = (buckets[request.bucketId] || []).filter((row) => !closed.has(row.number));
+        return { ok: true, rows, totalCount: rows.length, hasMore: false, cursor: null };
+      },
+      loadPullRequest: (number) => ({
+        ok: true,
+        pullRequest: pullRequest(number, { permissions: EDITABLE }),
+        comments: [],
+      }),
+      actions: { close: (number) => { closed.add(number); return { ok: true }; } },
+    });
+    await tick();
+    assert.match(strip(view.render(150).join('\n')), /Needs My Review \(3\)/, 'the fixture lists #87 in both buckets');
+    view.handleInput('x');
+    view.handleInput('enter');
+    await tick();
+    const tabs = strip(view.render(150).join('\n'));
+    assert.match(tabs, /My Pull Request \(1\)/, 'the bucket on screen drops it at once');
+    assert.match(tabs, /Needs My Review \(2\)/, 'the other bucket that lists it follows without waiting for a visit');
+    // Walking to that bucket never paints the closed pull request again: not
+    // while its own read is in flight, and not after the answer lands.
+    view.handleInput('tab');
+    const whileReading = leftOf(view, 150);
+    assert.ok(!whileReading.includes('pull request 87'), 'the stale copy is gone before the read lands');
+    assert.match(whileReading, /pull request 89/, 'the open rows of that bucket stay painted meanwhile');
+    await tick();
+    const settled = leftOf(view, 150);
+    assert.ok(!settled.includes('pull request 87'), 'the fresh answer agrees with the local edit');
+    assert.match(settled, /pull request 90/);
+  });
+
+  test('a merge drops the pull request from every bucket that lists it, not only the one on screen', async () => {
+    const closed = new Set();
+    const buckets = {
+      mine: [pullRequest(87), pullRequest(88)],
+      review: [pullRequest(87), pullRequest(89), pullRequest(90)],
+      involved: [],
+    };
+    const { view } = makeView({
+      prefetchBuckets: true,
+      loadPullRequestPage: (request) => {
+        const rows = (buckets[request.bucketId] || []).filter((row) => !closed.has(row.number));
+        return { ok: true, rows, totalCount: rows.length, hasMore: false, cursor: null };
+      },
+      loadPullRequest: (number) => ({
+        ok: true,
+        pullRequest: pullRequest(number, { permissions: EDITABLE }),
+        comments: [],
+      }),
+      actions: { merge: (number) => { closed.add(number); return { ok: true }; } },
+    });
+    await tick();
+    assert.match(strip(view.render(150).join('\n')), /Needs My Review \(3\)/, 'the fixture lists #87 in both buckets');
+    view.handleInput('m');
+    view.handleInput('ctrl+s');
+    await tick();
+    const tabs = strip(view.render(150).join('\n'));
+    assert.match(tabs, /My Pull Request \(1\)/, 'the bucket on screen drops it at once');
+    assert.match(tabs, /Needs My Review \(2\)/, 'the other bucket that lists it follows without waiting for a visit');
+    view.handleInput('tab');
+    const whileReading = leftOf(view, 150);
+    assert.ok(!whileReading.includes('pull request 87'), 'the stale copy is gone before the read lands');
+    await tick();
+    assert.ok(!leftOf(view, 150).includes('pull request 87'), 'the fresh answer agrees with the local edit');
+  });
+});

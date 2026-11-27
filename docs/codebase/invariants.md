@@ -23,9 +23,9 @@ The question this page answers: which rules must every change preserve, and what
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
    registration in the extension, the closed list of `lib/codegraph-*` modules and
    what each may do.
-3. **The shipped surface is exactly five commands, two tools, TWO sidebar
+3. **The shipped surface is exactly six commands, two tools, TWO sidebar
    sections and two tool designs.** `/warp`, `/odd`,
-   `/files`, `/issues`, `/prs`; `worktree_create`, `worktree_list`; the one fourth kind of
+   `/files`, `/identity`, `/issues`, `/prs`; `worktree_create`, `worktree_list`; the one fourth kind of
    surface, a sidebar section — and there are TWO of them, each neither a command nor a
    tool and each registering no name the host or the agent can call: the issues rail
    (`lib/issues-section.js`, id `odd-worktree.issues`, headed `GITHUB`, `rowLabel`
@@ -881,7 +881,8 @@ The question this page answers: which rules must every change preserve, and what
     patches — because Pi publishes no extension seam for a `role: "user"` entry: the
     class is handed in from the extension's lazy `import()`, so `lib/` imports no Pi
     package and a host without the export installs nothing. The card it draws is a
-    `✿ You · HH:MM` card on the card substrate (`float`/`neon` read live, tone `info`,
+    `✿ Jona · HH:MM` card — the name `/identity` stored, `You` while none is stored —
+    on the card substrate (`float`/`neon` read live, tone `info`,
     the whole frame and the title in `accent`, the separator and the clock in
     `muted` — the component's own `timestamp` when Pi restored the prompt, else the
     clock captured once at its first paint, else no subtitle at all — and the body
@@ -891,9 +892,9 @@ The question this page answers: which rules must every change preserve, and what
     frame) so a transcript restored before the deferred host import resolves comes
     back as cards instead of waiting for unrelated input; a refused install, a
     closed session and a bridge without that member request nothing.
-    It adds NO row, command, setting or design, so invariant 3's surface is
-    unchanged. The gate is `Card activity` answering this package's `activity`
-    design, asked INSIDE the patched `render` on every paint and never cached, which
+    It adds NO row, command, setting or design of its own, so the surface invariant 3
+    lists is unchanged by it. The gate is `Card activity` answering this package's
+    `activity` design, asked INSIDE the patched `render` on every paint and never cached, which
     is what repaints a prompt already on screen: any other answer — `default`
     (stored `native`), another design, an absent or throwing bridge, a width below
     six columns, a component whose Markdown shape is not Pi's — hands the host's own
@@ -904,13 +905,15 @@ The question this page answers: which rules must every change preserve, and what
     evaluation, `/reload` or a second session replaces only the live logic), never
     throws, is re-installed on `session_start` and restored to the original `render`
     by reference on `session_shutdown`, and its memo is keyed on everything that
-    changes a row (the width the frame really draws at, the resolved paint, the
-    rendered Markdown rows), so a style change always recomposes. An ACTIVE card paint
-    pays two live reads and nothing else: the gate itself — the live `Card activity`
-    answer, asked on every paint including the native one — and, only while the card
-    actually draws, the shell's style (the published slot, or `<home>/card-style.json`
-    when none is published), which is the price of a prompt that repaints the moment
-    either changes;
+    changes a row (the width the frame really draws at, the resolved paint, the stored
+    name, the rendered Markdown rows), so a style change, or a name set or cleared,
+    always recomposes. An ACTIVE card paint pays three live reads and nothing else: the
+    gate itself — the live `Card activity` answer, asked on every paint including the
+    native one — the stored name (`lib/user-identity.js`, one synchronous document
+    read, made only once the gate has answered for this design and the width and the
+    body can draw), and, only while the card actually draws, the shell's style (the
+    published slot, or `<home>/card-style.json` when none is published), which is the
+    price of a prompt that repaints the moment any of them changes;
     the drawing
     recomputes nothing on a steady frame. `tools/user-prompt-card.test.js` pins the
     gate and its live flip on

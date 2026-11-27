@@ -8363,6 +8363,98 @@ function registerFilesCommand(pi) {
 }
 
 // ---------------------------------------------------------------------------
+// `/identity` (identity-command S1/S2/S4): the user's own name.
+//
+// TRANSVERSAL, like `/files` and `/odd`: it is registered wherever the bridge is
+// and takes no module switch, because the name is the person's, not one of the
+// package's optional halves. The name lives in the bridge's own store
+// (`lib/user-identity.js`, document `identity`), so it survives a restart, and
+// the card learns about it by READING that document on every paint — which is
+// why a change only has to ask for ONE repaint instead of invalidating
+// anything: every prompt already on screen, old or new, heads with the name the
+// next frame reads.
+//
+// `clear` is RESERVED: it is the one argument that is a verb. Anything else is a
+// name, normalized by the lib module, and a value that does not normalize is
+// refused with one sentence and writes nothing.
+// ---------------------------------------------------------------------------
+
+// The two state reports and the one refusal. A name that is stored is said as it
+// was stored (normalized), and an unset one says what the card heads with.
+function identityStateText(name) {
+  return name === undefined || name === null
+    ? 'identity: not set · messages head with "You"'
+    : `identity: ${name}`;
+}
+const IDENTITY_REFUSAL = 'identity: a name needs 1-40 printable characters and no markdown heading';
+
+function registerIdentityCommand(pi) {
+  if (typeof pi?.registerCommand !== 'function') return;
+  pi.registerCommand('identity', {
+    description: "Store your name, which heads your prompts instead of \"You\" and rides one line of the orchestrator prompt; `clear` is reserved and unsets it",
+    handler: (args, ctx) => {
+      const notify = ctx && ctx.ui && typeof ctx.ui.notify === 'function' ? ctx.ui.notify : undefined;
+      // The optional-call posture every command here uses, plus the one thing a
+      // report can still cost: a UI that throws is never a failed write.
+      const say = (text, level) => {
+        try {
+          if (level === undefined) notify?.(text);
+          else notify?.(text, level);
+        } catch {
+          // A dead UI never turns a report into a throw.
+        }
+      };
+      const raw = String(args ?? '').trim();
+      try {
+        const identity = libRequire('user-identity.js');
+        const resolver = libRequire('file-card-resolver.js');
+        const api = resolver && typeof resolver.bridgeApi === 'function' ? resolver.bridgeApi() : undefined;
+        const before = identity.readIdentityName(api);
+        // No argument: report the state. Nothing is written and nothing repaints.
+        if (raw.length === 0) {
+          say(identityStateText(before));
+          return;
+        }
+        // The reserved word is decided on the NORMALIZED value, in any case: `cle\u0001ar` only
+        // BECOMES `clear` once the control is dropped, and treating it as a name would store a
+        // name the command could never unset — `clear` is always the verb.
+        const normalized = identity.normalizeIdentityName(raw);
+        if (normalized !== undefined && normalized.toLowerCase() === 'clear') {
+          identity.clearIdentityName(api);
+          const after = identity.readIdentityName(api);
+          say(identityStateText(after));
+          // ONE repaint, and only when the stored state actually changed: the
+          // prompts already on screen need it, an unchanged one already has it.
+          if (after !== before) requestPromptCardRepaintNow();
+          return;
+        }
+        // A refused name writes nothing, so it says the one sentence and stops.
+        if (normalized === undefined) {
+          say(IDENTITY_REFUSAL, 'error');
+          return;
+        }
+        // A value the store already holds changes nothing: no write and no repaint, and the
+        // state is still said honestly.
+        if (normalized === before) {
+          say(identityStateText(before));
+          return;
+        }
+        if (!identity.writeIdentityName(api, raw)) {
+          say(IDENTITY_REFUSAL, 'error');
+          return;
+        }
+        say(identityStateText(normalized));
+        // ONE repaint, and only for a change: the prompts already on screen need it.
+        requestPromptCardRepaintNow();
+      } catch {
+        // A store this build cannot read is no name, never a crash of the command.
+        say('identity: the name could not be read or written', 'error');
+      }
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // `/issues` (T3 S1,S3): a full-screen issues reader over the CURRENT checkout's
 // repository issues, through this package's own migrated pieces
 // (lib/gh-issues.js for `gh`, lib/issues-view.js for the pure view).
@@ -11117,6 +11209,20 @@ function installUserPromptCard() {
  */
 function requestPromptCardRepaint(outcome) {
   if (outcome === null || typeof outcome !== "object" || outcome.installed !== true) return;
+  requestPromptCardRepaintNow();
+}
+
+/**
+ * The one bridge call a repaint IS, extracted so every surface that needs one asks for exactly
+ * one the same way: the card's own install (above) and `/identity` after a successful write or
+ * clear (identity-command D5).
+ *
+ * Nothing is asked for by a session that is not the live one — the caller's outcome may not
+ * decide that, and a repaint belongs to the transcript still on screen. The bridge's member is
+ * OPTIONAL and its answer is irrelevant, so an absent member, an absent bridge and a throw all
+ * end the same way: no repaint, no error.
+ */
+function requestPromptCardRepaintNow() {
   if (!userPromptCardSessionLive) return;
   try {
     const resolver = libRequire("file-card-resolver.js");
@@ -11124,7 +11230,7 @@ function requestPromptCardRepaint(outcome) {
     if (api === undefined || typeof api.requestRepaint !== "function") return;
     api.requestRepaint();
   } catch {
-    // A bridge that refuses its own repaint never breaks the install it belongs to.
+    // A bridge that refuses its own repaint never breaks the surface it belongs to.
   }
 }
 
@@ -12100,6 +12206,9 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // T7 (files-picker): the file picker is the fourth command. It mounts its own
   // overlays, reads Git through the package's async runner and adds no tool.
   registerFilesCommand(pi);
+  // identity-command (S1/S2/S4): the user's own name, transversal like the picker —
+  // it is registered wherever the bridge is and takes no module switch.
+  registerIdentityCommand(pi);
   // S36 (files-picker T15): the picker's ONE key, bound directly on the host and
   // bound once — `alt+p` (S41) unless `GENTLE_PI_FILES_KEY` says otherwise.
   bindFilesShortcut(pi);
@@ -12408,6 +12517,15 @@ function registerOddWorktreeSurfaceEntries(pi) {
       } catch {
         // The prompt block is best effort.
       }
+    }
+    // identity-command (D4): the user's own name, one line, in its own try/catch beside the two
+    // blocks above. TRANSVERSAL on purpose: no module switch gates it, and the stored name
+    // itself is the switch — a child session and a named-agent event get nothing, because the
+    // line is the orchestrator's.
+    try {
+      libRequire("user-identity.js").appendUserIdentitySection(event);
+    } catch {
+      // The prompt block is best effort.
     }
   });
   // CodeGraph, only with its CLI installed: the global MCP entry, create-or-sync at session

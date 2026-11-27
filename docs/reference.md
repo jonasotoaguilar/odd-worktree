@@ -1713,8 +1713,9 @@ headed by its name alone — no invented detail, no empty separator.
 
 ## The user prompt card
 
-`lib/user-prompt-card.js` draws the message you sent as a card in the transcript — `✿ You · 14:32`,
-the name and the whole frame in the accent role and the clock in `muted` beside it (the message's own
+`lib/user-prompt-card.js` draws the message you sent as a card in the transcript — `✿ Jona · 14:32`,
+the name you stored with `/identity` (`You` while none is stored) and the whole frame in the accent
+role and the clock in `muted` beside it (the message's own
 `timestamp` when Pi restored it from a session entry, else the clock captured at the prompt's first
 paint, else nothing: no clock is invented), the body your own text
 rendered by Pi's Markdown with the user-message background dropped. It obeys the shell's
@@ -1734,6 +1735,18 @@ function BY REFERENCE on `session_shutdown`.
   `activity` design, asked INSIDE the patched `render` on every paint and never cached — that
   is what repaints a prompt already on screen when the line changes. It registers nothing, so
   `Cards` grows no row and there is no second switch.
+- **The heading is the name you stored.** `/identity <name>` keeps it in the bridge's own store and
+  the card reads that document on every paint, never cached, so a name set or cleared while the
+  transcript is on screen heads the prompts already on it too; after a write or a clear that
+  changed the name the command asks the bridge for ONE `requestRepaint` — the same call the install
+  makes — and an unchanged or refused value writes nothing and repaints nothing. The name is
+  normalized once, when it is stored: trimmed, internal whitespace runs collapsed to one space,
+  C0/C1 controls dropped, no markdown heading run (`## `), one to 40 code points after that, and a
+  value that does not normalize is
+  refused with `identity: a name needs 1-40 printable characters and no markdown heading`, said as
+  an error, with nothing
+  written. With no usable name — nothing stored, or a document that is missing, malformed or of
+  another schema — the heading is `You`.
 - **A restored session repaints.** The transcript a session restores is built before the deferred
   host import resolves, so the install asks the bridge for ONE repaint when it succeeds — the
   bridge's optional `requestRepaint`, one differential frame — and the prompts already on screen
@@ -1749,13 +1762,16 @@ function BY REFERENCE on `session_shutdown`.
   same three markers the same way — once each, never appended (Pi's own screen filters strip
   OSC 133 prefixes only, so a suffix would survive where Pi's own would not) — and the native
   path stays byte-identical, so click-to-jump and shell integration keep working.
-- **Cost.** An active card paint pays two live reads and nothing else: the gate (`Card activity`, one
-  selection read of the bridge's own store, which is what makes the flip instant) and the
-  shell's style (`lib/card-style.js`, the published slot, or `<home>/card-style.json` when no
-  live slot is published — so a style picked by hand repaints too). Everything about the
+- **Cost.** An active card paint pays three live reads and nothing else: the gate (`Card activity`,
+  one selection read of the bridge's own store, which is what makes the flip instant), the stored
+  name (`lib/user-identity.js`, one synchronous `get` through the same published store, made only
+  once the gate has answered for this design and the width and the body can draw, so a native frame
+  pays none of it) and the shell's style (`lib/card-style.js`, the published slot, or
+  `<home>/card-style.json` when no live slot is published — so a style picked by hand repaints too).
+  Everything about the
   drawing itself is memoized per component on the width the frame really draws at, the
-  resolved paint and the rendered Markdown rows: a steady frame spends those reads and a few
-  comparisons, recomposes nothing, and no error on this side ever reaches the host.
+  resolved paint, the name and the rendered Markdown rows: a steady frame spends those reads and a
+  few comparisons, recomposes nothing, and no error on this side ever reaches the host.
 - **Tests.** `tools/user-prompt-card.test.js` drives the public seam — the gate and its live
   flip on one mounted instance, the byte-for-byte native answers, the accent cells in `float`
   and `neon`, the zone markers, the wrap-once and uninstall-by-reference claims.
@@ -1830,8 +1846,8 @@ opens on the host's own card (`default`) until a choice is made.
 ## The module switches
 
 `/gentle:customize` gains a `Tools` page when `gentle-shell-bridge` is installed, with two Off/On lines.
-Both are On by default, and everything not named here (the issues surfaces, `/odd`, `/files`, every
-card, the skill-read guard) is transversal and has no switch.
+Both are On by default, and everything not named here (the issues surfaces, `/odd`, `/files`,
+`/identity`, every card, the skill-read guard) is transversal and has no switch.
 
 The page sits right after the host's `Sections` page and before `Keymaps`: the provider asks for that
 position with `categoryPlacement: { after: "Sections" }`, because the bridge derives its page list from
@@ -1900,7 +1916,18 @@ are caches, not preferences: deleting one costs a read and nothing else, and a
 write it cannot commit is silence rather than an error ([the rail
 section](#the-github-rail-section)).
 
-This package writes no preference document of its own: the file cards obey the
+One document in the bridge's own store is a stored setting and not a cache: the
+user's name, kept by `/identity` as plugin id `odd-worktree` → document `identity`
+→ `{ schema: 1, name: "<name>" }`, in the same store `lib/modules.js` writes its
+`modules` document to, and neither command touches the other's key. `/identity`
+alone reports what is stored — `identity: Jona`, or `identity: not set · messages
+head with "You"` — and `/identity clear`, in any case and reserved, is what unsets
+it: the document is overwritten with a cleared shape, or deleted on a store that
+publishes `delete`, and the next paint heads the prompts with `You` while the next
+append adds no `## User identity` line. A missing, malformed, wrong-schema or
+unreadable document is simply no name, never an error.
+
+Apart from those two documents in the bridge's own store, this package writes no preference document of its own: the file cards obey the
 bridge's `Card activity` choice, which belongs to the bridge and lives in its own
 store ([the cards](#the-cards-the-activity-design-paints)), and
 [the file cards](#the-file-cards) own no switch, no document and no customize
@@ -2061,6 +2088,22 @@ there, and skipped when its heading is already present. The prompt section only
 advises and runs nothing; what the package does with CodeGraph itself is in
 [CodeGraph: index, daemon and MCP entry](#codegraph-index-daemon-and-mcp-entry).
 `ODD_WORKTREE_PROMPT=0` suppresses both blocks.
+
+## The `## User identity` block in the system prompt
+
+A session whose store holds a name gains one line that states it: the `## User identity`
+heading, a blank line, and `The user's name is Jona.` — nothing else, and no relation or
+instruction around it. It rides `systemPromptOptions.appendSystemPrompt` like the two blocks
+above: appended after whatever the host and the earlier blocks put there, and skipped when a
+line of it already IS its heading (prose that merely mentions the heading is not the block). The
+name is read from the bridge's store at every append
+(`lib/user-identity.js`), so setting or clearing it decides the NEXT append and never
+rewrites text already sent. A `GENTLE_PI_AGENTS_CHILD=1` session and a named-agent event
+get nothing, because the line is the orchestrator's, and there is no environment switch:
+the stored name itself is the switch, so `ODD_WORKTREE_PROMPT=0` does not touch this block.
+The name is normalized before it is stored and may not carry a markdown heading run (`## `),
+so it can never form the marker of this block or of the two above it; `C#` and `#designer`
+are names, and the refusal says what a name may be.
 
 ## The two CodeGraph reminders
 
@@ -2238,7 +2281,7 @@ the `Card diff` line — which the skill/ODD file cards obey as well. It adds no
 or row of its own, and the file
 picker's `alt+p` and the issues panel's `alt+i` are bound on the host directly
 rather than contributed to any shell surface. There is
-nothing to configure here, and `/warp`, `/odd`, `/files`, `/issues` and `/prs` are
+nothing to configure here, and `/warp`, `/odd`, `/files`, `/identity`, `/issues` and `/prs` are
 always on. Paths, branches and arguments reach `git` and `gh` as fixed argv arrays,
 never as a shell string.
 

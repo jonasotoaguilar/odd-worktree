@@ -352,6 +352,79 @@ test('a width too small to draw a frame hands the rows straight back', () => {
   assert.notDeepEqual(component.render(6), nativeRows(component, 6), 'a usable width still paints');
 });
 
+// ---- identity-command: the heading is the person's name, read on every paint ----
+
+/**
+ * The published bridge plus the store `lib/user-identity.js` reads: one in-memory document map
+ * behind `createStore('odd-worktree')`, merged per key exactly like the bridge's own store. No
+ * invalidation call exists: a name is written here and the next paint has to see it.
+ */
+function publishIdentityBridge() {
+  const documents = new Map();
+  publishBridge(ACTIVITY_ANSWER);
+  globalThis[BRIDGE_API_SLOT].createStore = (id) => ({
+    get: (key, fallback) => {
+      const document = documents.get(id);
+      return document !== undefined && Object.hasOwn(document, key) ? document[key] : fallback;
+    },
+    set: (key, value) => {
+      documents.set(id, { ...(documents.get(id) ?? {}), [key]: value });
+    },
+  });
+  return {
+    documents,
+    setName: (name) => documents.set('odd-worktree', { ...(documents.get('odd-worktree') ?? {}), identity: { schema: 1, name } }),
+    forgetName: () => documents.set('odd-worktree', {}),
+  };
+}
+
+const headOf = (component, width = 60) => unpaint(component.render(width)[0]);
+
+test('a stored name heads the card instead of You', () => {
+  const bridge = publishIdentityBridge();
+  bridge.setName('Jona');
+  install();
+  const rows = promptComponent().render(60);
+  assert.match(unpaint(rows[0]), /^╭─ ✿ Jona /u, 'the heading is the name');
+  assert.equal(rows.some((row) => unpaint(row).includes('You')), false, 'nothing of the card still heads with You');
+});
+
+test('without a stored name the heading is still You, byte for byte as before', () => {
+  publishIdentityBridge();
+  install();
+  assert.match(headOf(promptComponent()), /^╭─ ✿ You /u);
+});
+
+test('a name changed between two paints of the SAME component recomposes: no stale You', () => {
+  const bridge = publishIdentityBridge();
+  install();
+  const component = promptComponent();
+  assert.match(headOf(component), /^╭─ ✿ You /u, 'nothing stored: You');
+  bridge.setName('Jona');
+  assert.match(headOf(component), /^╭─ ✿ Jona /u, 'the name is read per paint, so the memo cannot serve the old head');
+  bridge.setName('Ana');
+  assert.match(headOf(component), /^╭─ ✿ Ana /u, 'and a second change follows the same way');
+  bridge.forgetName();
+  assert.match(headOf(component), /^╭─ ✿ You /u, 'cleared: You is back on the same component');
+});
+
+test('a malformed identity document is no name: the card paints You', () => {
+  for (const document of [{ schema: 2, name: 'Jona' }, { schema: 1, name: 42 }, { schema: 1, name: '  ' }, 'Jona', null]) {
+    const made = publishIdentityBridge();
+    made.documents.set('odd-worktree', { identity: document });
+    install();
+    assert.match(headOf(promptComponent()), /^╭─ ✿ You /u, JSON.stringify(document));
+    uninstallUserPromptCard();
+  }
+});
+
+test('with no bridge at all the host\'s own rows come back unchanged', () => {
+  delete globalThis[BRIDGE_API_SLOT];
+  install();
+  const component = promptComponent();
+  assert.deepEqual(component.render(60), nativeRows(component, 60));
+});
+
 // ---- S3/S4: the accent frame in both styles, the body untouched ----
 
 const FRAME_CHARS = new Set(['╭', '╮', '╰', '╯', '─', '│', '▎']);

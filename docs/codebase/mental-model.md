@@ -64,7 +64,8 @@ never added — every other surface keeps working.
    only when the
    local `gh` probe finds the CLI), the two tools, the message renderer, the file
    card, the two rail sections (`GITHUB`, also `gh` only, and `ODD`, scoped to the
-   session's registered worktrees and therefore outside `Worktrees+`), the two tool
+   ODDs the session is associated with inside its registered worktrees and therefore
+   outside `Worktrees+`), the two tool
    designs and the hooks —
    deferred until gentle-shell-bridge is present, and nothing at all without it.
    Its `gh` gate is dispatched startup work under the generation the

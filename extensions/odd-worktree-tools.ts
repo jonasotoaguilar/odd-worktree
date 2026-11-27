@@ -3017,6 +3017,13 @@ function handleWorktreeOddEvent(event, ctx, pi, allowPhaseTrigger) {
 // a session that cannot register a worktree still works on ODDs. Only the observation
 // lives here, so leaving it on costs one comparison per tool result and no surface.
 let oddSession = null;
+// T4 (odd-rail-session-scope S2-S4): the ODD NAMES this session is ASSOCIATED with —
+// what the rail draws, and the one scope its rows have. It is rebuilt from the
+// ACTIVE branch (`getBranch()`) at `session_start` and after a subagent result is
+// persisted, and it is grown by the live touch record, so a document the session just
+// wrote shows before any history read sees it. Name-keyed, exactly like the model:
+// `railRows` draws only these names (lib/odd-rail-model.js).
+let oddAssociated = new Set();
 // The section's immediate-refresh request. Unset until the rail binds it (T4), and
 // calling an unset request is a no-op, so a touch never depends on a section existing.
 let oddSessionRefresh = null;
@@ -3075,6 +3082,8 @@ function noteOddSessionTouch(event, ctx, pi) {
     // path and `at` instead of a second reading of the clock.
     const touch = oddSession.touched()[0];
     if (!touch) return;
+    // T4 (S2): the live record is association evidence too, so the row can show now.
+    for (const recorded of oddSession.touched()) oddAssociated.add(recorded.name);
     appendOddTouchEntry(pi, oddSession.entryOf(touch));
     if (oddSessionRefresh !== null) {
       try {
@@ -3089,18 +3098,80 @@ function noteOddSessionTouch(event, ctx, pi) {
   return undefined;
 }
 
+// S3 (odd-rail-session-scope): the entries of the ACTIVE branch, `getBranch()` and
+// not `getEntries()`. `getEntries()` is append-only, so an abandoned branch still sits
+// in it and its writes would claim work this session did not do. A manager that cannot
+// answer the branch falls back to its append-only list rather than restoring nothing.
+function sessionBranchEntries(ctx) {
+  const sm = ctx && ctx.sessionManager ? ctx.sessionManager : null;
+  if (!sm) return undefined;
+  if (typeof sm.getBranch === "function") {
+    try {
+      const branch = sm.getBranch();
+      if (Array.isArray(branch)) return branch;
+    } catch {
+      // A branch it cannot read still has its append-only answer below.
+    }
+  }
+  if (typeof sm.getEntries === "function") {
+    try {
+      const entries = sm.getEntries();
+      if (Array.isArray(entries)) return entries;
+    } catch {
+      // No answer at all: the caller restores nothing.
+    }
+  }
+  return undefined;
+}
+
+// T4 (S2-S4): replace the association with what these branch entries name, UNIONED
+// with the live touch record — a touch not yet persisted is still this session's
+// work. Answers whether the association could be applied at all: the module may be
+// unavailable, and a caller that gets `false` keeps whatever it already had.
+function applyOddAssociation(entries) {
+  try {
+    const lib = libRequire("odd-session.js");
+    if (!lib || typeof lib.associatedFromHistory !== "function") return false;
+    const next = lib.associatedFromHistory(entries);
+    if (oddSession !== null) {
+      for (const touch of oddSession.touched()) next.add(touch.name);
+    }
+    oddAssociated = next;
+    return true;
+  } catch {
+    // A module that cannot answer costs the association, never the boundary.
+    return false;
+  }
+}
+
+// T4: re-read the ACTIVE branch and apply it. The subagent-result hook is the one
+// trigger besides `session_start`.
+function syncOddAssociation(ctx) {
+  try {
+    const entries = sessionBranchEntries(ctx);
+    if (!Array.isArray(entries)) return false;
+    return applyOddAssociation(entries);
+  } catch {
+    return false;
+  }
+}
+
 // S8 (T8): the resume boundary. `session_start` fires for a new, resumed, forked and
 // reloaded session alike, and the persisted entries are what a resumed session
 // remembers — so the record is rebuilt from them there and nowhere else. A manager that
 // cannot answer restores nothing (lib/odd-session.js skips every garbage entry).
+//
+// T4 (S2, S3): the SAME boundary rebuilds the association, from the active branch.
+// It is a replace, not a merge: a session boundary is a fresh session.
 function restoreOddSession(ctx) {
   try {
-    if (oddSession === null) return;
-    const sm = ctx && ctx.sessionManager;
-    const entries = sm && typeof sm.getEntries === "function" ? sm.getEntries() : undefined;
-    oddSession.restore(entries);
+    const entries = sessionBranchEntries(ctx);
+    if (oddSession !== null) oddSession.restore(entries);
+    oddAssociated = new Set();
+    if (Array.isArray(entries)) applyOddAssociation(entries);
   } catch {
-    // An unreadable session manager leaves the record empty, never the boundary broken.
+    // An unreadable session manager leaves the record and the association empty,
+    // never the boundary broken.
   }
 }
 
@@ -7938,7 +8009,13 @@ function filesSessionWorktreeRoots(ctx) {
   };
   const sessionId = typeof sm.getSessionId === 'function' ? safe(() => sm.getSessionId()) : undefined;
   if (typeof sessionId !== 'string' || sessionId.length === 0) return [];
-  const entries = typeof sm.getEntries === 'function' ? safe(() => sm.getEntries()) : undefined;
+  // S5 (odd-rail-session-scope): the ACTIVE branch, not the append-only list. A
+  // registration that lives only on an abandoned branch is alternative history, and
+  // a worktree nobody registered on this path must not keep its documents in scope.
+  // A manager without the branch accessor keeps the append-only answer.
+  const entries = typeof sm.getBranch === 'function'
+    ? (safe(() => sm.getBranch()) ?? (typeof sm.getEntries === 'function' ? safe(() => sm.getEntries()) : undefined))
+    : (typeof sm.getEntries === 'function' ? safe(() => sm.getEntries()) : undefined);
   if (!Array.isArray(entries)) return [];
   const warpSessions = libRequire('worktree-warp-sessions.js');
   const roots = [];
@@ -11352,6 +11429,10 @@ async function loadOddRailRows() {
   return model.railRows({
     groups,
     touched: oddSession === null ? [] : oddSession.touched(),
+    // S2 (odd-rail-session-scope): the rail draws ONLY the ODDs this session is
+    // associated with — never everything on disk. A new session's association is
+    // empty, so it draws the section's own `no ODD associated` line.
+    associated: oddAssociated,
   });
 }
 
@@ -12145,6 +12226,9 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // the open guard goes with it too, so a click left over never blocks the next
     // session.
     teardownOddRail();
+    // T4 (odd-rail-session-scope S2): the association is this session's alone, so the
+    // ended session leaves none behind for a frame drawn before the next start.
+    oddAssociated = new Set();
     // S7: the prompt card's teardown belongs to the lifecycle pair registered before the
     // bridge gate — the same owner as its install, so a session whose bridge was never
     // present still closes (and its ready announcement can no longer arm an install).
@@ -12188,6 +12272,23 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // list belongs to that module, so the attribution must already be recording when the
   // module is off. Every worktree observation above and below keeps its own gate.
   pi.on("tool_result", (event, ctx) => noteOddSessionTouch(event, ctx, pi));
+  // T4 (S4 of odd-rail-session-scope): a subagent's work reaches the PARENT as ONE
+  // persisted `custom_message` under `gentle-agents.result` — the child runs in its
+  // own session, so the parent reads its OWN history. That moment is when the parent
+  // rebuilds the association from its active branch and refreshes the rail, so the
+  // subagent's ODD appears without waiting out the section's TTL. Like the touch
+  // record it is NOT gated by `Worktrees+`: the association is session state.
+  pi.on("message_end", (event, ctx) => {
+    try {
+      const message = event && typeof event === "object" ? event.message : null;
+      if (!message || typeof message !== "object" || message.role !== "custom") return;
+      if (message.customType !== "gentle-agents.result") return;
+      if (syncOddAssociation(ctx) !== true) return;
+      refreshOddRailNow();
+    } catch {
+      // A subagent report never breaks the host.
+    }
+  });
   // S10 (T9): ONE `tool_result` observation for the rail's forced refresh. It
   // answers the `bash` tool only — every other tool returns before the classifier
   // is even loaded — and it is separate from the naming handler because the two
@@ -12368,4 +12469,4 @@ function registerOddWorktreeSurfaceEntries(pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setUserPromptCardHostLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule, oddSession, setOddSessionRefresh };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setUserPromptCardHostLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule, oddSession, oddAssociated, setOddSessionRefresh };

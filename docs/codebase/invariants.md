@@ -32,7 +32,8 @@ The question this page answers: which rules must every change preserve, and what
    `github`, mounted only where the `gh` probe found the CLI) and the ODD rail
    (`lib/odd-rail-section.js` over the row model `lib/odd-rail-model.js`, id
    `odd-worktree.odd-rail`, headed `ODD`, `rowLabel` `odd`, `placement: { after:
-   "agents" }`, scoped to the session's registered worktrees and therefore independent
+   "agents" }`, scoped to the ODDs the SESSION is associated with inside its
+   registered worktrees and therefore independent
    of `Worktrees+`); the two designs
    (`lib/bash-design.js`, `lib/diff-design.js`) on the two lines the bridge owns, one
    `Card activity` line over `bash`, `read`, `write`, `edit` and the three
@@ -48,6 +49,28 @@ The question this page answers: which rules must every change preserve, and what
    `ctrl+d` for removing). That is a rule about this package's surface, not about
    what an agent may run itself — invariant 5 says how a merged checkout is
    removed. Each command and tool keeps its declared name and label.
+
+   **The `ODD` rail draws only what the session is ASSOCIATED with, and never
+   "everything on disk".** Association is by ODD NAME (`odd/tasks/<name>.md`), and
+   attribution is the FILTER, not an ordering key: the row model draws a name only
+   while the association or the live touch record holds it, so a new session draws
+   the ONE dim `no ODD associated` line (the `EMPTY_ROW` mirror of
+   `lib/issues-section.js`) instead of the documents the checkout happens to have.
+   The association is rebuilt from the ACTIVE branch (`getBranch()`, never the
+   append-only `getEntries()`) and is unioned with the live touch record, which is
+   what covers OLD sessions written before the `odd-worktree.odd-touch` entry
+   existed and RESUMED ones. What it reads is `lib/odd-session.js`'s
+   `associatedFromHistory`: a successful `write`/`edit` toolCall (its matching
+   `toolResult` by `toolCallId`, `isError: false` — a failed or unanswered call
+   never counts), the persisted touch entries, the `files_changed:` paths of a
+   `gentle-agents.result` `custom_message`, and the `Spec: odd/tasks/<name>.md` line
+   of a successful `subagent_run`/`subagent_continue` task — so a subagent's write
+   counts for the parent. A path with `..` or one that is not exactly
+   `odd/tasks/<name>.md` associates nothing. Within that scope the election, the
+   order and the four-row body are unchanged, a touched name no longer on disk stays
+   hidden, and the `/odd` panel is untouched (it still lists main whole plus each
+   worktree's delta). `filesSessionWorktreeRoots` reads the same active branch, so a
+   worktree registered only on an abandoned branch is out of scope.
 
    **Two halves are optional, and nothing else is.** The `Tools` page of
    `/gentle:customize` (`lib/modules.js`, a plain `registerRows` provider) holds the

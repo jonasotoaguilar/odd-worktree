@@ -280,3 +280,194 @@ describe('restore (S8/S9)', () => {
     ]);
   });
 });
+
+// T1 (odd-rail-session-scope S3, S4): the association rebuilt from the session's
+// OWN history, the source that covers OLD sessions (written before the touch entry
+// existed) and RESUMED ones. The caller hands over the ACTIVE branch only
+// (`ctx.sessionManager.getBranch()`), so an abandoned branch's write is simply not
+// an entry this function ever sees.
+//
+// What the history names, all by ODD NAME (`odd/tasks/<name>.md`):
+// - an assistant `write`/`edit` toolCall whose matching `toolResult` (`toolCallId`)
+//   is not an error;
+// - the persisted `odd-worktree.odd-touch` entries;
+// - a `gentle-agents.result` custom_message whose report lists the path in its
+//   `files_changed:` block, and the `Spec: odd/tasks/<name>.md` line of a
+//   successful `subagent_run`/`subagent_continue` task;
+// - nothing else, and every malformed entry is SKIPPED instead of thrown on.
+const { associatedFromHistory } = require('../lib/odd-session.js');
+
+const assistant = (id, blocks) => ({
+  type: 'message',
+  id,
+  parentId: null,
+  message: { role: 'assistant', content: blocks, timestamp: 1 },
+});
+const toolCall = (id, name, args) => ({ type: 'toolCall', id, name, arguments: args });
+const result = (id, toolCallId, isError = false, toolName = 'write') => ({
+  type: 'message',
+  id,
+  parentId: null,
+  message: { role: 'toolResult', toolCallId, toolName, isError, content: [], timestamp: 1 },
+});
+const touchEntry = (id, file, at = 1000) => ({
+  type: 'custom',
+  id,
+  parentId: null,
+  customType: ENTRY_TYPE,
+  data: { path: abs(`odd/tasks/${file}.md`), at },
+});
+const resultMessage = (content, customType = 'gentle-agents.result') => ({
+  type: 'custom_message',
+  id: 'r',
+  parentId: null,
+  customType,
+  content,
+  display: true,
+});
+const names = (set) => [...set].sort();
+
+describe('the association rebuilt from history (S3, S4)', () => {
+  test('a successful write or edit on an odd/tasks document is associated by name', () => {
+    const associated = associatedFromHistory([
+      assistant('a1', [toolCall('call-1', 'write', { path: 'odd/tasks/alpha.md', content: '# alpha' })]),
+      result('r1', 'call-1', false, 'write'),
+      assistant('a2', [toolCall('call-2', 'edit', { path: abs('odd/tasks/beta.md') })]),
+      result('r2', 'call-2', false, 'edit'),
+    ]);
+    assert.deepEqual(names(associated), ['alpha', 'beta']);
+  });
+
+  test('a failed or unanswered call is not associated, and the result is matched by toolCallId', () => {
+    const associated = associatedFromHistory([
+      assistant('a1', [toolCall('call-1', 'write', { path: 'odd/tasks/alpha.md' })]),
+      result('r1', 'call-1', true),
+      // A successful result for ANOTHER call never vouches for this one.
+      assistant('a2', [toolCall('call-2', 'write', { path: 'odd/tasks/beta.md' })]),
+      result('r2', 'call-9', false),
+      // ... and a call whose result never landed (an in-flight or aborted turn).
+      assistant('a3', [toolCall('call-3', 'edit', { path: 'odd/tasks/gamma.md' })]),
+      assistant('a4', [toolCall('call-4', 'read', { path: 'odd/tasks/delta.md' })]),
+      result('r4', 'call-4', false, 'read'),
+    ]);
+    assert.deepEqual(names(associated), []);
+  });
+
+  test('a path with `..` or one that is not exactly odd/tasks/<name>.md is ignored', () => {
+    const paths = [
+      'docs/alpha.md',
+      'odd/alpha.md',
+      'odd/tasks/nested/alpha.md',
+      'odd/tasks/.alpha.md',
+      'odd/tasks/alpha.txt',
+      'odd/tasks/alpha.md.bak',
+      'odd/tasks/../tasks/alpha.md',
+      '/repo/odd/../odd/tasks/alpha.md',
+      'odd/tasks',
+      '',
+      undefined,
+      42,
+    ];
+    const entries = [];
+    paths.forEach((target, index) => {
+      entries.push(assistant(`a${index}`, [toolCall(`call-${index}`, 'write', { path: target })]));
+      entries.push(result(`r${index}`, `call-${index}`));
+    });
+    assert.deepEqual(names(associatedFromHistory(entries)), []);
+  });
+
+  test('the persisted odd-touch entries are associated, whether or not a tool call is still in history', () => {
+    const associated = associatedFromHistory([
+      { type: 'custom', id: 'x', customType: 'odd-worktree.other', data: { path: abs('odd/tasks/nope.md'), at: 1 } },
+      touchEntry('a', 'alpha'),
+      touchEntry('b', 'beta'),
+      // The same document by its other spelling is the same NAME.
+      touchEntry('c', 'alpha', 2000),
+    ]);
+    assert.deepEqual(names(associated), ['alpha', 'beta']);
+  });
+
+  test('a gentle-agents.result report associates every odd/tasks document under `files_changed:`', () => {
+    const content = [
+      'status: completed',
+      'summary: did the work',
+      'files_changed:',
+      `  - ${abs('odd/tasks/alpha.md')}: the change`,
+      '  - odd/tasks/beta.md: another change',
+      '  - lib/odd-session.js: not a document',
+      '',
+      'validation:',
+      '  - npm test: pass',
+    ].join('\n');
+    assert.deepEqual(names(associatedFromHistory([resultMessage(content)])), ['alpha', 'beta']);
+    // The content may arrive as text blocks, exactly as Pi stores a custom message.
+    assert.deepEqual(
+      names(associatedFromHistory([resultMessage([{ type: 'text', text: content }])])),
+      ['alpha', 'beta'],
+    );
+    // A custom_message under another customType is somebody else's report.
+    assert.deepEqual(names(associatedFromHistory([resultMessage(content, 'someone.else')])), []);
+  });
+
+  test('a successful subagent task naming a Spec document is associated', () => {
+    const task = 'Do the work.\n\nSpec: odd/tasks/gamma.md, T1, T2\n\n## Allowed edit surfaces\n- lib/odd-session.js';
+    const associated = associatedFromHistory([
+      assistant('a1', [toolCall('call-1', 'subagent_run', { task })]),
+      result('r1', 'call-1', false, 'subagent_run'),
+      assistant('a2', [toolCall('call-2', 'subagent_continue', { task: 'Spec: odd/tasks/delta.md, T3' })]),
+      result('r2', 'call-2', false, 'subagent_continue'),
+      // A failed subagent did no work on its Spec.
+      assistant('a3', [toolCall('call-3', 'subagent_run', { task: 'Spec: odd/tasks/epsilon.md, T4' })]),
+      result('r3', 'call-3', true, 'subagent_run'),
+      // A Spec line that names no document is no association.
+      assistant('a4', [toolCall('call-4', 'subagent_run', { task: 'Spec: odd/tasks/../docs/zeta.md, T5' })]),
+      result('r4', 'call-4', false, 'subagent_run'),
+    ]);
+    assert.deepEqual(names(associated), ['delta', 'gamma']);
+  });
+
+  test('a quoted example document is a placeholder, never an ODD', () => {
+    // Prose that shows the rule reaches a transcript as an ordinary path: the
+    // harness quotes `Spec: odd/tasks/<existing>.md, T<n>`. Electing it would name
+    // an ODD that cannot exist.
+    const associated = associatedFromHistory([
+      assistant('a1', [
+        toolCall('c1', 'subagent_run', { task: 'Do it.\n\nSpec: odd/tasks/<existing>.md, T2, S1' }),
+        toolCall('c2', 'subagent_run', { task: 'Do it.\n\nSpec: odd/tasks/real-one.md, T2, S1' }),
+      ]),
+      result('r1', 'c1', false, 'subagent_run'),
+      result('r2', 'c2', false, 'subagent_run'),
+      resultMessage('files_changed:\n  - odd/tasks/<name>.md: what changed'),
+    ]);
+    assert.deepEqual(names(associated), ['real-one']);
+    // A space is a real name, not a placeholder: the rail must still list it.
+    assert.deepEqual(
+      names(associatedFromHistory([assistant('a2', [toolCall('c3', 'write', { path: 'odd/tasks/with space.md' })]), result('r3', 'c3')])),
+      ['with space'],
+    );
+  });
+
+  test('garbage entries, garbage blocks and garbage content are skipped instead of thrown on', () => {
+    const associated = associatedFromHistory([
+      null,
+      undefined,
+      'odd/tasks/alpha.md',
+      42,
+      {},
+      { type: 'message' },
+      { type: 'message', message: null },
+      { type: 'message', message: { role: 'assistant', content: 'nope' } },
+      { type: 'message', message: { role: 'assistant', content: [null, 7, {}, { type: 'text' }, toolCall('c', 'write')] } },
+      { type: 'message', message: { role: 'toolResult' } },
+      { type: 'custom', customType: ENTRY_TYPE, data: null },
+      { type: 'custom', customType: ENTRY_TYPE, data: { path: 42, at: 1 } },
+      { type: 'custom_message', customType: 'gentle-agents.result', content: 42 },
+      { type: 'custom_message', customType: 'gentle-agents.result', content: [null, { type: 'text', text: null }] },
+      touchEntry('a', 'alpha'),
+    ]);
+    assert.deepEqual(names(associated), ['alpha']);
+    for (const answer of [undefined, null, 'entries', 42, {}]) {
+      assert.deepEqual(names(associatedFromHistory(answer)), []);
+    }
+  });
+});

@@ -6,14 +6,17 @@ starts, which rule each change must preserve, and where to begin.
 ## What This Codebase Owns
 
 One Pi extension package, `pi-odd-worktree`: two agent tools (`worktree_create`,
-`worktree_list`), five panels (`/warp`, `/odd`, `/files`, `/issues`, `/prs`), two
+`worktree_list`), five panels (`/warp`, `/odd`, `/files`, `/issues`, `/prs`), the
+`/identity` command, two
 optional sidebar sections — the `GITHUB` issues rail and the `ODD` rail — and two tool designs on the bridge — the `activity`
 value of its `Card activity` line (`bash`, the read-only shell tools `grep`, `find`,
 `ls`, and `read`, `write` and `edit`, the last two through a scope limited to
 skill and ODD paths, which is what lets the file cards ask about them) and the
 `color` value of its `Card diff` line (`write` and `edit`, drawn as an IDE pane
-in the active theme's own syntax roles) — and no preference of its own: the
-skill/ODD file cards obey that same `Card activity` value. On a bridge that can put
+in the active theme's own syntax roles) — and one stored value of its own: the
+user's name, kept by `/identity` in the bridge's own store, which heads the prompt
+card instead of `You` and adds one line to the orchestrator's prompt. The skill/ODD
+file cards obey that same `Card activity` value. On a bridge that can put
 several tools on one line the `Card activity` row was `Card tools` until this
 release (the older single row was `Card bash`), and a choice stored under the old
 key is carried over to `tags` before the design registers — only when the bridge
@@ -60,7 +63,7 @@ never added — every other surface keeps working.
 ## Main Flow
 
 1. `extensions/odd-worktree-tools.ts` — the only entry point the host loads:
-   behind the bridge gate it registers the five commands (`/issues` and `/prs`
+   behind the bridge gate it registers the six commands (`/issues` and `/prs`
    only when the
    local `gh` probe finds the CLI), the two tools, the message renderer, the file
    card, the two rail sections (`GITHUB`, also `gh` only, and `ODD`, scoped to the
@@ -114,7 +117,7 @@ for each is in [`invariants.md`](invariants.md).
 | --- | --- |
 | [1](invariants.md) | One extension entry point: `pi.extensions` is exactly `["./extensions/odd-worktree-tools.ts"]` and `extensions/` holds no other file. |
 | [2](invariants.md) | No customize command, plugin-tools toggle or Herdr panel surface; CodeGraph only as 18 and 19 allow. |
-| [3](invariants.md) | The shipped surface is exactly five commands, two tools, two sidebar sections and two tool designs. |
+| [3](invariants.md) | The shipped surface is exactly six commands, two tools, two sidebar sections and two tool designs. |
 | [4](invariants.md) | Deletion refuses on a live session and discloses every caveat it could not resolve. |
 | [5](invariants.md) | Deletion is git only: `git worktree remove <absolute path>`, branch kept. |
 | [6](invariants.md) | `/issues` keeps repository identity pinning, and refuses a mutation after the remote moves. |

@@ -28,12 +28,12 @@ injected.
 
 | ID | Spec | Route | Commit |
 | --- | --- | --- | --- |
-| T1 | S1, S3, S4 | inline: `lib/user-identity.js` — the persisted document, the normalization, the injected block | 1 |
-| T2 | S2, S4 | inline: `lib/user-prompt-card.js` — the heading name and the memo that repaints it | 1 |
-| T3 | S1, S2, S4 | inline: `extensions/odd-worktree-tools.ts` — the `/identity` command and the one repaint | 1 |
-| T4 | S3 | inline: `extensions/odd-worktree-tools.ts` — the append in `before_agent_start` | 1 |
-| T5 | S1-S4 | inline: `tools/user-identity.test.js` + the pins the surface change breaks | 1 |
-| T6 | S1-S4 | inline: `README.md`, `docs/reference.md`, `docs/codebase/{invariants,code-map}.md` | 1 |
+| T1 | S1, S3, S4 | inline: `lib/user-identity.js` — the persisted document, the normalization, the injected block | `ca3c443` |
+| T2 | S2, S4 | inline: `lib/user-prompt-card.js` — the heading name and the memo that repaints it | `ca3c443` |
+| T3 | S1, S2, S4 | inline: `extensions/odd-worktree-tools.ts` — the `/identity` command and the one repaint | `ca3c443` |
+| T4 | S3 | inline: `extensions/odd-worktree-tools.ts` — the append in `before_agent_start` | `ca3c443` |
+| T5 | S1-S4 | inline: `tools/user-identity.test.js` + the pins the surface change breaks | `ca3c443` |
+| T6 | S1-S4 | inline: `README.md`, `docs/reference.md`, `docs/codebase/{invariants,code-map,mental-model}.md` | `495ed4a` |
 
 ## Decisions (the spec's shape, decided by the parent)
 
@@ -105,3 +105,10 @@ a usable name is stored), in the `/identity` handler (the reserved word is decid
 value) and in the refusal sentence (`identity: a name needs 1-40 printable characters and no
 markdown heading`). Five RED tests in `tools/user-identity.test.js` pin them, plus one that proves
 the identity block and `## ODD worktrees` both survive one append.
+
+L3 (evidence, slices): the work landed in two commits on `feat/identity-command` — `ca3c443`
+(code, tests and this document, 1 030 authored changed lines) and `495ed4a` (the five documents,
+230). The first slice is past the ~400-line guidance on purpose: the store, the card heading, the
+command and the injection are one behavior sharing one document, and splitting them would ship a
+stored name nothing can set. `node --test tools/*.test.js` is green at both commits — 3 402 tests,
+3 401 pass, 0 fail, 1 pre-existing TODO — and the surfaces that broke are pinned in the same slice.

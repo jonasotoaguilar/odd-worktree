@@ -1,14 +1,16 @@
 'use strict';
-// S3/S4 (opencode-usage-alert): the `Alert` page of `/gentle:customize` and its one
-// `Deepseek peak` Off/On line. The page sits right after `Notifications`, the line reads
-// and writes the boolean `lib/alert-mode.js` owns, and a successful change applies to the
-// RUNNING session at once — no `/reload`, no new session, so nothing says "restart".
-// Pure over the injected bridge and callbacks; nothing here loads the extension.
+// S5/S7/S8 (opencode-usage-alert): the `Alert` page of `/gentle:customize`. It carries one
+// Off/On pair PER provider the peak registry declares, in the registry's declaration order,
+// under each provider's own setting label (`Deepseek peak`, then `Claude peak`). Each line
+// reads and writes the boolean `lib/alert-mode.js` owns for that provider id, and a
+// successful change applies to the RUNNING session at once — no `/reload`, so nothing says
+// "restart". Pure over the injected bridge and callbacks; nothing here loads the extension.
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
 const alertMode = require('../lib/alert-mode.js');
 const alertRows = require('../lib/alert-rows.js');
+const { PROVIDERS } = require('../lib/peak-providers.js');
 
 // A bridge whose `createStore` keeps one in-memory file per plugin id, like the real one.
 function fakeBridge(initial = {}) {
@@ -22,6 +24,15 @@ function fakeBridge(initial = {}) {
     },
   });
   return { api: { createStore }, files, writes };
+}
+
+// The rows of one provider's pair: Off first, then On, both under the provider's setting.
+function pairOf(rows, setting) {
+  return rows.filter((row) => row.choice.setting === setting);
+}
+
+function stored(value = {}) {
+  return fakeBridge({ 'odd-worktree': { alerts: { peaks: value } } });
 }
 
 function provider(api, hooks = {}) {
@@ -49,54 +60,97 @@ describe('the Alert page', () => {
     assert.deepEqual(page.categoryPlacement, { after: 'Notifications' });
   });
 
-  test('carries exactly one setting, `Deepseek peak`, as the two rows Off and then On', () => {
+  test('carries exactly one Off/On pair per registry entry, in declaration order, with its own label', () => {
     const { rows } = provider(fakeBridge().api);
     const built = rows();
-    assert.equal(built.length, 2);
-    assert.deepEqual(built.map((row) => [row.choice.setting, row.choice.value]), [
-      ['Deepseek peak', 'Off'], ['Deepseek peak', 'On'],
-    ]);
+    assert.equal(PROVIDERS.length > 0, true, 'the registry declares at least one provider');
+    assert.deepEqual(
+      built.map((row) => [row.choice.setting, row.choice.value]),
+      PROVIDERS.flatMap((entry) => [[entry.setting, 'Off'], [entry.setting, 'On']]),
+    );
+    // The registry's documented shape: DeepSeek first, Claude second, each under its setting.
+    assert.deepEqual(PROVIDERS.map((entry) => entry.id), ['deepseek', 'claude']);
+    assert.deepEqual(PROVIDERS.map((entry) => entry.setting), ['Deepseek peak', 'Claude peak']);
     for (const row of built) {
       assert.equal(row.category, 'Alert');
-      assert.equal(row.label(), 'Deepseek peak');
-      assert.match(row.choice.setting, /^[A-Za-z]+ [A-Za-z]+$/, 'a row name the bridge accepts');
+      assert.equal(typeof row.label, 'function');
       assert.equal(typeof row.action, 'function');
+    }
+  });
+
+  test('labels each pair with its provider\'s setting, not with a fixed name', () => {
+    const built = provider(fakeBridge().api).rows();
+    for (const entry of PROVIDERS) {
+      const pair = pairOf(built, entry.setting);
+      assert.equal(pair.length, 2, entry.setting);
+      assert.deepEqual(pair.map((row) => row.choice.value), ['Off', 'On'], entry.setting);
+      for (const row of pair) assert.equal(row.label(), entry.setting);
     }
   });
 });
 
 describe('the current value', () => {
-  test('is On for a first run, and follows what is stored', () => {
-    assert.deepEqual(provider(fakeBridge().api).rows().map((row) => row.choice.current()), [false, true]);
-    for (const stored of [true, false]) {
-      const bridge = fakeBridge({ 'odd-worktree': { alerts: { deepseekPeak: stored } } });
-      assert.deepEqual(provider(bridge.api).rows().map((row) => row.choice.current()), [!stored, stored], String(stored));
+  test('is Off for every provider on a first run, and follows each provider\'s own switch', () => {
+    const fresh = provider(fakeBridge().api).rows();
+    for (const entry of PROVIDERS) {
+      assert.deepEqual(pairOf(fresh, entry.setting).map((row) => row.choice.current()), [true, false], entry.setting);
+    }
+    for (const entry of PROVIDERS) {
+      const built = provider(stored({ [entry.id]: true }).api).rows();
+      const pair = pairOf(built, entry.setting);
+      assert.deepEqual(pair.map((row) => row.choice.current()), [false, true], entry.setting);
+      // Every other provider is untouched by that one provider's value.
+      for (const sibling of PROVIDERS.filter((other) => other.id !== entry.id)) {
+        assert.deepEqual(
+          pairOf(built, sibling.setting).map((row) => row.choice.current()),
+          [true, false],
+          `${entry.id} vs ${sibling.id}`,
+        );
+      }
     }
   });
 
   test('is read live: a value changed between two builds is reflected', () => {
     const bridge = fakeBridge();
     const { rows } = provider(bridge.api);
-    assert.deepEqual(rows().map((row) => row.choice.current()), [false, true]);
-    alertMode.writeDeepseekPeak(bridge.api, false);
-    assert.deepEqual(rows().map((row) => row.choice.current()), [true, false]);
-    alertMode.writeDeepseekPeak(bridge.api, true);
-    assert.deepEqual(rows().map((row) => row.choice.current()), [false, true]);
+    const target = PROVIDERS[0];
+    const sibling = PROVIDERS[1];
+    assert.deepEqual(pairOf(rows(), target.setting).map((row) => row.choice.current()), [true, false]);
+    alertMode.writePeakAlert(bridge.api, target.id, true);
+    assert.deepEqual(pairOf(rows(), target.setting).map((row) => row.choice.current()), [false, true]);
+    assert.deepEqual(pairOf(rows(), sibling.setting).map((row) => row.choice.current()), [true, false]);
+    alertMode.writePeakAlert(bridge.api, target.id, false);
+    assert.deepEqual(pairOf(rows(), target.setting).map((row) => row.choice.current()), [true, false]);
   });
 });
 
 describe('choosing a value', () => {
-  test('persists it, then applies it to the running session once', async () => {
+  test('persists that provider\'s id, then applies it to the running session once', async () => {
     const bridge = fakeBridge();
     const { rows, calls } = provider(bridge.api);
-    await rows()[0].action();
-    assert.deepEqual(bridge.files.get('odd-worktree'), { alerts: { deepseekPeak: false } });
+    const target = PROVIDERS[0];
+    await pairOf(rows(), target.setting)[1].action();
+    assert.deepEqual(bridge.files.get('odd-worktree'), { alerts: { peaks: { [target.id]: true } } });
     assert.equal(calls.onChange.length, 1);
-    assert.equal(alertMode.readDeepseekPeak(bridge.api), false);
-    await rows()[1].action();
-    assert.deepEqual(bridge.files.get('odd-worktree'), { alerts: { deepseekPeak: true } });
+    assert.equal(alertMode.readPeakAlert(bridge.api, target.id), true);
+    await pairOf(rows(), target.setting)[0].action();
+    assert.deepEqual(bridge.files.get('odd-worktree'), { alerts: { peaks: { [target.id]: false } } });
     assert.equal(calls.onChange.length, 2);
-    assert.equal(alertMode.readDeepseekPeak(bridge.api), true);
+    assert.equal(alertMode.readPeakAlert(bridge.api, target.id), false);
+  });
+
+  test('a second provider\'s line writes only its own id and leaves its siblings alone', async () => {
+    const bridge = stored({});
+    const { rows, calls } = provider(bridge.api);
+    await pairOf(rows(), PROVIDERS[0].setting)[1].action();
+    await pairOf(rows(), PROVIDERS[1].setting)[1].action();
+    assert.deepEqual(bridge.files.get('odd-worktree'), {
+      alerts: { peaks: { [PROVIDERS[0].id]: true, [PROVIDERS[1].id]: true } },
+    });
+    assert.equal(calls.onChange.length, 2);
+    await pairOf(rows(), PROVIDERS[0].setting)[0].action();
+    assert.equal(alertMode.readPeakAlert(bridge.api, PROVIDERS[0].id), false);
+    assert.equal(alertMode.readPeakAlert(bridge.api, PROVIDERS[1].id), true);
   });
 
   test('keeps the other keys of the store', async () => {
@@ -104,36 +158,39 @@ describe('choosing a value', () => {
     await provider(bridge.api).rows()[0].action();
     assert.deepEqual(bridge.files.get('odd-worktree'), {
       modules: { codegraph: false },
-      alerts: { deepseekPeak: false },
+      alerts: { peaks: { [PROVIDERS[0].id]: false } },
     });
   });
 
-  test('says nothing: this switch needs no reload, so no restart notice is printed', async () => {
+  test('says nothing: these switches need no reload, so no restart notice is printed', async () => {
     const bridge = fakeBridge();
     const { rows, calls } = provider(bridge.api);
-    await rows()[0].action();
-    await rows()[1].action();
+    for (const row of rows()) await row.action();
     assert.deepEqual(calls.notify, []);
   });
 });
 
 describe('a write the store refuses', () => {
-  test('is thrown so the menu reports it, and the running session is not told it changed', async () => {
+  test('is thrown per provider so the menu reports it, and nothing is told it changed', async () => {
     const api = { createStore: () => ({ get: (_key, fallback) => fallback, set: () => { throw new Error('read-only'); } }) };
     const { rows, calls } = provider(api);
-    await assert.rejects(async () => rows()[0].action(), /Deepseek peak/);
+    for (const entry of PROVIDERS) {
+      const pair = pairOf(rows(), entry.setting);
+      await assert.rejects(async () => pair[0].action(), new RegExp(`^Error: ${entry.setting} could not be saved$`), entry.setting);
+      await assert.rejects(async () => pair[1].action(), new RegExp(`^Error: ${entry.setting} could not be saved$`), entry.setting);
+    }
     assert.deepEqual(calls.onChange, []);
   });
 
   test('is thrown for a host with no store at all, and still calls nothing', async () => {
     const { rows, calls } = provider(undefined);
-    await assert.rejects(async () => rows()[0].action(), /Deepseek peak/);
+    await assert.rejects(async () => rows()[0].action(), /could not be saved$/);
     assert.deepEqual(calls.onChange, []);
   });
 
-  test('leaves the stored value reading On, the way it read before the press', async () => {
+  test('leaves the stored value reading Off, the way it read before the press', async () => {
     const api = { createStore: () => ({ get: (_key, fallback) => fallback, set: () => { throw new Error('read-only'); } }) };
-    await assert.rejects(async () => provider(api).rows()[0].action(), /Deepseek peak/);
-    assert.equal(alertMode.readDeepseekPeak(api), true);
+    await assert.rejects(async () => provider(api).rows()[1].action(), /could not be saved$/);
+    assert.equal(alertMode.readPeakAlert(api, PROVIDERS[0].id), false);
   });
 });

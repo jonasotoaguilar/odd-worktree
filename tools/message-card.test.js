@@ -504,6 +504,34 @@ test('both cards are informational and wear the accent on the frame and the name
   assert.ok(!reminder[0].includes('<warning>'), 'nothing on a reminder card is painted as a warning');
 });
 
+test('the whole closed box wears the identity role: the sides and the closing rule too', () => {
+  const outcome = registered();
+  // The card names ONE role for its box (`accent`, S5), and the substrate paints the box — the top
+  // rule, every body row's two sides and the closing rule — in that role. Only the top rule wearing
+  // it leaves the frame brighter at the heading and dimmer around the body, which reads as a colour
+  // that stops halfway down the card.
+  const budget = designFor(outcome, EXPLORATION).apply(plainBody(EXPLORATION, STARTED), { width: 70, customType: EXPLORATION, theme: taggedTheme, render: { expanded: false, outputPad: 1, message: {} } });
+  assert.ok(budget.length >= 4, 'a heading, at least one body row and the closing rule');
+  for (const row of budget) {
+    assert.ok(!row.includes('<border>'), `no cell of the frame falls back to the plain border: ${row}`);
+  }
+  assert.ok(budget[0].includes('<accent>╭'), budget[0]);
+  assert.ok(budget[0].includes('<accent>╮'), budget[0]);
+  for (const row of budget.slice(1, -1)) {
+    assert.ok(row.startsWith('<accent>│</accent>'), `the left side wears the identity role: ${row}`);
+    assert.ok(row.endsWith('<accent>│</accent>'), `the right side wears the identity role: ${row}`);
+  }
+  assert.ok(budget[budget.length - 1].startsWith('<accent>╰'), 'the closing rule wears the identity role');
+  assert.ok(budget[budget.length - 1].endsWith('╯</accent>'), budget[budget.length - 1]);
+  // The same rule in float, where the box is two rails and no corner: nothing may fall back either.
+  globalThis[CARD_STYLE_SLOT] = CARD_STYLE.FLOAT;
+  const float = designFor(outcome, VERIFIER).apply(plainBody(VERIFIER, VERIFIER_TEXT), { width: 70, customType: VERIFIER, theme: { fg: taggedTheme.fg, bg: bandTheme.bg }, render: { expanded: false, outputPad: 1, message: {} } });
+  for (const row of float) assert.ok(!row.includes('<border>'), `no float rail falls back to the plain border: ${row}`);
+  assert.ok(float[0].includes('<accent>▎'), 'the float heading band wears the identity role');
+  assert.ok(float[float.length - 1].includes('<accent>▎'), 'so does the closing row');
+  assert.ok(!float.join('\n').includes('<warning>'), 'a reminder is still no warning');
+});
+
 test('every row fits the width the host asked for, at narrow and wide terminals, in both styles', () => {
   const outcome = registered();
   for (const style of [CARD_STYLE.NEON, CARD_STYLE.FLOAT]) {

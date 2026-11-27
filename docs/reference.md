@@ -1621,7 +1621,7 @@ message instead of a tool.
 | Alert | What it draws |
 | --- | --- |
 | `gentle-pi.exploration-budget` | `⌕ Exploration budget` in the `info` tone, with the numbers the message states — `1,234 tracked lookups · 56,789 text bytes` — as the heading's detail |
-| `gentle-pi.verifier-settle-reminder` | `⚑ Verifier reminder` in the `warning` tone, with the risk item the message states — `Risk: item 3` — as the detail |
+| `gentle-pi.verifier-settle-reminder` | `⚑ Verifier reminder` in the `info` tone, with the risk item the message states — `Risk: item 3` — as the detail. A reminder is not an alert: nothing failed and nothing is running, so it wears the same accent as the budget card rather than the amber a `warning` tone owns its whole box with |
 
 The two registrations are ungrouped (`customType` each) and both FOLLOW the switch this package already
 owns: `follows: { line: tags, id: odd-worktree.bash-activity }` — the `tags` line `lib/bash-design.js`
@@ -1646,6 +1646,12 @@ headed by its name alone — no invented detail, no empty separator.
   choice once per paint (`lib/card-style.js`) and measures with the injected helpers. `ctx.cardStyle` is not
   read for the palette: it is the bridge's own Card style selection, not the host's chrome. A mid-session
   flip repaints a message already on screen, because the design is asked again on every pass.
+- **The whole closed box wears one role.** Both cards are informational, and both name `accent` for the
+  frame AND the name, so `floatRows` is given that role and paints every frame cell in it — the top rule,
+  each body row's two sides and the closing rule, in `neon` and in `float` alike. Handing the role to the
+  heading alone would leave the sides and the closing rule the theme's plain `border`, a frame that changes
+  colour halfway down the card. A tone that owns its box (`warning`, `error`) still speaks first, exactly as
+  on every other card.
 - **The switch is `Card activity` → `activity`, resolved live.** The bridge answers the follow on every pass,
   reading the tool document and never writing it, so flipping `Card activity` repaints a message already on
   screen and turns it off again — no re-registration, no session reload, no seed and no message store to

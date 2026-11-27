@@ -1010,9 +1010,11 @@ The question this page answers: which rules must every change preserve, and what
     and warns once in its own words. What comes with it is the bridge's own
     suite — `node --test lib/bridge/test/*.test.ts lib/bridge/test/*.test.mjs`,
     Node >= 22.18 because the suite is TypeScript — while its core never runs in
-    the plain-JS suite at all (the fixture stubs the one import). The one
-    coexistence cost is a standalone `gentle-shell-bridge` installed beside this
-    package: both copies share every piece of global state ("first wins") and
-    nothing else breaks, but the command name `bridge-status` is registered twice,
-    so `/bridge-status` stops resolving. Uninstalling the standalone package is the
-    whole fix; it is no longer needed.
+    the plain-JS suite at all (the fixture stubs the one import). A
+    standalone `gentle-shell-bridge` installed beside this package is harmless:
+    both copies share every piece of global state ("first wins"), and the one
+    thing that could collide, the command name `bridge-status`, is held by
+    `lib/bridge-host.js` — the host the vendored factory receives — until the first
+    `session_start`, then registered once and only when the host's own command list
+    shows no other copy owns it (`tools/bridge-host.test.js`). The standalone
+    package is no longer needed.

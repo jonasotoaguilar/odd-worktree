@@ -38,7 +38,7 @@ Worktree `native-bridge`, branch `feat/native-bridge`, base `main@588ac3b`.
 - **T1** (S1, S2) — vendor the whole bridge verbatim at `lib/bridge/`; its suite green (980/981 pass, 0 fail). DONE `67530be`.
 - **T2** (S2, S3) — entry imports the vendored extension and calls it first; gate, ready hold and install hint removed; fixture stubs the import; `tools/*.test.js` 3547 tests, 0 fail.
 - **T3** (S4) — docs, invariants (1/3/8 rewritten, new invariant 32), README, mental model, code map, reference, `files` negations, `test:bridge`, CI step on Node 22/24. DONE (tools 3548 tests 0 fail; bridge 980 pass 0 fail; `npm pack` ships lib/bridge/src, none of test/assets).
-- **T4** (S1-S4) — real `pi --mode rpc` with only this package: slot published (v1, 0.16.2, 12 members); with a fake `gentle:customize` host command `/bridge-status` shows 2 row providers, 2 sections, tool designs; with the standalone bridge loaded too only the `bridge-status` command name duplicates. DONE.
+- **T4** (S1-S4) — real `pi --mode rpc` with only this package: slot published (v1, 0.16.2, 12 members); with a fake `gentle:customize` host command `/bridge-status` shows 2 row providers, 2 sections, tool designs; with the standalone bridge loaded too (both orders) `/bridge-status` resolves exactly once, because `lib/bridge-host.js` holds this copy's registration until `session_start` (native review R1-001/R3-001/R4-001). DONE.
 
 Slice note: the 2 commits before this one are 59k lines because `67530be` is the verbatim vendor copy (reviewed by diff against the source, not by line); the wiring and docs commits are the reviewable ones.
 

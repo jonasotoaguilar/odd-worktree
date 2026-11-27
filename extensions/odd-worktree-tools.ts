@@ -12169,8 +12169,11 @@ export default function (pi) {
   // `session_start` and registers `/bridge-status`, so the bridge is armed before any
   // surface of this package looks for its object. A bridge that throws on the way out
   // is never fatal: every other surface of this package still loads.
+  // The bridge gets `libRequire("bridge-host.js").bridgeHost(pi)`, not the raw `pi`: the same
+  // host with its `/bridge-status` registration held until `session_start`, so a standalone
+  // bridge that is still installed never shares that command name with this copy.
   try {
-    bridgeExtension(pi);
+    bridgeExtension(libRequire("bridge-host.js").bridgeHost(pi));
   } catch {
     // The bridge is this package's own, but its failure still leaves the rest alone.
   }

@@ -111,7 +111,7 @@ describe('registration', () => {
   // registers `/bridge-status` from its own factory. This plain-JS suite cannot import a `.ts`
   // file, so the fixture stubs the bridge import (a no-op factory) and what it observes here is
   // the SIX this package registers itself; the seventh is pinned on the vendored source, and its
-  // wiring on the `bridgeExtension(pi)` call asserted below.
+  // wiring on the `bridgeExtension(bridgeHost(pi))` call asserted below.
   test('registers /warp, /odd, /files, /issues, /prs, /identity and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
@@ -119,7 +119,7 @@ describe('registration', () => {
     assert.deepEqual(registered, ['files', 'identity', 'issues', 'odd', 'prs', 'warp'], 'the six commands this package registers itself');
     const bridgeSource = fs.readFileSync(path.join(ROOT, 'lib/bridge/src/extension.ts'), 'utf8');
     assert.ok(bridgeSource.includes('STATUS_COMMAND = "bridge-status"'), 'the vendored bridge brings the seventh command, /bridge-status');
-    assert.equal(stubbedSource().includes('bridgeExtension(pi)'), true, 'and the entry calls that factory, which registers it');
+    assert.equal(stubbedSource().includes('bridgeExtension(libRequire("bridge-host.js").bridgeHost(pi))'), true, 'and the entry calls that factory through the host that holds the command until session_start');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });

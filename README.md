@@ -53,9 +53,10 @@ gentle-shell install npm:pi-odd-worktree
 From a local clone, `pi install .` installs the working copy, and `gentle-shell install .` does the same from inside a Gentle Shell session.
 
 An older install of the standalone
-[`gentle-shell-bridge`](https://github.com/jonasotoaguilar/gentle-shell-bridge) should be
-uninstalled: both copies share the same global state, so nothing breaks, but the command name
-`bridge-status` is then registered twice and `/bridge-status` stops resolving.
+[`gentle-shell-bridge`](https://github.com/jonasotoaguilar/gentle-shell-bridge) is no longer
+needed and can be uninstalled, but it does not have to be: both copies share the same global
+state ("first wins"), and this package holds its own `/bridge-status` until the first
+`session_start`, registering it only when no other copy already owns the name.
 
 ### Expected result
 

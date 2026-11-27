@@ -131,7 +131,7 @@ for each is in [`invariants.md`](invariants.md).
 | [18](invariants.md) | The `## CodeGraph` section is advice, selected by the session's own facts. |
 | [19](invariants.md) | CodeGraph runs only with its CLI, in the background, and writes one config entry. |
 | [20](invariants.md) | The tool designs only draw, and the `activity` one draws what the classifier names (the three read-only shell tools `grep`, `find`, `ls` are always `exploring`; `read`, `write` and `edit` are declared for the file card's question — `write` and `edit` through a scope limited to skill and ODD paths — and it draws nothing for any of the three). |
-| [21](invariants.md) | The two CodeGraph reminders advise; they never block and never add a surface. |
+| [21](invariants.md) | The two CodeGraph reminders advise, never block, add no surface, and belong to the primary session. |
 | [22](invariants.md) | The tool guards (`bash`, `edit`/`write`) read text and paths, fail open and add no surface. |
 | [23](invariants.md) | The file card only draws, and it claims exactly three tools. |
 | [24](invariants.md) | No session path waits on `gh`, and every `gh` reach is deferred. |

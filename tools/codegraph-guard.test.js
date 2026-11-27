@@ -87,16 +87,16 @@ test('neither sentence ends in ", if it applies" any more (S3)', async () => {
   }
 });
 
-test('an explore agent gets the native wording, every other child the MCP one', async () => {
+test('a child gets no reminder: its own rule text already says it and it lives a message or two', async () => {
   const child = (agent, tools) => setup({
     env: { GENTLE_PI_AGENTS_CHILD: '1', GENTLE_PI_AGENTS_REQUESTED_TOOLS: tools },
     argv: ['node', `/tmp/gentle-pi-subagent-${agent}-a1b2c3/bin.js`],
     tools: [],
   });
   const explorer = child('gentle-ai-explore', 'read,bash,codegraph');
-  assert.equal(await explorer.guard.onToolResult(bash('cat src/a.ts'), explorer.ctx), NATIVE);
+  assert.equal(await explorer.guard.onToolResult(bash('cat src/a.ts'), explorer.ctx), undefined);
   const worker = child('gentle-ai-worker', 'read,bash,mcp__codegraph__codegraph_explore');
-  assert.equal(await worker.guard.onToolResult(bash('cat src/a.ts'), worker.ctx), MCP);
+  assert.equal(await worker.guard.onToolResult(bash('cat src/a.ts'), worker.ctx), undefined);
 });
 
 // ---- who gets which guard (S1, S2) ----

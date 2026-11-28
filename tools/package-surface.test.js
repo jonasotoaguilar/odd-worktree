@@ -184,7 +184,7 @@ describe('registration', () => {
   });
 
   test('the skill rules are two more hooks and add no name (invariant 22)', async () => {
-    // Invariant 22: Worktrees+ gates the two worktree guards and the two read rules.
+    // Invariant 22: Worktrees+ gates the two worktree guards; Skills+ gates the two read rules.
     const source = stubbedSource();
     assert.equal(source.split('pi.on("tool_call"').length - 1, 4, 'the two worktree guards, the skill-read guard and the whole-read rule');
     assert.ok(source.includes('libRequire("skill-read-guard.js")'), 'the decision comes from lib/skill-read-guard.js');

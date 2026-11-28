@@ -456,7 +456,9 @@ describe('the module switch and the neighbouring observations', () => {
 
   test('a write on an odd/tasks document reaches the existing tool_call observations unchanged', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      // All three halves on: `Skills+` is OFF by default, so its two read rules would not be
+      // registered and this case is about a guard-free write with the whole package present.
+      publishBridge({ skills: true });
       const loaded = await loadModule();
       const results = await fire(loaded, 'tool_call', writeEvent(), ctxOf());
       assert.ok(results.length >= 4, 'the guards are all still there');

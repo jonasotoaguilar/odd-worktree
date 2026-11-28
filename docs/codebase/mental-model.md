@@ -13,10 +13,12 @@ value of its `Card activity` line (`bash`, the read-only shell tools `grep`, `fi
 `ls`, and `read`, `write` and `edit`, the last two through a scope limited to
 skill and ODD paths, which is what lets the file cards ask about them) and the
 `color` value of its `Card diff` line (`write` and `edit`, drawn as an IDE pane
-in the active theme's own syntax roles) — and one stored value of its own: the
-user's name, kept by `/identity` in the shell API's store, which heads the prompt
-card instead of `You` and adds one line to the orchestrator's prompt. The skill/ODD
-file cards obey that same `Card activity` value. On a shell API that can put
+in the active theme's own syntax roles) — and two stored values of its own behind two
+`Cards` rows: the user's name, kept by `/identity` in the shell API's store, which heads
+the prompt card instead of `You`, and the `Card message` Off/On switch, On by default
+and applied live, which draws the prompt (and, later, the assistant's final answer) as a
+card and adds the identity line to the orchestrator's prompt only while a name is stored.
+The skill/ODD file cards obey that same `Card activity` value; the prompt card does not. On a shell API that can put
 several tools on one line the `Card activity` row was `Card tools` until this
 release (the older single row was `Card bash`), and a choice stored under the old
 key is carried over to `tags` before the design registers — only when the API
@@ -153,7 +155,7 @@ for each is in [`invariants.md`](invariants.md).
 | [26](invariants.md) | The rail's timed refresh exists only while the section is drawn. |
 | [27](invariants.md) | A forced refresh happens only after a mutating `bash`, behind its cap. |
 | [28](invariants.md) | The `gh`-absent and non-repository states are settled, so nothing retries them. |
-| [29](invariants.md) | The user prompt card draws the host's class, gated by `Card activity`, and never touches its text. |
+| [29](invariants.md) | The user prompt card draws the host's class, gated by the `Card message` switch, and never touches its text. |
 | [30](invariants.md) | A session is named after the ODD it writes, and a name it cannot prove it wrote is never touched. |
 | [31](invariants.md) | The ODD panel folds by default, counts what it lists, and lines a document up under its group's name. |
 | [32](invariants.md) | The shell API is native: `lib/shell-api/` is this package's own code at the same slot and store, loaded first by the entry, with no external dependency, no import by package name and no copy rule. |

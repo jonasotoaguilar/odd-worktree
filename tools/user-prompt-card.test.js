@@ -1,8 +1,8 @@
 'use strict';
-// The user's own prompt, drawn as a card on this package's substrate: while the shell API's
-// `Card activity` line answers this package's activity design, `UserMessageComponent.render`
-// answers the card instead of Pi's plain block; for every other answer, and for every shape
-// it cannot read, the host's own rows come back byte for byte.
+// The user's own prompt, drawn as a card on this package's substrate: while this package's
+// `Card message` switch is On (`lib/card-message.js`), `UserMessageComponent.render` answers the
+// card instead of Pi's plain block; with it Off, and for every shell API it cannot read, the
+// host's own rows come back byte for byte. `Card activity` no longer decides this card.
 //
 // Everything below observes the public seam: the shim is installed on a STUB class exactly as
 // the extension installs it on Pi's, the shell API is the published object a process-wide slot
@@ -15,7 +15,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-const { installUserPromptCard, uninstallUserPromptCard } = require('../lib/user-prompt-card.js');
+const { installUserPromptCard, paintPrompt, uninstallUserPromptCard } = require('../lib/user-prompt-card.js');
 const { CARD_STYLE, CARD_STYLE_SLOT } = require('../lib/card-style.js');
 // The extension itself, loaded the way `tools/fixtures/load-extension.js` loads it: the deferred
 // install's guard lives there, so the test has to reach the module's own seam.
@@ -23,7 +23,6 @@ const fixture = require('./fixtures/load-extension.js');
 
 const SHELL_API_SLOT = Symbol.for('odd-worktree/shell-api/v1');
 const ACTIVITY = 'odd-worktree.bash-activity';
-const OTHER_DESIGN = 'acme.tools';
 
 // ---- the theme: one role per painted cell ----
 //
@@ -231,8 +230,15 @@ function promptComponent(text = PROMPT) {
 
 // ---- the published shell API, and the slots the runtime reads ----
 
-function publishShellApi(answer) {
-  const state = { answer, calls: [] };
+/**
+ * The published shell API plus the store its readers use: `card-message` is the switch the card asks
+ * (`lib/card-message.js`) and `identity` the name its heading wears — one in-memory document map
+ * behind `createStore('odd-worktree')`, merged per key exactly like the shell API's own store, so a
+ * write here is what the next paint has to see.
+ */
+function publishShellApi(answer, options = {}) {
+  const documents = new Map([['odd-worktree', { 'card-message': { schema: 1, on: options.cardMessage !== false } }]]);
+  const state = { answer, calls: [], documents };
   globalThis[SHELL_API_SLOT] = {
     schema: 'odd-worktree/shell-api',
     version: 1,
@@ -243,8 +249,22 @@ function publishShellApi(answer) {
       if (typeof value === 'function') return value(tool);
       return value;
     },
+    createStore: (id) => ({
+      get: (key, fallback) => {
+        const document = documents.get(id);
+        return document !== undefined && Object.hasOwn(document, key) ? document[key] : fallback;
+      },
+      set: (key, value) => {
+        documents.set(id, { ...(documents.get(id) ?? {}), [key]: value });
+      },
+    }),
   };
   return state;
+}
+
+/** The `Card message` document, written the way the row's action writes it. */
+function setCardMessage(state, on) {
+  state.documents.set('odd-worktree', { ...(state.documents.get('odd-worktree') ?? {}), 'card-message': { schema: 1, on } });
 }
 
 const ACTIVITY_ANSWER = { kind: 'design', design: { id: ACTIVITY } };
@@ -275,9 +295,9 @@ after(() => {
   delete globalThis[CARD_STYLE_SLOT];
 });
 
-// ---- S1: the card, and only while the line answers this package's design ----
+// ---- S1 (card-message): the card follows `Card message`, never again `Card activity` ----
 
-test('while Card activity answers activity the prompt is a card headed ✿ You', () => {
+test('while Card message is On the prompt is a card headed ✿ You', () => {
   const shellApi = publishShellApi(ACTIVITY_ANSWER);
   const outcome = install();
   assert.equal(outcome.installed, true);
@@ -289,62 +309,71 @@ test('while Card activity answers activity the prompt is a card headed ✿ You',
   assert.equal(unpaint(rows[rows.length - 1]).startsWith('╰'), true, 'the frame is closed by a rule');
   assert.ok(rows.some((row) => unpaint(row).includes('explain the card')), 'the prompt is the body');
   assert.ok(rows.some((row) => unpaint(row).includes('and keep `this` visible')), 'every row of it is drawn');
-  assert.deepEqual(shellApi.calls, ['bash'], 'the question is the bash line every other card asks');
+  assert.deepEqual(shellApi.calls, [], 'the prompt card no longer asks the `Card activity` line');
   for (const row of rows) assert.equal(chars(row).length, 60, `"${unpaint(row)}" is 60 wide`);
 });
 
-test('every other answer, an absent reader or a throwing one hands Pi\'s own rows back byte for byte', () => {
-  const cases = [
-    ['the host\'s own value', () => ({ kind: 'native' })],
-    ['another plugin\'s design', () => ({ kind: 'design', design: { id: OTHER_DESIGN } })],
-    ['a design with no id', () => ({ kind: 'design', design: {} })],
-    ['a design that has left the line', () => ({ kind: 'missing' })],
-    ['a line that covers nothing', () => ({ kind: 'not-covered' })],
-    ['an answer nothing can read', () => undefined],
-    ['a reader that throws', () => new Error('the shell API blew up')],
-    ['no published shell API at all', () => null],
-    ['an object that is not a shell API', () => 'native'],
-  ];
+test('with Card activity answering activity and Card message Off the prompt is NOT a card', () => {
+  publishShellApi(ACTIVITY_ANSWER, { cardMessage: false });
   install();
-  for (const [name, answer] of cases) {
-    if (answer === null) delete globalThis[SHELL_API_SLOT];
-    else globalThis[SHELL_API_SLOT] = { schema: 'odd-worktree/shell-api', version: 1, resolveToolDesignSelection: answer };
-    const component = promptComponent();
-    const expected = nativeRows(component, 60);
-    assert.deepEqual(component.render(60), expected, name);
-    if (answer !== null) {
-      delete globalThis[SHELL_API_SLOT].resolveToolDesignSelection;
-      assert.deepEqual(component.render(60), expected, `${name}: no reader member on the object`);
-    }
-  }
+  const component = promptComponent();
+  assert.deepEqual(component.render(60), nativeRows(component, 60),
+    'the tool line no longer decides this card');
 });
 
-test('a shell API the runtime cannot read is not a shell API: the schema and version gate is the same one', () => {
+test('with Card message On and Card activity at its default the prompt IS a card', () => {
+  publishShellApi({ kind: 'native' });
   install();
-  for (const api of [
-    { schema: 'odd-worktree/shell-api', version: 2, resolveToolDesignSelection: () => ACTIVITY_ANSWER },
-    { schema: 'other/api', version: 1, resolveToolDesignSelection: () => ACTIVITY_ANSWER },
-    null,
-  ]) {
-    globalThis[SHELL_API_SLOT] = api;
+  const component = promptComponent();
+  assert.notDeepEqual(component.render(60), nativeRows(component, 60),
+    'the switch alone decides it');
+  assert.match(unpaint(component.render(60)[0]), /^╭─ ✿ You /u);
+});
+
+test('with Card message Off the host\'s own rows come back unchanged: the very array', () => {
+  publishShellApi(ACTIVITY_ANSWER, { cardMessage: false });
+  install();
+  const component = promptComponent();
+  const hostRows = nativeRows(component, 60);
+  assert.equal(paintPrompt(component, hostRows, 60, {}), hostRows, 'the array the host handed over, not a copy');
+  assert.deepEqual(component.render(60), nativeRows(component, 60), 'and the mounted render is byte for byte Pi\'s');
+});
+
+test('an unusable shell API, or a store that throws, hands Pi\'s own rows back byte for byte', () => {
+  const cases = [
+    ['no published shell API at all', () => { delete globalThis[SHELL_API_SLOT]; }],
+    ['an object that is not a shell API', () => { globalThis[SHELL_API_SLOT] = 'native'; }],
+    ['a null slot', () => { globalThis[SHELL_API_SLOT] = null; }],
+    ['a shell API of another version', () => { publishShellApi(ACTIVITY_ANSWER); globalThis[SHELL_API_SLOT].version = 2; }],
+    ['another plugin\'s schema', () => { publishShellApi(ACTIVITY_ANSWER); globalThis[SHELL_API_SLOT].schema = 'other/api'; }],
+    ['a shell API with no store', () => { publishShellApi(ACTIVITY_ANSWER); delete globalThis[SHELL_API_SLOT].createStore; }],
+    ['a store that throws', () => { publishShellApi(ACTIVITY_ANSWER); globalThis[SHELL_API_SLOT].createStore = () => { throw new Error('disk'); }; }],
+    ['a document that cannot be read', () => {
+      publishShellApi(ACTIVITY_ANSWER);
+      globalThis[SHELL_API_SLOT].createStore = () => ({ get: () => { throw new Error('disk'); }, set: () => {} });
+    }],
+  ];
+  install();
+  for (const [name, publish] of cases) {
+    publish();
     const component = promptComponent();
-    assert.deepEqual(component.render(60), nativeRows(component, 60));
+    assert.deepEqual(component.render(60), nativeRows(component, 60), name);
   }
 });
 
 // ---- S2: the gate is read per paint, never cached ----
 
-test('flipping Card activity repaints the same mounted component, with no re-install', () => {
+test('flipping Card message repaints the same mounted component, with no re-install', () => {
   const shellApi = publishShellApi(ACTIVITY_ANSWER);
   install();
   const component = promptComponent();
   const card = component.render(60);
   assert.match(unpaint(card[0]), /^╭─ ✿ You /u, 'on');
-  shellApi.answer = { kind: 'native' };
+  setCardMessage(shellApi, false);
   assert.deepEqual(component.render(60), nativeRows(component, 60), 'off: Pi\'s own rows, byte for byte');
-  shellApi.answer = ACTIVITY_ANSWER;
+  setCardMessage(shellApi, true);
   assert.deepEqual(component.render(60), card, 'on again, the same card');
-  assert.equal(shellApi.calls.length, 3, 'the line was asked on every one of the three paints');
+  assert.deepEqual(shellApi.calls, [], 'the switch was read on every paint, and the tool line never asked');
 });
 
 test('a width too small to draw a frame hands the rows straight back', () => {
@@ -637,7 +666,7 @@ test('the card carries Pi\'s prompt-zone markers on its own first and last row, 
   const again = component.render(60);
   assert.equal(again[0].split(OSC133_ZONE_START).length - 1, 1, 'a repaint writes the marker once');
   // The native path is the host's own output, marker for marker, never a card row.
-  shellApi.answer = { kind: 'native' };
+  setCardMessage(shellApi, false);
   const native = component.render(60);
   assert.deepEqual(native, NATIVE_RENDER.call(component, 60), 'byte for byte, markers included');
   assert.ok(native[0].startsWith(OSC133_ZONE_START) && native.at(-1).startsWith(OSC133_ZONE_CLOSE));

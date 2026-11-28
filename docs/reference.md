@@ -1754,6 +1754,32 @@ headed by its name alone — no invented detail, no empty separator.
   bytes of both cards, the whole body at `minimal`, the style flip repainting, the live `Card activity` flip on
   and off, the `0.12.0` gate and the tone roles.
 
+## The `Card message` switch
+
+`Cards` gains one Off/On line of this package's own: **`Card message`**, Off then On, **On by
+default**. It is a plain shell API row provider (`lib/card-message.js`, `api.registerRows`), not a
+tool or message design — neither of those draws a user prompt or an assistant answer, so neither can
+carry this switch. Its document is one key of the shell API's own store (`odd-worktree` →
+`card-message` → `{ schema: 1, on: <boolean> }`), the store `/identity` and the module switches
+write their own keys to; nothing here touches another key.
+
+It gates, today, the [user prompt card](#the-user-prompt-card) and the
+[`## User identity` block](#the--user-identity-block-in-the-system-prompt); the assistant's final
+answer joins them. `Card activity`, the file cards, the jobs card, the CodeGraph card and the two
+message cards are untouched by it.
+
+- **Read live, never cached, and it repaints.** The cards ask `cardMessageOn()` inside their own
+  paint, on every frame, so a flip reaches the transcript already on screen; the row's action then
+  asks the shell API for ONE `requestRepaint` (its optional member) so that flip does not wait for
+  the next unrelated frame. A change therefore applies at once and says nothing — there is no
+  `/reload` notice here, unlike the module switches.
+- **On unless the stored document says exactly `on: false`.** A missing, malformed or unreadable
+  document reads On, so a first run behaves as this package always did and no existing transcript
+  changes silently.
+- **The gate fails CLOSED, the row reads On.** When the switch cannot be read at all (no published
+  shell API, a store that throws), `cardMessageOn()` answers no — the host's own rows come back
+  rather than a frame nobody asked for — while the row itself shows On.
+
 ## The user prompt card
 
 `lib/user-prompt-card.js` draws the message you sent as a card in the transcript — `✿ Jona · 14:32`,
@@ -1780,10 +1806,11 @@ without the export installs nothing), the live logic replaced rather than double
 second evaluation or `/reload`, re-installed on `session_start`, and restored to the original
 function BY REFERENCE on `session_shutdown`.
 
-- **When it draws.** Only while the shell API's `Card activity` line answers this package's
-  `activity` design, asked INSIDE the patched `render` on every paint and never cached — that
-  is what repaints a prompt already on screen when the line changes. It registers nothing, so
-  `Cards` grows no row and there is no second switch.
+- **When it draws.** Only while this package's own `Card message` switch is On
+  ([above](#the-card-message-switch)), asked INSIDE the patched `render` on every paint and never
+  cached — that is what repaints a prompt already on screen when the switch changes. The shell API's
+  `Card activity` line no longer decides it: that line keeps the file cards, the jobs card, the
+  CodeGraph card and the two message cards.
 - **The heading is the name you stored.** `/identity <name>` keeps it in the shell API's own store and
   the card reads that document on every paint, never cached, so a name set or cleared while the
   transcript is on screen heads the prompts already on it too; after a write or a clear that
@@ -1801,29 +1828,30 @@ function BY REFERENCE on `session_shutdown`.
   shell API's optional `requestRepaint`, one differential frame — and the prompts already on screen
   come back as cards instead of waiting for unrelated input. A refused install, a closed session
   and a shell API without that member request nothing.
-- **Switch it off and Pi owns the prompt again.** `default` (stored `native`), another design
-  on the line, an absent or throwing shell API, a width below six columns, or a Markdown shape
-  that is not Pi's all hand the host's own rows back BYTE FOR BYTE. Unlike the file cards —
-  whose pre-switch answer paints — this card fails CLOSED, because a prompt is the host's own
-  text and a guess would restyle a message nobody asked to restyle.
+- **Switch it off and Pi owns the prompt again.** `Card message` Off, an absent or throwing shell
+  API, a width below six columns, or a Markdown shape that is not Pi's all hand the host's own rows
+  back BYTE FOR BYTE (the very array the host handed over). Unlike the file cards — whose
+  pre-switch answer paints — this card fails CLOSED, because a prompt is the host's own text and a
+  guess would restyle a message nobody asked to restyle.
 - **The prompt zone stays.** Pi PREFIXES the first row with the OSC 133 zone-start sequence and
   PREFIXES the last row with the zone-end and final markers, in that order; the card carries the
   same three markers the same way — once each, never appended (Pi's own screen filters strip
   OSC 133 prefixes only, so a suffix would survive where Pi's own would not) — and the native
   path stays byte-identical, so click-to-jump and shell integration keep working.
-- **Cost.** An active card paint pays three live reads and nothing else: the gate (`Card activity`,
-  one selection read of the shell API's own store, which is what makes the flip instant), the stored
-  name (`lib/user-identity.js`, one synchronous `get` through the same published store, made only
-  once the gate has answered for this design and the width and the body can draw, so a native frame
-  pays none of it) and the shell's style (`lib/card-style.js`, the published slot, or
-  `<home>/card-style.json` when no live slot is published — so a style picked by hand repaints too).
+- **Cost.** An active card paint pays three live reads and nothing else: the gate (`Card message`,
+  one read of its `card-message` document through the shell API's published store, which is what
+  makes the flip instant), the stored name (`lib/user-identity.js`, one synchronous `get` through
+  the same published store, made only once the gate has answered On and the width and the body can
+  draw, so a native frame pays none of it) and the shell's style (`lib/card-style.js`, the
+  published slot, or `<home>/card-style.json` when no live slot is published — so a style picked by
+  hand repaints too).
   Everything about the
   drawing itself is memoized per component on the width the frame really draws at, the
   resolved paint, the name and the rendered Markdown rows: a steady frame spends those reads and a
   few comparisons, recomposes nothing, and no error on this side ever reaches the host.
-- **Tests.** `tools/user-prompt-card.test.js` drives the public seam — the gate and its live
-  flip on one mounted instance, the byte-for-byte native answers, the accent cells in `float`
-  and `neon`, the zone markers, the wrap-once and uninstall-by-reference claims.
+- **Tests.** `tools/user-prompt-card.test.js` drives the public seam — the `Card message` gate and
+  its live flip on one mounted instance, the byte-for-byte native answers, the accent cells in
+  `float` and `neon`, the zone markers, the wrap-once and uninstall-by-reference claims.
 
 ## The diff card
 
@@ -2047,15 +2075,18 @@ section](#the-github-rail-section)).
 One document in the shell API's own store is a stored setting and not a cache: the
 user's name, kept by `/identity` as plugin id `odd-worktree` → document `identity`
 → `{ schema: 1, name: "<name>" }`, in the same store `lib/modules.js` writes its
-`modules` document to, and neither command touches the other's key. `/identity`
+`modules` document to and `lib/card-message.js` writes its `card-message`
+document to; no command touches another's key. `/identity`
 alone reports what is stored — `identity: Jona`, or `identity: not set · messages
 head with "You"` — and `/identity clear`, in any case and reserved, is what unsets
 it: the document is overwritten with a cleared shape, or deleted on a store that
 publishes `delete`, and the next paint heads the prompts with `You` while the next
-append adds no `## User identity` line. A missing, malformed, wrong-schema or
-unreadable document is simply no name, never an error.
+append adds no `## User identity` line — the block needs `Card message` On as well,
+and `/identity` itself works whatever that switch says. A missing, malformed,
+wrong-schema or unreadable document is simply no name, never an error.
 
-Apart from those two documents in the shell API's own store, this package writes no preference document of its own: the file cards obey the
+Apart from those three documents in the shell API's own store (`identity`, `modules` and
+`card-message`), this package writes no preference document of its own: the file cards obey the
 shell API's `Card activity` choice, which belongs to the shell API and lives in its own
 store ([the cards](#the-cards-the-activity-design-paints)), and
 [the file cards](#the-file-cards) own no switch, no document and no customize
@@ -2219,16 +2250,22 @@ advises and runs nothing; what the package does with CodeGraph itself is in
 
 ## The `## User identity` block in the system prompt
 
-A session whose store holds a name gains one line that states it: the `## User identity`
-heading, a blank line, and `The user's name is Jona.` — nothing else, and no relation or
-instruction around it. It rides `systemPromptOptions.appendSystemPrompt` like the two blocks
+A session whose store holds a name AND whose `Card message` switch is On gains one line that states
+it: the `## User identity` heading, a blank line, and `The user's name is Jona.` — nothing else, and
+no relation or instruction around it. With either missing, nothing is appended: the name is the
+first switch and `Card message` the second ([the card message switch](#the-card-message-switch)), and
+`/identity` keeps setting, reporting and clearing the name whatever that switch says. The text lives
+in its own Markdown file, `lib/identity-prompt/user-identity.md`, beside the worktree and CodeGraph
+rule files, with `{{name}}` where the normalized name goes: a missing file, or one that does not open
+with the heading, falls back to the same text in code, so the block never disappears silently. It
+rides `systemPromptOptions.appendSystemPrompt` like the two blocks
 above: appended after whatever the host and the earlier blocks put there, and skipped when a
 line of it already IS its heading (prose that merely mentions the heading is not the block). The
 name is read from the shell API's store at every append
 (`lib/user-identity.js`), so setting or clearing it decides the NEXT append and never
 rewrites text already sent. A `GENTLE_PI_AGENTS_CHILD=1` session and a named-agent event
 get nothing, because the line is the orchestrator's, and there is no environment switch:
-the stored name itself is the switch, so `ODD_WORKTREE_PROMPT=0` does not touch this block.
+the stored name and the switch decide it, so `ODD_WORKTREE_PROMPT=0` does not touch this block.
 The name is normalized before it is stored and may not carry a markdown heading run (`## `),
 so it can never form the marker of this block or of the two above it; `C#` and `#designer`
 are names, and the refusal says what a name may be.
@@ -2405,8 +2442,9 @@ toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. Its
 customize-side contribution is the two values of the shell API's `Cards` page — `activity` on
 the `Card activity` line (or its `Card bash` line, on a shell API older than 0.6.0) and `color` on
-the `Card diff` line — which the skill/ODD file cards obey as well. It adds no command, tool
-or row of its own, and the file
+the `Card diff` line — which the skill/ODD file cards obey as well, plus ONE plain Off/On row of
+its own on that page, [`Card message`](#the-card-message-switch), which gates the user prompt card
+and the identity line and no design at all. It adds no command or tool of its own, and the file
 picker's `alt+p` and the issues panel's `alt+i` are bound on the host directly
 rather than contributed to any shell surface. There is
 nothing to configure here, and `/warp`, `/odd`, `/files`, `/identity`, `/issues` and `/prs` are

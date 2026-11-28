@@ -8,6 +8,8 @@
 // registered on a fake host. No internal state is read.
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const identity = require('../lib/user-identity.js');
 const fixture = require('./fixtures/load-extension.js');
@@ -188,6 +190,15 @@ describe('the block', () => {
 
 // ---- D4: where it is injected ----
 
+/**
+ * The deps one append takes: the store seam, a clean environment and the `Card message` seam.
+ * `cardMessage` defaults to On, which is the row's documented default (an absent document reads On),
+ * so a case that cares about the switch passes its own.
+ */
+function GATED(name = 'Jona', on = true) {
+  return { api: fakeShellApi(name === null ? {} : stored(name)).api, env: {}, cardMessage: () => on };
+}
+
 describe('the prompt append', () => {
   const name = stored('Jona');
 
@@ -200,14 +211,14 @@ describe('the prompt append', () => {
     ];
     for (const [before, after] of cases) {
       const event = { systemPromptOptions: { appendSystemPrompt: before } };
-      identity.appendUserIdentitySection(event, { api: fakeShellApi(name).api, env: {} });
+      identity.appendUserIdentitySection(event, GATED('Jona'));
       assert.equal(event.systemPromptOptions.appendSystemPrompt, after, JSON.stringify(before));
     }
   });
 
   test('a second call appends nothing, and a block already there is left alone', () => {
     const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
-    const deps = { api: fakeShellApi(name).api, env: {} };
+    const deps = GATED('Jona');
     identity.appendUserIdentitySection(event, deps);
     const once = event.systemPromptOptions.appendSystemPrompt;
     identity.appendUserIdentitySection(event, deps);
@@ -217,7 +228,7 @@ describe('the prompt append', () => {
 
   test('no stored name injects nothing', () => {
     const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
-    identity.appendUserIdentitySection(event, { api: fakeShellApi().api, env: {} });
+    identity.appendUserIdentitySection(event, GATED(null, true));
     assert.equal(event.systemPromptOptions.appendSystemPrompt, 'base');
   });
 
@@ -225,7 +236,7 @@ describe('the prompt append', () => {
     // Only a line that IS the heading counts: prose that happens to name the block must not
     // suppress the one line a stored name states.
     const event = { systemPromptOptions: { appendSystemPrompt: 'See ## User identity for the name.' } };
-    identity.appendUserIdentitySection(event, { api: fakeShellApi(name).api, env: {} });
+    identity.appendUserIdentitySection(event, GATED('Jona'));
     assert.equal(event.systemPromptOptions.appendSystemPrompt,
       "See ## User identity for the name.\n\n## User identity\n\nThe user's name is Jona.");
   });
@@ -237,7 +248,7 @@ describe('the prompt append', () => {
 
   test('a child session and a named-agent event get nothing, both keeping the text they had', () => {
     const child = { systemPromptOptions: { appendSystemPrompt: 'base' } };
-    identity.appendUserIdentitySection(child, { api: fakeShellApi(name).api, env: { GENTLE_PI_AGENTS_CHILD: '1' } });
+    identity.appendUserIdentitySection(child, { api: fakeShellApi(name).api, env: { GENTLE_PI_AGENTS_CHILD: '1' }, cardMessage: () => true });
     assert.equal(child.systemPromptOptions.appendSystemPrompt, 'base', 'a child gets none of it');
     for (const agentEvent of [
       { agentName: 'reviewer' },
@@ -247,17 +258,17 @@ describe('the prompt append', () => {
       { subagent: { name: 'reviewer' } },
     ]) {
       const event = { systemPromptOptions: { appendSystemPrompt: 'base' }, ...agentEvent };
-      identity.appendUserIdentitySection(event, { api: fakeShellApi(name).api, env: {} });
+      identity.appendUserIdentitySection(event, GATED('Jona'));
       assert.equal(event.systemPromptOptions.appendSystemPrompt, 'base', JSON.stringify(agentEvent));
     }
   });
 
   test('a missing or unusable systemPromptOptions writes nothing and throws nothing', () => {
     for (const event of [undefined, null, {}, { systemPromptOptions: null }, { systemPromptOptions: 'text' }, { systemPromptOptions: 42 }]) {
-      assert.doesNotThrow(() => identity.appendUserIdentitySection(event, { api: fakeShellApi(name).api, env: {} }), String(event));
+      assert.doesNotThrow(() => identity.appendUserIdentitySection(event, GATED('Jona')), String(event));
     }
     const stringly = { systemPromptOptions: { appendSystemPrompt: 42 } };
-    identity.appendUserIdentitySection(stringly, { api: fakeShellApi(name).api, env: {} });
+    identity.appendUserIdentitySection(stringly, GATED('Jona'));
     assert.equal(stringly.systemPromptOptions.appendSystemPrompt, `## User identity\n\nThe user's name is Jona.`, 'a non-string value is not a prefix');
   });
 
@@ -279,6 +290,63 @@ describe('the prompt append', () => {
       if (previous === undefined) delete globalThis[SHELL_SLOT];
       else globalThis[SHELL_SLOT] = previous;
     }
+  });
+});
+
+// ---- S4: the section is only injected with a name AND `Card message` On ----
+
+describe('the Card message gate', () => {
+  test('a stored name with Card message Off appends nothing', () => {
+    const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
+    identity.appendUserIdentitySection(event, GATED('Jona', false));
+    assert.equal(event.systemPromptOptions.appendSystemPrompt, 'base');
+  });
+
+  test('a stored name with Card message On appends the exact section', () => {
+    const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
+    identity.appendUserIdentitySection(event, GATED('Jona', true));
+    assert.equal(event.systemPromptOptions.appendSystemPrompt,
+      "base\n\n## User identity\n\nThe user's name is Jona.");
+  });
+
+  test('no name with Card message On appends nothing either', () => {
+    const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
+    identity.appendUserIdentitySection(event, { api: fakeShellApi().api, env: {}, cardMessage: () => true });
+    assert.equal(event.systemPromptOptions.appendSystemPrompt, 'base');
+  });
+
+  test('a seam that throws is a no, and with no seam the published document decides', () => {
+    const throwing = { systemPromptOptions: { appendSystemPrompt: 'base' } };
+    identity.appendUserIdentitySection(throwing, { api: fakeShellApi(stored('Jona')).api, env: {}, cardMessage: () => { throw new Error('disk'); } });
+    assert.equal(throwing.systemPromptOptions.appendSystemPrompt, 'base', 'an unreadable switch appends nothing');
+
+    const previous = globalThis[SHELL_SLOT];
+    try {
+      const shellApi = fakeShellApi(stored('Jona'));
+      shellApi.documents.set(STORE, { ...shellApi.documents.get(STORE), 'card-message': { schema: 1, on: false } });
+      globalThis[SHELL_SLOT] = shellApi.api;
+      const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
+      identity.appendUserIdentitySection(event, { env: {} });
+      assert.equal(event.systemPromptOptions.appendSystemPrompt, 'base', 'Card message Off on the published store');
+    } finally {
+      if (previous === undefined) delete globalThis[SHELL_SLOT];
+      else globalThis[SHELL_SLOT] = previous;
+    }
+  });
+});
+
+// ---- S4: the section is prose on disk, next to the other two rule files ----
+
+describe('the section is prose on disk', () => {
+  const SECTION_FILE = path.resolve(__dirname, '..', 'lib', 'identity-prompt', 'user-identity.md');
+
+  test('the section lives in its own Markdown file, and the rendered block is that file', () => {
+    assert.ok(fs.existsSync(SECTION_FILE), 'the section file exists');
+    const template = fs.readFileSync(SECTION_FILE, 'utf8').trim();
+    assert.ok(template.startsWith('## User identity'), template.split('\n')[0]);
+    assert.equal(template.split('{{name}}').length - 1, 1, 'the placeholder is stated once');
+    assert.equal(identity.identitySection('Jona'), template.replace('{{name}}', 'Jona'));
+    assert.equal(template.replace('{{name}}', 'Jona Soto'), identity.identitySection('  Jona   Soto '));
   });
 });
 
@@ -434,6 +502,23 @@ describe('/identity', () => {
       await loaded.command.handler('Jona', loaded.ctx);
       await loaded.command.handler('cle\u0001ar', loaded.ctx);
       assert.equal(Object.hasOwn(loaded.documents.get(STORE), 'identity'), false, 'it cleared instead of storing `clear`');
+      assert.deepEqual(loaded.notifications.at(-1), [NOT_SET]);
+    } finally {
+      loaded.restore();
+    }
+  });
+
+  test('with Card message Off the command still sets, reports and clears the name (S3)', async () => {
+    const loaded = await loadIdentityCommand();
+    try {
+      loaded.documents.set(STORE, { ...(loaded.documents.get(STORE) ?? {}), 'card-message': { schema: 1, on: false } });
+      await loaded.command.handler('Jona', loaded.ctx);
+      assert.deepEqual(loaded.documents.get(STORE).identity, { schema: 1, name: 'Jona' }, 'the name is stored anyway');
+      assert.deepEqual(loaded.notifications.at(-1), ['identity: Jona']);
+      await loaded.command.handler('', loaded.ctx);
+      assert.deepEqual(loaded.notifications.at(-1), ['identity: Jona'], 'and reported');
+      await loaded.command.handler('clear', loaded.ctx);
+      assert.equal(Object.hasOwn(loaded.documents.get(STORE), 'identity'), false, 'and cleared');
       assert.deepEqual(loaded.notifications.at(-1), [NOT_SET]);
     } finally {
       loaded.restore();

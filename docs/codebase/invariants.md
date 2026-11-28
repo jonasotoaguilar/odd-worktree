@@ -53,7 +53,10 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    `edit` through a scope limited to skill and ODD paths so the file card's question is
    answered per call and the second claiming every other call of those two, which is
    neither a command nor a tool either and adds no name to either registry; and
-   no `Cards` row of its own at all (the file cards add none either — see below).
+   ONE plain `Cards` row of its own, the `Card message` Off/On switch
+   (`lib/card-message.js`, below) — a row provider, never a design and never a third
+   line, so the design count above stays two (the file cards add no row at all — see
+   below).
    Neither moving the session nor
    removing a checkout is exposed to the agent: `/warp` is the person's front for
    both (its `ctrl+d`, the selector, a typed name, a queued handoff for moving; its
@@ -83,14 +86,24 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    worktree's delta). `filesSessionWorktreeRoots` reads the same active branch, so a
    worktree registered only on an abandoned branch is out of scope.
 
-   **Three switches are optional, and nothing else is.** The `Tools` page of
+   **Four switches are optional, and nothing else is.** The `Tools` page of
    `/gentle:customize` (`lib/modules.js`, a plain `registerRows` provider) holds the
    `Codegraph+` and `Worktrees+` Off/On lines. They are read once, when the surface
    registers, from the package's own store; `Worktrees+` Off leaves out `/warp`, its
    card, the two tools, the worktree guards and prompt text, and `Codegraph+` Off leaves
    out the CodeGraph wiring, prompt text and reminders. The CodeGraph CARD is not one of
    these: it is a design of the `Card activity` line and follows that switch. A change lands on
-   the next load, so each one says so. Neither adds a command or a tool name.
+   the next load, so each one says so. Neither adds a command or a tool name. The third
+   and fourth are the `Alert` page's per-provider lines below, applied live.
+
+   **`Card message` is this package's own line, applied live.** The
+   `Cards` page gains one `registerRows` provider — `lib/card-message.js`, the setting
+   `Card message`, Off then On, On unless the stored document says exactly `on: false` —
+   persisted as `card-message` in the shell API's own store beside `modules` and
+   `identity`, and read on every paint. It gates the user prompt card, the assistant
+   card and the `## User identity` block; its action asks the shell API for one
+   `requestRepaint` and says nothing, so a change applies at once with no `/reload`.
+   `Card activity` keeps the other cards (invariant 23).
 
    **The peak rows have one switch per provider, applied live.** `lib/alert-rows.js`
    contributes the `Alert` page of `/gentle:customize` with one line per entry of
@@ -906,8 +919,8 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     `tools/issues-command.test.js` pins "without the CLI neither the command nor the
     rail section exists" and "the decision costs no child process, at load or at
     session start".
-29. **The user prompt card is a DRAWING shim, gated by the same line and never
-    touching the host's text.** `lib/user-prompt-card.js` wraps
+29. **The user prompt card is a DRAWING shim, gated by this package's own `Card
+    message` switch and never touching the host's text.** `lib/user-prompt-card.js` wraps
     `UserMessageComponent.prototype.render` — the one host class this package
     patches — because Pi publishes no extension seam for a `role: "user"` entry: the
     class is handed in from the extension's lazy `import()`, so `lib/` imports no Pi
@@ -932,13 +945,14 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     frame) so a transcript restored before the deferred host import resolves comes
     back as cards instead of waiting for unrelated input; a refused install, a
     closed session and an API without that member request nothing.
-    It adds NO row, command, setting or design of its own, so the surface invariant 3
-    lists is unchanged by it. The gate is `Card activity` answering this package's
-    `activity` design, asked INSIDE the patched `render` on every paint and never cached, which
-    is what repaints a prompt already on screen: any other answer — `default`
-    (stored `native`), another design, an absent or throwing shell API, a width below
-    six columns, a component whose Markdown shape is not Pi's — hands the host's own
-    rows back BYTE FOR BYTE, fail CLOSED, unlike the file cards' pre-switch answer.
+    It adds no row, command or design of its own: the one `Cards` row it follows is the
+    `Card message` switch's, which the surface invariant 3 lists once. The
+    gate is `cardMessageOn()`, asked INSIDE the patched `render` on every paint and never
+    cached, which is what repaints a prompt already on screen: with the switch Off — and
+    for an absent or throwing shell API, a width below six columns, or a component whose
+    Markdown shape is not Pi's — the host's own rows come back BYTE FOR BYTE, fail
+    CLOSED. The shell API's `Card activity` line no longer decides this card; it keeps the
+    file, jobs, CodeGraph and message cards (invariant 23).
     Pi's OSC 133 prompt-zone markers are re-emitted once on the card's first and last
     row and never on the native path, so shell integration is not degraded. The
     wrapper is installed once per process through a `Symbol.for` slot (a second
@@ -948,9 +962,9 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     changes a row (the width the frame really draws at, the resolved paint, the stored
     name, the rendered Markdown rows), so a style change, or a name set or cleared,
     always recomposes. An ACTIVE card paint pays three live reads and nothing else: the
-    gate itself — the live `Card activity` answer, asked on every paint including the
+    gate itself — the live `card-message` document, asked on every paint including the
     native one — the stored name (`lib/user-identity.js`, one synchronous document
-    read, made only once the gate has answered for this design and the width and the
+    read, made only once the gate has answered On and the width and the
     body can draw), and, only while the card actually draws, the shell's style (the
     published slot, or `<home>/card-style.json` when none is published), which is the
     price of a prompt that repaints the moment any of them changes;

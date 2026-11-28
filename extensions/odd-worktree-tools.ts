@@ -11368,6 +11368,24 @@ function registerModuleRows(api) {
   }
 }
 
+// card-message: the ONE `Card message` Off/On line on the shell API's own `Cards` page
+// (`lib/card-message.js`). It gates the user prompt card — and, later, the assistant's final
+// answer and the `## User identity` prompt section — read live on every paint, so a change
+// applies at once: the row's own action asks the shell API for the repaint and says nothing.
+// Registered beside the other row providers, on the same published object and in the same
+// episode, so a republished shell API gets it again.
+function registerCardMessageRows(api) {
+  try {
+    if (!api || typeof api.registerRows !== "function") return;
+    const cardMessage = libRequire("card-message.js");
+    if (!cardMessage || typeof cardMessage.cardMessageRowsProvider !== "function") return;
+    api.registerRows(cardMessage.cardMessageRowsProvider({ api }));
+  } catch {
+    // The line is optional: a shell API that refuses it leaves `Card message` at its
+    // documented default, On.
+  }
+}
+
 // opencode-usage-alert: the OpenCode Go usage source this package carries, and the peak
 // rows above the editor that the `Alert` page owns. The two halves are one story:
 //
@@ -11541,6 +11559,7 @@ function registerIssuesSidebar(pi) {
       // with `mountIssuesSidebar` tearing the old section down first.
       if (api !== issuesSidebarApi) {
         registerModuleRows(api);
+        registerCardMessageRows(api);
         registerAlertRows(api);
         registerBashDesignRows(api);
         registerDiffDesignRows(api);

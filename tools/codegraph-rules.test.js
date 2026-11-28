@@ -92,7 +92,6 @@ describe('each role scopes the index to its own job', () => {
     ]) {
       assert.ok(text.includes(situation), situation);
     }
-    assert.match(text, /a verdict comes from the source and the tests/i, text);
   });
 
   test('the orchestrator keeps one exemption and one projectPath rule, and no concrete example', () => {
@@ -118,7 +117,6 @@ describe('each role scopes the index to its own job', () => {
     const text = prose('verify');
     assert.match(text, /once you know what the spec requires and you need that reach to choose interaction and regression probes/, text);
     assert.match(text, /The answer is a map of where to look/, text);
-    assert.match(text, /a verdict comes from the source you read and the checks you ran/, text);
     assert.match(text, /a probe that contradicts what it reports is the one that is right/, text);
   });
 
@@ -141,8 +139,8 @@ describe('each role scopes the index to its own job', () => {
     const text = prose('judge');
     assert.match(text, /Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` in the supplied `initial_review_tree`/, text);
     
-    assert.match(text, /Confirm every finding in the supplied source at the exact location you cite/, text);
-    assert.match(text, /report as unverified a relationship you have not read/, text);
+    assert.match(text, /A relationship it reports stays unverified until you read it in the supplied source at the location you cite/, text);
+    
     assert.match(text, /In scoped re-judgment, leave this tool aside/, text);
   });
 

@@ -133,7 +133,7 @@ describe('each role scopes the index to its own job', () => {
 
   test('judges sweep the initial review tree and leave the tool aside in scoped re-judgment', () => {
     const text = prose('judge');
-    assert.match(text, /Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` in the supplied `initial_review_tree`/, text);
+    assert.match(text, /Call it instead of `grep`, `rg`, `fd`, `find`, `read` or `cat` in the supplied `initial_review_tree`/, text);
     
     
     

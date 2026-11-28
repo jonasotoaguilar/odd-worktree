@@ -626,6 +626,46 @@ describe('issues view preview scroll variants (S15)', () => {
     });
   }
 
+  // S6: the wheel answers from the frame `render` last composed, so the notch
+  // lands in the pane it is over — the pair `/files` publishes.
+  test('the wheel over the pane scrolls it and the wheel over the list walks it', async () => {
+    const { view } = makeView({
+      pages: pagesOf([[issue(1, { body: longBody }), issue(2, { body: longBody })], [], []]),
+      issues: [issue(1, { body: longBody }), issue(2, { body: longBody })],
+      rows: 14,
+      loadIssue: (n) => ({ ok: true, issue: issue(n, { body: longBody }), comments: [] }),
+    });
+    await tick();
+    const height = view.render(120).length;
+    const paneX = 5 + readerPanes(120).left + 1;
+    const wheel = (over) => view.handleMouse({
+      type: 'wheel', button: 'none', wheelDelta: 1, x: paneX, y: 4, width: 120, height, ...over,
+    });
+    assert.equal(view.state.scroll, 0);
+    assert.deepEqual(wheel({}), { handled: true, render: true });
+    assert.equal(view.state.scroll, 1, 'one notch scrolls the pane one line');
+    assert.equal(view.state.index, 0, 'and never moves the list');
+    assert.deepEqual(wheel({ wheelDelta: -1 }), { handled: true, render: true });
+    assert.equal(view.state.scroll, 0, 'a notch up scrolls it back');
+    assert.deepEqual(wheel({ wheelDelta: -1 }), { handled: true, render: false },
+      'a notch the pane cannot answer repaints nothing');
+
+    assert.deepEqual(wheel({ x: 3 }), { handled: true, render: true });
+    assert.equal(view.state.index, 1, 'the list notch walks the list');
+    assert.equal(view.state.scroll, 0, 'and never scrolls the pane');
+    assert.equal(wheel({ x: 3, y: 1 }), undefined, 'a header row is not a pane');
+    assert.equal(wheel({ x: 1 }), undefined, 'the frame border is not a pane');
+    assert.equal(wheel({ x: 3, width: 100 }), undefined, 'another frame geometry is not this frame');
+    assert.equal(wheel({ x: 3, wheelDelta: 0 }), undefined, 'a notch carrying no delta is not a scroll');
+    assert.equal(view.state.index, 1, 'an unhandled notch changes nothing');
+
+    // S6: the wheel acts only where the reader's own movement keys do.
+    view.handleInput('c');
+    assert.equal(view.state.mode, 'comment');
+    assert.equal(wheel({ x: 3 }), undefined, 'a step that owns the keyboard keeps the wheel');
+    assert.equal(view.state.index, 1);
+  });
+
   test('ctrl+d/ctrl+u and shifted J/K scroll the pane, j/k still move the list', { skip: skipReal }, async () => {
     const { view } = realKeyView();
     await tick();

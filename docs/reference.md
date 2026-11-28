@@ -153,6 +153,11 @@ the bar reads only `All (<n>)`.
 | `enter` | Insert the focused issue into the chat input as `ISSUE #63`, and close the panel; inside the search box, an editor or the close confirmation the same key keeps that step's meaning | a loaded issue |
 | `esc`, `q`, `ctrl+c` | Close the reader | — |
 
+The wheel answers the pane under the pointer, exactly as it does in `/files`: a
+notch over the list walks the selection, a notch over the preview scrolls that
+preview one line, and a notch that lands on the divider or on the frame's own
+border is left to the host.
+
 **The shortcut teaches itself.** Outside `All` the footer reads `g all issues`;
 inside it the same key reads `g related issues`, because there it goes back — to
 the tab that was active when you entered, never always the first one. The key is
@@ -243,6 +248,11 @@ linked issues (and `space toggle · ctrl+j/k scroll · enter keep · esc discard
 inside the candidate list `n` opens), `enter add · esc cancel` while naming a new
 label, and `↑↓ field · ←→ method · enter select · ctrl+s merge · esc cancel` for
 the merge step.
+
+The wheel answers the pane under the pointer, exactly as it does in `/issues`:
+a notch over the list walks the selection, a notch over the pane scrolls that
+pane one line, and a notch that lands on the divider or on the frame's own border
+is left to the host.
 
 ## The deletion guard, and its honest limit
 

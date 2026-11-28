@@ -45,7 +45,7 @@ describe('the seven texts on disk', () => {
     for (const variant of rules.VARIANTS) {
       const text = prose(variant);
       assert.match(text, /source verbatim with line numbers/, `${variant} names the source`);
-      assert.match(text, /what depends on (it|them|the symbols you name)/, `${variant} names what depends on the symbols`);
+      assert.match(text, /the code that calls (it|them|the symbols you name)/, `${variant} names the callers`);
       assert.match(text, /the tests that cover (it|them)/, `${variant} names the tests that cover the symbols`);
     }
   });
@@ -86,8 +86,8 @@ describe('each role scopes the index to its own job', () => {
     const text = prose('orchestrator');
     for (const situation of [
       'about to change code you have not read',
-      'tracing a bug or a flow across files',
-      'what an edit would reach before you or a worker touch it',
+      'you are chasing a bug or an error across files',
+      'you or a worker are about to change code, and you need to see what calls it and which tests cover it',
       'size a task or delegate it to a subagent',
     ]) {
       assert.ok(text.includes(situation), situation);
@@ -110,26 +110,26 @@ describe('each role scopes the index to its own job', () => {
   test('explore replaces the chain of greps, follows what depends on a symbol and defers what code does to the source', () => {
     const text = prose('explore');
     assert.match(text, /one call instead of the chain of greps and reads that would answer the same question/, text);
-    assert.match(text, /Follow what it reports as depending on a symbol instead of grepping for callers/, text);
+    assert.match(text, /Follow the callers it reports instead of grepping for them/, text);
   });
 
   test('verify chooses probes from the index and keeps the probe as the proof', () => {
     const text = prose('verify');
-    assert.match(text, /once you know what the spec requires and you need that reach to choose interaction and regression probes/, text);
+    assert.match(text, /once you know what the spec requires and you need to see what else calls those symbols before you choose your probes/, text);
   });
 
   test('worker uses the index for what the edit must keep working, and never widens its scope', () => {
     const text = prose('worker');
-    assert.match(text, /what the edit has to keep working/, text);
-    assert.match(text, /what depends on the files in your allowed edit surfaces/, text);
+    assert.match(text, /the code your edit can break/, text);
+    assert.match(text, /what calls the files in your allowed edit surfaces/, text);
     assert.match(text, /find the implementation you should reuse instead of writing a second one/, text);
-    assert.match(text, /query the old name to find what still points at it/, text);
+    assert.match(text, /ask for the old name to find what still uses it/, text);
     
   });
 
   test('fix keeps the patch inside the finding\'s reach, in the checkout it is authorized to fix', () => {
     const text = prose('fix');
-    assert.match(text, /what the patch has to keep working, so the fix stays inside it/, text);
+    assert.match(text, /the code the patch can break, so the fix stays inside it/, text);
     assert.match(text, /within your allowed edit surfaces and the checkout you are authorized to fix/, text);
   });
 

@@ -13,10 +13,10 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
 2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
    invariants 18 and 19 allow.** No customize COMMAND, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
-   `herdr-gentle:` command name. This package owns exactly FOUR preferences, each an
+   `herdr-gentle:` command name. This package owns exactly FIVE preferences, each an
    Off/On row registered through the shell API and stored in its own store:
-   `Codegraph+`, `Worktrees+` (`Tools` page), `Deepseek peak` and `Claude peak`
-   (`Alert` page). All four read Off until the human turns them on.
+   `Codegraph+`, `Worktrees+` and `Skills+` (`Tools` page), `Deepseek peak` and
+   `Claude peak` (`Alert` page). All five read Off until the human turns them on.
    Everything else it contributes to `/gentle:customize` is a DESIGN: the two
    (`activity` and `color`) on
    the shell API's own `Cards` page — a `Card activity` line, or its `Card bash`
@@ -85,12 +85,15 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
 
    **Three switches are optional, and nothing else is.** The `Tools` page of
    `/gentle:customize` (`lib/modules.js`, a plain `registerRows` provider) holds the
-   `Codegraph+` and `Worktrees+` Off/On lines. They are read once, when the surface
+   `Codegraph+`, `Worktrees+` and `Skills+` Off/On lines. They are read once, when the surface
    registers, from the package's own store; `Worktrees+` Off leaves out `/warp`, its
-   card, the two tools, the worktree guards and prompt text, and `Codegraph+` Off leaves
+   card, the two tools, the worktree guards (the active-session guard a removal runs included)
+   and prompt text, `Skills+` Off leaves out the two read rules, and `Codegraph+` Off leaves
    out the CodeGraph wiring, prompt text and reminders. The CodeGraph CARD is not one of
    these: it is a design of the `Card activity` line and follows that switch. A change lands on
-   the next load, so each one says so. Neither adds a command or a tool name.
+   the next load, so each one says so. None adds a command or a tool name. `Codegraph+` and
+   `Worktrees+` are ON unless the stored value is exactly `false`; `Skills+` is OFF unless it is
+   exactly `true`, so an unset, malformed or unreadable document leaves the read rules out.
 
    **The peak rows have one switch per provider, applied live.** `lib/alert-rows.js`
    contributes the `Alert` page of `/gentle:customize` with one line per entry of
@@ -255,7 +258,9 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
    "could not be resolved". Nothing is auto-warped. The check is best effort:
    stale, unattributable and truncated evidence is disclosed — the panel notifies
    each caveat the guard could not resolve, one notice per caveat — never
-   silently dropped and never left blocking forever.
+   silently dropped and never left blocking forever. The check belongs to the worktree
+   half: it runs while `Worktrees+` is on, and with that module off the removal surface it
+   guards is not registered either.
 5. **Deletion is git only.** Removal is `git worktree remove <absolute path>`
    (with `--force` only when the caller asked) and the branch is kept. No other
    application is closed, opened or removed on any path — including the panel's
@@ -640,19 +645,21 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     (`lib/artifact-read-full.js`): a `read` of a `.md` below a `skills/` or an `odd/` folder has its
     `offset` and `limit` DELETED from the host's `event.input` before the tool runs, so a skill or an
     ODD is delivered whole and never half a procedure. It blocks nothing and answers nothing. Both
-    observations follow the `Worktrees+` module switch with the guards above.
+    observations follow the `Skills+` module switch — OFF by default — and touch no worktree surface.
 
     **Both worktree guards (the `bash` one and the `edit`/`write` one) judge the primary session only**:
     creating a worktree and leaving the default branch are the orchestrator's actions, so a subagent
     child (`GENTLE_PI_AGENTS_CHILD=1`, read per call) passes both. The skill-read guard and the
-    whole-read rule still apply to every session.
+    whole-read rule still apply to every session that has `Skills+` on.
 
     No guard ever throws (a throwing `tool_call` handler blocks the tool), an
     unreadable repository leaves only the `bash` worktree refusal active, and the
     default branch is resolved lazily and memoized per checkout.
-    `ODD_WORKTREE_GUARD=0` is the one way to turn all of them off, like
-    `ODD_WORKTREE_PROMPT=0` for the prompt blocks, and the `Worktrees+` switch
-    leaves the worktree guards out at registration (the skill-read guard stays); no
+    `ODD_WORKTREE_GUARD=0` takes the two worktree guards and the skill-read refusal away, like
+    `ODD_WORKTREE_PROMPT=0` for the prompt blocks, and the switches decide first:
+    `Worktrees+` off leaves the two worktree guards out at registration and `Skills+` off —
+    its default — leaves the two read rules out, each at registration, so neither the
+    module nor the environment variable can be worked around from a call; no
     other value, option or config file does, and they register no command or tool name (invariant 3). Each refusal
     names the tool that replaces the blocked action, and the prompt block (invariant
     14) is what keeps the agent from reaching them, so a change to one is read

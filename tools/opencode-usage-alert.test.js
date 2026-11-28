@@ -103,8 +103,10 @@ const alertRowsOf = (shellApi) => shellApi.rows.find((provider) => provider.cate
 describe('the OpenCode Go usage source', () => {
   test('registers one payload with the four contract keys', async () => {
     const { emitted } = await load(undefined);
-    const registrations = emitted.filter((entry) => entry.name === 'gentle-pi:usage-source/v1');
-    assert.equal(registrations.length, 1, 'one source per load');
+    const registrations = emitted.filter(
+      (entry) => entry.name === 'gentle-pi:usage-source/v1' && entry.payload.provider === 'opencode-go',
+    );
+    assert.equal(registrations.length, 1, 'one opencode-go source per load');
     const payload = registrations[0].payload;
     assert.deepEqual(Object.keys(payload).sort(), ['fetch', 'pendingNote', 'provider', 'schema']);
     assert.equal(payload.schema, 'gentle-pi.usage-source/v1');

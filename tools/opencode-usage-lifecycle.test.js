@@ -37,7 +37,7 @@ async function fixture(t) {
   globalThis[SHELL_SLOT] = shellApi.api;
   const sources = [];
   const { hooks } = await loadExtension({ events: { emit(name, payload) {
-    if (name === 'gentle-pi:usage-source/v1') sources.push(payload);
+    if (name === 'gentle-pi:usage-source/v1' && payload.provider === 'opencode-go') sources.push(payload);
   } } }, { gh: false });
   let now = PEAK;
   const timers = new Set();

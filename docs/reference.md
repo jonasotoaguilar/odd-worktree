@@ -2144,6 +2144,65 @@ switch's own action — so a change applies to the session in progress with no `
 session. They live in the shell API's own store (`odd-worktree` → `alerts` →
 `{ peaks: { <provider>: boolean } }`), and a missing, malformed or unreadable document reads Off.
 
+## The Claude usage source
+
+The same event carries this package's Anthropic source, under **two provider ids** — `anthropic` and
+`claude-bridge` — because the account behind them is one account. One source is emitted per id, at load and
+again at every `session_start`, exactly like the OpenCode Go one, and the panel draws one section per id the
+session targets. One account still answers **once per refresh wave**: the host hands the same instant to
+every source it refreshes, and the first id that resolves that account claims the wave, so the second id
+shows the host's own note instead of a copy of the numbers. The claim is a hash of the token, kept in memory
+as a single entry and never logged, and the next wave is free for either id again — so the provider the
+session actually runs keeps its numbers on every refresh. No third provider id is invented. Everything
+this package prints says `claude`: the pending note reads `claude · press r to fetch` under both ids, and
+the rows read `claude 5h` / `claude 7d`. The heading above them is the provider id the shell itself
+listed, which is the host's text, not this package's.
+
+The token is resolved in one fixed order, first usable candidate wins:
+
+1. `claudeAiOauth.accessToken` in the Claude Code credentials file (`~/.claude/.credentials.json`).
+2. The key pi holds for the provider that is running.
+
+A **Console key is never sent**: `sk-ant-api…` cannot call this route, so it is treated as no token at all
+rather than as a request that fails later. A value is trimmed before either check and the trimmed string is
+what travels in the header, so surrounding whitespace can neither hide a Console prefix nor ride along in
+the `Authorization` line. A file whose explicit, non-empty `scopes` array lacks `user:profile` describes a
+`setup-token`, which this route refuses, so that token is not used either — and a file with no `scopes`
+array at all is read as an older one and stays usable. The credentials file is **read, never refreshed and
+never written** — its refresh token is single-use and rotates, so rewriting it would break the human's own
+`claude` login. An `expiresAt` already in the past (13-digit milliseconds in current builds, 10-digit
+seconds in older ones) means that token is not used; when nothing else can serve, the attempt reports
+`expired-token` and the panel keeps its last good numbers. A rejected credential is never tried twice: when
+the host's own key for the provider is that same string, nothing is sent at all. The tier is read from the
+same block's `subscriptionType`, and **only** when the file's token was the one that answered.
+
+One `GET https://api.anthropic.com/api/oauth/usage`, with `Authorization: Bearer …`,
+`anthropic-beta: oauth-2025-04-20`, `User-Agent: claude-code/2.0.55` and `Accept: application/json`. The
+beta flag is what opens the OAuth route and the User-Agent is not cosmetic: without it the route
+rate-limits aggressively. Redirects are refused rather than followed, so the bearer cannot be replayed to
+another origin, and the attempt has the same 10-second window as the other sources.
+
+The two universal buckets map to `claude 5h` and `claude 7d` (18000 s and 604800 s) — the labels and the
+limit name mirror the shell's own header parser, so a header-driven snapshot and a fetched one draw the
+same rows. The nullable per-model buckets (`seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps`)
+are ignored: they are absent for most accounts and reading them would reject every snapshot. Either
+universal bucket missing or malformed rejects the whole snapshot, and a window at 100 % marks the limit
+reached.
+
+The `plan` slot is the tier when the file offered one, then Claude's peak schedule — `max · peak 2hr`,
+`max · off-peak 1d 17hr`, or `peak 2hr` / `off-peak 1d 17hr` when no tier was offered. The schedule is the
+`claude` entry of `lib/peak-providers.js`, so no hours and no multiplier are copied here; the tier is
+printed only when `subscriptionType` reads as a plain plan word, never guessed at.
+
+Failures resolve to no snapshot and report a fixed reason code only — `missing-key`, `timeout`, `network`,
+`redirect`, `http-<status>`, `http-unknown`, `invalid-json`, `unexpected-shape`, `expired-token`,
+`unusable-token`, `duplicate-account` — never a token, a header value or a response body. `http-<status>` is
+printed only for a real HTTP code (an integer from 100 to 599); an adapter that answers anything else is
+reported as `http-unknown`, so no unchecked value can reach a reason. Readiness is `ready` when a snapshot
+came back, `missing-key` only when there was no token to send, and `unknown` for every other failure, so a
+transient error never clears the peak line of a provider that is logged in. Nothing here polls, the shell
+keeps owning the refresh schedule, and nothing writes host state.
+
 ## The list
 
 `worktree_list` prints the main checkout first and unnumbered, as the `base: <branch>@<sha>`

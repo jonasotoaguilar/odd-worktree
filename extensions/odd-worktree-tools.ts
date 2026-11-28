@@ -11327,6 +11327,32 @@ function registerOpenCodeUsageSource(pi) {
 	}
 }
 
+// S1/S3/S4 (claude-usage): the Anthropic side of the same event. One source per served provider id
+// — `anthropic` and `claude-bridge` — because the account behind them is one account and the panel
+// lists only the providers the session actually uses, so a logged-in provider and a bridge are two
+// ids for one subscription and never two rows with different numbers. The ids come from the
+// module's own `PROVIDERS`, so a third cannot appear here by accident and the same id is emitted
+// once per pass. Re-registering replaces the source, exactly like the OpenCode Go one, so this is
+// safe at load and at every session start.
+function registerClaudeUsageSources(pi) {
+	try {
+		if (!pi || !pi.events || typeof pi.events.emit !== "function") return;
+		const usage = opencodeAlertLib("claude-usage.js");
+		if (!usage || typeof usage.createUsageSource !== "function") return;
+		if (!Array.isArray(usage.PROVIDERS)) return;
+		const emitted = new Set();
+		for (const providerId of usage.PROVIDERS) {
+			if (typeof providerId !== "string" || emitted.has(providerId)) continue;
+			const source = usage.createUsageSource(providerId);
+			if (!source) continue;
+			emitted.add(providerId);
+			pi.events.emit("gentle-pi:usage-source/v1", source);
+		}
+	} catch {
+		// The source is optional: a host without the seam keeps every other surface.
+	}
+}
+
 // S5/S8 (opencode-usage-alert): the `Alert` page's switches, one line per registry entry.
 // Each reads its own live value on every build and applies through `onChange`, so the running
 // session shows or hides that provider's row the moment the human picks On or Off.
@@ -12041,6 +12067,9 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // session start, so either load order works and a session switch re-targets the
   // same provider. `registerAlertRows` below carries the `Deepseek peak` switch.
   registerOpenCodeUsageSource(pi);
+  // S1/S3 (claude-usage T3): the same two moments for the Anthropic ids, so the panel
+  // reads a Claude subscription whether the session runs `anthropic` or `claude-bridge`.
+  registerClaudeUsageSources(pi);
   // S8/S9 (T8): the record of the ODDs this session wrote or edited is NOT part of the
   // worktree half: the ODD rail is `Worktrees+`'s surface, so the attribution has to be
   // there with that module OFF too. One record per load — a `session_start` restores it
@@ -12170,6 +12199,9 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // above the editor belong to the session that draws them.
     bindOpenCodeAlertUi(ctx);
     registerOpenCodeUsageSource(pi);
+    // S1/S3 (claude-usage T3): the Anthropic source is re-registered here for the same
+    // reason, one emission per served id and never the same id twice.
+    registerClaudeUsageSources(pi);
     syncOpenCodePeakAlert();
   });
   // A queued warp is session state: shutdown clears its record and its timer so

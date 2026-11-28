@@ -155,3 +155,35 @@ test('an incompatible object on the slot leaves this package\'s surface unregist
   assert.match(foreign[0].message, /"2"/, 'and its version');
   assert.match(foreign[0].message, /sidebar sections/, 'and what is off');
 });
+
+for (const schema of ['third-party/v2', 'gentle-shell-bridge/api']) {
+  test(`foreign slot ${schema}: one warning, no commands, no row of this package, and no load failure`, { skip: !pi }, (t) => {
+    const { records, report } = rpc(t, `
+      import { writeFileSync } from "node:fs";
+      const key = ${slot};
+      const foreign = {
+        schema: ${JSON.stringify(schema)},
+        get version() { throw new Error("unreadable version"); },
+      };
+      globalThis[key] = foreign;
+      export default function (pi) {
+        pi.registerCommand("gentle:customize", { handler() {} });
+        pi.on("session_start", () => setImmediate(() => {
+          const bus = globalThis[Symbol.for("gentle-shell-bridge.providers")];
+          writeFileSync(process.env.PROBE_REPORT, JSON.stringify({
+            preserved: globalThis[key] === foreign,
+            providers: ((bus && bus.entries) || []).map((entry) => entry.provider.id),
+          }));
+        }));
+      }
+    `, null, [get]);
+    const commands = records.find((x) => x.id === '1').data.commands;
+    assert.deepEqual(commands.filter((x) => x.source === 'extension').map((x) => x.name), ['gentle:customize']);
+    const warnings = records.filter((x) => x.method === 'notify' && x.notifyType === 'warning' && x.message.startsWith('odd-worktree:'));
+    assert.equal(warnings.length, 1, 'one notice, in this package\'s own words');
+    assert.ok(warnings[0].message.includes(`schema "${schema}", version "unreadable"`));
+    const saw = report();
+    assert.equal(saw.preserved, true, 'the foreign object is never replaced');
+    assert.deepEqual(saw.providers.filter((id) => id.startsWith('odd-worktree.')), [], 'none of this package\'s own rows');
+  });
+}

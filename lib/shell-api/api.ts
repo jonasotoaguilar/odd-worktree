@@ -303,13 +303,19 @@ function warnSkewOnce(): void {
 export function isBridgeApi(value: unknown): value is BridgeApi {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return (
-    candidate.schema === API_SCHEMA &&
-    candidate.version === API_VERSION &&
-    typeof candidate.registerRows === "function" &&
-    typeof candidate.registerSection === "function" &&
-    typeof candidate.createStore === "function"
-  );
+  // The slot's object may be another plugin's, and any of these reads can be an accessor that throws:
+  // that makes it "not this API", never a reason for the loading package to fail.
+  try {
+    return (
+      candidate.schema === API_SCHEMA &&
+      candidate.version === API_VERSION &&
+      typeof candidate.registerRows === "function" &&
+      typeof candidate.registerSection === "function" &&
+      typeof candidate.createStore === "function"
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** The object this copy publishes when it owns the slot (or when the slot is unusable). */

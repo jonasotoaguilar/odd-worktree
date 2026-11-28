@@ -1007,7 +1007,9 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     by package name anywhere: the root manifest names no `dependencies` at all. An
     INCOMPATIBLE object already on the slot (another plugin published first) leaves
     this package's whole surface UNREGISTERED — no command, no tool, no section, no
-    design, no row, no second attempt — and the package says so ONCE in its own
+    design, no row of its own, no second attempt (the API's own plumbing rows, such
+    as the `Sections` visibility line, still arm for a host that has `gentle-pi`, as
+    they always did) — and the package says so ONCE in its own
     words, naming the slot, the schema and version it actually holds, and the
     surfaces that are off. Its surfaces still arm only for a host that has
     `gentle-pi`, the package registering `/gentle:customize`: without it nothing arms

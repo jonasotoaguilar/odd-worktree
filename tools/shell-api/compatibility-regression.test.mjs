@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { bridgeApi, publishBridgeApi } from "../../lib/shell-api/api.ts";
+import { bridgeApi, isBridgeApi, publishBridgeApi } from "../../lib/shell-api/api.ts";
 import { registerSection } from "../../lib/shell-api/index.ts";
 import { getPluginLineReport } from "../../lib/shell-api/plugin-lines.ts";
 
@@ -50,4 +50,15 @@ test("a rejected foreign slot cannot throw while it is described", (t) => {
   assert.doesNotThrow(() => publishBridgeApi());
   assert.equal(bridgeApi(), undefined);
   assert.equal(globalThis[key], foreign, "the foreign object is never replaced");
+});
+
+test("the shape gate treats an object whose members throw as not this API", () => {
+  const throwing = {
+    schema: "gentle-shell-bridge/api",
+    get version() {
+      throw new Error("verification: unreadable version");
+    },
+  };
+  assert.doesNotThrow(() => isBridgeApi(throwing));
+  assert.equal(isBridgeApi(throwing), false);
 });

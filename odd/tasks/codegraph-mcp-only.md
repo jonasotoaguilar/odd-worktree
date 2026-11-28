@@ -32,12 +32,18 @@ me pasa todavia que las intrucciones de codegraph son precarias, aun lo ocupa de
 redaccion como lo dice /home/jona/dev/upstream/skill-diet o algo mas. investiga sobre el tema." and "por lo que hay que tambien revisarlo para mejorarlos y
 que use mas la tool mcp codegraph, porque sigue usandola muy poco o mal". The research and the tool tests are reported to the user, not shipped.
 
+S7. A git project with `Codegraph+` On is indexed automatically: `codegraph init` when its checkout has no index, `sync` when it does, and a linked worktree without its own index is seeded from the main checkout. No manifest is required. The user said: "revisa igual lo de init, pues tool ya no existe, revisa que si es un proyecto git, si codegraph+ esta activo haga un codegraph init si no existe ruta o un sync si existe, si es que no lo hace ya, pues al iniciar me sale un codegraph ready recuerdo, epro nose si es solo sync o init tambien".
+
+S8. The seven role texts say what one call returns, the situations that call for it, what the query accepts and what to do with the answer. They never explain how CodeGraph works (index, sync, init) and never name a category instead of the situations. The user said: "no pongas antipatrones, que te vi que lo extendiste demas ahora, no tien tem sentido poner para que no es" and "ademas no metas wea de codegraph funciona, como la indexacion, es estupido, si te dije que que la unica tool es la del mcp explore".
+
 ## Tasks
 
 - [x] T1 (S4, S5) switches: default Off, `Codegraph+` On refused without the CLI. Route: inline. Commit: see git log (feat(modules))
 - [x] T2 (S2, S3) wiring: tools.json reconcile (On adds, Off removes, checked at session start) and the mcp.json entry at the moment of the switch. Route: inline. Commit: see git log (feat(codegraph))
 - [x] T3 (S1, S6) prompts: every role's CodeGraph text, the runtime reminders, docs and tests name only `mcp__codegraph__codegraph_explore` and say what it is for and how to query it. Route: inline. Commit: see git log (feat(codegraph-prompt))
 
+- [x] T4 (S7) automatic index: any git checkout gets `init` or `sync`, no manifest; `ODD_WORKTREE_CODEGRAPH_INDEX=0` opts out. Route: inline. Commit: 7279844
+- [x] T5 (S8) role texts: what a call returns, the situations, the query, the answer. Route: inline. Commit: 8865687
 ## Log
 
 L1. "/home/jona/.pi/gentle-ai/tools.json bien, ya funciona, entonces hay que hacer ajuste a nuestro prompt /home/jona/.pi/agent/agents/gentle-ai-explore.md
@@ -59,3 +65,4 @@ ejemplo si te digo que use el color de rol de checking, actualente eso lo delega
 y listo, 1 tool. Es un ejemplo, pero revis mas, revisa codegraph y revisa su doc web y cli para entender todo el mundo que es la base de codigo indexada y
 sus posiblidades, es muy potente, pero como es algo externo los modelos no la entienden o no la usan como principal aunque es mejor en la mayoria de casos
 por lo que hay que tambien revisarlo para mejorarlos y que use mas la tool mcp codegraph, porque sigue usandola muy poco o mal"
+L5. "dime exacto que dice en espanol el de orchestrator dejas,te luego sigue en lo que estas" (asked for the orchestrator text in Spanish while the index work continued)

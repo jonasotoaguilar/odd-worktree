@@ -8,12 +8,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { BRIDGE_SLOT, loadExtension } = require('./fixtures/load-extension.js');
+const { SHELL_SLOT, loadExtension } = require('./fixtures/load-extension.js');
 
 const scratch = [];
 after(() => {
   for (const dir of scratch) fs.rmSync(dir, { recursive: true, force: true });
-  delete globalThis[BRIDGE_SLOT];
+  delete globalThis[SHELL_SLOT];
 });
 
 function git(cwd, args) {

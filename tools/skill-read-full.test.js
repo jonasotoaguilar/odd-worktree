@@ -1,7 +1,8 @@
 'use strict';
 // S1-S5 (skill-read-full): a skill's or an ODD's Markdown is read whole, the decision the
 // extension's `tool_call` handler makes is a mutation of the host's own input, and the rule
-// follows the `Worktrees+` module switch.
+// follows the `Skills+` module switch — OFF by default, so every case that expects the rule
+// publishes `{ skills: true }` first.
 //
 // The pure half is exercised directly; the wiring half loads the extension and drives
 // the registered handlers with the event the host sends, which is the only way to prove
@@ -11,24 +12,24 @@ const assert = require('node:assert/strict');
 const os = require('node:os');
 
 const { isArtifactMarkdown, keepArtifactReadWhole } = require('../lib/artifact-read-full.js');
-const { BRIDGE_SLOT, defaultBridge, loadExtension } = require('./fixtures/load-extension.js');
+const { SHELL_SLOT, defaultShellApi, loadExtension } = require('./fixtures/load-extension.js');
 
-// S5: the module switch is read from the bridge's own store when the extension registers, so a
+// S5: the module switch is read from the shell API's own store when the extension registers, so a
 // suite that turns `Worktrees+` off publishes the document first and restores the slot after.
-const savedBridge = globalThis[BRIDGE_SLOT];
+const savedShellApi = globalThis[SHELL_SLOT];
 async function loadWithModules(modules) {
-  const bridge = defaultBridge();
-  bridge.api.createStore = () => ({
+  const shellApi = defaultShellApi();
+  shellApi.api.createStore = () => ({
     get: (key, fallback) => (key === 'modules' && modules !== undefined ? modules : fallback),
     set: () => {},
     delete: () => {},
   });
-  globalThis[BRIDGE_SLOT] = bridge.api;
+  globalThis[SHELL_SLOT] = shellApi.api;
   try {
     return await loadExtension({});
   } finally {
-    if (savedBridge === undefined) delete globalThis[BRIDGE_SLOT];
-    else globalThis[BRIDGE_SLOT] = savedBridge;
+    if (savedShellApi === undefined) delete globalThis[SHELL_SLOT];
+    else globalThis[SHELL_SLOT] = savedShellApi;
   }
 }
 
@@ -118,7 +119,7 @@ describe('the extension wiring', () => {
   };
 
   test('a skill read with a range is executed whole, and the call is not blocked', async () => {
-    const loaded = await loadExtension({});
+    const loaded = await loadWithModules({ skills: true });
     const event = readEvent({ path: SKILL, offset: 1, limit: 90 });
     const answer = await runToolCall(loaded, event);
     assert.equal(answer, undefined, 'nothing is blocked: the call still runs');
@@ -126,28 +127,30 @@ describe('the extension wiring', () => {
   });
 
   test('an ordinary read keeps its range, byte for byte', async () => {
-    const loaded = await loadExtension({});
+    const loaded = await loadWithModules({ skills: true });
     const event = readEvent({ path: 'lib/skill-read-full.js', offset: 3, limit: 40 });
     await runToolCall(loaded, event);
     assert.deepEqual(event.input, { path: 'lib/skill-read-full.js', offset: 3, limit: 40 });
   });
 
-  test('S5: worktrees+ off leaves the read exactly as the host proposed it', async () => {
-    const loaded = await loadWithModules({ worktrees: false });
-    const event = readEvent({ path: SKILL, offset: 1, limit: 90 });
-    await runToolCall(loaded, event);
-    assert.deepEqual(event.input, { path: SKILL, offset: 1, limit: 90 });
+  test('S5: Skills+ off — its default — leaves the read exactly as the host proposed it', async () => {
+    for (const modules of [undefined, { skills: false }, { worktrees: false }]) {
+      const loaded = await loadWithModules(modules);
+      const event = readEvent({ path: SKILL, offset: 1, limit: 90 });
+      await runToolCall(loaded, event);
+      assert.deepEqual(event.input, { path: SKILL, offset: 1, limit: 90 }, JSON.stringify(modules));
+    }
   });
 
   test('an odd artifact read with a range is executed whole too', async () => {
-    const loaded = await loadExtension({});
+    const loaded = await loadWithModules({ skills: true });
     const event = readEvent({ path: 'odd/tasks/x.md', offset: 40, limit: 10 });
     await runToolCall(loaded, event);
     assert.deepEqual(event.input, { path: 'odd/tasks/x.md' });
   });
 
   test('the old bash guard still refuses a skill printed with a reader', async () => {
-    const loaded = await loadExtension({});
+    const loaded = await loadWithModules({ skills: true });
     const event = { type: 'tool_call', toolName: 'bash', toolCallId: 'call-2', input: { command: `cat ${SKILL}` } };
     const answer = await runToolCall(loaded, event);
     assert.equal(answer?.block, true, 'the bash reader is still refused');

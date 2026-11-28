@@ -5,12 +5,12 @@
  * calls its factory first, so everything described here is odd-worktree's own code, not a second
  * plugin loaded beside it. Three responsibilities, no more:
  * 1. publish the runtime handshake and announce it. Importing `./api.ts` publishes the frozen API
- *    object at `Symbol.for("gentle-shell-bridge/api/v1")` at module load, before any
+ *    object at `Symbol.for("odd-worktree/shell-api/v1")` at module load, before any
  *    `session_start`, so a plugin that registers from its own `session_start` handler finds the
  *    object or learns the API is absent. When Pi loads the plugin BEFORE this package — the
  *    real TUI order — an absent symbol is only "not yet", so the factory also announces the
- *    publication on `pi.events` (`gentle-shell-bridge:ready`), once per process and never for an
- *    incompatible slot (`announceBridgeReady`). A plugin therefore needs no path, no environment
+ *    publication on `pi.events` (`odd-worktree:shell-ready`), once per process and never for an
+ *    incompatible slot (`announceShellReady`). A plugin therefore needs no path, no environment
  *    variable and no import.
  * 2. arm the row surfaces on `session_start`, only when the context has a UI AND the required host
  *    package `gentle-pi` is present at RUNTIME (`pi.getCommands()` names `gentle:customize`, see
@@ -31,8 +31,8 @@
  * registration.
  */
 
-import { armBridge } from "./arm.ts";
-import { announceBridgeReady, publishBridgeApi, type BridgeEventBus } from "./api.ts";
+import { armShellApi } from "./arm.ts";
+import { announceShellReady, publishShellApi, type ShellEventBus } from "./api.ts";
 import { flushNotices } from "./notices.ts";
 import { checkGentlePi, warnMissingGentlePi } from "./presence.ts";
 import { isRecord } from "./rows.ts";
@@ -49,15 +49,15 @@ import { installToolDesignRows } from "./tool-design-rows.ts";
 import { installToolDesignResolver, type ToolDesignResolver } from "./tool-design-wiring.ts";
 
 /** The part of the session context this extension reads. */
-export interface BridgeSessionContext {
+export interface ShellSessionContext {
   hasUI?: boolean;
   ui?: unknown;
 }
 
-export type BridgeSessionHandler = (event: unknown, ctx: BridgeSessionContext) => unknown;
+export type ShellSessionHandler = (event: unknown, ctx: ShellSessionContext) => unknown;
 
 /** Key of the widget whose only purpose is to receive the host's `tui`. */
-export const SIDEBAR_WIDGET_KEY = "gentle-shell-bridge.sidebar";
+export const SIDEBAR_WIDGET_KEY = "odd-worktree.sidebar";
 
 /** What one sidebar wiring attempt achieved. */
 export type SidebarArmOutcome =
@@ -73,7 +73,7 @@ export interface SidebarArmResult {
 }
 
 /** The `ctx.ui` members this module reads. */
-interface BridgeUiSurface {
+interface ShellUiSurface {
   setWidget?: (key: string, factory: (tui: unknown, theme: unknown) => unknown) => void;
 }
 
@@ -98,7 +98,7 @@ export function armSidebar(ui: unknown): SidebarArmResult {
     // Reading `setWidget` can itself throw (a getter on the host's UI object), so the whole
     // acquisition happens inside this guard: a broken accessor must never escape the session
     // handler and take the row side with it.
-    const surface = isRecord(ui) ? (ui as BridgeUiSurface) : undefined;
+    const surface = isRecord(ui) ? (ui as ShellUiSurface) : undefined;
     const setWidget = surface?.setWidget;
     if (surface === undefined || typeof setWidget !== "function") {
       noteSidebarUnavailable("ctx.ui has no setWidget, so a tui cannot be acquired");
@@ -109,7 +109,7 @@ export function armSidebar(ui: unknown): SidebarArmResult {
     //
     // The factory's SECOND argument is Pi's theme (`dist/core/extensions/types.d.ts:113`: `(tui:
     // theme) => Component`), the same documented hand-out gentle-shell's own parts take their theme
-    // from. The bridge keeps it so a section header and its rows paint in the host's roles instead
+    // from. The shell API keeps it so a section header and its rows paint in the host's roles instead
     // of the terminal's defaults (N11); without it the drawing is uncoloured and the recorded
     // outcome says so.
     setWidget.call(surface, SIDEBAR_WIDGET_KEY, (tui: unknown, theme?: unknown) => {
@@ -122,7 +122,7 @@ export function armSidebar(ui: unknown): SidebarArmResult {
       // The same hand-out is the only way to the conversation component (S4) and to the rail
       // component (R1), so both card-style wrappers arm here too — never at module load, never twice
       // (their marker decides), and every absence is a reported outcome instead of a throw inside
-      // the host's factory. The captured `tui` is also what a bridge-owned write asks for a frame
+      // the host's factory. The captured `tui` is also what a shell API-owned write asks for a frame
       // through (R3), so it is remembered first: a later rail attach (the fullscreen layout may not
       // be mounted yet) reads it from there.
       setRepaintHost(captured);
@@ -146,7 +146,7 @@ export function armSidebar(ui: unknown): SidebarArmResult {
 }
 
 /** One entry of Pi's command list, as this module reads it: only the name is ever inspected. */
-export interface BridgeCommandEntry {
+export interface ShellCommandEntry {
   readonly name?: string;
 }
 
@@ -155,20 +155,20 @@ export interface BridgeCommandEntry {
  * every shape (a non-array answer, an entry without a name, a throwing accessor), so nothing here
  * relies on the declared type being honoured.
  */
-export type BridgeCommandList = readonly BridgeCommandEntry[];
+export type ShellCommandList = readonly ShellCommandEntry[];
 
 /** The part of Pi's `ExtensionAPI` this extension uses. */
-export interface BridgeExtensionApi {
-  on(event: "session_start" | "session_shutdown", handler: BridgeSessionHandler): void;
+export interface ShellExtensionApi {
+  on(event: "session_start" | "session_shutdown", handler: ShellSessionHandler): void;
   /**
    * Pi's command list (`docs/extensions.md`): the runtime evidence of which extensions are loaded.
-   * The bridge reads it for the REQUIRED host package (S9): an entry named `gentle:customize` means
+   * The shell API reads it for the REQUIRED host package (S9): an entry named `gentle:customize` means
    * `gentle-pi` is there. Optional, because a bare harness may expose no command surface at all —
    * which is MISSING, not an error.
    */
-  getCommands?(): BridgeCommandList;
+  getCommands?(): ShellCommandList;
   /** Pi's cross-extension bus (`docs/extensions.md:1965-1972`); absent only in a bare harness. */
-  events?: BridgeEventBus;
+  events?: ShellEventBus;
   /**
    * Pi's tool-renderer hook (`docs/extensions.md:2123`;
    * `dist/core/extensions/types.d.ts:546`): the sanctioned way to choose how a tool's card is drawn.
@@ -178,13 +178,13 @@ export interface BridgeExtensionApi {
   registerToolRenderer?(resolver: ToolDesignResolver): void;
 }
 
-export default function shellApiExtension(pi: BridgeExtensionApi): void {
+export default function shellApiExtension(pi: ShellExtensionApi): void {
   // The module load above already published the object; this factory is the first moment `pi` —
   // and therefore `pi.events` — exists, so it is where the process is told. Both calls are
   // idempotent: publishing again hands back the slot's object, and the announcement happens once
   // per process even when two copies of this package are loaded.
-  publishBridgeApi();
-  announceBridgeReady(pi.events);
+  publishShellApi();
+  announceShellReady(pi.events);
 
   pi.on("session_start", (_event, ctx) => {
     // Without a UI there is no customize menu to reach, so there is nothing to arm. There is also
@@ -208,12 +208,12 @@ export default function shellApiExtension(pi: BridgeExtensionApi): void {
       }
       return;
     }
-    armBridge(ctx.ui);
+    armShellApi(ctx.ui);
     // The `Sections` provider needs no `tui`, so it is installed even when the rail cannot be
     // reached: the user can still see and toggle a section. Re-installing is idempotent — the bus
     // replaces a provider with the same id in place.
     installSectionRows();
-    // The card-style fallback line needs no `tui`: it is the bridge's own `Bridge card style` line,
+    // The card-style fallback line needs no `tui`: it is the shell API's own `API card style` line,
     // registered only while the host's own line cannot be extended (the capture decides that, and
     // disposes this provider the moment it extends the host's line instead).
     installCardStyleRows();

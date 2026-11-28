@@ -43,9 +43,9 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 const {
-  BRIDGE_SLOT,
+  SHELL_SLOT,
   LIB_DIR,
-  defaultBridge,
+  defaultShellApi,
   loadExtension,
   stubbedSource,
   withGhPath,
@@ -55,32 +55,32 @@ const CWD = '/odd-session-wiring/checkout';
 const ENTRY_TYPE = 'odd-worktree.odd-touch';
 const TASKS = path.join(CWD, 'odd', 'tasks');
 
-const savedBridge = globalThis[BRIDGE_SLOT];
+const savedShellApi = globalThis[SHELL_SLOT];
 afterEach(() => {
-  if (savedBridge === undefined) delete globalThis[BRIDGE_SLOT];
-  else globalThis[BRIDGE_SLOT] = savedBridge;
+  if (savedShellApi === undefined) delete globalThis[SHELL_SLOT];
+  else globalThis[SHELL_SLOT] = savedShellApi;
 });
 
-// A bridge whose `modules` document is the one handed in (everything else on), which is
+// A shell API whose `modules` document is the one handed in (everything else on), which is
 // how the Tools page turns `Worktrees+` off; `undefined` keeps the default document.
-function publishBridge(modules) {
-  const bridge = defaultBridge();
+function publishShellApi(modules) {
+  const shellApi = defaultShellApi();
   if (modules !== undefined) {
-    bridge.api.createStore = () => ({
+    shellApi.api.createStore = () => ({
       get: (key, fallback) => (key === 'modules' ? modules : fallback),
       set: () => {},
       delete: () => {},
     });
   }
-  globalThis[BRIDGE_SLOT] = bridge.api;
-  return bridge;
+  globalThis[SHELL_SLOT] = shellApi.api;
+  return shellApi;
 }
 
 // The extension's own module namespace, which the shared fixture's loader does not
 // return: the record lives on module scope (`oddSession`), like this package's other
 // test seams (`libModule`, `setWarpTuiLoader`, ...), so the assertions read it there.
 // Everything else is the fixture's setup — the same stubbed source, the same lib
-// override and the same published bridge.
+// override and the same published shell API.
 async function loadModule(options = {}) {
   const opts = options !== null && typeof options === 'object' ? options : {};
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-session-wiring-'));
@@ -212,7 +212,7 @@ const touchEntries = (loaded) => loaded.entries.filter((entry) => entry.customTy
 describe('a write or an edit on an odd/tasks document (S8)', () => {
   test('is recorded against this session and persisted as ONE entry that paints nothing', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       assert.ok(loaded.mod.oddSession, 'the record exists once the worktree module registers');
       assert.equal(loaded.entryRenderers.has(ENTRY_TYPE), false, 'an unrendered entry draws no transcript line');
@@ -240,7 +240,7 @@ describe('a write or an edit on an odd/tasks document (S8)', () => {
 
   test('a relative target is persisted absolute, resolved against the call’s cwd', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       await fire(loaded, 'tool_result', writeEvent('./odd/tasks/../tasks/alpha.md'), ctxOf());
       assert.deepEqual(touchEntries(loaded).map((entry) => entry.data.path), [path.join(TASKS, 'alpha.md')]);
@@ -249,7 +249,7 @@ describe('a write or an edit on an odd/tasks document (S8)', () => {
 
   test('a re-touch moves the document to the front while the record keeps one row per document', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       await fire(loaded, 'tool_result', writeEvent('odd/tasks/alpha.md'), ctxOf());
       await fire(loaded, 'tool_result', writeEvent('odd/tasks/beta.md'), ctxOf());
@@ -267,7 +267,7 @@ describe('a write or an edit on an odd/tasks document (S8)', () => {
 
   test('every other tool and every non-document target registers nothing', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       for (const toolName of ['read', 'bash', 'grep', 'find', 'ls', 'worktree_create']) {
         await fire(loaded, 'tool_result', { ...writeEvent(), toolName }, ctxOf());
@@ -282,7 +282,7 @@ describe('a write or an edit on an odd/tasks document (S8)', () => {
 
   test('a FAILED write leaves no row and no entry', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       await fire(loaded, 'tool_result', writeEvent('odd/tasks/alpha.md', { isError: true }), ctxOf());
       assert.deepEqual(touches(loaded), []);
@@ -292,7 +292,7 @@ describe('a write or an edit on an odd/tasks document (S8)', () => {
 
   test('asks for one immediate refresh, and an unset callback is a no-op', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       // No callback set: the touch still lands.
       await fire(loaded, 'tool_result', writeEvent('odd/tasks/alpha.md'), ctxOf());
@@ -313,7 +313,7 @@ describe('a write or an edit on an odd/tasks document (S8)', () => {
   test('a host without the appendEntry seam, or one that throws, still records the touch', async () => {
     await presentGh(async () => {
       for (const seam of ['absent', 'throwing']) {
-        publishBridge(undefined);
+        publishShellApi(undefined);
         const loaded = await loadModule({ appendEntry: seam });
         await fire(loaded, 'tool_result', writeEvent('odd/tasks/alpha.md'), ctxOf());
         assert.deepEqual(touches(loaded).map((touch) => touch.name), ['alpha'], seam);
@@ -337,7 +337,7 @@ describe('the session boundary (S8/S9)', () => {
 
   test('a resumed session remembers what it touched, and a new one restores the same way', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       assert.deepEqual(touches(loaded), []);
       const persisted = [
@@ -360,7 +360,7 @@ describe('the session boundary (S8/S9)', () => {
 
   test('a resumed session then records a new touch on top of the restored ones', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       await fire(loaded, 'session_start', { reason: 'resume' }, ctxOf([touchEntry('a', 'alpha.md', 1000)]));
       await fire(loaded, 'tool_result', writeEvent('odd/tasks/gamma.md'), ctxOf());
@@ -370,7 +370,7 @@ describe('the session boundary (S8/S9)', () => {
 
   test('a session manager that cannot answer restores nothing and throws nothing', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       const broken = {
         cwd: CWD,
@@ -390,7 +390,7 @@ describe('the session boundary (S8/S9)', () => {
 describe('a subagent’s write (S9)', () => {
   test('never reaches this session’s record: no event, no touch', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       // A subagent runs in its OWN session, so its `write` of an `odd/tasks` document
       // is observed by its own handler and by nobody else. The parent's record grows
@@ -407,7 +407,7 @@ describe('a subagent’s write (S9)', () => {
 describe('the module switch and the neighbouring observations', () => {
   test('with Worktrees+ OFF a write or an edit of an odd/tasks document is STILL recorded and persisted', async () => {
     await presentGh(async () => {
-      publishBridge({ worktrees: false });
+      publishShellApi({ worktrees: false });
       const loaded = await loadModule();
       // The ODD rail is `Worktrees+`'s surface, so the attribution of what this session
       // writes cannot be behind that switch: the record exists and grows with the module
@@ -438,15 +438,14 @@ describe('the module switch and the neighbouring observations', () => {
   // registered surface uses.
   test('only the existing worktree observations stay behind the switch: the touch one does not', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const on = await loadExtension({});
-      publishBridge({ worktrees: false });
+      publishShellApi({ worktrees: false });
       const off = await loadExtension({});
       const onToolResult = handlersOf(on, 'tool_result').length;
       const offToolResult = handlersOf(off, 'tool_result').length;
-      // Exactly ONE `tool_result` observation is the worktree half's: the ODD-naming
-      // observer. The touch observation and the issues one are NOT, so the gap is one.
-      assert.equal(onToolResult - offToolResult, 1);
+      // The ODD touch and issues observers do not depend on Worktrees+.
+      assert.equal(onToolResult, offToolResult);
       assert.ok(offToolResult >= 2, 'the touch observation is still registered with the module off');
 
       const ctx = ctxOf();
@@ -457,10 +456,12 @@ describe('the module switch and the neighbouring observations', () => {
 
   test('a write on an odd/tasks document reaches the existing tool_call observations unchanged', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      // All three halves on: `Skills+` is OFF by default, so its two read rules would not be
+      // registered and this case is about a guard-free write with the whole package present.
+      publishShellApi({ skills: true });
       const loaded = await loadModule();
       const results = await fire(loaded, 'tool_call', writeEvent(), ctxOf());
-      assert.ok(results.length >= 4, 'the naming observer and the guards are all still there');
+      assert.ok(results.length >= 4, 'the guards are all still there');
       for (const result of results) assert.equal(result, undefined, 'nothing blocks a write on an odd document');
       assert.deepEqual(touches(loaded), [], 'a call that has not finished is not a touch');
     });
@@ -475,7 +476,7 @@ describe('the module switch and the neighbouring observations', () => {
 describe('the association rebuilt from the active branch (S3, S4)', () => {
   test('session_start associates what an old session wrote or edited, with no touch entry at all', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       assert.deepEqual(associated(loaded), [], 'nothing yet');
       const history = [
@@ -492,7 +493,7 @@ describe('the association rebuilt from the active branch (S3, S4)', () => {
 
   test('a FAILED call is not associated, and the association is not a restore of the record', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       const history = [
         callEntry('call-1', 'write', path.join(TASKS, 'alpha.md')),
@@ -507,7 +508,7 @@ describe('the association rebuilt from the active branch (S3, S4)', () => {
 
   test('the abandoned branch is not read: only the active branch associates', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       const abandoned = [
         callEntry('call-1', 'write', path.join(TASKS, 'alpha.md')),
@@ -522,7 +523,7 @@ describe('the association rebuilt from the active branch (S3, S4)', () => {
 
   test('a live touch joins the association immediately', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       await fire(loaded, 'session_start', { reason: 'new' }, ctxOf([]));
       assert.deepEqual(associated(loaded), []);
@@ -535,7 +536,7 @@ describe('the association rebuilt from the active branch (S3, S4)', () => {
 
   test('a persisted subagent report associates its files_changed paths', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       await fire(loaded, 'session_start', { reason: 'new' }, ctxOf([]));
 
@@ -567,7 +568,7 @@ describe('the association rebuilt from the active branch (S3, S4)', () => {
 
   test('a resumed session restores touches, reports and Spec lines alike', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       const task = 'Do the work.\n\nSpec: odd/tasks/delta.md, T1\n';
       const history = [
@@ -592,7 +593,7 @@ describe('the association rebuilt from the active branch (S3, S4)', () => {
 
   test('a manager that cannot answer the branch keeps the append-only fallback', async () => {
     await presentGh(async () => {
-      publishBridge(undefined);
+      publishShellApi(undefined);
       const loaded = await loadModule();
       const history = [
         callEntry('call-1', 'edit', path.join(TASKS, 'alpha.md')),

@@ -401,6 +401,6 @@ test("a contributed section leaves the main column exactly where the host put it
 });
 
 // ---------------------------------------------------------------------------------------------
-// N20 — the report carries the last render's budget and what the bridge did with it
+// N20 — the report carries the last render's budget and what the shell API did with it
 // ---------------------------------------------------------------------------------------------
 

@@ -216,7 +216,7 @@ test("S3: with `default` selected the host's own frame is drawn, byte for byte",
   registerMessageDesign(design());
   adoptCustomMessages(container([child]));
 
-  assert.deepEqual(child.render(40), ["host frame@40"], "exactly what Pi drew before the bridge");
+  assert.deepEqual(child.render(40), ["host frame@40"], "exactly what Pi drew before the shell API");
 });
 
 test("S3: a selected design receives the host's rows at the message's width and returns the rest", () => {
@@ -372,12 +372,12 @@ test("S2: the design reads `ctx.cardStyle`, so the consumer's painter knows whic
     "the message body's own rows: label, spacer, content",
   );
   const style = seen as { kind: string; style?: { id: string } };
-  assert.equal(style.kind, "style", "the bridge's own Card style selection, the one a tool design reads");
+  assert.equal(style.kind, "style", "the shell API's own Card style selection, the one a tool design reads");
   assert.equal(style.style?.id, "loon.lunar", "and the exact style the user chose");
 });
 
 test("S2: own-the-box works for ANY custom type, not just the two Pi ships today", () => {
-  // Nothing in the bridge knows this type: no host renderer, no Pi component, no list. A design still
+  // Nothing in the shell API knows this type: no host renderer, no Pi component, no list. A design still
   // claims it and owns the box, which is the capability a consumer registers for its own messages.
   const TYPE = "loon.custom-note";
   const child = fakeCustomMessage(TYPE);
@@ -595,14 +595,14 @@ test("S2: the fallback box carries the message's CURRENT output padding", () => 
   assert.deepEqual(child.render(40), [`[${REMINDER}] pi's own box@40`], "Pi's own next frame");
 });
 
-// Coexistence: the adoption state lives on a process-global slot that an older copy of this API (a
-// standalone `gentle-shell-bridge` still installed) reads too, and that copy only trusts the slot
+// Coexistence: the adoption state lives on a process-global slot that an older copy of this API (an
+// older copy of it still loaded) reads too, and that copy only trusts the slot
 // while `adoptedMessages` is an array — otherwise it overwrites the whole object and drops the live
 // adoption count and the per-container record. So the fields stay, even though nothing here reads
 // `adoptedMessages` for a report any more.
 test("the shared adoption state keeps the shape an older copy validates before trusting it", () => {
   const slot = (globalThis as unknown as Record<symbol, Record<string, unknown> | undefined>)[
-    Symbol.for("gentle-shell-bridge.message-designs.adoption.v1")
+    Symbol.for("odd-worktree.message-designs.adoption.v1")
   ];
   assert.ok(slot !== undefined, "resetting the adoption state publishes the slot");
   assert.ok(Array.isArray(slot.adoptedMessages), "adoptedMessages stays an array, or an older copy resets the slot");

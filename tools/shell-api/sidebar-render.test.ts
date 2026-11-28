@@ -1,7 +1,7 @@
 /**
  * Section rendering on the host's rail (S3, S7, S8), against the fake host.
  *
- * Every assertion here is about FRAMED output: the bridge contributes rows and card groups, and the
+ * Every assertion here is about FRAMED output: the shell API contributes rows and card groups, and the
  * host's own frame draws the card. A raw string in a rail's output is not a rendered section.
  */
 
@@ -71,7 +71,7 @@ const section = (id: string, extra: Partial<SidebarSection> = {}): SidebarSectio
   ...extra,
 });
 
-/** Native host first, then the bridge's interception and the section renderer. */
+/** Native host first, then the shell API's interception and the section renderer. */
 function arm(): void {
   registerNativeFooter();
   installSidebarBackend(() => fakeTui());

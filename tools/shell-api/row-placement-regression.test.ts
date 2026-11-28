@@ -457,8 +457,8 @@ test("a pop'd appended row makes the rollback report what it found and could not
   assert.deepEqual(
     snapshotNotices().entries.map((entry) => entry.message),
     [
-      "gentle-shell-bridge: could not fully roll back the provisional rows: appended 1 row; " +
-        "1 already removed by the host; 0 removed by the bridge; 0 could not be removed. " +
+      "odd-worktree: could not fully roll back the provisional rows: appended 1 row; " +
+        "1 already removed by the host; 0 removed by the shell API; 0 could not be removed. " +
         "The host menu was left as consistent as the array allowed.",
     ],
   );
@@ -522,7 +522,7 @@ test("a clean rollback of every appended row emits no notice", () => {
   assert.deepEqual(labels(scenario.rows), labels(hostRows()));
 });
 
-test("a host pop of one of three appended rows reports host and bridge removals truthfully", () => {
+test("a host pop of one of three appended rows reports host and shell API removals truthfully", () => {
   const scenario = throwingHostAfter(
     [
       { label: "Injected one", action: () => {} },
@@ -535,8 +535,8 @@ test("a host pop of one of three appended rows reports host and bridge removals 
   assert.throws(() => scenario.host.build(), (error) => error === scenario.originalError);
   assert.deepEqual(labels(scenario.rows), labels(hostRows()));
   assert.deepEqual(snapshotNotices().entries.map((entry) => entry.message), [
-    "gentle-shell-bridge: could not fully roll back the provisional rows: appended 3 rows; " +
-      "1 already removed by the host; 2 removed by the bridge; 0 could not be removed. " +
+    "odd-worktree: could not fully roll back the provisional rows: appended 3 rows; " +
+      "1 already removed by the host; 2 removed by the shell API; 0 could not be removed. " +
       "The host menu was left as consistent as the array allowed.",
   ]);
 });
@@ -570,9 +570,9 @@ test("a non-configurable appended index makes the rollback remove nothing", () =
     assert.equal(Object.hasOwn(scenario.rows, String(index)), true, `index ${index} is not a hole`);
   }
   assert.deepEqual(snapshotNotices().entries.map((entry) => entry.message), [
-    "gentle-shell-bridge: could not fully roll back the provisional rows: index 4 is " +
+    "odd-worktree: could not fully roll back the provisional rows: index 4 is " +
       "non-configurable; appended 3 rows; 0 already removed by the host; 0 removed by the " +
-      "bridge; 3 could not be removed. The host menu was left as consistent as the array allowed.",
+      "shell API; 3 could not be removed. The host menu was left as consistent as the array allowed.",
   ]);
 });
 
@@ -652,9 +652,9 @@ test("swapping the last two appended rows removes all three and accounts for the
     assert.equal(Object.hasOwn(scenario.rows, String(index)), true, `index ${index} is not a hole`);
   }
   assert.deepEqual(snapshotNotices().entries.map((entry) => entry.message), [
-    "gentle-shell-bridge: could not fully roll back the provisional rows: the host changed the " +
+    "odd-worktree: could not fully roll back the provisional rows: the host changed the " +
       "appended rows before the rollback; appended 3 rows; 0 already removed by the host; " +
-      "3 removed by the bridge; 0 could not be removed. The host menu was left as consistent as " +
+      "3 removed by the shell API; 0 could not be removed. The host menu was left as consistent as " +
       "the array allowed.",
   ]);
 });
@@ -690,9 +690,9 @@ test("a locked host row after the append leaves the build array byte-for-byte in
     assert.equal(Object.hasOwn(scenario.rows, String(index)), true, `index ${index} is not a hole`);
   }
   assert.deepEqual(snapshotNotices().entries.map((entry) => entry.message), [
-    "gentle-shell-bridge: could not fully roll back the provisional rows: index 7 is " +
+    "odd-worktree: could not fully roll back the provisional rows: index 7 is " +
       "non-configurable; appended 3 rows; 0 already removed by the host; 0 removed by the " +
-      "bridge; 3 could not be removed. The host menu was left as consistent as the array allowed.",
+      "shell API; 3 could not be removed. The host menu was left as consistent as the array allowed.",
   ]);
 });
 
@@ -739,8 +739,8 @@ test("a getter-only earlier splice target makes the rollback write nothing", () 
     assert.equal(Object.hasOwn(scenario.rows, String(index)), true, `index ${index} is not a hole`);
   }
   assert.deepEqual(snapshotNotices().entries.map((entry) => entry.message), [
-    "gentle-shell-bridge: could not fully roll back the provisional rows: index 5 is " +
-      "read-only; appended 3 rows; 0 already removed by the host; 0 removed by the bridge; " +
+    "odd-worktree: could not fully roll back the provisional rows: index 5 is " +
+      "read-only; appended 3 rows; 0 already removed by the host; 0 removed by the shell API; " +
       "3 could not be removed. The host menu was left as consistent as the array allowed.",
   ]);
 });
@@ -790,8 +790,8 @@ test("a setter-bearing accessor is refused before any write", () => {
     assert.equal(Object.hasOwn(scenario.rows, String(index)), true, `index ${index} is not a hole`);
   }
   assert.deepEqual(snapshotNotices().entries.map((entry) => entry.message), [
-    "gentle-shell-bridge: could not fully roll back the provisional rows: index 5 is " +
-      "read-only; appended 3 rows; 0 already removed by the host; 0 removed by the bridge; " +
+    "odd-worktree: could not fully roll back the provisional rows: index 5 is " +
+      "read-only; appended 3 rows; 0 already removed by the host; 0 removed by the shell API; " +
       "3 could not be removed. The host menu was left as consistent as the array allowed.",
   ]);
 });

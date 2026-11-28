@@ -26,7 +26,7 @@
  *
  * ## No design, no line
  *
- * The provider is registered when the bridge arms and its rows are rebuilt per menu build, never
+ * The provider is registered when the shell API arms and its rows are rebuilt per menu build, never
  * cached. With no design registered it contributes NOTHING: a session that never installed a design
  * plugin must not gain an empty line. The first design to register appears on the next build with no
  * re-registration.
@@ -41,7 +41,7 @@
  * This module is internal: `src/index.ts` does not re-export it.
  */
 
-import { registerBridgeRows } from "./bus.ts";
+import { registerShellApiRows } from "./bus.ts";
 import { HOST_CARD_STYLE_CATEGORY } from "./card-style-line.ts";
 import { requestRepaint } from "./repaint.ts";
 import { deriveRowLabel } from "./row-labels.ts";
@@ -57,8 +57,8 @@ import {
 } from "./tool-designs.ts";
 import type { CustomizeRow, RowPreview, ToolDesignRegistration } from "./types.ts";
 
-/** The rows provider's id; it is the bridge's own registration, never a plugin's. */
-export const TOOL_DESIGN_ROWS_PROVIDER_ID = "bridge.tool-designs";
+/** The rows provider's id; it is the shell API's own registration, never a plugin's. */
+export const TOOL_DESIGN_ROWS_PROVIDER_ID = "shell-api.tool-designs";
 
 /** The word every design line starts with: the `Cards` category's own vocabulary. */
 const TOOL_LINE_PREFIX = "Card";
@@ -248,12 +248,12 @@ function designRows(): CustomizeRow[] {
 }
 
 interface ToolDesignRowsState {
-  /** The live provider's disposer, while the bridge has it registered. */
+  /** The live provider's disposer, while the shell API has it registered. */
   dispose?: () => void;
 }
 
-/** Process-global, like every other piece of bridge state: two copies must agree. */
-const ROWS_KEY = Symbol.for("gentle-shell-bridge.tool-designs.rows.v1");
+/** Process-global, like every other piece of shell API state: two copies must agree. */
+const ROWS_KEY = Symbol.for("odd-worktree.tool-designs.rows.v1");
 
 function rowsHost(): Record<symbol, ToolDesignRowsState | undefined> {
   // SAFETY: only `rowsState()` writes this key, and it re-checks the shape before trusting a value
@@ -275,13 +275,13 @@ function rowsState(): ToolDesignRowsState {
 /**
  * Register the design line for this process and return a disposer that withdraws it.
  *
- * Call it when the bridge arms; it needs no `tui` and no capture. Installing twice is a no-op, so a
+ * Call it when the shell API arms; it needs no `tui` and no capture. Installing twice is a no-op, so a
  * second arm or a second loaded copy of this package cannot contribute the line twice.
  */
 export function installToolDesignRows(): () => void {
   const state = rowsState();
   if (state.dispose === undefined) {
-    state.dispose = registerBridgeRows({
+    state.dispose = registerShellApiRows({
       id: TOOL_DESIGN_ROWS_PROVIDER_ID,
       category: HOST_CARD_STYLE_CATEGORY,
       // Rebuilt per build, never cached: a design registered later shows up with no re-registration.

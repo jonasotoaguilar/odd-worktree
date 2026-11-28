@@ -113,8 +113,8 @@ interface PipelineState {
   lastFrame: TransformFrameOutcome[];
 }
 
-/** Process-global, like every other piece of bridge state (`./bus.ts` explains why). */
-const PIPELINE_STATE = Symbol.for("gentle-shell-bridge.transform-pipeline.state.v1");
+/** Process-global, like every other piece of shell API state (`./bus.ts` explains why). */
+const PIPELINE_STATE = Symbol.for("odd-worktree.transform-pipeline.state.v1");
 
 function pipelineHost(): Record<symbol, PipelineState | undefined> {
   // SAFETY: only `pipelineState()` writes this key, and it re-checks the shape it finds.

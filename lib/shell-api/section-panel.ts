@@ -16,16 +16,16 @@
  *
  * The theme comes from Pi: `ctx.ui.setWidget(key, (tui, theme) => Component)` is the documented
  * hand-out (`docs/extensions.md:2922`), and gentle-shell obtains its own theme the same way. So the
- * bridge captures that theme (`setSectionTheme`) instead of inventing a palette.
+ * shell API captures that theme (`setSectionTheme`) instead of inventing a palette.
  *
  * ## Why the fallback exists
  *
  * The host's builders are NOT reachable: gentle-shell is not a dependency of this package, and Pi
  * loads each extension through its own jiti loader with `moduleCache: false`, so
- * `lib/shell-panel.ts` is not importable and publishes no seam on any object the bridge is handed.
+ * `lib/shell-panel.ts` is not importable and publishes no seam on any object the shell API is handed.
  * Rather than claim otherwise, this module:
  *
- * 1. LOOKS, on every object the bridge is actually given — the rail part, the Pi theme, the
+ * 1. LOOKS, on every object the shell API is actually given — the rail part, the Pi theme, the
  *    terminal's sidebar state — for the host's two builder functions (`notePanelCandidate`);
  * 2. uses them when they are found, and reports `host` in the diagnostics record;
  * 3. otherwise draws with the local port of the same algorithm (`renderSectionHeader` /
@@ -105,8 +105,8 @@ interface PanelState {
   missing: string[];
 }
 
-/** Process-global, like every other piece of bridge state (`./bus.ts` explains why). */
-const PANEL_STATE = Symbol.for("gentle-shell-bridge.section-panel.state.v1");
+/** Process-global, like every other piece of shell API state (`./bus.ts` explains why). */
+const PANEL_STATE = Symbol.for("odd-worktree.section-panel.state.v1");
 
 function panelHost(): Record<symbol, PanelState | undefined> {
   // SAFETY: only `panelState()` writes this key, and it re-checks the shape before trusting it.
@@ -159,7 +159,7 @@ export function getSectionTheme(): PanelTheme | undefined {
 }
 
 /**
- * Look for the host's panel builders on one object the bridge was handed (N11, N15). Called with the
+ * Look for the host's panel builders on one object the shell API was handed (N11, N15). Called with the
  * rail part, the Pi theme and the terminal's sidebar state — every object in this package's reach —
  * so the answer in the diagnostics record is a measurement of this run, not a claim in a comment.
  */

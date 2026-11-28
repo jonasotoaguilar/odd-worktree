@@ -19,8 +19,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { publishBridgeApi, resetBridgeApiForTests } from "../../lib/shell-api/api.ts";
-import { armBridge } from "../../lib/shell-api/arm.ts";
+import { publishShellApi, resetShellApiForTests } from "../../lib/shell-api/api.ts";
+import { armShellApi } from "../../lib/shell-api/arm.ts";
 import {
   registerCardStyle,
   registerRows,
@@ -78,7 +78,7 @@ test.after(() => {
 
 test.beforeEach(() => {
   rmSync(join(configHome, "gentle-shell-bridge"), { recursive: true, force: true });
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetBusForTests();
   resetSectionsForTests();
   resetCardStylesForTests();
@@ -108,7 +108,7 @@ const section = (id: string, extra: Partial<SidebarSection> = {}): SidebarSectio
 
 const menuHost = (): FakeHost => {
   const host = createFakeHost();
-  armBridge(host.ui);
+  armShellApi(host.ui);
   return host;
 };
 
@@ -286,7 +286,7 @@ test("a card style whose rowLabel breaks the shape is not registered and never r
       },
     ],
   });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   host.buildMenu();
 
   assert.deepEqual(host.toggleLines(), ["Card style ○ neon ● float"], "the host's line is unchanged");

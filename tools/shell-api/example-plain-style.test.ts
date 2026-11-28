@@ -15,13 +15,13 @@
  *
  * What is REAL here and what is MODELLED:
  *
- * - real: the example registers through the published API; the bridge's own card-style transform
+ * - real: the example registers through the published API; the shell API's own card-style transform
  *   (`installCardStyleTransform` / `installRailCardStyleTransform` through the extension entry), its
  *   sidebar backend wrapper and its section renderer (`buildSectionContribution`), its card-style
  *   rows (the host's own `Card style` line, extended), its store, and the host's own `neon`/`float`
  *   rows.
  * - modelled: the host's framing of a rail section into a `float` card. `hostSectionCard` below is
- *   pinned against the host-produced fixtures `RAIL_HOST_CARD` / `RAIL_BRIDGE_CARD`: it reproduces
+ *   pinned against the host-produced fixtures `RAIL_HOST_CARD` / `RAIL_SHELL_API_CARD`: it reproduces
  *   both byte for byte, so the bytes it draws for the example's own section follow the same shape.
  * - fixtures: every conversation card and every rail card is the host's or pi's own output; the
  *   derivation is the comment block in `test/fake-transcript.ts` (conversation) and
@@ -40,14 +40,14 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
-  BRIDGE_API_KEY,
-  BRIDGE_READY_EVENT,
-  announceBridgeReady,
-  bridgeApi,
-  publishBridgeApi,
-  resetBridgeApiForTests,
+  SHELL_API_KEY,
+  SHELL_READY_EVENT,
+  announceShellReady,
+  shellApi,
+  publishShellApi,
+  resetShellApiForTests,
 } from "../../lib/shell-api/api.ts";
-import { armBridge } from "../../lib/shell-api/arm.ts";
+import { armShellApi } from "../../lib/shell-api/arm.ts";
 import {
   resetBusForTests,
   resetCardStylesForTests,
@@ -75,7 +75,7 @@ import {
   setCardStyleSelection,
 } from "../../lib/shell-api/card-styles.ts";
 import { disableCaptureBackend, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
-import gentleShellBridge, { type BridgeExtensionApi } from "../../lib/shell-api/extension.ts";
+import gentleShellShellApi, { type ShellExtensionApi } from "../../lib/shell-api/extension.ts";
 import { resetHookStateForTests } from "../../lib/shell-api/hook.ts";
 import { resetNoticesForTests } from "../../lib/shell-api/notices.ts";
 import { resetPluginLinesForTests } from "../../lib/shell-api/plugin-lines.ts";
@@ -169,9 +169,9 @@ const notifySurface = (): {
   return { ui: { notify: (message, level) => calls.push([message, level]) }, calls };
 };
 
-const loadBridge = (events: ReturnType<typeof createFakeEvents>): void => {
-  const pi: BridgeExtensionApi = { on() {}, registerCommand() {}, events };
-  gentleShellBridge(pi);
+const loadShellApi = (events: ReturnType<typeof createFakeEvents>): void => {
+  const pi: ShellExtensionApi = { on() {}, registerCommand() {}, events };
+  gentleShellShellApi(pi);
 };
 
 /** How many `plain` styles and `CARD BASH` sections this load owns right now. */
@@ -197,7 +197,7 @@ test.after(() => {
 
 test.beforeEach(() => {
   rmSync(join(configHome, "gentle-shell-bridge"), { recursive: true, force: true });
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetBusForTests();
   resetSectionsForTests();
   resetCardStylesForTests();
@@ -259,16 +259,16 @@ test("T29: the example registers `plain` (id bash-card.plain) on the Card style 
       { category: "Layout", label: "Layout: builtin", action: () => {} },
     ],
   });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
 
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   (await loadExample("plain-row"))(pi);
   const { ui, calls } = notifySurface();
   for (const handler of sessionHandlers) handler({}, { hasUI: true, ui });
 
-  assert.deepEqual(calls, [], "nothing to warn about: the bridge published the surface");
+  assert.deepEqual(calls, [], "nothing to warn about: the shell API published the surface");
   assert.deepEqual(surfaceCounts(), [1, 1]);
 
   const [style] = snapshotCardStyles();
@@ -299,7 +299,7 @@ test("T29: the example registers `plain` (id bash-card.plain) on the Card style 
 });
 
 test("T30: selecting `plain` from its row persists the selection and repaints the card already on screen", async () => {
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   (await loadExample("plain-select"))(pi);
   const { ui } = notifySurface();
@@ -339,10 +339,10 @@ test("T30: selecting `plain` from its row persists the selection and repaints th
   });
 });
 
-test("T30: an older bridge without registerCardStyle keeps the design, the section and the demo category, and says `card style  absent`", async () => {
-  const published = bridgeApi() ?? publishBridgeApi();
+test("T30: an older shell API without registerCardStyle keeps the design, the section and the demo category, and says `card style  absent`", async () => {
+  const published = shellApi() ?? publishShellApi();
   // First-wins: a mixed process can hand back a v1 object that predates `registerCardStyle`.
-  hostSlot()[BRIDGE_API_KEY] = {
+  hostSlot()[SHELL_API_KEY] = {
     schema: published.schema,
     version: published.version,
     VERSION: published.VERSION,
@@ -353,11 +353,11 @@ test("T30: an older bridge without registerCardStyle keeps the design, the secti
   };
 
   const { pi, sessionHandlers } = recordingPi();
-  const dispose = (await loadExample("plain-old-bridge"))(pi);
+  const dispose = (await loadExample("plain-old-shell API"))(pi);
   const { ui, calls } = notifySurface();
   for (const handler of sessionHandlers) handler({}, { hasUI: true, ui });
 
-  assert.deepEqual(calls, [], "a surface the bridge never promised is never warned about");
+  assert.deepEqual(calls, [], "a surface the shell API never promised is never warned about");
   assert.deepEqual(snapshotToolDesigns("bash").map((design) => design.id), ["bash-card.bash-heading"]);
   assert.deepEqual(surfaceCounts(), [0, 1], "no style, but the section still registers");
 
@@ -385,12 +385,12 @@ test("T30: a late load through the ready announcement registers the style", asyn
   (await loadExample("plain-late"))(pi);
 
   assert.deepEqual(surfaceCounts(), [0, 0], "nothing registers at module load");
-  assert.equal(bus.listenerCount(BRIDGE_READY_EVENT), 1, "the early loader is listening");
+  assert.equal(bus.listenerCount(SHELL_READY_EVENT), 1, "the early loader is listening");
 
-  loadBridge(bus);
+  loadShellApi(bus);
 
   assert.deepEqual(surfaceCounts(), [1, 1], "the announcement served the early loader");
-  assert.equal(bus.listenerCount(BRIDGE_READY_EVENT), 0, "and it stopped listening afterwards");
+  assert.equal(bus.listenerCount(SHELL_READY_EVENT), 0, "and it stopped listening afterwards");
 
   const { ui } = notifySurface();
   for (const handler of sessionHandlers) handler({}, { hasUI: true, ui });
@@ -398,7 +398,7 @@ test("T30: a late load through the ready announcement registers the style", asyn
 });
 
 test("T30: a reload replaces the style instead of stacking a second one, and the stable disposer removes it", async () => {
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   const { ui } = notifySurface();
 
@@ -432,7 +432,7 @@ test("T30: a stored selection of `bash-card.plain` waits as `missing`, then reso
     reason: "missing",
   });
 
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   (await loadExample("plain-stored"))(pi);
   const { ui } = notifySurface();
@@ -586,13 +586,13 @@ interface World {
 }
 
 /**
- * A whole session the way Pi runs it: the bridge's real entry (which publishes, arms the capture,
+ * A whole session the way Pi runs it: the shell API's real entry (which publishes, arms the capture,
  * the widget, the conversation wrapper and the rail wrapper), the example registering through the
  * published object, the host's own menu rows, and one tui that carries both the conversation and
  * the rail the way Pi's `layoutRoot` does.
  */
 async function startWorld(tag: string, seed: { conversation: readonly string[]; rail: readonly string[] }): Promise<World> {
-  publishBridgeApi();
+  publishShellApi();
   const host = createFakeHost({ rows: hostRows() });
 
   let conversationRows: string[] = [...seed.conversation];
@@ -616,7 +616,7 @@ async function startWorld(tag: string, seed: { conversation: readonly string[]; 
   const sessionHandlers: SessionHandler[] = [];
   const notices: string[] = [];
   const pi: FakePi = {
-    // `gentle-pi` is present, so the bridge's `session_start` arms every surface (S9).
+    // `gentle-pi` is present, so the shell API's `session_start` arms every surface (S9).
     getCommands: () => [{ name: "gentle:customize" }],
     on(_event, handler) {
       sessionHandlers.push(handler);
@@ -627,7 +627,7 @@ async function startWorld(tag: string, seed: { conversation: readonly string[]; 
     },
   };
 
-  gentleShellBridge(pi as BridgeExtensionApi);
+  gentleShellShellApi(pi as ShellExtensionApi);
   const dispose = (await loadExample(tag))(pi);
 
   const ui = host.ui as Record<string, unknown>;
@@ -640,16 +640,16 @@ async function startWorld(tag: string, seed: { conversation: readonly string[]; 
   };
 
   const sessionStart = (): void => {
-    // The bridge and the example both subscribe; each gets the same context, as on Pi.
+    // The shell API and the example both subscribe; each gets the same context, as on Pi.
     for (const handler of sessionHandlers) handler({}, { hasUI: true, ui });
   };
   sessionStart();
 
-  assert.equal(resolvers.length, 1, "the bridge registers exactly one tool-renderer resolver");
+  assert.equal(resolvers.length, 1, "the shell API registers exactly one tool-renderer resolver");
   const resolver = resolvers[0] as Resolver;
   assert.equal(typeof resolver, "function");
 
-  // The host's own menu build is the capture moment: the bridge splices its values into the host's
+  // The host's own menu build is the capture moment: the shell API splices its values into the host's
   // `Card style` line and appends the example's rows.
   host.buildMenu();
 
@@ -693,7 +693,7 @@ test("T31 matrix — conversation/minimal/native: `plain` repaints bash and read
   const conversation = ["a line the host wrote", "", ...bash, "", ...HOST_READ_CARD];
   const world = await startWorld("matrix-minimal-native", { conversation, rail: [] });
 
-  // Design `native`: the bridge wraps the renderers (a design exists for bash), and the component
+  // Design `native`: the shell API wraps the renderers (a design exists for bash), and the component
   // hands the host's own rows back byte for byte. No design at all (read) returns `next()` itself.
   const hostRenderers = fakeRenderers(BASH_MINIMAL_FLOAT_CALL, BASH_MINIMAL_FLOAT_RESULT);
   const resolvedBash = world.resolver("bash", () => hostRenderers);
@@ -720,7 +720,7 @@ test("T31 matrix — conversation/minimal/native: `plain` repaints bash and read
       "▌",
       "",
       "▌ read src/api.ts                           ctrl+o to expand",
-      "▌ export function bridgeApi() {",
+      "▌ export function shellApi() {",
       "▌",
     ],
     "both tool cards are the plain frame: one gutter row per host row, every text kept, prose untouched",
@@ -874,7 +874,7 @@ test("T31 matrix — conversation/default: pi's native card is not a float frame
 });
 
 // ---------------------------------------------------------------------------------------------
-// 4. the native sidebar (rail): host sections and the bridge's own sections, through the rail wiring
+// 4. the native sidebar (rail): host sections and the shell API's own sections, through the rail wiring
 // ---------------------------------------------------------------------------------------------
 
 test("T31 matrix — rail: host sections painted by the host (STATS, AGENTS) and the status rail are repainted through the real rail wrapper", async () => {
@@ -930,7 +930,7 @@ test("T31 matrix — rail: host sections painted by the host (STATS, AGENTS) and
 });
 
 // ---------------------------------------------------------------------------------------------
-// 5. sections added by the bridge/another plugin, collapsed and expanded, header/tones/hit map
+// 5. sections added by the shell API/another plugin, collapsed and expanded, header/tones/hit map
 // ---------------------------------------------------------------------------------------------
 
 /** The theme the host's roles paint with, matching `test/section-panel.test.ts`'s reference. */
@@ -975,12 +975,12 @@ function framePart(part: { render(width: number): string[]; cardGroups?(width: n
   return framed;
 }
 
-test("T31 matrix — sections: the bridge's own section and another plugin's, collapsed and expanded, keep their header, tones and hit map; only the chrome changes", async () => {
+test("T31 matrix — sections: the shell API's own section and another plugin's, collapsed and expanded, keep their header, tones and hit map; only the chrome changes", async () => {
   const world = await startWorld("matrix-sections", { conversation: [], rail: [] });
   const theme = fakeTheme();
 
   // A section added through the PUBLIC api, exactly as another plugin would.
-  const api = bridgeApi();
+  const api = shellApi();
   assert.ok(api !== undefined);
   const disposeMusic = api.registerSection({
     id: "loon.music",
@@ -989,10 +989,10 @@ test("T31 matrix — sections: the bridge's own section and another plugin's, co
     defaultVisible: true,
   });
 
-  // The host's own footer part, registered before the arm, wrapped by the bridge's real backend.
+  // The host's own footer part, registered before the arm, wrapped by the shell API's real backend.
   registerNativeFooter();
   world.sessionStart();
-  // The widget factory hands the bridge the host's theme; this session's theme is ours, set AFTER
+  // The widget factory hands the shell API the host's theme; this session's theme is ours, set AFTER
   // the arm so the section renderer paints the host's roles with it.
   setSectionTheme(theme);
   const part = fakeState().parts.get(SIDEBAR_RAIL_KEY);
@@ -1113,7 +1113,7 @@ test("T31 matrix — sections: the bridge's own section and another plugin's, co
 test("T31 matrix — sections: a structured row keeps its tone through the style, because the style draws chrome and passes no tone", async () => {
   const world = await startWorld("matrix-sections-tone", { conversation: [], rail: [] });
   const theme = fakeTheme();
-  const api = bridgeApi();
+  const api = shellApi();
   assert.ok(api !== undefined);
   const dispose = api.registerSection({
     id: "loon.music",
@@ -1164,9 +1164,9 @@ test("T31 matrix — switching back to `neon` and to `float` restores the host's
     assert.notEqual(world.renderConversation(60), world.conversation(), "plain is drawing");
     assert.notEqual(world.renderRail(), world.rail(), "and it reaches the rail too");
 
-    // Pressing the host's own value is the way back (S13): the bridge selection becomes `native`.
+    // Pressing the host's own value is the way back (S13): the shell API selection becomes `native`.
     await world.pressHost(hostValue);
-    assert.equal(getCardStyleSelection(), "native", `${hostValue}: the bridge no longer touches the frame`);
+    assert.equal(getCardStyleSelection(), "native", `${hostValue}: the shell API no longer touches the frame`);
     assert.equal(world.renderConversation(60), world.conversation(), `${hostValue}: the conversation's array`);
     assert.equal(world.renderRail(), world.rail(), `${hostValue}: the rail's array`);
   }
@@ -1178,7 +1178,7 @@ test("T31 matrix — switching back to `neon` and to `float` restores the host's
 // T30 — the suites that were deleted with the style, re-covered end to end
 // ---------------------------------------------------------------------------------------------
 test("T30: two surfaces, one identity — a section line reports the style as registered, never as assumed", async () => {
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   (await loadExample("plain-section-state"))(pi);
   const { ui } = notifySurface();
@@ -1196,9 +1196,9 @@ test("T30: two surfaces, one identity — a section line reports the style as re
   assert.equal(section.meta?.({ theme: undefined, configHome }), "default");
 });
 
-test("T30: no bridge at all adds nothing and reports it once, with the style named as one of the missing surfaces", async () => {
+test("T30: no shell API at all adds nothing and reports it once, with the style named as one of the missing surfaces", async () => {
   const { pi, sessionHandlers } = recordingPi();
-  (await loadExample("plain-no-bridge"))(pi);
+  (await loadExample("plain-no-shell API"))(pi);
   const { ui, calls } = notifySurface();
   for (const handler of sessionHandlers) handler({}, { hasUI: true, ui });
 
@@ -1213,8 +1213,8 @@ test("T30: the announcement alone is enough to register `plain`, with no session
   const { pi, sessionHandlers } = recordingPi(bus);
   (await loadExample("plain-late-no-session"))(pi);
 
-  publishBridgeApi();
-  announceBridgeReady(bus);
+  publishShellApi();
+  announceShellReady(bus);
 
   assert.deepEqual(surfaceCounts(), [1, 1]);
   assert.equal(sessionHandlers.length, 1, "the handler stays for the next session");

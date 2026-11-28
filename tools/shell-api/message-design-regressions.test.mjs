@@ -30,17 +30,17 @@ const host = () => ({ render: () => ['host'] });
 
 test.beforeEach(() => { process.env.GENTLE_PI_CONFIG_HOME = mkdtempSync(join(tmpdir(), 'gsb-message-regressions-')); });
 
-test('S1/S4: the bridge owns its provider id, so no plugin can take the line off the menu', () => {
-  const provider = { id: 'bridge.message-designs', category: 'Cards', rows: () => [] };
+test('S1/S4: the shell API owns its provider id, so no plugin can take the line off the menu', () => {
+  const provider = { id: 'shell-api.message-designs', category: 'Cards', rows: () => [] };
   const disarm = installMessageDesignRows();
   try {
-    assert.throws(() => registerRows(provider), /belongs to the bridge's own line/);
+    assert.throws(() => registerRows(provider), /belongs to the shell API's own line/);
     assert.equal(snapshotProviders().includes(provider), false, 'nothing stored');
     const drop = register('provider-collision', () => []);
     try {
       assert.ok(
-        snapshotProviders().some((candidate) => candidate.id === 'bridge.message-designs'),
-        "the bridge's own line is what answers that id",
+        snapshotProviders().some((candidate) => candidate.id === 'shell-api.message-designs'),
+        "the shell API's own line is what answers that id",
       );
     } finally {
       drop();

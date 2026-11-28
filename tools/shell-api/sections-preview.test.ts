@@ -3,7 +3,7 @@
  *
  * The host draws ONE preview for its `Sections` rows — a title naming the row and a sample listing
  * the sections that are active under that hypothetical (`[changes] [rdd] [agents] …`) — and a
- * section registered through the bridge must appear in that same list instead of drawing a card
+ * section registered through the shell API must appear in that same list instead of drawing a card
  * picture of its own. These tests drive the real capture path with host `Sections` rows shaped
  * exactly like the host's own inline closures (`extensions/gentle-shell.ts:3522-3524`, L3) and
  * assert what `preview()` returns to the renderer.
@@ -149,7 +149,7 @@ const rowFor = (
 const toggleRow = (rows: readonly CustomizeRow[], setting: string, value: string): CustomizeRow =>
   rowFor(rows, (row) => row.choice?.setting === setting && row.choice.value === value);
 
-test("the host's own Sections row gains the bridge labels and keeps its title", () => {
+test("the host's own Sections row gains the shell API labels and keeps its title", () => {
   registerSection(section("loon.issues", { title: "ISSUES" }));
   registerSection(section("loon.music", { title: "MUSIC" }));
   installSectionRows();
@@ -167,7 +167,7 @@ test("the host's own Sections row gains the bridge labels and keeps its title", 
   assert.deepEqual(
     hostRow.preview?.(),
     hostRow.preview?.(),
-    "reading the preview twice never double-appends the bridge's labels",
+    "reading the preview twice never double-appends the shell API's labels",
   );
 
   assert.deepEqual(toggleRow(rows, "issues", "shown").preview?.(), {
@@ -180,7 +180,7 @@ test("the host's own Sections row gains the bridge labels and keeps its title", 
   });
 });
 
-test("a hidden bridge section leaves the list, and its own row puts it back", async () => {
+test("a hidden shell API section leaves the list, and its own row puts it back", async () => {
   registerSection(section("loon.issues", { title: "ISSUES" }));
   registerSection(section("loon.music", { title: "MUSIC" }));
   installSectionRows();
@@ -233,7 +233,7 @@ test("a throwing host preview cannot break the menu", () => {
   const preview = hostRow.preview?.();
   assert.ok(preview !== undefined, "the row still has a preview");
   assert.equal(preview.title, "Sections", "the title it could not read falls back to the category");
-  assert.equal(preview.sample, "[issues]", "and the bridge's own list is still previewable");
+  assert.equal(preview.sample, "[issues]", "and the shell API's own list is still previewable");
 });
 
 test("a factory that throws leaves the host's own preview functions exactly as they were", () => {
@@ -260,7 +260,7 @@ test("a factory that throws leaves the host's own preview functions exactly as t
     /factory exploded/u,
   );
 
-  // The two host rows, the one value row the splice inserts, and the bridge's two toggle rows.
+  // The two host rows, the one value row the splice inserts, and the shell API's two toggle rows.
   assert.equal(
     duringBuild.length,
     identities.length + 3,
@@ -280,7 +280,7 @@ test("a factory that throws leaves the host's own preview functions exactly as t
   assert.equal(
     duringBuild[firstSectionsRow]?.preview?.().sample,
     "[changes] [agents] [issues]",
-    "and the bridge's label is in its sample during the build",
+    "and the shell API's label is in its sample during the build",
   );
 
   assert.equal(rows.length, identities.length, "the appended rows and the spliced value are gone");

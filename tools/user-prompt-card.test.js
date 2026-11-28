@@ -1,11 +1,11 @@
 'use strict';
-// The user's own prompt, drawn as a card on this package's substrate: while the bridge's
-// `Card activity` line answers this package's activity design, `UserMessageComponent.render`
-// answers the card instead of Pi's plain block; for every other answer, and for every shape
-// it cannot read, the host's own rows come back byte for byte.
+// The user's own prompt, drawn as a card on this package's substrate: while this package's
+// `Card message` switch is On (`lib/card-message.js`), `UserMessageComponent.render` answers the
+// card instead of Pi's plain block; with it Off, and for every shell API it cannot read, the
+// host's own rows come back byte for byte. `Card activity` no longer decides this card.
 //
 // Everything below observes the public seam: the shim is installed on a STUB class exactly as
-// the extension installs it on Pi's, the bridge is the published object a process-wide slot
+// the extension installs it on Pi's, the shell API is the published object a process-wide slot
 // holds, the style is the slot Gentle Shell writes, and the rows are read by calling `render`
 // on the component — the same call the host makes on every frame.
 const assert = require('node:assert/strict');
@@ -15,15 +15,14 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-const { installUserPromptCard, uninstallUserPromptCard } = require('../lib/user-prompt-card.js');
+const { installUserPromptCard, paintPrompt, uninstallUserPromptCard } = require('../lib/user-prompt-card.js');
 const { CARD_STYLE, CARD_STYLE_SLOT } = require('../lib/card-style.js');
 // The extension itself, loaded the way `tools/fixtures/load-extension.js` loads it: the deferred
 // install's guard lives there, so the test has to reach the module's own seam.
 const fixture = require('./fixtures/load-extension.js');
 
-const BRIDGE_API_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+const SHELL_API_SLOT = Symbol.for('odd-worktree/shell-api/v1');
 const ACTIVITY = 'odd-worktree.bash-activity';
-const OTHER_DESIGN = 'acme.tools';
 
 // ---- the theme: one role per painted cell ----
 //
@@ -229,12 +228,19 @@ function promptComponent(text = PROMPT) {
   return new UserMessageComponent(text);
 }
 
-// ---- the published bridge, and the slots the runtime reads ----
+// ---- the published shell API, and the slots the runtime reads ----
 
-function publishBridge(answer) {
-  const state = { answer, calls: [] };
-  globalThis[BRIDGE_API_SLOT] = {
-    schema: 'gentle-shell-bridge/api',
+/**
+ * The published shell API plus the store its readers use: `card-message` is the switch the card asks
+ * (`lib/card-message.js`) and `identity` the name its heading wears — one in-memory document map
+ * behind `createStore('odd-worktree')`, merged per key exactly like the shell API's own store, so a
+ * write here is what the next paint has to see.
+ */
+function publishShellApi(answer, options = {}) {
+  const documents = new Map([['odd-worktree', { 'card-message': { schema: 1, on: options.cardMessage !== false } }]]);
+  const state = { answer, calls: [], documents };
+  globalThis[SHELL_API_SLOT] = {
+    schema: 'odd-worktree/shell-api',
     version: 1,
     resolveToolDesignSelection(tool) {
       state.calls.push(tool);
@@ -243,8 +249,22 @@ function publishBridge(answer) {
       if (typeof value === 'function') return value(tool);
       return value;
     },
+    createStore: (id) => ({
+      get: (key, fallback) => {
+        const document = documents.get(id);
+        return document !== undefined && Object.hasOwn(document, key) ? document[key] : fallback;
+      },
+      set: (key, value) => {
+        documents.set(id, { ...(documents.get(id) ?? {}), [key]: value });
+      },
+    }),
   };
   return state;
+}
+
+/** The `Card message` document, written the way the row's action writes it. */
+function setCardMessage(state, on) {
+  state.documents.set('odd-worktree', { ...(state.documents.get('odd-worktree') ?? {}), 'card-message': { schema: 1, on } });
 }
 
 const ACTIVITY_ANSWER = { kind: 'design', design: { id: ACTIVITY } };
@@ -266,19 +286,19 @@ beforeEach(() => {
 });
 afterEach(() => {
   uninstallUserPromptCard();
-  delete globalThis[BRIDGE_API_SLOT];
+  delete globalThis[SHELL_API_SLOT];
   delete globalThis[CARD_STYLE_SLOT];
 });
 after(() => {
   uninstallUserPromptCard();
-  delete globalThis[BRIDGE_API_SLOT];
+  delete globalThis[SHELL_API_SLOT];
   delete globalThis[CARD_STYLE_SLOT];
 });
 
-// ---- S1: the card, and only while the line answers this package's design ----
+// ---- S1 (card-message): the card follows `Card message`, never again `Card activity` ----
 
-test('while Card activity answers activity the prompt is a card headed ✿ You', () => {
-  const bridge = publishBridge(ACTIVITY_ANSWER);
+test('while Card message is On the prompt is a card headed ✿ You', () => {
+  const shellApi = publishShellApi(ACTIVITY_ANSWER);
   const outcome = install();
   assert.equal(outcome.installed, true);
   const component = promptComponent();
@@ -289,66 +309,75 @@ test('while Card activity answers activity the prompt is a card headed ✿ You',
   assert.equal(unpaint(rows[rows.length - 1]).startsWith('╰'), true, 'the frame is closed by a rule');
   assert.ok(rows.some((row) => unpaint(row).includes('explain the card')), 'the prompt is the body');
   assert.ok(rows.some((row) => unpaint(row).includes('and keep `this` visible')), 'every row of it is drawn');
-  assert.deepEqual(bridge.calls, ['bash'], 'the question is the bash line every other card asks');
+  assert.deepEqual(shellApi.calls, [], 'the prompt card no longer asks the `Card activity` line');
   for (const row of rows) assert.equal(chars(row).length, 60, `"${unpaint(row)}" is 60 wide`);
 });
 
-test('every other answer, an absent reader or a throwing one hands Pi\'s own rows back byte for byte', () => {
-  const cases = [
-    ['the host\'s own value', () => ({ kind: 'native' })],
-    ['another plugin\'s design', () => ({ kind: 'design', design: { id: OTHER_DESIGN } })],
-    ['a design with no id', () => ({ kind: 'design', design: {} })],
-    ['a design that has left the line', () => ({ kind: 'missing' })],
-    ['a line that covers nothing', () => ({ kind: 'not-covered' })],
-    ['an answer nothing can read', () => undefined],
-    ['a reader that throws', () => new Error('the bridge blew up')],
-    ['no published bridge at all', () => null],
-    ['an object that is not a bridge', () => 'native'],
-  ];
+test('with Card activity answering activity and Card message Off the prompt is NOT a card', () => {
+  publishShellApi(ACTIVITY_ANSWER, { cardMessage: false });
   install();
-  for (const [name, answer] of cases) {
-    if (answer === null) delete globalThis[BRIDGE_API_SLOT];
-    else globalThis[BRIDGE_API_SLOT] = { schema: 'gentle-shell-bridge/api', version: 1, resolveToolDesignSelection: answer };
-    const component = promptComponent();
-    const expected = nativeRows(component, 60);
-    assert.deepEqual(component.render(60), expected, name);
-    if (answer !== null) {
-      delete globalThis[BRIDGE_API_SLOT].resolveToolDesignSelection;
-      assert.deepEqual(component.render(60), expected, `${name}: no reader member on the object`);
-    }
-  }
+  const component = promptComponent();
+  assert.deepEqual(component.render(60), nativeRows(component, 60),
+    'the tool line no longer decides this card');
 });
 
-test('a bridge the runtime cannot read is not a bridge: the schema and version gate is the same one', () => {
+test('with Card message On and Card activity at its default the prompt IS a card', () => {
+  publishShellApi({ kind: 'native' });
   install();
-  for (const api of [
-    { schema: 'gentle-shell-bridge/api', version: 2, resolveToolDesignSelection: () => ACTIVITY_ANSWER },
-    { schema: 'other/api', version: 1, resolveToolDesignSelection: () => ACTIVITY_ANSWER },
-    null,
-  ]) {
-    globalThis[BRIDGE_API_SLOT] = api;
+  const component = promptComponent();
+  assert.notDeepEqual(component.render(60), nativeRows(component, 60),
+    'the switch alone decides it');
+  assert.match(unpaint(component.render(60)[0]), /^╭─ ✿ You /u);
+});
+
+test('with Card message Off the host\'s own rows come back unchanged: the very array', () => {
+  publishShellApi(ACTIVITY_ANSWER, { cardMessage: false });
+  install();
+  const component = promptComponent();
+  const hostRows = nativeRows(component, 60);
+  assert.equal(paintPrompt(component, hostRows, 60, {}), hostRows, 'the array the host handed over, not a copy');
+  assert.deepEqual(component.render(60), nativeRows(component, 60), 'and the mounted render is byte for byte Pi\'s');
+});
+
+test('an unusable shell API, or a store that throws, hands Pi\'s own rows back byte for byte', () => {
+  const cases = [
+    ['no published shell API at all', () => { delete globalThis[SHELL_API_SLOT]; }],
+    ['an object that is not a shell API', () => { globalThis[SHELL_API_SLOT] = 'native'; }],
+    ['a null slot', () => { globalThis[SHELL_API_SLOT] = null; }],
+    ['a shell API of another version', () => { publishShellApi(ACTIVITY_ANSWER); globalThis[SHELL_API_SLOT].version = 2; }],
+    ['another plugin\'s schema', () => { publishShellApi(ACTIVITY_ANSWER); globalThis[SHELL_API_SLOT].schema = 'other/api'; }],
+    ['a shell API with no store', () => { publishShellApi(ACTIVITY_ANSWER); delete globalThis[SHELL_API_SLOT].createStore; }],
+    ['a store that throws', () => { publishShellApi(ACTIVITY_ANSWER); globalThis[SHELL_API_SLOT].createStore = () => { throw new Error('disk'); }; }],
+    ['a document that cannot be read', () => {
+      publishShellApi(ACTIVITY_ANSWER);
+      globalThis[SHELL_API_SLOT].createStore = () => ({ get: () => { throw new Error('disk'); }, set: () => {} });
+    }],
+  ];
+  install();
+  for (const [name, publish] of cases) {
+    publish();
     const component = promptComponent();
-    assert.deepEqual(component.render(60), nativeRows(component, 60));
+    assert.deepEqual(component.render(60), nativeRows(component, 60), name);
   }
 });
 
 // ---- S2: the gate is read per paint, never cached ----
 
-test('flipping Card activity repaints the same mounted component, with no re-install', () => {
-  const bridge = publishBridge(ACTIVITY_ANSWER);
+test('flipping Card message repaints the same mounted component, with no re-install', () => {
+  const shellApi = publishShellApi(ACTIVITY_ANSWER);
   install();
   const component = promptComponent();
   const card = component.render(60);
   assert.match(unpaint(card[0]), /^╭─ ✿ You /u, 'on');
-  bridge.answer = { kind: 'native' };
+  setCardMessage(shellApi, false);
   assert.deepEqual(component.render(60), nativeRows(component, 60), 'off: Pi\'s own rows, byte for byte');
-  bridge.answer = ACTIVITY_ANSWER;
+  setCardMessage(shellApi, true);
   assert.deepEqual(component.render(60), card, 'on again, the same card');
-  assert.equal(bridge.calls.length, 3, 'the line was asked on every one of the three paints');
+  assert.deepEqual(shellApi.calls, [], 'the switch was read on every paint, and the tool line never asked');
 });
 
 test('a width too small to draw a frame hands the rows straight back', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install();
   const component = promptComponent();
   for (const width of [0, 1, 4, 5]) {
@@ -360,14 +389,14 @@ test('a width too small to draw a frame hands the rows straight back', () => {
 // ---- identity-command: the heading is the person's name, read on every paint ----
 
 /**
- * The published bridge plus the store `lib/user-identity.js` reads: one in-memory document map
- * behind `createStore('odd-worktree')`, merged per key exactly like the bridge's own store. No
+ * The published shell API plus the store `lib/user-identity.js` reads: one in-memory document map
+ * behind `createStore('odd-worktree')`, merged per key exactly like the shell API's own store. No
  * invalidation call exists: a name is written here and the next paint has to see it.
  */
-function publishIdentityBridge() {
+function publishIdentityShellApi() {
   const documents = new Map();
-  publishBridge(ACTIVITY_ANSWER);
-  globalThis[BRIDGE_API_SLOT].createStore = (id) => ({
+  publishShellApi(ACTIVITY_ANSWER);
+  globalThis[SHELL_API_SLOT].createStore = (id) => ({
     get: (key, fallback) => {
       const document = documents.get(id);
       return document !== undefined && Object.hasOwn(document, key) ? document[key] : fallback;
@@ -386,8 +415,8 @@ function publishIdentityBridge() {
 const headOf = (component, width = 60) => unpaint(component.render(width)[0]);
 
 test('a stored name heads the card instead of You', () => {
-  const bridge = publishIdentityBridge();
-  bridge.setName('Jona');
+  const shellApi = publishIdentityShellApi();
+  shellApi.setName('Jona');
   install();
   const rows = promptComponent().render(60);
   assert.match(unpaint(rows[0]), /^╭─ ✿ Jona /u, 'the heading is the name');
@@ -395,27 +424,27 @@ test('a stored name heads the card instead of You', () => {
 });
 
 test('without a stored name the heading is still You, byte for byte as before', () => {
-  publishIdentityBridge();
+  publishIdentityShellApi();
   install();
   assert.match(headOf(promptComponent()), /^╭─ ✿ You /u);
 });
 
 test('a name changed between two paints of the SAME component recomposes: no stale You', () => {
-  const bridge = publishIdentityBridge();
+  const shellApi = publishIdentityShellApi();
   install();
   const component = promptComponent();
   assert.match(headOf(component), /^╭─ ✿ You /u, 'nothing stored: You');
-  bridge.setName('Jona');
+  shellApi.setName('Jona');
   assert.match(headOf(component), /^╭─ ✿ Jona /u, 'the name is read per paint, so the memo cannot serve the old head');
-  bridge.setName('Ana');
+  shellApi.setName('Ana');
   assert.match(headOf(component), /^╭─ ✿ Ana /u, 'and a second change follows the same way');
-  bridge.forgetName();
+  shellApi.forgetName();
   assert.match(headOf(component), /^╭─ ✿ You /u, 'cleared: You is back on the same component');
 });
 
 test('a malformed identity document is no name: the card paints You', () => {
   for (const document of [{ schema: 2, name: 'Jona' }, { schema: 1, name: 42 }, { schema: 1, name: '  ' }, 'Jona', null]) {
-    const made = publishIdentityBridge();
+    const made = publishIdentityShellApi();
     made.documents.set('odd-worktree', { identity: document });
     install();
     assert.match(headOf(promptComponent()), /^╭─ ✿ You /u, JSON.stringify(document));
@@ -423,8 +452,8 @@ test('a malformed identity document is no name: the card paints You', () => {
   }
 });
 
-test('with no bridge at all the host\'s own rows come back unchanged', () => {
-  delete globalThis[BRIDGE_API_SLOT];
+test('with no shell API at all the host\'s own rows come back unchanged', () => {
+  delete globalThis[SHELL_API_SLOT];
   install();
   const component = promptComponent();
   assert.deepEqual(component.render(60), nativeRows(component, 60));
@@ -450,7 +479,7 @@ function assertAccentChrome(rows, style) {
 }
 
 test('in neon the whole frame and the name wear the accent, and the body keeps its own paint', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   const paint = roleTheme();
   install({ seams: { paint } });
   const component = promptComponent();
@@ -469,7 +498,7 @@ test('in neon the whole frame and the name wear the accent, and the body keeps i
 });
 
 test('in float the whole rail wears the accent too, and the band is the card\'s own', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   globalThis[CARD_STYLE_SLOT] = CARD_STYLE.FLOAT;
   const paint = roleTheme();
   install({ seams: { paint } });
@@ -487,7 +516,7 @@ test('in float the whole rail wears the accent too, and the band is the card\'s 
 });
 
 test('a mid-session style flip repaints a prompt already on screen, in both directions', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install({ seams: { paint: bandTheme } });
   const component = promptComponent();
   globalThis[CARD_STYLE_SLOT] = CARD_STYLE.NEON;
@@ -502,7 +531,7 @@ test('a mid-session style flip repaints a prompt already on screen, in both dire
 });
 
 test('the prompt is never capped: every row of a long message is drawn', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install();
   const body = Array.from({ length: 12 }, (_unused, index) => `row ${index + 1} of the prompt`);
   const rows = promptComponent(body.join('\n')).render(60).map(unpaint);
@@ -512,7 +541,7 @@ test('the prompt is never capped: every row of a long message is drawn', () => {
 // ---- S5: the body is Pi's own Markdown, rebuilt without the background ----
 
 test('the body rows are the child\'s own Markdown rebuilt with no background and no side padding', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install();
   const component = promptComponent();
   const original = component.children[0];
@@ -546,7 +575,7 @@ function decoratedPrompt(text = PROMPT) {
 }
 
 test('the ❯ an extension transformer prepends is dropped, and the body starts at the frame padding', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install();
   const rows = decoratedPrompt().render(60);
   assert.equal(rows.some((row) => unpaint(row).includes('❯')), false, 'no row carries the decoration');
@@ -558,7 +587,7 @@ test('the ❯ an extension transformer prepends is dropped, and the body starts 
 });
 
 test('a prompt with no transformer is drawn byte for byte as before', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install();
   const component = promptComponent();
   component.timestamp = '2026-01-02T09:07:00Z';
@@ -575,7 +604,7 @@ test('a prompt with no transformer is drawn byte for byte as before', () => {
 });
 
 test('a prompt that starts with ❯ keeps exactly one ❯: only the decoration is consumed', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install();
   const rows = decoratedPrompt('❯ my own mark\nsecond line').render(60).map(unpaint);
   const body = rows.filter((row) => row.includes('my own mark'));
@@ -585,7 +614,7 @@ test('a prompt that starts with ❯ keeps exactly one ❯: only the decoration i
 });
 
 test('the body re-wraps at the full inner width: the decoration costs no columns', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install();
   // Exactly the inner width of a 60-column card (`cardInnerWidth(60)`): one body row undecorated,
   // and one row plus a mark-only row when the three decoration columns still eat the line.
@@ -597,7 +626,7 @@ test('the body re-wraps at the full inner width: the decoration costs no columns
 });
 
 test('a steady frame rebuilds nothing, and a width change or a style flip redraws', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   const counting = countingMetrics();
   const countingPaint = { fg: (_role, value) => value, bg: (_role, value) => `\x1b[48;5;240m${value}\x1b[49m` };
   install({ seams: { counting: counting.metrics, paint: countingPaint } });
@@ -617,7 +646,7 @@ test('a steady frame rebuilds nothing, and a width change or a style flip redraw
 });
 
 test('the card carries Pi\'s prompt-zone markers on its own first and last row, exactly once', () => {
-  const bridge = publishBridge(ACTIVITY_ANSWER);
+  const shellApi = publishShellApi(ACTIVITY_ANSWER);
   install();
   const component = promptComponent();
   const rows = component.render(60);
@@ -637,7 +666,7 @@ test('the card carries Pi\'s prompt-zone markers on its own first and last row, 
   const again = component.render(60);
   assert.equal(again[0].split(OSC133_ZONE_START).length - 1, 1, 'a repaint writes the marker once');
   // The native path is the host's own output, marker for marker, never a card row.
-  bridge.answer = { kind: 'native' };
+  setCardMessage(shellApi, false);
   const native = component.render(60);
   assert.deepEqual(native, NATIVE_RENDER.call(component, 60), 'byte for byte, markers included');
   assert.ok(native[0].startsWith(OSC133_ZONE_START) && native.at(-1).startsWith(OSC133_ZONE_CLOSE));
@@ -651,7 +680,7 @@ test('the card pays for the frame only: the clone adds no vertical padding row',
   // `new Renderer(source, 0, 0, …)` and `lib/message-card.js` hands the substrate plain rows, so
   // no card body carries Markdown's own vertical padding: a prompt of N lines is N body rows,
   // and a blank row the clone put there is a row the terminal pays for with nothing in it.
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install({ seams: { paint: bandTheme } });
   // The frame's own rows: neon is the heading and the closing rule; float adds the two padding
   // rows of its band above the heading and between the heading and the body.
@@ -677,7 +706,7 @@ test('float at the width whose inner equals a neon draw recomposes, with no outl
   // Neon at 60 composes at inner 60; float at 62 composes at inner 60 too (it gives two columns
   // to its margins). The chrome is decided by the requested width and the style, not by the
   // inner width alone, so the memo may not serve the neon parts to the float draw.
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install({ seams: { paint: bandTheme } });
   const component = promptComponent();
   globalThis[CARD_STYLE_SLOT] = CARD_STYLE.NEON;
@@ -702,7 +731,7 @@ test('a theme switch repaints a mounted prompt body, never the theme it was clon
   // switch keeps painting the old colours while a freshly built prompt is already new. The
   // clone memo is therefore keyed on the theme used for THIS paint and rebuilds the clone when
   // it differs (the card's paint is live: the theme instance behind Pi's slot changes).
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   const CODE_A = MARKDOWN_CODE;
   const CODE_B = '94';
   const themeA = { fg: (_role, text) => text, bg: (_role, text) => `\x1b[48;5;236m${text}\x1b[49m` };
@@ -729,7 +758,7 @@ test('a theme switch repaints a mounted prompt body, never the theme it was clon
 /**
  * Load THIS extension (the same stubbing `tools/fixtures/load-extension.js` does) and hand back
  * its own module namespace, because the deferred install's seam lives there: a test must be able
- * to make Pi's package resolve LATE, after the session ended. The bridge is published before the
+ * to make Pi's package resolve LATE, after the session ended. The shell API is published before the
  * factory runs, exactly as the fixture does, so the activity design registers.
  */
 async function loadExtensionModule(loader, events = {}, options = {}) {
@@ -750,7 +779,7 @@ async function loadExtensionModule(loader, events = {}, options = {}) {
       registerEntryRenderer() {},
       appendEntry() {},
       on: (event, handler) => hooks.push([event, handler]),
-      // The host's event bus, when a test needs the bridge's ready announcement (`pi.events`).
+      // The host's event bus, when a test needs the shell API's ready announcement (`pi.events`).
       events,
     };
     // A host SHAPE a test needs: an `on` that accepts some events and refuses others, or none at
@@ -775,9 +804,9 @@ const drain = () => new Promise((resolve) => setImmediate(resolve));
 test('an install whose import resolves after shutdown patches nothing', async () => {
   // `installUserPromptCard()` awaits a dynamic import; a session that ends inside that window
   // must not be patched afterwards, or the prototype stays wrapped into the next session.
-  const bridge = fixture.defaultBridge();
-  const previousBridge = globalThis[BRIDGE_API_SLOT];
-  globalThis[BRIDGE_API_SLOT] = bridge.api;
+  const shellApi = fixture.defaultShellApi();
+  const previousShellApi = globalThis[SHELL_API_SLOT];
+  globalThis[SHELL_API_SLOT] = shellApi.api;
   class LateHost {
     render(width) {
       return [`native ${width}`];
@@ -802,15 +831,15 @@ test('an install whose import resolves after shutdown patches nothing', async ()
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(LateHost.prototype.render, native, 'a late install patches nothing after shutdown');
   } finally {
-    if (previousBridge === undefined) delete globalThis[BRIDGE_API_SLOT];
-    else globalThis[BRIDGE_API_SLOT] = previousBridge;
+    if (previousShellApi === undefined) delete globalThis[SHELL_API_SLOT];
+    else globalThis[SHELL_API_SLOT] = previousShellApi;
   }
 });
 
 // ---- S7: the install lifecycle survives the epoch it belongs to ----
 
 test('S7: a pending install from a closed session cannot suppress the next install', async () => {
-  globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
+  globalThis[SHELL_API_SLOT] = fixture.defaultShellApi().api;
   class Host {
     render() {
       return ['native'];
@@ -839,8 +868,8 @@ test('S7: a pending install from a closed session cannot suppress the next insta
   }
 });
 
-test('S7: bridge readiness after shutdown cannot arm a host import', async () => {
-  delete globalThis[BRIDGE_API_SLOT];
+test('S7: shell API readiness after shutdown cannot arm a host import', async () => {
+  delete globalThis[SHELL_API_SLOT];
   class Host {
     render() {
       return ['native'];
@@ -858,8 +887,8 @@ test('S7: bridge readiness after shutdown cannot arm a host import', async () =>
   for (const [event, handler] of [...hooks]) {
     if (event === 'session_shutdown') await handler({}, {});
   }
-  globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
-  listeners.get('gentle-shell-bridge:ready')?.();
+  globalThis[SHELL_API_SLOT] = fixture.defaultShellApi().api;
+  listeners.get('odd-worktree:shell-ready')?.();
   release({ UserMessageComponent: Host });
   await drain();
   assert.equal(Host.prototype.render, native);
@@ -869,8 +898,8 @@ test('S7: factory load does not arm a host import before session_start', async (
   // Pi loads the factory before any session exists, and caches it across sessions. A load may
   // neither arm the host import nor patch the class until a `session_start` opens the session
   // that owns the card.
-  const previousBridge = globalThis[BRIDGE_API_SLOT];
-  globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
+  const previousShellApi = globalThis[SHELL_API_SLOT];
+  globalThis[SHELL_API_SLOT] = fixture.defaultShellApi().api;
   class Host {
     render() {
       return ['native'];
@@ -896,18 +925,18 @@ test('S7: factory load does not arm a host import before session_start', async (
     assert.equal(Host.prototype.render, native, 'and its shutdown restores it');
   } finally {
     await emit('session_shutdown');
-    if (previousBridge === undefined) delete globalThis[BRIDGE_API_SLOT];
-    else globalThis[BRIDGE_API_SLOT] = previousBridge;
+    if (previousShellApi === undefined) delete globalThis[SHELL_API_SLOT];
+    else globalThis[SHELL_API_SLOT] = previousShellApi;
   }
 });
 
-test('S7 (T2): with no bridge on the slot nothing is registered, and a silent publication never arms an install', async () => {
-  // The gate observer is gone (native-bridge T2): the shell API publishes at module load, the
+test('S7 (T2): with no shell API on the slot nothing is registered, and a silent publication never arms an install', async () => {
+  // The gate observer is gone (native-shell API T2): the shell API publishes at module load, the
   // factory reads the slot ONCE, and a load that found it empty keeps no observer to be woken by.
-  // What S7 still guarantees is the other half: a load that DID find the bridge owns the shutdown
+  // What S7 still guarantees is the other half: a load that DID find the shell API owns the shutdown
   // that unwraps the card, which is what the first test above proves.
-  const previousBridge = globalThis[BRIDGE_API_SLOT];
-  delete globalThis[BRIDGE_API_SLOT];
+  const previousShellApi = globalThis[SHELL_API_SLOT];
+  delete globalThis[SHELL_API_SLOT];
   class Host {
     render() {
       return ['native'];
@@ -917,16 +946,16 @@ test('S7 (T2): with no bridge on the slot nothing is registered, and a silent pu
   const { hooks } = await loadExtensionModule(() => ({ UserMessageComponent: Host }));
   const emit = extensionSession(hooks);
   try {
-    assert.deepEqual(hooks, [], 'a load with no bridge registers no hook at all');
+    assert.deepEqual(hooks, [], 'a load with no shell API registers no hook at all');
     // A SILENT publication: nothing announces it, and nothing is listening for it either.
-    globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
+    globalThis[SHELL_API_SLOT] = fixture.defaultShellApi().api;
     await emit('session_start');
     await drain();
     assert.equal(Host.prototype.render, native, 'nothing installs: no session boundary was owned');
   } finally {
     await emit('session_shutdown');
-    if (previousBridge === undefined) delete globalThis[BRIDGE_API_SLOT];
-    else globalThis[BRIDGE_API_SLOT] = previousBridge;
+    if (previousShellApi === undefined) delete globalThis[SHELL_API_SLOT];
+    else globalThis[SHELL_API_SLOT] = previousShellApi;
   }
 });
 
@@ -936,8 +965,8 @@ test('S7: a host that refuses the shutdown hook owns no patch', async () => {
   // Owning a teardown is a PRECONDITION of installing (fail closed). A host that accepts
   // `session_start` and refuses `session_shutdown` would otherwise leave the card installed with
   // nobody to unwrap it, so it gets no patch at all: its prompt stays Pi's own.
-  const previousBridge = globalThis[BRIDGE_API_SLOT];
-  globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
+  const previousShellApi = globalThis[SHELL_API_SLOT];
+  globalThis[SHELL_API_SLOT] = fixture.defaultShellApi().api;
   class Host {
     render() {
       return ['native'];
@@ -972,14 +1001,14 @@ test('S7: a host that refuses the shutdown hook owns no patch', async () => {
     assert.equal(calls, 0, 'no session start arms an unowned install');
     assert.equal(Host.prototype.render, native, 'and the class stays Pi\'s own');
   } finally {
-    if (previousBridge === undefined) delete globalThis[BRIDGE_API_SLOT];
-    else globalThis[BRIDGE_API_SLOT] = previousBridge;
+    if (previousShellApi === undefined) delete globalThis[SHELL_API_SLOT];
+    else globalThis[SHELL_API_SLOT] = previousShellApi;
   }
 });
 
 test('S7: a host with no session hooks owns no patch either', async () => {
-  const previousBridge = globalThis[BRIDGE_API_SLOT];
-  globalThis[BRIDGE_API_SLOT] = fixture.defaultBridge().api;
+  const previousShellApi = globalThis[SHELL_API_SLOT];
+  globalThis[SHELL_API_SLOT] = fixture.defaultShellApi().api;
   class Host {
     render() {
       return ['native'];
@@ -1000,15 +1029,15 @@ test('S7: a host with no session hooks owns no patch either', async () => {
     assert.equal(calls, 0, 'a host with no `on` owns no teardown, so the loader is never called');
     assert.equal(Host.prototype.render, native, 'and the prototype stays untouched');
   } finally {
-    if (previousBridge === undefined) delete globalThis[BRIDGE_API_SLOT];
-    else globalThis[BRIDGE_API_SLOT] = previousBridge;
+    if (previousShellApi === undefined) delete globalThis[SHELL_API_SLOT];
+    else globalThis[SHELL_API_SLOT] = previousShellApi;
   }
 });
 
 // ---- S5/S6: one wrapper per process, torn down on demand ----
 
 test('installing twice wraps once, and uninstall restores the original render byte for byte', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   const first = install();
   assert.equal(first.installed, true);
   const wrapped = UserMessageComponent.prototype.render;
@@ -1029,7 +1058,7 @@ test('installing twice wraps once, and uninstall restores the original render by
 });
 
 test('a class without render, an absent class and a component with no Markdown install and answer native', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   const refused = installUserPromptCard({});
   assert.equal(refused.installed, false);
   assert.equal(typeof refused.uninstall, 'function', 'a refused install still answers an inert uninstall');
@@ -1058,7 +1087,7 @@ test('a class without render, an absent class and a component with no Markdown i
 });
 
 test('a body the card cannot read answers native: no row, an answer that is not rows, a renderer that throws', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install();
   for (const [name, text] of [['a body that draws no row', 'EMPTY_BODY'], ['an answer that is not rows', 'NOT_ROWS'], ['a renderer that throws', 'THROW']]) {
     const component = promptComponent(text);
@@ -1067,7 +1096,7 @@ test('a body the card cannot read answers native: no row, an answer that is not 
 });
 
 test('a metrics or theme seam that throws, or answers nothing usable, answers native too', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install({
     seams: {
       metrics: () => { throw new Error('no tui package'); },
@@ -1089,7 +1118,7 @@ test('a metrics or theme seam that throws, or answers nothing usable, answers na
 });
 
 test('an empty prompt draws no card: the host\'s own nothing comes back', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install();
   const component = new UserMessageComponent(PROMPT, { empty: true });
   assert.deepEqual(component.render(60), []);
@@ -1109,7 +1138,7 @@ function headingClock(row) {
 }
 
 test('S1: a component with a timestamp heads ✿ You · <local HH:MM>, and the clock is muted', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   const paint = roleTheme();
   install({ seams: { paint } });
   // The instant the host sets on a prompt rebuilt from a session entry: an ISO string in UTC.
@@ -1134,7 +1163,7 @@ test('S1: a component with a timestamp heads ✿ You · <local HH:MM>, and the c
 });
 
 test('S1: without a timestamp the first-paint clock is used, unchanged on every later paint', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install();
   const realNow = Date.now;
   try {
@@ -1156,7 +1185,7 @@ test('S1: without a timestamp the first-paint clock is used, unchanged on every 
 });
 
 test('S1: a component with neither a timestamp nor a clock shows ✿ You alone, inventing nothing', () => {
-  publishBridge(ACTIVITY_ANSWER);
+  publishShellApi(ACTIVITY_ANSWER);
   install({ seams: { paint: taggedTheme } });
   const realNow = Date.now;
   try {
@@ -1181,11 +1210,11 @@ test('S1: a component with neither a timestamp nor a clock shows ✿ You alone, 
 // ---- S2 (prompt-card-fix): a restored session repaints — once per install ----
 
 /**
- * The bridge a repaint assertion needs: the published object every surface here reads, with a
+ * The shell API a repaint assertion needs: the published object every surface here reads, with a
  * `requestRepaint` recorder and the gate's own reader. `extra` replaces a member per case.
  */
-function repaintBridge(extra = {}) {
-  const api = fixture.defaultBridge().api;
+function repaintShellApi(extra = {}) {
+  const api = fixture.defaultShellApi().api;
   const state = { repaints: 0 };
   api.requestRepaint = () => {
     state.repaints += 1;
@@ -1196,13 +1225,13 @@ function repaintBridge(extra = {}) {
 }
 
 /**
- * Load this extension with one published bridge and drive the session that owns the deferred
+ * Load this extension with one published shell API and drive the session that owns the deferred
  * install — the only path that knows a session is live. Answers the host class and the hooks, so
  * a test can watch the prototype and a paint.
  */
-async function loadPromptCardSession(bridgeApi) {
-  const previous = globalThis[BRIDGE_API_SLOT];
-  globalThis[BRIDGE_API_SLOT] = bridgeApi;
+async function loadPromptCardSession(shellApi) {
+  const previous = globalThis[SHELL_API_SLOT];
+  globalThis[SHELL_API_SLOT] = shellApi;
   class Host {
     render(width) {
       return [`native ${width}`];
@@ -1213,39 +1242,39 @@ async function loadPromptCardSession(bridgeApi) {
   const emit = extensionSession(hooks);
   const shutdown = async () => {
     await emit('session_shutdown');
-    if (previous === undefined) delete globalThis[BRIDGE_API_SLOT];
-    else globalThis[BRIDGE_API_SLOT] = previous;
+    if (previous === undefined) delete globalThis[SHELL_API_SLOT];
+    else globalThis[SHELL_API_SLOT] = previous;
   };
   return { Host, native, emit, shutdown };
 }
 
-test('S2: a successful install asks the bridge for exactly one repaint, and no paint asks again', async () => {
-  const bridge = repaintBridge();
-  const session = await loadPromptCardSession(bridge.api);
+test('S2: a successful install asks the shell API for exactly one repaint, and no paint asks again', async () => {
+  const shellApi = repaintShellApi();
+  const session = await loadPromptCardSession(shellApi.api);
   try {
     await session.emit('session_start');
     await drain();
     assert.notEqual(session.Host.prototype.render, session.native, 'the class is patched by the live session');
-    assert.equal(bridge.state.repaints, 1, 'the restored transcript is asked to repaint once');
+    assert.equal(shellApi.state.repaints, 1, 'the restored transcript is asked to repaint once');
     // Painting is what the request produced: it never asks for another repaint itself.
     const component = new session.Host();
     component.render(60);
     component.render(62);
-    assert.equal(bridge.state.repaints, 1, 'a paint requests none, and a steady frame neither');
+    assert.equal(shellApi.state.repaints, 1, 'a paint requests none, and a steady frame neither');
     // A second `session_start` is a re-install: it asks again, exactly once.
     await session.emit('session_start');
     await drain();
-    assert.equal(bridge.state.repaints, 2, 'the re-install path asks for its own single repaint');
+    assert.equal(shellApi.state.repaints, 2, 'the re-install path asks for its own single repaint');
   } finally {
     await session.shutdown();
   }
 });
 
-test('S2: an install the gate never armed, and a bridge with no requestRepaint, ask for none', async () => {
-  // (a) The bridge refuses the design registration, so the install was never armed: no request.
-  const refused = repaintBridge({
+test('S2: an install the gate never armed, and a shell API with no requestRepaint, ask for none', async () => {
+  // (a) The shell API refuses the design registration, so the install was never armed: no request.
+  const refused = repaintShellApi({
     registerToolDesign: () => {
-      throw new Error('this bridge refuses the activity design');
+      throw new Error('this shell API refuses the activity design');
     },
   });
   const ungated = await loadPromptCardSession(refused.api);
@@ -1258,11 +1287,11 @@ test('S2: an install the gate never armed, and a bridge with no requestRepaint, 
     await ungated.shutdown();
   }
   // (b) The member is optional: the install succeeds and no member is there to call.
-  const absent = repaintBridge({});
+  const absent = repaintShellApi({});
   delete absent.api.requestRepaint;
   const memberless = await loadPromptCardSession(absent.api);
   try {
-    assert.equal('requestRepaint' in absent.api, false, 'the published bridge carries no such member');
+    assert.equal('requestRepaint' in absent.api, false, 'the published shell API carries no such member');
     await memberless.emit('session_start');
     await drain();
     assert.notEqual(memberless.Host.prototype.render, memberless.native, 'the install still happened');

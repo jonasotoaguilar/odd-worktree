@@ -11,7 +11,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const os = require('node:os');
-const { loadExtension, BRIDGE_SLOT, defaultBridge } = require('./fixtures/load-extension.js');
+const { loadExtension, SHELL_SLOT, defaultShellApi } = require('./fixtures/load-extension.js');
 
 const FRIDAY_END = Date.parse('2026-11-27T10:00:00Z');
 const MONDAY_START = Date.parse('2026-11-30T01:00:00Z');
@@ -24,17 +24,17 @@ const reply = () => ({ ok: true, json: async () => ({ usage: Object.fromEntries(
 ) }) });
 
 async function fixture(t) {
-  const previous = [globalThis[BRIDGE_SLOT], Date.now, setTimeout, clearTimeout];
-  t.after(() => { [globalThis[BRIDGE_SLOT], Date.now, global.setTimeout, global.clearTimeout] = previous; });
+  const previous = [globalThis[SHELL_SLOT], Date.now, setTimeout, clearTimeout];
+  t.after(() => { [globalThis[SHELL_SLOT], Date.now, global.setTimeout, global.clearTimeout] = previous; });
   // The rows are Off until the human says On, so this suite turns DeepSeek's switch on: what it
   // tests is the timer, not the default.
-  const bridge = defaultBridge();
-  bridge.api.createStore = () => ({
+  const shellApi = defaultShellApi();
+  shellApi.api.createStore = () => ({
     get: (key, fallback) => (key === 'alerts' ? { peaks: { deepseek: true } } : fallback),
     set: () => {},
     delete: () => {},
   });
-  globalThis[BRIDGE_SLOT] = bridge.api;
+  globalThis[SHELL_SLOT] = shellApi.api;
   const sources = [];
   const { hooks } = await loadExtension({ events: { emit(name, payload) {
     if (name === 'gentle-pi:usage-source/v1') sources.push(payload);

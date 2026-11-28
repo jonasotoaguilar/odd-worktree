@@ -9,7 +9,7 @@
  * (`dist/core/extensions/runner.js:534-540`). There is no `next()` chain, unlike tool renderers
  * (`:550-553`), and no way to read or wrap another extension's renderer. So "patching
  * `pi.registerMessageRenderer`" cannot capture anybody: every extension holds its own `pi` object
- * with its own closure, and only a registration made THROUGH the bridge's object would pass here.
+ * with its own closure, and only a registration made THROUGH the shell API's object would pass here.
  *
  * What Pi does expose is the component: `CustomMessageComponent` keeps the renderer Pi resolved for
  * that message in `customRenderer`, and calls it again on every `rebuild()`
@@ -36,11 +36,11 @@
  * selection on EVERY render pass, which is what lets a design chosen after the message was drawn
  * repaint it, and what makes `default` restore the host's own rows untouched.
  *
- * ## The content level is the design's, not the bridge's
+ * ## The content level is the design's, not the shell API's
  *
  * Pi's card content level (`minimal`) clips TOOL cards, because the host's own renderer decides how
  * much of a tool result to show, and gentle-shell's renderers offer `previewRows` for exactly that.
- * A custom message has no host renderer, and the bridge adds no policy of its own: it never truncates,
+ * A custom message has no host renderer, and the shell API adds no policy of its own: it never truncates,
  * re-wraps or withholds a row a design returned, and it never reads a content level. An alert the
  * agent must read in full can therefore print in full — that choice is the DESIGN's, and what this
  * module owes it is the material to make it: `width`, `render.expanded`, `render.outputPad`,
@@ -77,7 +77,7 @@ export interface MessageComponentLike {
 /**
  * Pi's `MessageRenderer`, described structurally (`dist/core/extensions/types.d.ts:1211`): it is
  * handed the message, `{ expanded, outputPad }` and the theme, and answers a component or
- * `undefined`. The bridge never re-types the host's objects, it forwards them.
+ * `undefined`. The shell API never re-types the host's objects, it forwards them.
  */
 export type HostMessageRenderer = (
   message: unknown,
@@ -150,7 +150,7 @@ function hostRows(component: unknown, width: number, customType: string): string
  * owns the frame around a body it did not have to invent — and so a design that throws or answers
  * something that is not rows still leaves the message readable instead of dropping it off the screen.
  *
- * Nothing here is styled: the bridge has no business choosing colours a design is about to frame.
+ * Nothing here is styled: the shell API has no business choosing colours a design is about to frame.
  * Content that is not a string yields the label alone, because inventing text would be worse than
  * showing less.
  */
@@ -198,7 +198,7 @@ function bodyLines(content: unknown): string[] {
 /**
  * Hard-wrap rows to `width`, by code point, for the rows THIS module fabricates. Nothing is dropped:
  * a 190-column row at width 24 becomes eight rows. Only the plain body and Pi's box take this path —
- * a design's own rows are handed back untouched, because the bridge does not measure what a design
+ * a design's own rows are handed back untouched, because the shell API does not measure what a design
  * chose to draw (L7).
  */
 function wrapToWidth(rows: readonly string[], width: number): string[] {
@@ -302,7 +302,7 @@ function designComponent(args: {
 }
 
 /**
- * The renderer the bridge installs for ONE custom type, given the host's own renderer for it (or
+ * The renderer the shell API installs for ONE custom type, given the host's own renderer for it (or
  * `undefined` when the host has none).
  *
  * It is the whole policy in one place:
@@ -338,7 +338,7 @@ export function messageDesignRenderer(
     hooks?.onBuild?.(selection.kind === "design");
     // The host's own renderer first, always, and exactly once per build: it owns the frame, its
     // arguments and its failures. A host renderer that throws is REPORTED and answers `undefined`,
-    // which is exactly what Pi does with it — its own default box — so the bridge never changes what
+    // which is exactly what Pi does with it — its own default box — so the shell API never changes what
     // the user sees when the host's own renderer is broken.
     let hostComponent: unknown;
     if (host !== undefined) {

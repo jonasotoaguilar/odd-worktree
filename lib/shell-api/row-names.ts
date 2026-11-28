@@ -3,7 +3,7 @@
  *
  * A row name is what a human reads where a setting line's name goes — an entry provider's
  * `choice.setting`, or the label of the row a provider, a section or a card style contributes. The
- * host names its own rows in one to three plain words (`Card style`, `stats`); a bridge row read
+ * host names its own rows in one to three plain words (`Card style`, `stats`); a shell API row read
  * `Bash card → Bash rendering`, which is a breadcrumb with an arrow and a repeated qualifier, not a
  * name. Third instance of one class of defect, so the rule is stated once here and applied by both
  * boundaries that can create a row name:
@@ -35,7 +35,7 @@
  *
  * ## Reject and report, never rewrite
  *
- * The bridge does NOT sanitize a name: `Bash card → Bash rendering` staying in a report as
+ * The shell API does NOT sanitize a name: `Bash card → Bash rendering` staying in a report as
  * `Bash card → Bash rendering` is what lets an author find and fix it. So the offending string is
  * recorded verbatim with the rule it broke, the diagnostics record lists the pair, and the row simply does
  * not exist. Derivation (`./row-labels.ts`) is the one place that transforms text, and it applies the
@@ -184,7 +184,7 @@ export function rowNameProblem(value: string): RowNameProblem | undefined {
 }
 
 /** Stable process-global slot, like the bus and the notice buffer: two copies must agree. */
-const ROW_NAMES_KEY = Symbol.for("gentle-shell-bridge.row-names.v1");
+const ROW_NAMES_KEY = Symbol.for("odd-worktree.row-names.v1");
 
 interface RowNameState {
   /** One record per surface + id + field, in the order the first rejection appeared. */

@@ -11,7 +11,7 @@
  *
  * The function itself is not reachable — gentle-shell is not a dependency and Pi loads it in its own
  * jiti module graph — but the SLOT it writes is: `SidebarState.hover` is declared on the
- * process-global state the bridge already intercepts, and its own comment says it is "shared across
+ * process-global state the shell API already intercepts, and its own comment says it is "shared across
  * separately loaded extensions" (`lib/shell-sidebar.ts:37`). So this module performs the same two
  * steps against the same published state, exactly as `./repaint.ts` bumps the host's cache revision
  * rather than importing `invalidateSidebar`:
@@ -27,7 +27,7 @@
  * That part handler is a `NativePointerRegion` around the host's own card
  * (`extensions/gentle-shell.ts:2766`), whose `onHover` claims or clears the pointer and always
  * returns `{ handled: true }` (`extensions/gentle-shell.ts:2732-2741`). So a MOVE over a row the
- * bridge appended is consumed by the host unless the rail wrapper offers it to the contributor
+ * shell API appended is consumed by the host unless the rail wrapper offers it to the contributor
  * first; `./sidebar.ts`'s `mouseThrough` does exactly that for the rows the contributor rendered,
  * and keeps the host first for every other event.
  *
@@ -54,7 +54,7 @@ interface PointerState {
   lastReason?: string;
 }
 
-const POINTER_STATE = Symbol.for("gentle-shell-bridge.section-pointer.state.v1");
+const POINTER_STATE = Symbol.for("odd-worktree.section-pointer.state.v1");
 
 function pointerHost(): Record<symbol, PointerState | undefined> {
   // SAFETY: only `pointerState()` writes this key, and it re-checks the shape before trusting it.

@@ -1,10 +1,10 @@
 /**
  * S10/T14 — the chain test that was missing: the host's resolver runs FIRST and answers bash
- * WITHOUT calling `next()`, so the bridge's resolver is never consulted.
+ * WITHOUT calling `next()`, so the shell API's resolver is never consulted.
  *
  * Pi composes resolvers in extension load order (`runner.js:550-553`) and offers no way to reorder
  * them (`loader.js:298-302` only pushes). In the user's install gentle-pi is package 0 and this
- * bridge is package 11, and gentle-pi's bash resolver answers `bash` without calling `next()`
+ * shell API is package 11, and gentle-pi's bash resolver answers `bash` without calling `next()`
  * (`extensions/quiet-tools.ts:910-914`). Every earlier test passed a fake `next()` that always
  * answered, so none of them could observe this.
  *
@@ -211,21 +211,21 @@ function mountCard(options: MountOptions): FakeCard {
 // T14/T15 — the host resolves bash first; adoption is the path that still reaches the card
 // ---------------------------------------------------------------------------------------------
 
-test("S10/T14: a design reaches a card when a resolver ahead of the bridge answers bash", () => {
+test("S10/T14: a design reaches a card when a resolver ahead of the shell API answers bash", () => {
   registerToolDesign(bashHeadingDesign);
   setToolDesignSelection("bash", "loon.bash-heading");
   applied = 0;
 
-  const bridgeCalls: string[] = [];
-  const bridgeResolver: Resolver = (toolName, next) => {
-    bridgeCalls.push(toolName);
+  const shellApiCalls: string[] = [];
+  const shellApiResolver: Resolver = (toolName, next) => {
+    shellApiCalls.push(toolName);
     return toolDesignResolver(toolName, next as () => never);
   };
 
-  const toolDefinition = resolveChain([hostQuietResolver, bridgeResolver], "bash", () => undefined);
+  const toolDefinition = resolveChain([hostQuietResolver, shellApiResolver], "bash", () => undefined);
   const card = mountCard({ toolName: "bash", toolDefinition });
 
-  assert.deepEqual(bridgeCalls, [], "the bridge's resolver is never consulted — the defect");
+  assert.deepEqual(shellApiCalls, [], "the shell API's resolver is never consulted — the defect");
   assert.deepEqual(card.render(80), BASH_CARD, "the host's own rows, before adoption");
   assert.equal(applied, 0, "no design has been applied yet");
 
@@ -251,9 +251,9 @@ test("S10/T15: the two paths cooperate — the resolver wraps once, adoption add
   setToolDesignSelection("bash", "loon.bash-heading");
   applied = 0;
 
-  // The bridge is FIRST in the chain here, so its resolver wraps the host's renderers.
-  const bridgeResolver: Resolver = (toolName, next) => toolDesignResolver(toolName, next as () => never);
-  const toolDefinition = resolveChain([bridgeResolver, hostQuietResolver], "bash", () => undefined);
+  // The shell API is FIRST in the chain here, so its resolver wraps the host's renderers.
+  const shellApiResolver: Resolver = (toolName, next) => toolDesignResolver(toolName, next as () => never);
+  const toolDefinition = resolveChain([shellApiResolver, hostQuietResolver], "bash", () => undefined);
   const card = mountCard({ toolName: "bash", toolDefinition });
 
   // Marker on the renderers: the resolver path already wrapped, so adoption must not stack.

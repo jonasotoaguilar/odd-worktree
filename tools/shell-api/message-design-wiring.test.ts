@@ -92,7 +92,7 @@ test("S4: a type with no design hands the host's own component back by identity"
   assert.deepEqual(
     (built as { render(width: number): readonly string[] }).render(40),
     ["host frame@40"],
-    "and it draws exactly what it drew before the bridge existed",
+    "and it draws exactly what it drew before the shell API existed",
   );
 });
 

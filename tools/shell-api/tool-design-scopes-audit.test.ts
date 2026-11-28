@@ -27,7 +27,7 @@ import { resetNoticesForTests } from "../../lib/shell-api/notices.ts";
 import { resetPluginLinesForTests } from "../../lib/shell-api/plugin-lines.ts";
 import { createStore, resetStoreStateForTests } from "../../lib/shell-api/store.ts";
 import {
-  TOOL_DESIGN_STORE_ID,
+  LEGACY_TOOL_DESIGN_STORE_ID,
   TOOL_DESIGN_STORE_KEY,
   getToolDesignConflicts,
   registerToolDesign,
@@ -67,7 +67,7 @@ const apply = (lines: readonly string[]): string[] => [...lines];
 const scope: ToolDesignScope = { description: "under odd/", matches: () => false };
 
 /** The one store file this surface writes, so a refusal can be shown to leave it byte for byte. */
-const storeFile = (): string => join(configHome, "gentle-shell-bridge", `${TOOL_DESIGN_STORE_ID}.json`);
+const storeFile = (): string => join(configHome, "gentle-shell-bridge", `${LEGACY_TOOL_DESIGN_STORE_ID}.json`);
 
 const invalidKeys = [
   ["read", null, /scopes for tool "read" must be an object/u],
@@ -79,7 +79,7 @@ test("S19: a non-enumerable `scopes` key is validated before anything is stored"
     resetAll();
     const id = `acme.hidden-${key}`;
     // A legacy per-tool selection is exactly what a hidden key used to reach through the migration.
-    createStore(TOOL_DESIGN_STORE_ID).set(TOOL_DESIGN_STORE_KEY, { write: id });
+    createStore(LEGACY_TOOL_DESIGN_STORE_ID).set(TOOL_DESIGN_STORE_KEY, { write: id });
     const bytes = readFileSync(storeFile());
     const registry = snapshotToolDesigns();
     const scopes = Object.defineProperty({ write: scope }, key, { value });
@@ -109,7 +109,7 @@ test("S19: a symbol `scopes` key is refused too, enumerable or not", () => {
   for (const enumerable of [false, true]) {
     resetAll();
     const id = `acme.symbol-${String(enumerable)}`;
-    createStore(TOOL_DESIGN_STORE_ID).set(TOOL_DESIGN_STORE_KEY, { write: id });
+    createStore(LEGACY_TOOL_DESIGN_STORE_ID).set(TOOL_DESIGN_STORE_KEY, { write: id });
     const bytes = readFileSync(storeFile());
     const registry = snapshotToolDesigns();
     const foreign = Symbol("find");
@@ -132,7 +132,7 @@ test("S19: enumerable invalid `scopes` keys are still rejected unchanged", () =>
   for (const [key, value, reason] of invalidKeys) {
     resetAll();
     const id = `acme.plain-${key}`;
-    createStore(TOOL_DESIGN_STORE_ID).set(TOOL_DESIGN_STORE_KEY, { write: id });
+    createStore(LEGACY_TOOL_DESIGN_STORE_ID).set(TOOL_DESIGN_STORE_KEY, { write: id });
     const bytes = readFileSync(storeFile());
     const registry = snapshotToolDesigns();
     const scopes = { write: scope, [key]: value } as unknown as Readonly<Record<string, ToolDesignScope>>;

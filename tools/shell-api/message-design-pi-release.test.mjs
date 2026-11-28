@@ -7,11 +7,11 @@ import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 // Run with PI_NODE_MODULES pointing to the installed Pi 1.6.0 distribution's node_modules.
-// BRIDGE_SOURCE is only for running the unmodified test beside an isolated source archive.
+// SHELL_API_SOURCE is only for running the unmodified test beside an isolated source archive.
 const pi = process.env.PI_NODE_MODULES;
-const bridge = process.env.BRIDGE_SOURCE;
-const src = file => import(bridge
-  ? pathToFileURL(resolve(bridge, 'src', file))
+const shellApi = process.env.SHELL_API_SOURCE;
+const src = file => import(shellApi
+  ? pathToFileURL(resolve(shellApi, 'src', file))
   : new URL(`../../lib/shell-api/${file}`, import.meta.url));
 const piImport = file => import(pathToFileURL(resolve(pi, '@earendil-works', file)));
 
@@ -94,22 +94,22 @@ if (!pi) {
   test('reserved provider ids leave the bus untouched and the message switch available', () => {
     const before = snapshotProviders();
     for (const id of [
-      'bridge.sections', 'bridge.card-styles', 'bridge.tool-designs', 'bridge.message-designs',
+      'shell-api.sections', 'shell-api.card-styles', 'shell-api.tool-designs', 'shell-api.message-designs',
     ]) {
       assert.throws(
         () => registerRows({ id, category: 'Cards', rows: () => [] }),
-        /belongs to the bridge's own line/,
+        /belongs to the shell API's own line/,
       );
     }
     assert.deepEqual(snapshotProviders(), before, 'nothing stored, nothing replaced');
     installMessageDesignRows();
     assert.equal(
-      snapshotProviders().some(p => p.id === 'bridge.message-designs'),
+      snapshotProviders().some(p => p.id === 'shell-api.message-designs'),
       false,
       'no design yet: no provider at all',
     );
     select('late-menu', () => ['design']);
-    const line = snapshotProviders().find(p => p.id === 'bridge.message-designs').rows();
+    const line = snapshotProviders().find(p => p.id === 'shell-api.message-designs').rows();
     assert.deepEqual(
       line.map(row => row.choice?.value),
       ['default', 'panel'],

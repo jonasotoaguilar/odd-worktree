@@ -3,7 +3,7 @@
 The question this page answers: which rules must every change preserve, and what does each one refuse?
 
 Where a rule below says "the API", it means the shell API this package owns (`lib/shell-api/`,
-invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on purpose.
+invariant 32). The one name it keeps from before is its store directory, spelled as it was so saved choices still load.
 
 1. **One extension entry point.** `package.json` `pi.extensions` is exactly
    `["./extensions/odd-worktree-tools.ts"]`, and `extensions/` holds no other
@@ -13,14 +13,14 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
 2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
    invariants 18 and 19 allow.** No customize COMMAND, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
-   `herdr-gentle:` command name. This package owns exactly FOUR preferences, each an
+   `herdr-gentle:` command name. This package owns exactly FIVE preferences, each an
    Off/On row registered through the shell API and stored in its own store:
-   `Codegraph+`, `Worktrees+` (`Tools` page), `Deepseek peak` and `Claude peak`
-   (`Alert` page). All four read Off until the human turns them on.
+   `Codegraph+`, `Worktrees+` and `Skills+` (`Tools` page), `Deepseek peak` and
+   `Claude peak` (`Alert` page). All five read Off until the human turns them on.
    Everything else it contributes to `/gentle:customize` is a DESIGN: the two
    (`activity` and `color`) on
    the shell API's own `Cards` page — a `Card activity` line, or its `Card bash`
-   line on a published object older than 0.6.0, and a `Card diff` line on 0.9.0 and later
+   line on a published object older than 0.6.0, and a `Card file` line on 0.9.0 and later
    (invariant 3). The skill/ODD file cards obey the `activity` design's line
    (invariant 23) and contribute no row of their own, and never the `color` one; neither design is a
    preference here, because the shell API owns those choices and its store. It registers no customize
@@ -48,12 +48,15 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
    of `Worktrees+`); the two designs
    (`lib/bash-design.js`, `lib/diff-design.js`) on the two lines the shell API owns, one
    `Card activity` line over `bash`, `read`, `write`, `edit` and the three
-   read-only shell tools `grep`, `find`, `ls` (the single `tool: "bash"` design on a bridge older
-   than 0.6.0) and one `Card diff` line over `write` and `edit`, the first claiming `write` and
+   read-only shell tools `grep`, `find`, `ls` (the single `tool: "bash"` design on a shell API older
+   than 0.6.0) and one `Card file` line over `write` and `edit`, the first claiming `write` and
    `edit` through a scope limited to skill and ODD paths so the file card's question is
    answered per call and the second claiming every other call of those two, which is
    neither a command nor a tool either and adds no name to either registry; and
-   no `Cards` row of its own at all (the file cards add none either — see below).
+   ONE plain `Cards` row of its own, the `Card message` Off/On switch
+   (`lib/card-message.js`, below) — a row provider, never a design and never a third
+   line, so the design count above stays two (the file cards add no row at all — see
+   below).
    Neither moving the session nor
    removing a checkout is exposed to the agent: `/warp` is the person's front for
    both (its `ctrl+d`, the selector, a typed name, a queued handoff for moving; its
@@ -86,14 +89,26 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
    only its delta against main. `filesSessionWorktreeRoots` reads the same active
    branch, so a worktree registered only on an abandoned branch is out of scope.
 
-   **Three switches are optional, and nothing else is.** The `Tools` page of
+   **Four switches are optional, and nothing else is.** The `Tools` page of
    `/gentle:customize` (`lib/modules.js`, a plain `registerRows` provider) holds the
-   `Codegraph+` and `Worktrees+` Off/On lines. They are read once, when the surface
+   `Codegraph+`, `Worktrees+` and `Skills+` Off/On lines. They are read once, when the surface
    registers, from the package's own store; `Worktrees+` Off leaves out `/warp`, its
-   card, the two tools, the worktree guards and prompt text, and `Codegraph+` Off leaves
+   card, the two tools, the worktree guards (the active-session guard a removal runs included)
+   and prompt text, `Skills+` Off leaves out the two read rules, and `Codegraph+` Off leaves
    out the CodeGraph wiring, prompt text and reminders. The CodeGraph CARD is not one of
    these: it is a design of the `Card activity` line and follows that switch. A change lands on
-   the next load, so each one says so. Neither adds a command or a tool name.
+   the next load, so each one says so. None adds a command or a tool name. `Codegraph+` and
+   `Worktrees+` are ON unless the stored value is exactly `false`; `Skills+` is OFF unless it is
+   exactly `true`, so an unset, malformed or unreadable document leaves the read rules out.
+
+   **`Card message` is this package's own line, applied live.** The
+   `Cards` page gains one `registerRows` provider — `lib/card-message.js`, the setting
+   `Card message`, Off then On, On unless the stored document says exactly `on: false` —
+   persisted as `card-message` in the shell API's own store beside `modules` and
+   `identity`, and read on every paint. It gates the user prompt card, the assistant
+   card and the `## User identity` block; its action asks the shell API for one
+   `requestRepaint` and says nothing, so a change applies at once with no `/reload`.
+   `Card activity` keeps the other cards (invariant 23).
 
    **The peak rows have one switch per provider, applied live.** `lib/alert-rows.js`
    contributes the `Alert` page of `/gentle:customize` with one line per entry of
@@ -110,8 +125,8 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
    **The shell API is native, and the sections reach the host only through it.** Both
    the issues rail and the ODD rail are published through the shell API's
    sidebar-section API alone: the object read from its
-   `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
-   gate, or the one `gentle-shell-bridge:ready` announcement when an API
+   `Symbol.for("odd-worktree/shell-api/v1")` slot after its schema and version
+   gate, or the one `odd-worktree:shell-ready` announcement when an API
    publishes later. That API SHIPS IN THIS PACKAGE — this package's own code at
    `lib/shell-api/`, imported by the entry as `../lib/shell-api/extension.ts`
    (invariant 32) — so no host installs anything for this package's surface to
@@ -131,7 +146,7 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
    which is the API's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the shell API, not by this package (invariant 2 keeps every customize
    surface out of it except the two tool-design rows this package puts on the shell API's
-   own `Card activity` and `Card diff` lines), and the section declares NO
+   own `Card activity` and `Card file` lines), and the section declares NO
    preview: every `Sections` row draws the host's one shared list of active sections
    and the API adds this section's `rowLabel` to it itself, shown or left out
    with the row's own hypothetical (`registerSection` has no `preview` field — do
@@ -174,26 +189,30 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
    later (one `Card activity` row), gaining `edit`, and the scope on `write` and `edit` limited to skill
    and ODD paths, from `0.9.0` on — six tools there, seven here — and the single `tool: "bash"` design on anything older (one
    `Card bash` row) or on a release it cannot read — never a grouped registration an older
-   bridge would refuse. A second design (`lib/diff-design.js`, id `odd-worktree.diff`, label
-   `color`) registers on its own `Card diff` line over `write` and `edit`, on `0.9.0` and later
-   only, and draws nothing for a skill or an ODD path because those rows are the file card's. The bridge owns Pi's one tool-renderer resolver, builds the host's
+   shell API would refuse. A second design (`lib/diff-design.js`, id `odd-worktree.file`, label
+   `color`) registers on its own `Card file` line over `write` and `edit`, on `0.9.0` and later
+   only, and draws nothing for a skill or an ODD path because those rows are the file card's. The shell API owns Pi's one tool-renderer resolver, builds the host's
    own card, reads the line it is painting (`default` | `activity`, or `default` | `color` on
-   `diff`, stored as `native` | the design id) on
+   `file`, stored as `native` | the design id) on
    every render pass and persists each choice in its own store. This package writes exactly three
    things to that store. The first is the first-run `activity` seed: `seedBashDesignSelection` selects `activity`
    once, for `bash`, only when the API holds no `bash` choice, and it does so BEFORE the
-   registration, because a `0.6.0` bridge carries that choice over to its line's value at
+   registration, because a `0.6.0` shell API carries that choice over to its line's value at
    registration time; it records `bashActivitySeeded` in its own `odd-worktree` store so a
    later `native` is never undone. The second is the one-time line-key carry-over, which moves a
    value stored at `selections.$lines.tools` — the line's row was `Card tools` before the rename —
    to `selections.$lines.tags`, ONLY when `tags` is absent, and BEFORE the registration, so the
    API's own migration finds the key taken and copies nothing over it; a store that is absent,
    unreadable, of another shape or that throws carries nothing over and throws nothing. The third
-   is the `diff` line's own first-run seed: `seedDiffDesignSelection` selects `color` on `diff`
-   once, only when the API holds no `diff` choice, and — because there is no legacy per-tool
-   value for that line to inherit — it runs AFTER the registration the API accepted, so a
+   is the `file` line's own first-run seed: `seedDiffDesignSelection` selects `color` on `file`
+   once, only when the API holds no `file` choice, carrying a value stored under the line's previous
+   key `diff` over to `file` — the id `odd-worktree.diff` mapped to `odd-worktree.file`, any other
+   stored value (`native` included) copied as it stands — and leaving the old key exactly as it
+   found it, never deleted, so a user's choice survives the rename; and — because there is no legacy
+   per-tool value for that line to inherit — it runs AFTER the registration the API accepted, so a
    refused registration never leaves a value naming a design nobody registered; its
-   `diffDesignSeeded` marker lives in that same `odd-worktree` store. A stored
+   `fileDesignSeeded` marker (the older `diffDesignSeeded` one is no longer read) lives in that same
+   `odd-worktree` store. A stored
    choice is never overwritten, a reserved line
    key is never written by the seed, a failure seeds nothing. It reads no other file, has no
    `/card:bash` command and depends on no extension load order.
@@ -258,7 +277,9 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
    "could not be resolved". Nothing is auto-warped. The check is best effort:
    stale, unattributable and truncated evidence is disclosed — the panel notifies
    each caveat the guard could not resolve, one notice per caveat — never
-   silently dropped and never left blocking forever.
+   silently dropped and never left blocking forever. The check belongs to the worktree
+   half: it runs while `Worktrees+` is on, and with that module off the removal surface it
+   guards is not registered either.
 5. **Deletion is git only.** Removal is `git worktree remove <absolute path>`
    (with `--force` only when the caller asked) and the branch is kept. No other
    application is closed, opened or removed on any path — including the panel's
@@ -525,7 +546,7 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     `lib/bash-design.js` changes nothing but a heading row: it executes, spawns,
     guards, intercepts and shadows nothing, and the destructive evidence of
     `lib/bash-destructive.js` is presentation: no permission, guard or execution
-    decision may read it. A bridge that hands over the call's arguments makes them
+    decision may read it. A shell API that hands over the call's arguments makes them
     the evidence; without them the heading is the only evidence and a call is named
     only when the heading provably shows the WHOLE text — no `…` abbreviation, no
     `… +N lines` fold, no continuation row, nothing after it but the host's fill and
@@ -643,19 +664,21 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     (`lib/artifact-read-full.js`): a `read` of a `.md` below a `skills/` or an `odd/` folder has its
     `offset` and `limit` DELETED from the host's `event.input` before the tool runs, so a skill or an
     ODD is delivered whole and never half a procedure. It blocks nothing and answers nothing. Both
-    observations follow the `Worktrees+` module switch with the guards above.
+    observations follow the `Skills+` module switch — OFF by default — and touch no worktree surface.
 
     **Both worktree guards (the `bash` one and the `edit`/`write` one) judge the primary session only**:
     creating a worktree and leaving the default branch are the orchestrator's actions, so a subagent
     child (`GENTLE_PI_AGENTS_CHILD=1`, read per call) passes both. The skill-read guard and the
-    whole-read rule still apply to every session.
+    whole-read rule still apply to every session that has `Skills+` on.
 
     No guard ever throws (a throwing `tool_call` handler blocks the tool), an
     unreadable repository leaves only the `bash` worktree refusal active, and the
     default branch is resolved lazily and memoized per checkout.
-    `ODD_WORKTREE_GUARD=0` is the one way to turn all of them off, like
-    `ODD_WORKTREE_PROMPT=0` for the prompt blocks, and the `Worktrees+` switch
-    leaves the worktree guards out at registration (the skill-read guard stays); no
+    `ODD_WORKTREE_GUARD=0` takes the two worktree guards and the skill-read refusal away, like
+    `ODD_WORKTREE_PROMPT=0` for the prompt blocks, and the switches decide first:
+    `Worktrees+` off leaves the two worktree guards out at registration and `Skills+` off —
+    its default — leaves the two read rules out, each at registration, so neither the
+    module nor the environment variable can be worked around from a call; no
     other value, option or config file does, and they register no command or tool name (invariant 3). Each refusal
     names the tool that replaces the blocked action, and the prompt block (invariant
     14) is what keeps the agent from reaching them, so a change to one is read
@@ -716,7 +739,7 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     it.** The card is painted while — and only while — the API's published
     reader answers that this package's activity design draws the tool being
     painted. That reader is `api.resolveToolDesignSelection(tool)`, reached from
-    the `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
+    the `Symbol.for("odd-worktree/shell-api/v1")` slot after its schema and version
     gate (`lib/file-card-resolver.js:51`, `:160`) and never imported, and the
     answer that paints is `{ kind: "design", design }` with
     `design.id === "odd-worktree.bash-activity"` (the id at
@@ -725,7 +748,7 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     its key hint included. The question is asked per painted tool, on every frame,
     never cached, which is what repaints a card already on screen after a
     mid-session switch. It fails OPEN: the reader is an
-    OPTIONAL member of the published object, so a bridge older than 0.7.0 — or none
+    OPTIONAL member of the published object, so a shell API older than 0.7.0 — or none
     at all — cannot answer and an answer this build cannot read is unreadable, and
     in both cases the card paints exactly as it did before it joined that line: an
     unavailable gate never hides a row, and nothing here throws. The answer, the
@@ -909,12 +932,24 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     `tools/issues-command.test.js` pins "without the CLI neither the command nor the
     rail section exists" and "the decision costs no child process, at load or at
     session start".
-29. **The user prompt card is a DRAWING shim, gated by the same line and never
-    touching the host's text.** `lib/user-prompt-card.js` wraps
-    `UserMessageComponent.prototype.render` — the one host class this package
-    patches — because Pi publishes no extension seam for a `role: "user"` entry: the
-    class is handed in from the extension's lazy `import()`, so `lib/` imports no Pi
-    package and a host without the export installs nothing. The card it draws is a
+29. **The two message cards are DRAWING shims, gated by this package's own `Card
+    message` switch and never touching the host's text.** `lib/user-prompt-card.js` wraps
+    `UserMessageComponent.prototype.render` and `lib/assistant-message-card.js` wraps
+    `AssistantMessageComponent.prototype.render`, the two host classes this package
+    patches, because Pi publishes no extension seam for a `role: "user"` entry nor for an
+    assistant message: each class is handed in from the extension's lazy `import()`, so
+    `lib/` imports no Pi package and a host without the export installs nothing. Both
+    wrappers come from `lib/host-render-shim.js` with the card's own `Symbol.for` cell, so
+    the two cards install and uninstall independently and `/reload` replaces only the live
+    logic. The assistant card draws a message ONLY while its own `hasToolCalls` is
+    `false` — the final answer of a turn, in a resumed or an old session alike, never an
+    intermediate one — and the "no job or sub-agent pending" filter is NOT applied
+    because a transcript cannot prove it, so a message that ends a turn while a background
+    sub-agent is still running is drawn as final. Its heading is the fixed `✿ Gentleman`,
+    the clock and the turn stats of the session history (`turnStats` over the extension's
+    `entries` seam, the current session's own `getEntries()`), frame and title in the
+    theme role `mdHeading`, and its body is Pi's own rendering placed at the frame's inner
+    width, never repainted. The card it draws is a
     `✿ Jona · HH:MM` card — the name `/identity` stored, `You` while none is stored —
     on the card substrate (`float`/`neon` read live, tone `info`,
     the whole frame and the title in `accent`, the separator and the clock in
@@ -935,13 +970,14 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     frame) so a transcript restored before the deferred host import resolves comes
     back as cards instead of waiting for unrelated input; a refused install, a
     closed session and an API without that member request nothing.
-    It adds NO row, command, setting or design of its own, so the surface invariant 3
-    lists is unchanged by it. The gate is `Card activity` answering this package's
-    `activity` design, asked INSIDE the patched `render` on every paint and never cached, which
-    is what repaints a prompt already on screen: any other answer — `default`
-    (stored `native`), another design, an absent or throwing bridge, a width below
-    six columns, a component whose Markdown shape is not Pi's — hands the host's own
-    rows back BYTE FOR BYTE, fail CLOSED, unlike the file cards' pre-switch answer.
+    It adds no row, command or design of its own: the one `Cards` row it follows is the
+    `Card message` switch's, which the surface invariant 3 lists once. The
+    gate is `cardMessageOn()`, asked INSIDE the patched `render` on every paint and never
+    cached, which is what repaints a prompt already on screen: with the switch Off — and
+    for an absent or throwing shell API, a width below six columns, or a component whose
+    Markdown shape is not Pi's — the host's own rows come back BYTE FOR BYTE, fail
+    CLOSED. The shell API's `Card activity` line no longer decides this card; it keeps the
+    file, jobs, CodeGraph and message cards (invariant 23).
     Pi's OSC 133 prompt-zone markers are re-emitted once on the card's first and last
     row and never on the native path, so shell integration is not degraded. The
     wrapper is installed once per process through a `Symbol.for` slot (a second
@@ -951,9 +987,9 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     changes a row (the width the frame really draws at, the resolved paint, the stored
     name, the rendered Markdown rows), so a style change, or a name set or cleared,
     always recomposes. An ACTIVE card paint pays three live reads and nothing else: the
-    gate itself — the live `Card activity` answer, asked on every paint including the
+    gate itself — the live `card-message` document, asked on every paint including the
     native one — the stored name (`lib/user-identity.js`, one synchronous document
-    read, made only once the gate has answered for this design and the width and the
+    read, made only once the gate has answered On and the width and the
     body can draw), and, only while the card actually draws, the shell's style (the
     published slot, or `<home>/card-style.json` when none is published), which is the
     price of a prompt that repaints the moment any of them changes;
@@ -963,28 +999,9 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     one instance, the byte-for-byte native answers, the accent cells in both styles,
     the zone markers and the wrap-once/uninstall-by-reference claims.
 
-30. **A session is named after the ODD it writes, and a name it cannot prove it
-    wrote is never touched.** `lib/session-auto-name.js` derives the label from the
-    document's own name — `odd/tasks/prompt-card-fix.md` is `Prompt card fix`, with
-    `-`, `_` and the `/` of a nested feature read as word breaks, the first letter
-    capitalized and the rest left exactly as the document named it — on every
-    `write`/`edit` landing on an `odd/tasks/*.md` document, from the primary checkout
-    and from a worktree alike, and never on a `read` or on any other path. The prose
-    INSIDE the document is not a source: a heading is its author's sentence, not the
-    ODD's identity, and a document that does not exist yet names the session the same.
-    The branch is not part of the name, so two checkouts of one ODD carry one label.
-    Ownership is what keeps the guarantee: the plugin writes only an empty name or one
-    it can prove it produced — the label it just derived, the label of an ODD this
-    session already wrote (the durable `odd-worktree.odd-touch` record, which is why a
-    resume keeps working), or the two shapes earlier versions wrote (`<slug>` and
-    `<slug> @ <branch>`). Anything else was typed by a human and is untouchable,
-    including by the `gentle_odd_phase` re-apply, which invents nothing for a session
-    that never wrote an ODD.
-    `tools/session-auto-name.test.js` pins the label shape, the re-name on every write,
-    the ownership cases and the resume path; `tools/session-auto-name-wiring.test.js`
-    pins that the primary checkout names too, and that a write into a registered
-    worktree names from the principal checkout — the naming base is the DOCUMENT's own
-    checkout, never the one the call started in.
+30. **ODD activity does not set the session name.** Task writes and edits are
+    recorded for the ODD rail only; session naming belongs to the host's session
+    identity tool. `tools/session-name-ownership.test.js` pins this boundary.
 
 31. **The ODD panel is ONE flat listing, with a checkout cell on every row and a
     count of the rows.** `lib/odd-view.js` hands the caller's elected groups to
@@ -1012,10 +1029,10 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     is `lib/shell-api/index.ts`, its Pi-side factory `lib/shell-api/extension.ts`).
     What never changes is the COMPATIBILITY SURFACE, because third-party plugins and
     users' saved choices depend on it: the slot
-    `Symbol.for("gentle-shell-bridge/api/v1")` publishing a frozen object at module
-    load (schema `gentle-shell-bridge/api`, version 1, `VERSION` 0.16.2, twelve
-    members), every `Symbol.for("gentle-shell-bridge…")` key, the
-    `gentle-shell-bridge:ready` event, `bridgeApi()`/`onBridgeApi`, and the
+    `Symbol.for("odd-worktree/shell-api/v1")` publishing a frozen object at module
+    load (schema `odd-worktree/shell-api`, version 1, `VERSION` 0.16.2, twelve
+    members), every `Symbol.for("odd-worktree…")` key, the
+    `odd-worktree:shell-ready` event, `shellApi()`/`onShellApi`, and the
     `<config home>/gentle-shell-bridge` store directory — all exactly as they were, so
     a plugin that reads the slot keeps working through this package alone and a user
     keeps every saved choice. The entry loads it FIRST —
@@ -1039,19 +1056,17 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     `tools/shell-api/*.test.ts` and `tools/shell-api/*.test.mjs`, run by
     `npm run test:shell-api` on Node >= 22.18 (the suite is TypeScript) in CI on 22.x
     and 24.x, while its core never runs in the plain-JS suite at all (the fixture
-    stubs the one import). A standalone `gentle-shell-bridge` installed beside this
-    package is simply unnecessary: both copies share the global state ("first wins"),
-    so this package's own surfaces are unaffected, and what differs is visible but
-    small — the older package's extra `/bridge-status` command, and which copy's words
-    a shared notice such as the missing-`gentle-pi` warning uses (whoever runs it
-    first). Uninstalling it is the recommendation and not a requirement. That
+    stubs the one import). A second copy of this API loaded in the same process
+    shares the global state ("first wins"), so this package's own surfaces are unaffected;
+    the only visible difference is which copy's words a shared notice such as the
+    missing-`gentle-pi` warning uses (whoever runs it first). That
     harmlessness is a property of the shared state, so the SHAPE of every
     `Symbol.for` slot is frozen too, not only its key — including the values cached in
     it. An older copy re-validates a slot by a field and overwrites it when the field
     is missing, so a field nothing here reads any more (`adoptedMessages` in the
     message-design adoption state, `owner` in the tool-design index and its
     `TOOL_DESIGN_INDEX_SHAPE` stamp) stays, and the plugin-line attribution kind
-    stays `bridge`, because an older copy writes and reads it.
+    stays `shell-api`, because an older copy writes and reads it.
     `tools/shell-api/message-design-adoption.test.ts` and
     `tools/shell-api/compatibility-regression.test.mjs` pin the adoption slot, the
     attribution kind and a foreign object that throws when described.

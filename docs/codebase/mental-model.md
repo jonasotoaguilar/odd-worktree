@@ -12,11 +12,13 @@ optional sidebar sections — the `GITHUB` issues rail and the `ODD` rail — an
 value of its `Card activity` line (`bash`, the read-only shell tools `grep`, `find`,
 `ls`, and `read`, `write` and `edit`, the last two through a scope limited to
 skill and ODD paths, which is what lets the file cards ask about them) and the
-`color` value of its `Card diff` line (`write` and `edit`, drawn as an IDE pane
-in the active theme's own syntax roles) — and one stored value of its own: the
-user's name, kept by `/identity` in the shell API's store, which heads the prompt
-card instead of `You` and adds one line to the orchestrator's prompt. The skill/ODD
-file cards obey that same `Card activity` value. On a shell API that can put
+`color` value of its `Card file` line (`write` and `edit`, drawn as an IDE pane
+in the active theme's own syntax roles) — and two stored values of its own behind two
+`Cards` rows: the user's name, kept by `/identity` in the shell API's store, which heads
+the prompt card instead of `You`, and the `Card message` Off/On switch, On by default
+and applied live, which draws the prompt and the assistant's final answer as
+cards and adds the identity line to the orchestrator's prompt only while a name is stored.
+The skill/ODD file cards obey that same `Card activity` value; the prompt card does not. On a shell API that can put
 several tools on one line the `Card activity` row was `Card tools` until this
 release (the older single row was `Card bash`), and a choice stored under the old
 key is carried over to `tags` before the design registers — only when the API
@@ -27,7 +29,7 @@ checkout's files, reading and — role permitting — editing that checkout's Gi
 issues and pull requests, and the drawing of its own cards. `git` is the only external requirement, and the shell API is not one: it is this
 package's OWN code under `lib/shell-api/`
 (invariant 32), imported by the entry as `../lib/shell-api/extension.ts`, so the slot
-`Symbol.for("gentle-shell-bridge/api/v1")`
+`Symbol.for("odd-worktree/shell-api/v1")`
 is published at module load with nothing installed beside this package. Other plugins keep
 using that slot, so they extend gentle-shell through odd-worktree too. That API carries
 three control surfaces: the two
@@ -58,7 +60,7 @@ never added — every other surface keeps working.
   draw, the reminders only advise, the guards read command text and paths (invariants 20, 21,
   22, 23).
 - Every other customize surface, plugin-tools toggle and companion-app
-  integration: the bash activity is a design on the shell API, the diff card is the
+  integration: the bash activity is a design on the shell API, the `color` design is the
   second one, the file cards read the `activity` design's line and never the
   `color` one, and this package owns no
   preference at all (invariants 2, 3, 23).
@@ -153,8 +155,8 @@ for each is in [`invariants.md`](invariants.md).
 | [26](invariants.md) | The rail's timed refresh exists only while the section is drawn. |
 | [27](invariants.md) | A forced refresh happens only after a mutating `bash`, behind its cap. |
 | [28](invariants.md) | The `gh`-absent and non-repository states are settled, so nothing retries them. |
-| [29](invariants.md) | The user prompt card draws the host's class, gated by `Card activity`, and never touches its text. |
-| [30](invariants.md) | A session is named after the ODD it writes, and a name it cannot prove it wrote is never touched. |
+| [29](invariants.md) | The two message cards draw the host's classes, gated by the `Card message` switch; the assistant card is the final answer only, and neither touches the host's text. |
+| [30](invariants.md) | ODD activity does not set the session name. |
 | [31](invariants.md) | The ODD panel is one flat listing, a checkout cell on every row and a count of the rows. |
 | [32](invariants.md) | The shell API is native: `lib/shell-api/` is this package's own code at the same slot and store, loaded first by the entry, with no external dependency, no import by package name and no copy rule. |
 

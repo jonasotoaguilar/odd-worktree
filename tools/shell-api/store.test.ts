@@ -22,8 +22,8 @@ import {
 let configHome: string;
 let previousConfigHome: string | undefined;
 
-const bridgeDir = (): string => join(configHome, "gentle-shell-bridge");
-const storePath = (pluginId: string): string => join(bridgeDir(), `${pluginId}.json`);
+const storeDir = (): string => join(configHome, "gentle-shell-bridge");
+const storePath = (pluginId: string): string => join(storeDir(), `${pluginId}.json`);
 
 test.beforeEach(() => {
   configHome = mkdtempSync(join(tmpdir(), "gsb-store-"));
@@ -64,11 +64,11 @@ test("a missing file reads the caller's default and creates nothing", () => {
 
   assert.equal(store.get("bannerSource", "activity"), "activity");
   assert.deepEqual(getStoreDiagnostics(), [], "a missing file is not a problem to report");
-  assert.equal(existsSync(bridgeDir()), false, "reading must not create the bridge directory");
+  assert.equal(existsSync(storeDir()), false, "reading must not create the shell API directory");
 });
 
 test("malformed JSON reads the default, is reported, and is left untouched", () => {
-  mkdirSync(bridgeDir(), { recursive: true });
+  mkdirSync(storeDir(), { recursive: true });
   writeFileSync(storePath("loon"), "{ not json", "utf8");
 
   const store = createStore("loon");
@@ -87,7 +87,7 @@ test("malformed JSON reads the default, is reported, and is left untouched", () 
 });
 
 test("a later set after a malformed file writes a valid document", () => {
-  mkdirSync(bridgeDir(), { recursive: true });
+  mkdirSync(storeDir(), { recursive: true });
   writeFileSync(storePath("loon"), "{ not json", "utf8");
   const store = createStore("loon");
 
@@ -101,7 +101,7 @@ test("a later set after a malformed file writes a valid document", () => {
 });
 
 test("a document that is not an object reads the default and is reported", () => {
-  mkdirSync(bridgeDir(), { recursive: true });
+  mkdirSync(storeDir(), { recursive: true });
   writeFileSync(storePath("loon"), "[1,2,3]", "utf8");
 
   const store = createStore("loon");
@@ -111,7 +111,7 @@ test("a document that is not an object reads the default and is reported", () =>
 });
 
 test("an unknown schemaVersion reads the default and is reported", () => {
-  mkdirSync(bridgeDir(), { recursive: true });
+  mkdirSync(storeDir(), { recursive: true });
   writeFileSync(
     storePath("loon"),
     JSON.stringify({ schemaVersion: 99, values: { keep: "me" }, extraTopLevel: true }),
@@ -125,7 +125,7 @@ test("an unknown schemaVersion reads the default and is reported", () => {
 });
 
 test("a later set after an unknown schemaVersion writes only the caller's keys and reports the discarded payload", () => {
-  mkdirSync(bridgeDir(), { recursive: true });
+  mkdirSync(storeDir(), { recursive: true });
   writeFileSync(
     storePath("loon"),
     JSON.stringify({ schemaVersion: 99, values: { keep: "me" }, extraTopLevel: true }),
@@ -145,7 +145,7 @@ test("a later set after an unknown schemaVersion writes only the caller's keys a
   assert.equal(
     "extraTopLevel" in document,
     false,
-    "keys the bridge does not understand are not carried into the valid document",
+    "keys the shell API does not understand are not carried into the valid document",
   );
   const problem = getStoreDiagnostics()[0];
   assert.equal(problem?.kind, "unsupported-schema-version");
@@ -157,7 +157,7 @@ test("writes are atomic: the temp file is gone and the target parses completely"
 
   for (let index = 0; index < 5; index += 1) {
     store.set("counter", index);
-    assert.deepEqual(readdirSync(bridgeDir()), ["loon.json"], `no temp file after write ${index}`);
+    assert.deepEqual(readdirSync(storeDir()), ["loon.json"], `no temp file after write ${index}`);
     assert.equal(JSON.parse(readFileSync(storePath("loon"), "utf8")).values.counter, index);
   }
 });
@@ -169,7 +169,7 @@ test("two plugin ids never touch each other's file", () => {
   loon.set("bannerSource", "output");
   card.set("style", "rounded");
 
-  assert.deepEqual(readdirSync(bridgeDir()).sort(), ["cards.json", "loon.json"]);
+  assert.deepEqual(readdirSync(storeDir()).sort(), ["cards.json", "loon.json"]);
   assert.equal(loon.get("style", "none"), "none");
   assert.equal(card.get("bannerSource", "none"), "none");
   assert.equal(loon.get("bannerSource", "activity"), "output");
@@ -187,6 +187,6 @@ test("invalid plugin ids are rejected before any filesystem access", () => {
     );
   }
 
-  assert.equal(existsSync(bridgeDir()), false, "rejection happens before the directory is created");
-  assert.equal(existsSync(join(configHome, "escape.json")), false, "nothing escaped the bridge dir");
+  assert.equal(existsSync(storeDir()), false, "rejection happens before the directory is created");
+  assert.equal(existsSync(join(configHome, "escape.json")), false, "nothing escaped the shell API dir");
 });

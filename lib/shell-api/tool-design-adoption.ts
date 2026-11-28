@@ -8,7 +8,7 @@
  * (`dist/core/extensions/loader.js:298-302` only pushes). So a resolver loaded before this package
  * decides first, and a resolver that answers WITHOUT calling `next()` — the host's own quiet bash
  * resolver does exactly that while `Card content` is `minimal`
- * (`extensions/quiet-tools.ts:910-914`) — means the bridge's resolver is never consulted. The user's
+ * (`extensions/quiet-tools.ts:910-914`) — means the shell API's resolver is never consulted. The user's
  * live report (L3) is that picture: a design is selected, the `Cards` row and the sidebar say so, and
  * every bash card still draws `$ …`.
  *
@@ -18,7 +18,7 @@
  *
  * ## The card's own contract is enough
  *
- * The bridge already holds the conversation component (`./card-style-wiring.ts`'s
+ * The shell API already holds the conversation component (`./card-style-wiring.ts`'s
  * `findConversation`), and its children are Pi's `ToolExecutionComponent`s. Each one carries
  * `toolName` and the `toolDefinition` Pi resolved for it
  * (`dist/modes/interactive/components/tool-execution.js`, constructor near line 37-45), and
@@ -85,8 +85,8 @@ interface AdoptionState {
   adoptedCards: AdoptedEntry[];
 }
 
-/** Stable process-global slot, like every other piece of bridge state: two copies must agree. */
-const ADOPTION_STATE: symbol = Symbol.for("gentle-shell-bridge.tool-designs.adoption.v1");
+/** Stable process-global slot, like every other piece of shell API state: two copies must agree. */
+const ADOPTION_STATE: symbol = Symbol.for("odd-worktree.tool-designs.adoption.v1");
 
 function adoptionHost(): Record<symbol, AdoptionState | undefined> {
   // SAFETY: only `adoptionState()` writes this key, and it re-checks the shape before trusting a

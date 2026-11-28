@@ -4,7 +4,7 @@
  *
  * The example is what a plugin author copies, so what is proven here is its whole contract:
  *
- * - it reaches the bridge through the symbol and the `gentle-shell-bridge:ready` announcement, with
+ * - it reaches the shell API through the symbol and the `odd-worktree:shell-ready` announcement, with
  *   no path, no environment variable and no import (both load orders work);
  * - it registers its design for `bash`, its `plain` card style and its sidebar section, and its own
  *   `session_start` handler is the only entry point (the demo row provider is covered here too);
@@ -25,21 +25,21 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
-  BRIDGE_API_KEY,
-  BRIDGE_READY_EVENT,
-  announceBridgeReady,
-  bridgeApi,
-  publishBridgeApi,
-  resetBridgeApiForTests,
+  SHELL_API_KEY,
+  SHELL_READY_EVENT,
+  announceShellReady,
+  shellApi,
+  publishShellApi,
+  resetShellApiForTests,
 } from "../../lib/shell-api/api.ts";
 import { resetBusForTests, resetSectionsForTests, snapshotSections } from "../../lib/shell-api/bus.ts";
-import gentleShellBridge, { type BridgeExtensionApi } from "../../lib/shell-api/extension.ts";
+import gentleShellShellApi, { type ShellExtensionApi } from "../../lib/shell-api/extension.ts";
 import { resetNoticesForTests } from "../../lib/shell-api/notices.ts";
 import { resetPluginLinesForTests } from "../../lib/shell-api/plugin-lines.ts";
 import { buildRows, resetRowBuildStateForTests } from "../../lib/shell-api/rows.ts";
 import { resetStoreStateForTests } from "../../lib/shell-api/store.ts";
 import {
-  TOOL_DESIGN_STORE_ID,
+  LEGACY_TOOL_DESIGN_STORE_ID,
   getToolDesignSelection,
   resetToolDesignsForTests,
   setToolDesignSelection,
@@ -79,9 +79,9 @@ const recordingPi = (events?: FakeEvents): { pi: FakePi; sessionHandlers: Sessio
 };
 
 /** The package loading in the same process: publishing, then announcing itself. */
-const loadBridge = (events: FakeEvents): void => {
-  const pi: BridgeExtensionApi = { on() {}, registerCommand() {}, events };
-  gentleShellBridge(pi);
+const loadShellApi = (events: FakeEvents): void => {
+  const pi: ShellExtensionApi = { on() {}, registerCommand() {}, events };
+  gentleShellShellApi(pi);
 };
 
 const notifySurface = (): {
@@ -146,22 +146,22 @@ let previousModuleEnv: string | undefined;
 test.before(() => {
   configHome = mkdtempSync(join(tmpdir(), "gsb-example-designs-"));
   previousConfigHome = process.env.GENTLE_PI_CONFIG_HOME;
-  previousModuleEnv = process.env.GENTLE_SHELL_BRIDGE_MODULE;
+  previousModuleEnv = process.env.GENTLE_SHELL_API_MODULE;
   process.env.GENTLE_PI_CONFIG_HOME = configHome;
-  delete process.env.GENTLE_SHELL_BRIDGE_MODULE;
+  delete process.env.GENTLE_SHELL_API_MODULE;
 });
 
 test.after(() => {
   if (previousConfigHome === undefined) delete process.env.GENTLE_PI_CONFIG_HOME;
   else process.env.GENTLE_PI_CONFIG_HOME = previousConfigHome;
-  if (previousModuleEnv === undefined) delete process.env.GENTLE_SHELL_BRIDGE_MODULE;
-  else process.env.GENTLE_SHELL_BRIDGE_MODULE = previousModuleEnv;
+  if (previousModuleEnv === undefined) delete process.env.GENTLE_SHELL_API_MODULE;
+  else process.env.GENTLE_SHELL_API_MODULE = previousModuleEnv;
   rmSync(configHome, { recursive: true, force: true });
 });
 
 test.beforeEach(() => {
   rmSync(join(configHome, "gentle-shell-bridge"), { recursive: true, force: true });
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetBusForTests();
   resetSectionsForTests();
   resetNoticesForTests();
@@ -177,11 +177,11 @@ test.beforeEach(() => {
 // The handshake: absent, present, and loaded-first
 // ---------------------------------------------------------------------------------------------
 
-test("with no bridge installed the example adds nothing and says so once", async () => {
+test("with no shell API installed the example adds nothing and says so once", async () => {
   const captured = captureConsole();
   const { pi, sessionHandlers } = recordingPi();
   try {
-    const init = await loadExample("no-bridge");
+    const init = await loadExample("no-shell API");
     assert.doesNotThrow(() => init(pi));
   } finally {
     captured.restore();
@@ -195,7 +195,7 @@ test("with no bridge installed the example adds nothing and says so once", async
   sessionHandlers[0]({}, { hasUI: true, ui });
   assert.equal(calls.length, 1, "one notice, delivered exactly once");
   assert.equal(calls[0][1], "warning");
-  assert.match(calls[0][0], /no compatible gentle-shell-bridge is installed/u);
+  assert.match(calls[0][0], /no compatible shell API is installed/u);
   assert.match(calls[0][0], /no cross-extension event bus/u);
   assert.match(calls[0][0], /adds nothing/u);
   assert.deepEqual(surfaceCounts(), [0, 0]);
@@ -213,16 +213,16 @@ test("the absent notice waits for a UI and is delivered exactly once", async () 
   sessionHandlers[0]({}, { hasUI: true, ui });
   sessionHandlers[0]({}, { hasUI: true, ui });
   assert.equal(calls.length, 1, "the buffered message waits for a UI that can show it");
-  assert.match(calls[0][0], /no compatible gentle-shell-bridge is installed/u);
+  assert.match(calls[0][0], /no compatible shell API is installed/u);
   assert.deepEqual(surfaceCounts(), [0, 0]);
 });
 
-test("an old or foreign bridge is treated as absent, and only through notify", async () => {
-  hostSlot()[BRIDGE_API_KEY] = { schema: "gentle-shell-bridge/api", version: 0 };
+test("an old or foreign shell API is treated as absent, and only through notify", async () => {
+  hostSlot()[SHELL_API_KEY] = { schema: "odd-worktree/shell-api", version: 0 };
   const captured = captureConsole();
   const { pi, sessionHandlers } = recordingPi();
   try {
-    (await loadExample("old-bridge"))(pi);
+    (await loadExample("old-shell API"))(pi);
   } finally {
     captured.restore();
   }
@@ -231,13 +231,13 @@ test("an old or foreign bridge is treated as absent, and only through notify", a
   const { ui, calls } = notifySurface();
   sessionHandlers[0]({}, { hasUI: true, ui });
   assert.equal(calls.length, 1);
-  assert.match(calls[0][0], /no compatible gentle-shell-bridge is installed/u);
+  assert.match(calls[0][0], /no compatible shell API is installed/u);
   assert.deepEqual(surfaceCounts(), [0, 0]);
-  assert.equal(hostSlot()[BRIDGE_API_KEY] !== undefined, true, "the slot it cannot use is left alone");
+  assert.equal(hostSlot()[SHELL_API_KEY] !== undefined, true, "the slot it cannot use is left alone");
 });
 
 test("the session handler does nothing without a UI, then registers on the next one", async () => {
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   (await loadExample("no-ui"))(pi);
 
@@ -252,7 +252,7 @@ test("the session handler does nothing without a UI, then registers on the next 
 });
 
 test("two session_start events leave one design and one section, not two", async () => {
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   (await loadExample("twice"))(pi);
   const { ui } = notifySurface();
@@ -264,7 +264,7 @@ test("two session_start events leave one design and one section, not two", async
 });
 
 test("the disposer removes both the design and the section", async () => {
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   const dispose = (await loadExample("dispose"))(pi);
   const { ui } = notifySurface();
@@ -275,10 +275,10 @@ test("the disposer removes both the design and the section", async () => {
   assert.deepEqual(surfaceCounts(), [0, 0]);
 });
 
-test("an older bridge object without registerToolDesign keeps the section and says absent", async () => {
-  const published = bridgeApi() ?? publishBridgeApi();
+test("an older shell API object without registerToolDesign keeps the section and says absent", async () => {
+  const published = shellApi() ?? publishShellApi();
   // First-wins: a mixed process can hand back an object that predates the design bus.
-  hostSlot()[BRIDGE_API_KEY] = {
+  hostSlot()[SHELL_API_KEY] = {
     schema: published.schema,
     version: published.version,
     VERSION: published.VERSION,
@@ -292,7 +292,7 @@ test("an older bridge object without registerToolDesign keeps the section and sa
   const { ui, calls } = notifySurface();
   sessionHandlers[0]({}, { hasUI: true, ui });
 
-  assert.deepEqual(calls, [], "a surface the bridge never promised is not warned about");
+  assert.deepEqual(calls, [], "a surface the shell API never promised is not warned about");
   assert.deepEqual(snapshotToolDesigns("bash"), [], "and no design is registered");
   assert.deepEqual(surfaceCounts(), [0, 1], "the section still registers");
   assert.equal(sectionOf().lines(context())[0], "resolver  absent", "the resolver report is now the first body row");
@@ -305,7 +305,7 @@ test("an older bridge object without registerToolDesign keeps the section and sa
 // ---------------------------------------------------------------------------------------------
 
 test("the Cards line appears with no extra wiring, and the section reads the live selection", async () => {
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   (await loadExample("live-state"))(pi);
   const { ui } = notifySurface();
@@ -348,9 +348,9 @@ test("the Cards line appears with no extra wiring, and the section reads the liv
     "and selecting a design still adds no second copy of the value",
   );
 
-  // The selection lives in the BRIDGE's own file, not in one of the example's.
+  // The selection lives in the SHELL API's own file, not in one of the example's.
   const stored = JSON.parse(
-    readFileSync(join(configHome, "gentle-shell-bridge", `${TOOL_DESIGN_STORE_ID}.json`), "utf8"),
+    readFileSync(join(configHome, "gentle-shell-bridge", `${LEGACY_TOOL_DESIGN_STORE_ID}.json`), "utf8"),
   );
   assert.deepEqual(stored.values.selections, { bash: "bash-card.bash-heading" });
   assert.equal(getToolDesignSelection("bash"), "bash-card.bash-heading");
@@ -369,7 +369,7 @@ test("the Cards line appears with no extra wiring, and the section reads the liv
 
 const DEMO_CATEGORY = "Card bash";
 
-/** The tool-design line's setting, old bridge (`bash`) and current bridge (`Card bash`). */
+/** The tool-design line's setting, old shell API (`bash`) and current shell API (`Card bash`). */
 const isBashDesignSetting = (setting: string | undefined): boolean =>
   setting === "bash" || setting === "Card bash";
 
@@ -398,7 +398,7 @@ const demoStoreValues = (): Record<string, unknown> => {
 };
 
 test("a plugin adds its OWN category with a toggle and a button, through one provider", async () => {
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   (await loadExample("demo-category"))(pi);
   const { ui } = notifySurface();
@@ -443,7 +443,7 @@ test("a plugin adds its OWN category with a toggle and a button, through one pro
 });
 
 test("choosing the demo toggle persists it and the sidebar shows the new value", async () => {
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   (await loadExample("demo-toggle"))(pi);
   const { ui } = notifySurface();
@@ -461,7 +461,7 @@ test("choosing the demo toggle persists it and the sidebar shows the new value",
 });
 
 test("the demo button counts its presses in the section, through the example's store", async () => {
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   (await loadExample("demo-button"))(pi);
   const { ui } = notifySurface();
@@ -477,7 +477,7 @@ test("the demo button counts its presses in the section, through the example's s
 });
 
 test("a second registration replaces the demo provider instead of stacking a category", async () => {
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   (await loadExample("demo-reload-1"))(pi);
   const { ui } = notifySurface();
@@ -501,9 +501,9 @@ test("a second registration replaces the demo provider instead of stacking a cat
   assert.equal(pressesMeta(), "1", "and so does the press count");
 });
 
-test("an older bridge without registerRows keeps the design and section, and adds no category", async () => {
-  const published = bridgeApi() ?? publishBridgeApi();
-  hostSlot()[BRIDGE_API_KEY] = {
+test("an older shell API without registerRows keeps the design and section, and adds no category", async () => {
+  const published = shellApi() ?? publishShellApi();
+  hostSlot()[SHELL_API_KEY] = {
     schema: published.schema,
     version: published.version,
     VERSION: published.VERSION,
@@ -514,17 +514,17 @@ test("an older bridge without registerRows keeps the design and section, and add
 
   const { pi, sessionHandlers } = recordingPi();
   // `registerRows` is absent from this object: the example must degrade, not throw.
-  const dispose = (await loadExample("demo-old-bridge"))(pi);
+  const dispose = (await loadExample("demo-old-shell API"))(pi);
   const { ui } = notifySurface();
   for (const handler of sessionHandlers) handler({}, { hasUI: true, ui });
 
   assert.deepEqual(surfaceCounts(), DESIGN_AND_SECTION, "the promised surfaces still register");
-  assert.deepEqual(demoRows(), [], "a surface the bridge never promised adds nothing");
+  assert.deepEqual(demoRows(), [], "a surface the shell API never promised adds nothing");
   dispose();
 });
 
 test("the design's own preview depicts the card in that design", async () => {
-  publishBridgeApi();
+  publishShellApi();
   const { pi, sessionHandlers } = recordingPi();
   (await loadExample("preview"))(pi);
   const { ui } = notifySurface();
@@ -548,31 +548,31 @@ test("the design's own preview depicts the card in that design", async () => {
 // The load order Pi really produces: the plugin runs first
 // ---------------------------------------------------------------------------------------------
 
-test("a plugin loaded before the bridge registers when the announcement arrives", async () => {
+test("a plugin loaded before the shell API registers when the announcement arrives", async () => {
   const bus = createFakeEvents();
   const { pi, sessionHandlers } = recordingPi(bus);
   (await loadExample("late-announcement"))(pi);
 
   assert.deepEqual(surfaceCounts(), [0, 0], "nothing registers at module load");
-  assert.equal(bus.listenerCount(BRIDGE_READY_EVENT), 1, "the early loader is listening");
+  assert.equal(bus.listenerCount(SHELL_READY_EVENT), 1, "the early loader is listening");
 
-  loadBridge(bus);
+  loadShellApi(bus);
 
   assert.deepEqual(surfaceCounts(), DESIGN_AND_SECTION, "the announcement served the early loader");
-  assert.equal(bus.listenerCount(BRIDGE_READY_EVENT), 0, "and it stopped listening afterwards");
+  assert.equal(bus.listenerCount(SHELL_READY_EVENT), 0, "and it stopped listening afterwards");
 
   const { ui } = notifySurface();
   for (const handler of sessionHandlers) handler({}, { hasUI: true, ui });
   assert.deepEqual(surfaceCounts(), DESIGN_AND_SECTION, "a reload adds no second copy");
 });
 
-test("the announcement alone is enough: a late bridge registers with no session_start", async () => {
+test("the announcement alone is enough: a late shell API registers with no session_start", async () => {
   const bus = createFakeEvents();
   const { pi, sessionHandlers } = recordingPi(bus);
   (await loadExample("late-no-session"))(pi);
 
-  publishBridgeApi();
-  announceBridgeReady(bus);
+  publishShellApi();
+  announceShellReady(bus);
 
   assert.deepEqual(surfaceCounts(), DESIGN_AND_SECTION);
   assert.equal(sessionHandlers.length, 1, "the handler is still there for the next session");
@@ -589,24 +589,24 @@ test("session_start before and after the announcement leaves exactly one of each
   const { ui } = notifySurface();
 
   for (const handler of sessionHandlers) handler({}, { hasUI: true, ui });
-  assert.deepEqual(surfaceCounts(), [0, 0], "no bridge yet: nothing to register with");
+  assert.deepEqual(surfaceCounts(), [0, 0], "no shell API yet: nothing to register with");
 
-  loadBridge(bus);
+  loadShellApi(bus);
   assert.deepEqual(surfaceCounts(), DESIGN_AND_SECTION);
 
   for (const handler of sessionHandlers) handler({}, { hasUI: true, ui });
   assert.deepEqual(surfaceCounts(), DESIGN_AND_SECTION, "the later session_start adds no duplicate");
 });
 
-test("a plugin loaded after the bridge registers from session_start and leaves no listener", async () => {
+test("a plugin loaded after the shell API registers from session_start and leaves no listener", async () => {
   const bus = createFakeEvents();
-  loadBridge(bus);
+  loadShellApi(bus);
 
   const { pi, sessionHandlers } = recordingPi(bus);
-  (await loadExample("early-bridge"))(pi);
+  (await loadExample("early-shell API"))(pi);
 
   assert.equal(
-    bus.listenerCount(BRIDGE_READY_EVENT),
+    bus.listenerCount(SHELL_READY_EVENT),
     0,
     "the API was already published: nothing to wait for, so nothing is subscribed",
   );
@@ -623,11 +623,11 @@ test("disposing before the announcement drops the listener and registers nothing
   const { pi } = recordingPi(bus);
   const dispose = (await loadExample("late-dispose"))(pi);
 
-  assert.equal(bus.listenerCount(BRIDGE_READY_EVENT), 1);
+  assert.equal(bus.listenerCount(SHELL_READY_EVENT), 1);
   dispose();
-  assert.equal(bus.listenerCount(BRIDGE_READY_EVENT), 0, "a disposed load hears nothing");
+  assert.equal(bus.listenerCount(SHELL_READY_EVENT), 0, "a disposed load hears nothing");
 
-  loadBridge(bus);
+  loadShellApi(bus);
   assert.deepEqual(surfaceCounts(), [0, 0]);
 });
 
@@ -636,17 +636,17 @@ test("an announcement backed by no published object registers nothing", async ()
   const { pi } = recordingPi(bus);
   (await loadExample("late-foreign"))(pi);
 
-  bus.emit(BRIDGE_READY_EVENT, { schema: "someone-else/api", version: 1 });
+  bus.emit(SHELL_READY_EVENT, { schema: "someone-else/api", version: 1 });
 
   assert.deepEqual(surfaceCounts(), [0, 0], "the symbol decides, never the payload");
-  assert.equal(bus.listenerCount(BRIDGE_READY_EVENT), 1, "and the example is still waiting");
+  assert.equal(bus.listenerCount(SHELL_READY_EVENT), 1, "and the example is still waiting");
 });
 
 // ---------------------------------------------------------------------------------------------
 // The two honest notices
 // ---------------------------------------------------------------------------------------------
 
-test("with a bus but no bridge yet the notice says it is waiting for the announcement", async () => {
+test("with a bus but no shell API yet the notice says it is waiting for the announcement", async () => {
   const bus = createFakeEvents();
   const { pi, sessionHandlers } = recordingPi(bus);
   (await loadExample("notice-waiting"))(pi);
@@ -656,11 +656,11 @@ test("with a bus but no bridge yet the notice says it is waiting for the announc
 
   assert.equal(calls.length, 1);
   const message = calls[0][0];
-  assert.match(message, /waiting for the "gentle-shell-bridge:ready" announcement/u);
+  assert.match(message, /waiting for the "odd-worktree:shell-ready" announcement/u);
   assert.match(message, /registers the bash design/u);
   assert.match(message, /the CARD BASH sidebar section/u);
   assert.match(message, /if it is not installed, or the published object is incompatible, nothing arrives/u);
-  assert.doesNotMatch(message, /no compatible gentle-shell-bridge is installed/u);
+  assert.doesNotMatch(message, /no compatible shell API is installed/u);
 });
 
 test("a waiting notice is withdrawn once the announcement registers the surfaces", async () => {
@@ -673,7 +673,7 @@ test("a waiting notice is withdrawn once the announcement registers the surfaces
   for (const handler of sessionHandlers) handler({}, { hasUI: false, ui });
   assert.deepEqual(calls, [], "a session without a UI shows nothing");
 
-  loadBridge(bus);
+  loadShellApi(bus);
   assert.deepEqual(surfaceCounts(), DESIGN_AND_SECTION);
 
   for (const handler of sessionHandlers) handler({}, { hasUI: true, ui });
@@ -684,21 +684,21 @@ test("a waiting notice is withdrawn once the announcement registers the surfaces
 // Nothing outside the TUI
 // ---------------------------------------------------------------------------------------------
 
-test("the example's runtime path resolves no module of the bridge", () => {
+test("the example's runtime path resolves no module of the shell API", () => {
   const source = readFileSync(new URL("../../docs/shell-api/examples/bash-card.ts", import.meta.url), "utf8");
 
-  assert.equal(/GENTLE_SHELL_BRIDGE_MODULE/u.test(source), false, "no environment-variable override");
-  assert.equal(/bridgeCandidates/u.test(source), false, "no path probing");
+  assert.equal(/GENTLE_SHELL_API_MODULE/u.test(source), false, "no environment-variable override");
+  assert.equal(/shellApiCandidates/u.test(source), false, "no path probing");
   assert.equal(/await\s+import\s*\(/u.test(source), false, "nothing is imported at runtime");
   assert.equal(
-    /from\s+["']gentle-shell-bridge["']/u.test(source),
+    /from\s+["']pi-odd-worktree["']/u.test(source),
     false,
     "the package is never imported, not even for types",
   );
-  assert.match(source, /Symbol\.for\("gentle-shell-bridge\/api\/v1"\)/u);
+  assert.match(source, /Symbol\.for\("odd-worktree\/shell-api\/v1"\)/u);
   assert.equal(/console\./u.test(source), false, "no console write survives in the example");
   assert.match(source, /pi\.on\("session_start"/u, "registration happens in session_start");
-  assert.match(source, /gentle-shell-bridge:ready/u, "a later bridge is heard on the announcement");
+  assert.match(source, /odd-worktree:shell-ready/u, "a later shell API is heard on the announcement");
   assert.match(source, /pi\.events/u, "the channel comes from Pi's own bus, not a module");
   assert.match(source, /registerToolDesign/u, "the design is the surface it registers");
   assert.equal(/registerTransform/u.test(source), false, "there is no second transcript grammar");

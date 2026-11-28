@@ -1,5 +1,5 @@
 'use strict';
-// The bash activity design: what a caller of the bridge's `registerToolDesign` observes.
+// The bash activity design: what a caller of the shell API's `registerToolDesign` observes.
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const {
@@ -24,7 +24,7 @@ const strip = (row) => row.replace(/\u001b\[[0-9;]*m/g, '');
 const cols = (row) => Array.from(strip(row)).length;
 const textWidth = (text) => Array.from(text).length;
 
-// The host's two frames, as the bridge hands them for a collapsed call.
+// The host's two frames, as the shell API hands them for a collapsed call.
 const neon = (command, hint = 'ctrl+o to expand') => {
   const used = `╭─ $ ${command} `.length + ` ${hint} ─╮`.length;
   return `╭─ $ ${command} ${'─'.repeat(Math.max(2, 90 - used))} ${hint} ─╮`;
@@ -190,7 +190,7 @@ describe('the generic heading', () => {
   });
 });
 
-// What the bridge hands a design about the call itself (`ctx.render`).
+// What the shell API hands a design about the call itself (`ctx.render`).
 const render = (command, extra = {}) => ({ toolCallId: 'c1', args: { command }, isPartial: false, isError: false, ...extra });
 const RESULT = { tool: 'bash', part: 'result', width: 90, theme };
 const closing = (extra = '') => `╰${'─'.repeat(88 - extra.length)}${extra}╯`;
@@ -495,7 +495,7 @@ describe('choosing the shape', () => {
     }
   });
 
-  test('a bridge that refuses the line is probed once and keeps the per-tool shape', () => {
+  test('a shell API that refuses the line is probed once and keeps the per-tool shape', () => {
     const refusing = fake('nightly', false);
     const dispose = registerBashDesign(refusing.api);
     assert.equal(typeof dispose, 'function');
@@ -518,7 +518,7 @@ describe('choosing the shape', () => {
 });
 
 describe('the registration', () => {
-  test('is one bash design with the label the bridge line shows and a preview', () => {
+  test('is one bash design with the label the shell API line shows and a preview', () => {
     const design = bashActivityDesign();
     assert.equal(design.tool, 'bash');
     assert.equal(design.id, BASH_DESIGN_ID);
@@ -536,7 +536,7 @@ describe('the registration', () => {
     assert.equal(design.preview().title, 'Cards · Card bash');
   });
 
-  test('registers once per process, returns an idempotent disposer, and tolerates a bridge without the API', () => {
+  test('registers once per process, returns an idempotent disposer, and tolerates a shell API without the API', () => {
     const seen = [];
     const api = { registerToolDesign: (d) => { seen.push(d); return () => seen.pop(); } };
     assert.equal(registerBashDesign({}), null);
@@ -552,8 +552,8 @@ describe('the registration', () => {
   });
 });
 
-// A bridge whose `createStore` keeps one in-memory file per plugin id, like the real one.
-function fakeBridge(files = {}) {
+// A shell API whose `createStore` keeps one in-memory file per plugin id, like the real one.
+function fakeShellApi(files = {}) {
   const writes = [];
   const createStore = (id) => ({
     get: (key, fallback) => (files[id] && Object.hasOwn(files[id], key) ? files[id][key] : fallback),
@@ -565,27 +565,27 @@ const SELECTIONS = ['bridge-tool-designs', 'selections'];
 
 describe('the first-run selection', () => {
   test('a first load with no choice selects activity for bash and keeps the other tools', () => {
-    const { api, files } = fakeBridge({ 'bridge-tool-designs': { selections: { write: 'x.write' } } });
+    const { api, files } = fakeShellApi({ 'bridge-tool-designs': { selections: { write: 'x.write' } } });
     assert.equal(seedBashDesignSelection(api), true);
     assert.deepEqual(files['bridge-tool-designs'].selections, { write: 'x.write', bash: BASH_DESIGN_ID });
   });
 
   test('a fresh install with no store file at all selects activity', () => {
-    const { api, files } = fakeBridge();
+    const { api, files } = fakeShellApi();
     assert.equal(seedBashDesignSelection(api), true);
     assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID });
   });
 
   test('a choice the user already made is never overwritten, native included', () => {
     for (const chosen of ['native', 'someone.else']) {
-      const { api, files } = fakeBridge({ 'bridge-tool-designs': { selections: { bash: chosen } } });
+      const { api, files } = fakeShellApi({ 'bridge-tool-designs': { selections: { bash: chosen } } });
       assert.equal(seedBashDesignSelection(api), false, chosen);
       assert.equal(files['bridge-tool-designs'].selections.bash, chosen);
     }
   });
 
   test('it seeds once: native chosen afterwards stays native on the next load', () => {
-    const { api, files } = fakeBridge();
+    const { api, files } = fakeShellApi();
     assert.equal(seedBashDesignSelection(api), true);
     files['bridge-tool-designs'] = { selections: { bash: 'native' } };
     assert.equal(seedBashDesignSelection(api), false);
@@ -595,10 +595,10 @@ describe('the first-run selection', () => {
     assert.deepEqual(files['bridge-tool-designs'].selections, {});
   });
 
-  test('a bridge without createStore, a malformed file or a failing store seeds nothing and never throws', () => {
+  test('a shell API without createStore, a malformed file or a failing store seeds nothing and never throws', () => {
     assert.equal(seedBashDesignSelection({}), false);
     assert.equal(seedBashDesignSelection(null), false);
-    const malformed = fakeBridge({ 'bridge-tool-designs': { selections: 'oops' } });
+    const malformed = fakeShellApi({ 'bridge-tool-designs': { selections: 'oops' } });
     assert.doesNotThrow(() => seedBashDesignSelection(malformed.api));
     const failing = { createStore: () => ({ get: (_k, f) => f, set: () => { throw new Error('disk full'); } }) };
     assert.equal(seedBashDesignSelection(failing), false);
@@ -617,16 +617,16 @@ describe('the first-run selection', () => {
     assert.equal(files['bridge-tool-designs'].selections.bash, BASH_DESIGN_ID);
   });
 
-  test('registering the design on a bridge seeds it, and a refused registration registers nothing', () => {
-    const accepted = fakeBridge();
+  test('registering the design on a shell API seeds it, and a refused registration registers nothing', () => {
+    const accepted = fakeShellApi();
     const dispose = registerBashDesign(accepted.api);
     assert.equal(typeof dispose, 'function');
     assert.equal(accepted.files['bridge-tool-designs'].selections.bash, BASH_DESIGN_ID);
     dispose();
-    // The seed runs BEFORE the registration (so a 0.6.0 bridge inherits it), which means a
-    // refusal can only arrive after the choice is stored: the bridge then holds a value whose
+    // The seed runs BEFORE the registration (so a 0.6.0 shell API inherits it), which means a
+    // refusal can only arrive after the choice is stored: the shell API then holds a value whose
     // design is not registered, which its own report calls `missing` and draws as the host's card.
-    const refused = fakeBridge();
+    const refused = fakeShellApi();
     refused.api.registerToolDesign = () => { throw new Error('refused'); };
     assert.equal(registerBashDesign(refused.api), null);
     assert.equal(refused.files['bridge-tool-designs'].selections.bash, BASH_DESIGN_ID);
@@ -636,7 +636,7 @@ describe('the first-run selection', () => {
 // The read-only SHELL tools the one `activity` value heads. The host heads their cards
 // `<glyph> <tool> <arguments>`; every one of them is a shell command that only reads, so the word is
 // always the same. `read` is on the same line for coverage alone — the question the file card asks
-// the bridge — and this design paints nothing for it: a read is the file card's row or the host's.
+// the shell API — and this design paints nothing for it: a read is the file card's row or the host's.
 const READ_GLYPH = { grep: '⌕', find: '⌖', ls: '☷', read: '≡' };
 const READ_ARGS = {
   grep: '/needle/ in src/app.js',
@@ -712,7 +712,7 @@ describe('the read-only tools', () => {
     }
   });
 
-  test('a heading the host wrapped or cut is still headed when the bridge hands the arguments', () => {
+  test('a heading the host wrapped or cut is still headed when the shell API hands the arguments', () => {
     for (const tool of READ_TOOLS) {
       // Wrapped: the heading ends where the host ran out of rule, the rest continues below.
       const wrapped = [`╭─ ${toolHead(tool, '/needle/ in a/very')}  ╮`, '│ long/path │'];
@@ -733,7 +733,7 @@ describe('the read-only tools', () => {
       assert.deepEqual(applyBashActivityHeading(unproven, readCtx(tool)), unproven, tool);
       const wrapped = [`╭─ ${toolHead(tool, '/needle/ in a/very')}  ╮`, '│ long/path │'];
       assert.deepEqual(applyBashActivityHeading(wrapped, readCtx(tool)), wrapped, tool);
-      // An old bridge that hands no arguments leaves a provable heading alone only for its own row.
+      // An old shell API that hands no arguments leaves a provable heading alone only for its own row.
       const proven = [readNeon(tool)];
       assert.ok(applyBashActivityHeading(proven, readCtx(tool))[0].includes(painted('mdLink', '⌕ exploring')), tool);
     }
@@ -824,15 +824,15 @@ describe('the read-only tools', () => {
   });
 });
 
-// A bridge whose published object carries a release, and records what it was asked to register.
-function versionedBridge(version) {
+// A shell API whose published object carries a release, and records what it was asked to register.
+function versionedShellApi(version) {
   const seen = [];
   const api = { registerToolDesign: (design) => { seen.push(design); return () => {}; } };
   if (version !== undefined) api.VERSION = version;
   return { api, seen };
 }
 const designFor = (version) => {
-  const { api, seen } = versionedBridge(version);
+  const { api, seen } = versionedShellApi(version);
   const dispose = registerBashDesign(api);
   assert.equal(typeof dispose, 'function', String(version));
   dispose();
@@ -844,7 +844,7 @@ const designFor = (version) => {
 describe('the Card activity line', () => {
   test('the line declares `read` and `write` so the file card can be asked about them, and the design paints nothing for either', () => {
     // S1: the file card is painted only while this line resolves to the activity design
-    // for the tool being drawn, and a bridge resolves coverage from the line's own
+    // for the tool being drawn, and a shell API resolves coverage from the line's own
     // `tools`. `read` and `write` are declared for the card's question — the design itself
     // answers `undefined` for both (`computeActivity` knows only bash and the three read-only
     // shell marks), so their rows come back byte for byte and the host's own card is never lost.
@@ -866,9 +866,9 @@ describe('the Card activity line', () => {
     assert.deepEqual(design.apply(result, { tool: 'write', part: 'result', width: 90, theme, render }), result);
   });
 
-  test('a 0.6.0 bridge gets ONE grouped registration over bash and the read-only tools', () => {
+  test('a 0.6.0 shell API gets ONE grouped registration over bash and the read-only tools', () => {
     const design = designFor('0.6.0');
-    assert.equal(design.line, 'activity', 'the row the bridge derives is `Card activity` (S3 of modular-tools)');
+    assert.equal(design.line, 'activity', 'the row the shell API derives is `Card activity` (S3 of modular-tools)');
     assert.deepEqual(design.tools, ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list', ...CODEGRAPH_TOOLS]);
     assert.equal(Object.hasOwn(design, 'tool'), false, 'never both shapes');
     assert.equal(design.id, BASH_DESIGN_ID);
@@ -888,7 +888,7 @@ describe('the Card activity line', () => {
     }
   });
 
-  test('an older bridge with a readable release gets exactly today\'s single bash design', () => {
+  test('an older shell API with a readable release gets exactly today\'s single bash design', () => {
     for (const version of ['0.5.0', '0.5.9', '0.4.2', '0.5']) {
       const design = designFor(version);
       assert.equal(design.tool, 'bash', String(version));
@@ -898,18 +898,18 @@ describe('the Card activity line', () => {
     }
   });
 
-  test('an old bridge still heads bash cards, and the grouped one heads both', () => {
+  test('an old shell API still heads bash cards, and the grouped one heads both', () => {
     const design = designFor('0.5.0');
     const [out] = design.apply([neon('ls -la')], { ...THEMED, render: render('ls -la') });
     assert.ok(out.includes(painted('mdLink', '⌕ exploring')));
-    // The shape decides what is wired: an old bridge is only ever asked about `bash`, and the one
+    // The shape decides what is wired: an old shell API is only ever asked about `bash`, and the one
     // registration that covers all five tools applies to every one of them.
     const grouped = designFor('0.6.0');
     assert.ok(grouped.apply([readNeon('grep')], readCtx('grep'))[0].includes(painted('mdLink', '⌕ exploring')));
   });
 
   test('one registration per process: a second call is the same disposer, whichever shape it chose', () => {
-    const { api, seen } = versionedBridge('0.6.0');
+    const { api, seen } = versionedShellApi('0.6.0');
     const dispose = registerBashDesign(api);
     try {
       assert.equal(registerBashDesign(api), dispose);
@@ -921,13 +921,13 @@ describe('the Card activity line', () => {
   });
 });
 
-// A BRIDGE WE CONTROL, for the one thing this package cannot prove about itself: what the bridge
+// A SHELL API WE CONTROL, for the one thing this package cannot prove about itself: what the shell API
 // hands `apply`. The real one wraps the host's renderers and passes, from Pi's own render context, a
 // by-value snapshot of the call (`ctx.render`). This fake keeps exactly that contract for BOTH
 // registration shapes and nothing else, so a regression in what this package does with either shape
 // is this package's to fix. It mirrors `toolDesignResolver`: the host's renderers, one wrapper per
 // member, the design applied on every render pass with the context of THAT renderer.
-function fakeRenderBridge(version) {
+function fakeRenderShellApi(version) {
   const designs = [];
   const seen = [];
   const api = {
@@ -942,7 +942,7 @@ function fakeRenderBridge(version) {
   };
   // A design covers one tool (the historical shape) or several (the 0.6.0 line).
   const covers = (design) => (typeof design.tool === 'string' ? [design.tool] : design.tools);
-  // Pi's render context → the snapshot the bridge hands a design: the tool's own `args` by reference.
+  // Pi's render context → the snapshot the shell API hands a design: the tool's own `args` by reference.
   const snapshot = (context) => {
     if (context === null || typeof context !== 'object') return undefined;
     const render = {};
@@ -978,27 +978,27 @@ function fakeRenderBridge(version) {
   return { api, resolve, designs, seen };
 }
 
-describe('what the bridge hands the design', () => {
+describe('what the shell API hands the design', () => {
   // The host cut the heading, so only the call's own arguments can name this card.
   const COMMAND = `grep -rn "activity" ${'lib/'.repeat(6)} | head -40; echo ---; grep -rn needle docs`;
   const cutRow = neon(`${COMMAND.slice(0, 52)}…`);
   const closingRow = () => `╰${'─'.repeat(88)}╯`;
   const call = { toolCallId: 'c1', args: { command: COMMAND }, isPartial: false, isError: false, durationMs: 132 };
   const draw = (version) => {
-    const bridge = fakeRenderBridge(version);
-    const dispose = registerBashDesign(bridge.api);
+    const shellApi = fakeRenderShellApi(version);
+    const dispose = registerBashDesign(shellApi.api);
     assert.equal(typeof dispose, 'function', version);
     const host = {
       renderCall: () => ({ render: () => [cutRow] }),
       renderResult: () => ({ render: () => [closingRow()] }),
     };
-    const resolved = bridge.resolve('bash', host);
+    const resolved = shellApi.resolve('bash', host);
     const rows = {
       call: resolved.renderCall({}, theme, call).render(90),
       result: resolved.renderResult({}, {}, theme, call).render(90),
     };
     dispose();
-    return { ...rows, seen: bridge.seen };
+    return { ...rows, seen: shellApi.seen };
   };
 
   test('a line registration is handed the same `ctx.render` as a per-tool one, and draws the same card', () => {
@@ -1030,18 +1030,18 @@ describe('what the bridge hands the design', () => {
     }
   });
 
-  test('a context the bridge hands without the call is the host\'s card, never a guess', () => {
-    const bridge = fakeRenderBridge('0.6.0');
-    const dispose = registerBashDesign(bridge.api);
+  test('a context the shell API hands without the call is the host\'s card, never a guess', () => {
+    const shellApi = fakeRenderShellApi('0.6.0');
+    const dispose = registerBashDesign(shellApi.api);
     try {
-      const resolved = bridge.resolve('bash', { renderCall: () => ({ render: () => [cutRow] }) });
+      const resolved = shellApi.resolve('bash', { renderCall: () => ({ render: () => [cutRow] }) });
       const [out] = resolved.renderCall({}, theme, undefined).render(90);
       // The drawn heading is cut, so nothing can be named: bash's own `$ bash` fallback, the width
       // kept, and no frame role — the state (`isPartial`, `isError`, `durationMs`) is unknown.
       assert.ok(out.includes(painted('bashMode', '$ bash')), strip(out));
       assert.ok(out.startsWith('╭─ '), 'the frame keeps the host\'s paint');
       assert.equal(cols(out), cols(cutRow));
-      assert.deepEqual(bridge.seen, [{ tool: 'bash', part: 'call', render: undefined }]);
+      assert.deepEqual(shellApi.seen, [{ tool: 'bash', part: 'call', render: undefined }]);
     } finally {
       dispose();
     }
@@ -1049,10 +1049,10 @@ describe('what the bridge hands the design', () => {
 });
 
 describe('the seed runs before the registration', () => {
-  // A 0.6.0 bridge, as its contract documents it: at REGISTRATION time a line with no value of its
+  // A 0.6.0 shell API, as its contract documents it: at REGISTRATION time a line with no value of its
   // own inherits a joining tool's legacy per-tool value, and writes it then.
-  function migratingBridge(files = {}) {
-    const { api, files: store, writes } = fakeBridge(files);
+  function migratingShellApi(files = {}) {
+    const { api, files: store, writes } = fakeShellApi(files);
     const inherited = [];
     api.VERSION = '0.6.0';
     api.registerToolDesign = () => {
@@ -1067,16 +1067,16 @@ describe('the seed runs before the registration', () => {
   }
 
   test('a first run stores the choice before registering, so the line inherits it', () => {
-    const { api, files, inherited } = migratingBridge();
+    const { api, files, inherited } = migratingShellApi();
     const dispose = registerBashDesign(api);
     assert.equal(typeof dispose, 'function');
     dispose();
-    assert.deepEqual(inherited[0], { bash: BASH_DESIGN_ID }, 'the seed was already stored when the bridge registered');
+    assert.deepEqual(inherited[0], { bash: BASH_DESIGN_ID }, 'the seed was already stored when the shell API registered');
     assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID, $lines: { activity: BASH_DESIGN_ID } });
   });
 
   test('a stored legacy choice is kept: the seed writes no selection and the line inherits that choice', () => {
-    const { api, files, writes } = migratingBridge({ 'bridge-tool-designs': { selections: { bash: 'someone.else' } } });
+    const { api, files, writes } = migratingShellApi({ 'bridge-tool-designs': { selections: { bash: 'someone.else' } } });
     const dispose = registerBashDesign(api);
     dispose();
     assert.deepEqual(writes.filter(([store]) => store === SELECTIONS[0]), [], 'no selection was written');
@@ -1084,7 +1084,7 @@ describe('the seed runs before the registration', () => {
   });
 
   test('the seed never writes the reserved line key itself', () => {
-    const { api, files } = migratingBridge();
+    const { api, files } = migratingShellApi();
     api.registerToolDesign = () => () => {};
     const dispose = registerBashDesign(api);
     dispose();
@@ -1094,17 +1094,17 @@ describe('the seed runs before the registration', () => {
   test('a stored line choice survives the rename: the carry-over takes the key first', () => {
     // S10: a user who chose `default` on `Card tools` has `$lines.tools` = `native`, while the
     // first-run seed left `bash` = `activity`. A bare rename would leave `$lines.tags` absent and the
-    // bridge's own migration would resurrect that stale `activity`; the carry-over makes it a no-op.
+    // shell API's own migration would resurrect that stale `activity`; the carry-over makes it a no-op.
     const stored = { 'bridge-tool-designs': { selections: { bash: BASH_DESIGN_ID, $lines: { tools: 'native' } } } };
-    const { api, files, inherited } = migratingBridge(stored);
+    const { api, files, inherited } = migratingShellApi(stored);
     const dispose = registerBashDesign(api);
     dispose();
-    assert.deepEqual(inherited[0].$lines, { activity: 'native' }, 'the bridge registered with the new key already taken');
+    assert.deepEqual(inherited[0].$lines, { activity: 'native' }, 'the shell API registered with the new key already taken');
     assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID, $lines: { activity: 'native' } }, 'the user keeps `default`');
   });
 
-  test('an old bridge keeps today\'s per-tool choice, with no line value', () => {
-    const { api, files } = fakeBridge();
+  test('an old shell API keeps today\'s per-tool choice, with no line value', () => {
+    const { api, files } = fakeShellApi();
     api.VERSION = '0.5.0';
     const dispose = registerBashDesign(api);
     dispose();
@@ -1112,13 +1112,13 @@ describe('the seed runs before the registration', () => {
   });
 });
 
-// S10: the row name is the bridge's, derived from the LINE KEY itself — `Card ` + the line, a line has
+// S10: the row name is the shell API's, derived from the LINE KEY itself — `Card ` + the line, a line has
 // no label of its own — so
-// `Card tools` becoming `Card activity` is a rename of this package's line. The bridge has no rename or
+// `Card tools` becoming `Card activity` is a rename of this package's line. The shell API has no rename or
 // alias path, and its own registration-time migration treats an ABSENT line key as "inherit the
 // joining tool's legacy per-tool value", which is exactly the `bash` = `activity` this package seeds
 // on a first run: a bare rename would hand `activity` back to a user who had chosen `default`. So the
-// package carries the stored value over itself, BEFORE it registers, and the bridge then finds the
+// package carries the stored value over itself, BEFORE it registers, and the shell API then finds the
 // line's key taken.
 describe('the `Card tools` -> `Card activity` carry-over', () => {
   const stored = (selections) => ({ 'bridge-tool-designs': { selections } });
@@ -1126,7 +1126,7 @@ describe('the `Card tools` -> `Card activity` carry-over', () => {
   test('a value stored under either previous key becomes the activity value and the old key is gone', () => {
     for (const previous of ['tags', 'tools']) {
       for (const chosen of ['native', 'someone.else']) {
-        const { api, files } = fakeBridge(stored({ bash: BASH_DESIGN_ID, $lines: { [previous]: chosen } }));
+        const { api, files } = fakeShellApi(stored({ bash: BASH_DESIGN_ID, $lines: { [previous]: chosen } }));
         assert.equal(carryOverLineSelection(api), true, `${previous} ${chosen}`);
         assert.deepEqual(files['bridge-tool-designs'].selections, { bash: BASH_DESIGN_ID, $lines: { activity: chosen } }, `${previous} ${chosen}`);
         assert.equal(Object.hasOwn(files['bridge-tool-designs'].selections.$lines, previous), false, `${previous} ${chosen}: the old key is gone`);
@@ -1135,10 +1135,10 @@ describe('the `Card tools` -> `Card activity` carry-over', () => {
   });
 
   test('the newest previous key wins, and an invalid one migrates nothing at all', () => {
-    const both = fakeBridge(stored({ $lines: { tags: 'native', tools: 'someone.else' } }));
+    const both = fakeShellApi(stored({ $lines: { tags: 'native', tools: 'someone.else' } }));
     assert.equal(carryOverLineSelection(both.api), true);
     assert.deepEqual(both.files['bridge-tool-designs'].selections, { $lines: { activity: 'native', tools: 'someone.else' } }, 'the newest key is carried and no other key is dropped');
-    const invalid = fakeBridge(stored({ $lines: { tags: [], tools: 'native' } }));
+    const invalid = fakeShellApi(stored({ $lines: { tags: [], tools: 'native' } }));
     assert.equal(carryOverLineSelection(invalid.api), false);
     assert.deepEqual(invalid.writes, []);
   });
@@ -1148,29 +1148,29 @@ describe('the `Card tools` -> `Card activity` carry-over', () => {
       {},
       { bash: 'native' },
       { bash: 'native', $lines: {} },
-      { bash: 'native', $lines: { diff: 'odd-worktree.diff-color' } },
-      { bash: 'native', $lines: { colour: 'odd-worktree.diff-color' } },
+      { bash: 'native', $lines: { file: 'someone.else' } },
+      { bash: 'native', $lines: { colour: 'someone.else' } },
     ];
     for (const selections of untouched) {
-      const { api, files, writes } = fakeBridge(stored(selections));
+      const { api, files, writes } = fakeShellApi(stored(selections));
       assert.equal(carryOverLineSelection(api), false, JSON.stringify(selections));
       assert.deepEqual(writes, [], JSON.stringify(selections));
       assert.deepEqual(files['bridge-tool-designs'].selections, selections);
     }
     // No store file at all is the first run, not a rename.
-    const fresh = fakeBridge();
+    const fresh = fakeShellApi();
     assert.equal(carryOverLineSelection(fresh.api), false);
     assert.deepEqual(fresh.writes, []);
   });
 
   test('an invalid stored value is never migrated: the document stays byte-identical and nothing is written', () => {
-    // The bridge's own `storedId` reads a line value as a choice only when it is a non-empty,
+    // The shell API's own `storedId` reads a line value as a choice only when it is a non-empty,
     // non-blank id string (`native` included). Copying anything else would write garbage under the
     // new key and delete the old one, so an invalid value is NO migration at all.
     for (const chosen of [42, null, {}, ' ', '', ['native'], false]) {
       const selections = { bash: BASH_DESIGN_ID, $lines: { tags: chosen } };
       const before = JSON.stringify(selections);
-      const { api, files, writes } = fakeBridge(stored(selections));
+      const { api, files, writes } = fakeShellApi(stored(selections));
       assert.equal(carryOverLineSelection(api), false, JSON.stringify(chosen));
       assert.deepEqual(writes, [], `${JSON.stringify(chosen)}: nothing was written`);
       assert.equal(JSON.stringify(files['bridge-tool-designs'].selections), before, `${JSON.stringify(chosen)}: byte-identical`);
@@ -1179,7 +1179,7 @@ describe('the `Card tools` -> `Card activity` carry-over', () => {
 
   test('a value already stored at activity is never overwritten', () => {
     const selections = { bash: BASH_DESIGN_ID, $lines: { activity: 'someone.else', tags: 'native' } };
-    const { api, files, writes } = fakeBridge(stored(selections));
+    const { api, files, writes } = fakeShellApi(stored(selections));
     assert.equal(carryOverLineSelection(api), false);
     assert.deepEqual(writes, [], 'nothing was written');
     assert.deepEqual(files['bridge-tool-designs'].selections, selections, 'neither key is touched');
@@ -1195,7 +1195,7 @@ describe('the `Card tools` -> `Card activity` carry-over', () => {
       {},
     ];
     for (const files of foreign) {
-      const { api, writes } = fakeBridge(files);
+      const { api, writes } = fakeShellApi(files);
       assert.doesNotThrow(() => carryOverLineSelection(api), JSON.stringify(files));
       assert.equal(carryOverLineSelection(api), false, JSON.stringify(files));
       assert.deepEqual(writes, [], JSON.stringify(files));
@@ -1207,17 +1207,17 @@ describe('the `Card tools` -> `Card activity` carry-over', () => {
     assert.equal(carryOverLineSelection(null), false);
   });
 
-  test('it writes the bridge\'s own store and nothing else', () => {
-    const { api, writes } = fakeBridge(stored({ $lines: { tools: 'native' } }));
+  test('it writes the shell API\'s own store and nothing else', () => {
+    const { api, writes } = fakeShellApi(stored({ $lines: { tools: 'native' } }));
     assert.equal(carryOverLineSelection(api), true);
-    assert.deepEqual(writes, [SELECTIONS], 'one document, the bridge\'s, never a marker of ours');
+    assert.deepEqual(writes, [SELECTIONS], 'one document, the shell API\'s, never a marker of ours');
   });
 });
 
 // S3/S6: the grouped `tags` line claims `write` and `edit` only for the paths the file card itself
 // claims — `lib/skill-odd-card.js`'s own rule, reused and never copied — so a skill or an ODD
 // artifact keeps the file card it has today while every other write is another line's call. The
-// scope is a 0.9.0 member, so the shape is decided before anything is registered: an older bridge
+// scope is a 0.9.0 member, so the shape is decided before anything is registered: an older shell API
 // takes today's unscoped list, which is exactly the registration it has always accepted.
 describe('the scoped claim', () => {
   test('one shared scope owns exactly the paths under a skills/ or an odd/ folder', () => {
@@ -1275,7 +1275,7 @@ describe('the scoped claim', () => {
     };
   };
 
-  test('a bridge older than 0.9.0 registers today\'s unscoped line, without edit', () => {
+  test('a shell API older than 0.9.0 registers today\'s unscoped line, without edit', () => {
     const cases = [['0.6.0', false], ['0.8.9', false], ['0.9.0', true], ['0.10.0', true], ['1.0.0', true]];
     for (const [version, scoped] of cases) {
       const { api, calls } = registering(version);
@@ -1326,7 +1326,7 @@ describe('the scoped claim', () => {
 // order, numbers first, and a prerelease or build suffix loses ONLY when the numbers are equal. Both
 // of this package's lines sit at the same `0.9.0` cutoff, so each version is read through both
 // registrations at once: a release that is below it keeps the unscoped `Card activity` line and gets no
-// `Card diff` row, and a newer one gets both the scope and the diff line.
+// `Card file` row, and a newer one gets both the scope and the file line.
 describe('the release rule is semver order, on both lines at once (S6)', () => {
   const registerBoth = (version) => {
     const seen = [];
@@ -1337,31 +1337,31 @@ describe('the release rule is semver order, on both lines at once (S6)', () => {
       if (typeof disposeTags === 'function') disposeTags();
       if (typeof disposeDiff === 'function') disposeDiff();
     };
-    return { seen, dispose, tags: seen.find((design) => design.line === 'activity'), diff: seen.find((design) => design.line === 'diff') };
+    return { seen, dispose, tags: seen.find((design) => design.line === 'activity'), diff: seen.find((design) => design.line === 'file') };
   };
 
-  test('a prerelease or a build suffix of 0.9.0 is BELOW it: unscoped `Card activity`, no `Card diff`', () => {
+  test('a prerelease or a build suffix of 0.9.0 is BELOW it: unscoped `Card activity`, no `Card file`', () => {
     for (const version of ['0.9.0-rc.1', '0.9.0-beta.1+build', '0.9.0+workstation']) {
       const registration = registerBoth(version);
       try {
-        assert.deepEqual(registration.seen.map((design) => design.line), ['activity'], `${version}: the grouped line, and no diff line`);
+        assert.deepEqual(registration.seen.map((design) => design.line), ['activity'], `${version}: the grouped line, and no file line`);
         assert.equal(registration.tags.scopes, undefined, `${version}: below 0.9.0, so no scope`);
         assert.deepEqual([...registration.tags.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list', ...CODEGRAPH_TOOLS], `${version}: ten tools, no edit`);
-        assert.equal(registration.diff, undefined, `${version}: nothing is offered for a row the bridge would refuse`);
+        assert.equal(registration.diff, undefined, `${version}: nothing is offered for a row the shell API would refuse`);
       } finally {
         registration.dispose();
       }
     }
   });
 
-  test('a NEWER release carrying a suffix is ABOVE 0.9.0: the scoped `Card activity` line AND `Card diff`', () => {
+  test('a NEWER release carrying a suffix is ABOVE 0.9.0: the scoped `Card activity` line AND `Card file`', () => {
     for (const version of ['0.9.1-rc.1', '0.10.0+local.2']) {
       const registration = registerBoth(version);
       try {
-        assert.deepEqual(registration.seen.map((design) => design.line), ['activity', 'diff'], `${version}: both lines`);
+        assert.deepEqual(registration.seen.map((design) => design.line), ['activity', 'file'], `${version}: both lines`);
         assert.equal(registration.tags.scopes.write, registration.tags.scopes.edit, `${version}: the scope is on the line`);
         assert.deepEqual([...registration.tags.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list', ...CODEGRAPH_TOOLS, 'edit'], `${version}: eleven tools`);
-        assert.equal(registration.diff.id, 'odd-worktree.diff', version);
+        assert.equal(registration.diff.id, 'odd-worktree.file', version);
         assert.equal(registration.diff.label, 'color', version);
         assert.deepEqual([...registration.diff.tools], ['write', 'edit'], version);
       } finally {
@@ -1373,7 +1373,7 @@ describe('the release rule is semver order, on both lines at once (S6)', () => {
   test('0.6.0-rc.1 is BELOW 0.6.0, so it falls back to the single `tool: "bash"` design', () => {
     // Deliberate and more conservative than the base commit, which accepted the grouped shape here:
     // semver puts `0.6.0-rc.1` below `0.6.0`, and this package reads one rule at every cutoff. That
-    // is the `Card bash` row over bash alone — never a grouped registration a 0.6.0 bridge would
+    // is the `Card bash` row over bash alone — never a grouped registration a 0.6.0 shell API would
     // accept but its own release ordering says came first.
     const registration = registerBoth('0.6.0-rc.1');
     try {
@@ -1381,7 +1381,7 @@ describe('the release rule is semver order, on both lines at once (S6)', () => {
       const [design] = registration.seen;
       assert.equal(design.tool, 'bash', 'the single-tool shape');
       assert.equal(Object.hasOwn(design, 'tools'), false, 'never both shapes');
-      assert.equal(Object.hasOwn(design, 'line'), false, 'the older bridge names the row itself, `Card bash`');
+      assert.equal(Object.hasOwn(design, 'line'), false, 'the older shell API names the row itself, `Card bash`');
       assert.equal(design.id, 'odd-worktree.bash-activity');
       assert.equal(design.label, 'activity');
       assert.equal(registration.diff, undefined, 'and the diff line is not offered either');

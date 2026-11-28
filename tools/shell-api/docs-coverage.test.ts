@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 // The shell API is odd-worktree's own code, so its docs live in this repository's `docs/shell-api/`
-// (T5 flattened `lib/bridge/docs/` into it). The package root stays the one this suite runs in.
+// (T5 flattened `lib/shell API/docs/` into it). The package root stays the one this suite runs in.
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /** The markdown a plugin author is expected to read before their first registration. */

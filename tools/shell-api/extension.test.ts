@@ -4,10 +4,10 @@ import test from "node:test";
 import type { RowProvider } from "../../lib/shell-api/types.ts";
 import { resetBusForTests, registerRows } from "../../lib/shell-api/bus.ts";
 import { getCaptureDiagnostics, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
-import gentleShellBridge, {
-  type BridgeExtensionApi,
-  type BridgeSessionContext,
-  type BridgeSessionHandler,
+import gentleShellShellApi, {
+  type ShellExtensionApi,
+  type ShellSessionContext,
+  type ShellSessionHandler,
 } from "../../lib/shell-api/extension.ts";
 import { resetHookStateForTests } from "../../lib/shell-api/hook.ts";
 import { getPluginLineReport, resetPluginLinesForTests } from "../../lib/shell-api/plugin-lines.ts";
@@ -38,17 +38,17 @@ const labelsProvider = (id: string, category: string, labels: string[]): RowProv
 });
 
 interface FakeApi {
-  api: BridgeExtensionApi;
-  sessionHandlers: BridgeSessionHandler[];
-  shutdownHandlers: BridgeSessionHandler[];
+  api: ShellExtensionApi;
+  sessionHandlers: ShellSessionHandler[];
+  shutdownHandlers: ShellSessionHandler[];
   commands: Array<{ name: string }>;
 }
 
 const createFakeApi = (): FakeApi => {
-  const sessionHandlers: BridgeSessionHandler[] = [];
-  const shutdownHandlers: BridgeSessionHandler[] = [];
+  const sessionHandlers: ShellSessionHandler[] = [];
+  const shutdownHandlers: ShellSessionHandler[] = [];
   const commands: Array<{ name: string }> = [];
-  const api: BridgeExtensionApi = {
+  const api: ShellExtensionApi = {
     // The REQUIRED host package is present: `session_start` arms as before (S9/T12).
     getCommands: () => [{ name: "gentle:customize" }],
     on(event, handler) {
@@ -63,14 +63,14 @@ const createFakeApi = (): FakeApi => {
     registerCommand(name: string) {
       commands.push({ name });
     },
-  } as unknown as BridgeExtensionApi;
+  } as unknown as ShellExtensionApi;
   return { api, sessionHandlers, shutdownHandlers, commands };
 };
 
 test("registers one session_start and one session_shutdown handler, and no command", () => {
   const fake = createFakeApi();
 
-  gentleShellBridge(fake.api);
+  gentleShellShellApi(fake.api);
 
   assert.equal(fake.sessionHandlers.length, 1);
   assert.equal(fake.shutdownHandlers.length, 1, "shutdown is how the INTEGRATIONS row is cleared");
@@ -81,9 +81,9 @@ test("a session_start without UI arms nothing", () => {
   const host = createFakeHost();
   registerRows(labelsProvider("p1", "Cards", ["Must not appear"]));
   const fake = createFakeApi();
-  gentleShellBridge(fake.api);
+  gentleShellShellApi(fake.api);
 
-  const context: BridgeSessionContext = { hasUI: false };
+  const context: ShellSessionContext = { hasUI: false };
   fake.sessionHandlers[0]({}, context);
 
   assert.equal(getCaptureDiagnostics().armedTargets, 0);
@@ -95,8 +95,8 @@ test("two session_start events with UI arm once and inject once", () => {
   const host = createFakeHost();
   registerRows(labelsProvider("p1", "Cards", ["Once"]));
   const fake = createFakeApi();
-  gentleShellBridge(fake.api);
-  const context: BridgeSessionContext = { hasUI: true, ui: host.ui };
+  gentleShellShellApi(fake.api);
+  const context: ShellSessionContext = { hasUI: true, ui: host.ui };
 
   fake.sessionHandlers[0]({}, context);
   fake.sessionHandlers[0]({}, context);
@@ -115,9 +115,9 @@ test("loading the extension twice still arms the same ui once", () => {
   registerRows(labelsProvider("p1", "Cards", ["Once"]));
   const first = createFakeApi();
   const second = createFakeApi();
-  gentleShellBridge(first.api);
-  gentleShellBridge(second.api);
-  const context: BridgeSessionContext = { hasUI: true, ui: host.ui };
+  gentleShellShellApi(first.api);
+  gentleShellShellApi(second.api);
+  const context: ShellSessionContext = { hasUI: true, ui: host.ui };
 
   first.sessionHandlers[0]({}, context);
   second.sessionHandlers[0]({}, context);
@@ -133,7 +133,7 @@ test("loading the extension twice still arms the same ui once", () => {
 test("the factory installs the INTEGRATIONS surface on the session's ui", () => {
   registerRows(labelsProvider("loon.banner-source", "Banner", ["Row"]));
   const fake = createFakeApi();
-  gentleShellBridge(fake.api);
+  gentleShellShellApi(fake.api);
   const statuses: string[] = [];
   const ui = {
     setStatus: (key: string, text?: string) => {

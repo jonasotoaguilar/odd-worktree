@@ -374,15 +374,51 @@ describe('a binary, an error and a truncation are notices (S11)', () => {
     assert.deepEqual(out.rows[3].cells, [
       { text: '│', role: 'border' },
       { text: ' ', role: 'dim' },
-      { text: ' … preview tr', role: 'text' },
+      { text: ' … preview tr', role: 'dim' },
       { text: '│', role: 'border' },
     ]);
     assert.deepEqual(out.rows[4].cells, [
       { text: '│', role: 'border' },
       { text: ' ', role: 'dim' },
-      { text: ' uncated.'.padEnd(13), role: 'text' },
+      { text: ' uncated.'.padEnd(13), role: 'dim' },
       { text: '│', role: 'border' },
     ]);
+  });
+
+  // S3: the notice is chrome, not a file line, so it paints dim; the file lines,
+  // the position label and the gutter keep the roles they always had.
+  test('the truncation notice paints dim while the file lines keep text', () => {
+    const out = render({ kind: 'text', lines: ['alpha', 'beta'], truncated: true });
+
+    assert.deepEqual(out.rows[0].cells[2], { text: ' 1/2+', role: 'text' });
+    assert.deepEqual(out.rows[1].cells, [
+      { text: '│', role: 'border' },
+      { text: '1', role: 'dim' },
+      { text: ' alpha'.padEnd(13), role: 'text' },
+      { text: '│', role: 'border' },
+    ]);
+    assert.deepEqual(out.rows[2].cells[2], { text: ' beta'.padEnd(13), role: 'text' });
+    const noticeRows = out.rows.slice(3, 5);
+    for (const row of noticeRows) assert.equal(row.cells[2].role, 'dim');
+    for (const row of out.rows) {
+      for (const cell of row.cells) assert.ok(['dim', 'border', 'text'].includes(cell.role), cell.role);
+    }
+  });
+
+  // S4: the `+` follows the reader's truncation flag alone, so a preview clipped
+  // per line reads `5/5`, not `5/5+`.
+  test('a per-line width clip paints no plus on the position label', () => {
+    const clipped = `${'x'.repeat(11)}\u2026`;
+    const out = render({ kind: 'text', lines: [clipped, 'beta', 'gamma', 'delta', 'epsilon'], truncated: false });
+
+    assert.deepEqual(out.rows[0].cells, [
+      { text: '╭', role: 'border' },
+      { text: '─'.repeat(10), role: 'border' },
+      { text: ' 1/5', role: 'text' },
+      { text: '╮', role: 'border' },
+    ]);
+    assert.equal(out.rows.length, 6, 'every file line counts and no notice row follows');
+    assert.equal(out.rows.some((row) => plainOf(row).includes('preview truncated.')), false);
   });
 });
 

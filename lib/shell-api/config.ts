@@ -12,7 +12,7 @@
  *   is a non-empty path and is used as given.
  * - `~` and a leading `~/` are expanded against the supplied home directory. Any other
  *   leading `~` (another user's home) is left literal, since resolving another user's home
- *   is not something the bridge can do without inventing a lookup.
+ *   is not something the shell API can do without inventing a lookup.
  * - After expansion a relative value is resolved against the supplied working directory, so
  *   the result is always absolute and normalized (no `.`/`..` segments, no doubled or
  *   trailing separators).
@@ -21,8 +21,8 @@
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 
-/** Name of the directory the bridge owns inside the gentle-shell config home. */
-export const BRIDGE_DIR_NAME = "gentle-shell-bridge";
+/** Name of the directory the shell API owns inside the gentle-shell config home. */
+export const LEGACY_PERSISTENCE_DIR_NAME = "gentle-shell-bridge";
 
 /** Environment shape the resolver needs; `process.env` satisfies it structurally. */
 export type ConfigEnv = Readonly<Record<string, string | undefined>>;
@@ -49,9 +49,9 @@ export function resolveConfigHome(input: ResolveConfigHomeInput): string {
   return resolvePath(cwd, expandTilde(configured, input.homeDir));
 }
 
-/** The bridge's own directory inside a resolved config home. */
-export function resolveBridgeConfigHome(configHome: string): string {
-  return join(configHome, BRIDGE_DIR_NAME);
+/** The shell API's own directory inside a resolved config home. */
+export function resolveShellApiConfigHome(configHome: string): string {
+  return join(configHome, LEGACY_PERSISTENCE_DIR_NAME);
 }
 
 /** Reads the live process environment and home directory. */
@@ -60,8 +60,8 @@ export function getConfigHome(): string {
 }
 
 /** `<config home>/gentle-shell-bridge` for the live process. */
-export function getBridgeConfigHome(): string {
-  return resolveBridgeConfigHome(getConfigHome());
+export function getShellApiConfigHome(): string {
+  return resolveShellApiConfigHome(getConfigHome());
 }
 
 function expandTilde(value: string, homeDir: string): string {

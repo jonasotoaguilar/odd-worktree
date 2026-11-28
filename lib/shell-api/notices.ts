@@ -4,7 +4,7 @@
  * Pi renders its diagnostics inside the TUI (its startup report lists `[Ext]`, `[Skill warnings]`,
  * …). An extension that writes to the console instead puts that text in the terminal *around*
  * Pi's startup, before the TUI takes the screen, where it is easy to miss and impossible to read
- * after the fact. So this module is the only place a bridge problem is reported out of band:
+ * after the fact. So this module is the only place a shell API problem is reported out of band:
  *
  * - a message produced while a context exists is shown with `ctx.ui.notify(message, level)`;
  * - a message produced before any context exists (module load) is buffered
@@ -18,7 +18,7 @@
  * and identical `message` + `level` pairs are recorded once — a repeated warning is the same fact.
  */
 
-/** The levels Pi's `notify` accepts. Every bridge notice is a problem report: default `warning`. */
+/** The levels Pi's `notify` accepts. Every shell API notice is a problem report: default `warning`. */
 export type NoticeLevel = "info" | "warning" | "error";
 
 export interface NoticeEntry {
@@ -46,7 +46,7 @@ export const MAX_NOTICES = 20;
  * Stable process-global slot. `v1` is part of the key for the same reason as the API symbol: a
  * future shape change takes a new key instead of mutating this one.
  */
-const NOTICES_KEY: symbol = Symbol.for("gentle-shell-bridge/notices/v1");
+const NOTICES_KEY: symbol = Symbol.for("odd-worktree/notices/v1");
 
 function noticesHost(): Record<symbol, NoticeState | undefined> {
   // SAFETY: this module is the only writer of the slot, and `noticeState()` re-checks the shape

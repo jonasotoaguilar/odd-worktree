@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { armBridge } from "../../lib/shell-api/arm.ts";
+import { armShellApi } from "../../lib/shell-api/arm.ts";
 import { registerRows, resetBusForTests } from "../../lib/shell-api/bus.ts";
 import { getCaptureDiagnostics, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
 import { getHookDiagnostics, resetHookStateForTests } from "../../lib/shell-api/hook.ts";
@@ -9,7 +9,7 @@ import type { CustomizeRow, RowProvider } from "../../lib/shell-api/types.ts";
 import { createFakeHost } from "./fake-host.ts";
 
 const HOOK_KEY = Symbol.for("gentle-pi.customize-row-providers");
-const CAPTURE_WRAPPED = Symbol.for("gentle-shell-bridge.capture.wrapped.v1");
+const CAPTURE_WRAPPED = Symbol.for("odd-worktree.capture.wrapped.v1");
 
 const hookSlot = (): Record<symbol, unknown> => globalThis as unknown as Record<symbol, unknown>;
 const clearHook = (): void => {
@@ -45,7 +45,7 @@ test("selects the hook backend and patches nothing on ui", () => {
   registerRows(labelsProvider("p1", "Cards", ["Hooked row"]));
   const customBefore = host.ui.custom;
 
-  const result = armBridge(host.ui);
+  const result = armShellApi(host.ui);
 
   assert.deepEqual(result, { outcome: "hooked", backend: "hook" });
   assert.equal(host.ui.custom, customBefore, "ui.custom identity is unchanged");
@@ -71,7 +71,7 @@ test("an unusable hook shape falls back to capture and records why", () => {
   const host = createFakeHost();
   registerRows(labelsProvider("p1", "Cards", ["Fallback row"]));
 
-  const result = armBridge(host.ui);
+  const result = armShellApi(host.ui);
 
   assert.deepEqual(result, {
     outcome: "fallback-capture",
@@ -89,7 +89,7 @@ test("arms capture when the host exposes no registry", () => {
   const host = createFakeHost();
   registerRows(labelsProvider("p1", "Cards", ["Captured row"]));
 
-  const result = armBridge(host.ui);
+  const result = armShellApi(host.ui);
 
   assert.deepEqual(result, { outcome: "capture-armed", backend: "capture" });
   host.buildMenu();
@@ -100,8 +100,8 @@ test("two session_start arms wrap once and inject once", () => {
   const host = createFakeHost();
   registerRows(labelsProvider("p1", "Cards", ["Once"]));
 
-  const first = armBridge(host.ui);
-  const second = armBridge(host.ui);
+  const first = armShellApi(host.ui);
+  const second = armShellApi(host.ui);
 
   assert.deepEqual(first, { outcome: "capture-armed", backend: "capture" });
   assert.deepEqual(second, { outcome: "already-armed", backend: "capture" });
@@ -127,8 +127,8 @@ test("a prototype-only ui wraps where custom was found, and a second arm is a no
   const host = createFakeHost({ customShape: "prototype" });
   registerRows(labelsProvider("p1", "Cards", ["Proto row"]));
 
-  const first = armBridge(host.ui);
-  const second = armBridge(host.ui);
+  const first = armShellApi(host.ui);
+  const second = armShellApi(host.ui);
 
   assert.deepEqual(first, { outcome: "capture-armed", backend: "capture" });
   assert.deepEqual(second, { outcome: "already-armed", backend: "capture" });
@@ -149,17 +149,17 @@ test("a prototype-only ui wraps where custom was found, and a second arm is a no
 });
 
 test("a no-UI context is a reported no-op, not a throw", () => {
-  assert.deepEqual(armBridge(undefined), {
+  assert.deepEqual(armShellApi(undefined), {
     outcome: "no-ui",
     backend: "none",
     reason: "ui-missing",
   });
-  assert.deepEqual(armBridge(null), {
+  assert.deepEqual(armShellApi(null), {
     outcome: "no-ui",
     backend: "none",
     reason: "ui-missing",
   });
-  assert.deepEqual(armBridge({}), {
+  assert.deepEqual(armShellApi({}), {
     outcome: "no-ui",
     backend: "none",
     reason: "custom-missing",
@@ -177,7 +177,7 @@ test("importing the arm module has no side effects", async () => {
 
   assert.equal(getCaptureDiagnostics().armedTargets, armedBefore, "import arms nothing");
   assert.equal(Array.prototype.map, mapBefore, "import patches nothing");
-  assert.equal(typeof fresh.armBridge, "function");
+  assert.equal(typeof fresh.armShellApi, "function");
 
   // A menu built without arming must show no provider rows: nothing armed itself on import.
   const host = createFakeHost();
@@ -202,7 +202,7 @@ test("the same providers produce the same rows through either backend", () => {
   // Capture backend.
   providers();
   const host = createFakeHost();
-  armBridge(host.ui);
+  armShellApi(host.ui);
   host.buildMenu();
   const capturedLabels = host.rendered().slice(4);
 
@@ -212,7 +212,7 @@ test("the same providers produce the same rows through either backend", () => {
   providers();
   const registry: PushedProvider[] = [];
   hookSlot()[HOOK_KEY] = registry;
-  armBridge(createFakeHost().ui);
+  armShellApi(createFakeHost().ui);
   const hookedLabels = registry[0].rows({}).map((row) => String(row.label));
 
   assert.deepEqual(capturedLabels, ["First a", "Second b"]);

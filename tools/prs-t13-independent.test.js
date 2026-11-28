@@ -315,16 +315,16 @@ test('S6/S7: independent hit ranges and Enter on both panels',()=>{
 });
 
 test('D10/S5: registered /prs refuses moved repo; session_start does not await its held gh gate',async t=>{
-  const {LIB_DIR,stubbedSource,defaultBridge,BRIDGE_SLOT,withGhPath}=require('./fixtures/load-extension');
+  const {LIB_DIR,stubbedSource,defaultShellApi,SHELL_SLOT,withGhPath}=require('./fixtures/load-extension');
   const {pathToFileURL}=require('node:url');
   const tmp=await fs.mkdtemp(path.join(os.tmpdir(),'t13-ext-'));
   const file=path.join(tmp,'ext.mjs');await fs.writeFile(file,stubbedSource());
-  const original={lib:process.env.GENTLE_WORKTREE_LIB_DIR,repo:process.env.GH_REPO,bridge:globalThis[BRIDGE_SLOT]};
+  const original={lib:process.env.GENTLE_WORKTREE_LIB_DIR,repo:process.env.GH_REPO,shellApi:globalThis[SHELL_SLOT]};
   t.after(()=>{for(const [key, value] of [['GENTLE_WORKTREE_LIB_DIR',original.lib],['GH_REPO',original.repo]]){
     if(value===undefined)delete process.env[key];else process.env[key]=value;
-  } if(original.bridge===undefined)delete globalThis[BRIDGE_SLOT];else globalThis[BRIDGE_SLOT]=original.bridge;});
+  } if(original.shellApi===undefined)delete globalThis[SHELL_SLOT];else globalThis[SHELL_SLOT]=original.shellApi;});
   process.env.GENTLE_WORKTREE_LIB_DIR=LIB_DIR;
-  process.env.GH_REPO='github.com/amber/widget';globalThis[BRIDGE_SLOT]=defaultBridge().api;
+  process.env.GH_REPO='github.com/amber/widget';globalThis[SHELL_SLOT]=defaultShellApi().api;
   const commands=new Map(), hooks=[], writes=[];
   const mod=await withGhPath('present',async()=>{
     const api=await import(pathToFileURL(file).href);

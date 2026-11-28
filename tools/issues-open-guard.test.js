@@ -1,7 +1,7 @@
 'use strict';
 // T1 (issues-sidebar-click S1, S2): the rail click's single-flight guard and the
 // numbered open's cached-scope identity pin, driven through the loaded extension
-// with a fake host, a fake bridge and injected `gh`/`git` seams.
+// with a fake host, a fake shell API and injected `gh`/`git` seams.
 //
 // Contract under test, through the public surface only:
 // - while a rail click is being opened, every further rail click — the same row,
@@ -23,7 +23,7 @@
 //
 // Every child process is injected: `gh` through lib/gh-issues.js `setGhRunner`,
 // the identity read's `git` through its `setGitRunner`, and the checkouts live
-// under os.tmpdir() and are removed in `after()`. The bridge slot is
+// under os.tmpdir() and are removed in `after()`. The shell API slot is
 // process-wide, so it is always deleted again.
 
 const { test, after, afterEach, beforeEach } = require('node:test');
@@ -36,7 +36,7 @@ const { execFileSync } = require('node:child_process');
 const { LIB_DIR, stubbedSource } = require('./fixtures/load-extension.js');
 const { pathToFileURL } = require('node:url');
 
-const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+const SHELL_SLOT = Symbol.for('odd-worktree/shell-api/v1');
 // `waitFor` and the timer fixtures poll with the REAL timer, even while one test
 // replaces the global one to fake the safety interval.
 const realSetTimeout = setTimeout;
@@ -64,7 +64,7 @@ after(() => {
 });
 
 afterEach(() => {
-  delete globalThis[BRIDGE_SLOT];
+  delete globalThis[SHELL_SLOT];
   if (ghIssues) {
     ghIssues.setGhRunner(null);
     ghIssues.setGitRunner(null);
@@ -280,14 +280,14 @@ function identityGit({
   };
 }
 
-function installBridge() {
+function installShellApi() {
   const registered = [];
   const repaints = [];
-  globalThis[BRIDGE_SLOT] = {
-    schema: 'gentle-shell-bridge/api',
+  globalThis[SHELL_SLOT] = {
+    schema: 'odd-worktree/shell-api',
     version: 1,
     registerRows: () => {},
-    // T5 of odd-rail-section: the bridge carries TWO sections now, so this double
+    // T5 of odd-rail-section: the shell API carries TWO sections now, so this double
     // records the `GITHUB` one it is about. Every registration still receives a
     // disposer, so the `ODD` rail registers alongside rather than being refused.
     registerSection: (section) => {
@@ -370,7 +370,7 @@ async function harness({
   identityOptions = {},
 } = {}) {
   const checkout = makeCheckout({ singleRemote });
-  const { registered, repaints } = installBridge();
+  const { registered, repaints } = installShellApi();
   const sent = [];
   const loaded = await loadExtension({
     sendUserMessage: (text, opts) => { sent.push({ text, opts }); },

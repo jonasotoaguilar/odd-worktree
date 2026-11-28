@@ -629,7 +629,36 @@ test('a line wider than the cap ends in the ellipsis mark', () => {
   assert.deepEqual(readFilePreview(root, 'wide.txt', { maxLineWidth: 5 }), {
     kind: 'text',
     lines: ['abcd\u2026'],
-    truncated: true,
+    truncated: false,
+  });
+});
+
+// S1: a per-line clip is visible in that line's own `…`; it must not claim the
+// whole preview was cut short. The concrete report was
+// lib/codegraph-prompt/judge.md — five lines, one of them 527 characters.
+test('a file fully read reports no truncation even when one of its lines was clipped', () => {
+  const root = tempDir();
+  const wide = 'x'.repeat(527);
+  writeFile(root, 'judge.md', `# Judge\n\n${wide}\nfour\nfive\n`);
+
+  const preview = readFilePreview(root, 'judge.md');
+  assert.equal(preview.kind, 'text');
+  assert.equal(preview.lines.length, 5, 'every line of the file was read and returned');
+  assert.deepEqual(preview.lines.slice(0, 2), ['# Judge', '']);
+  assert.deepEqual(preview.lines.slice(3), ['four', 'five']);
+  assert.equal(preview.lines[2].endsWith('\u2026'), true);
+  assert.equal(preview.truncated, false, 'a clipped line is not a truncated preview');
+});
+
+// S2: the clip itself is unchanged — maxLineWidth - 1 characters plus the mark.
+test('an over-wide line is clipped to maxLineWidth - 1 characters plus the mark', () => {
+  const root = tempDir();
+  writeFile(root, 'wide.txt', `${'x'.repeat(FILE_PREVIEW_LIMITS.maxLineWidth + 1)}\nshort\n`);
+
+  assert.deepEqual(readFilePreview(root, 'wide.txt'), {
+    kind: 'text',
+    lines: [`${'x'.repeat(FILE_PREVIEW_LIMITS.maxLineWidth - 1)}\u2026`, 'short'],
+    truncated: false,
   });
 });
 
@@ -643,7 +672,7 @@ test('an override can only lower a bound, never lift it', () => {
   assert.equal(raised.lines.length, 1);
   assert.equal(raised.lines[0].length, FILE_PREVIEW_LIMITS.maxLineWidth, 'the default cap still applies');
   assert.equal(raised.lines[0].endsWith('\u2026'), true);
-  assert.equal(raised.truncated, true);
+  assert.equal(raised.truncated, false);
 
   const defaulted = readFilePreview(root, 'long.txt');
   assert.deepEqual(defaulted, raised);

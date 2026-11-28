@@ -1,7 +1,7 @@
 /**
  * The customize rows for tool designs (S6, T9): one line per tool that HAS designs, in the `Cards`
  * category, with the tool's own card as one value and each design as another. The selection is
- * persisted per tool in the bridge's own store, and changing it repaints the cards already drawn
+ * persisted per tool in the shell API's own store, and changing it repaints the cards already drawn
  * through `requestRepaint()` — one differential frame, because the wrapper re-reads the live selection
  * on every render pass (S13/T23: dropping the caches was the freeze).
  *
@@ -131,7 +131,7 @@ const recordingTui = (): { calls: string[]; host: Record<string, unknown> } => {
   };
 };
 
-test("T9: the bridge owns one rows provider, and it is internal plumbing", () => {
+test("T9: the shell API owns one rows provider, and it is internal plumbing", () => {
   installToolDesignRows();
   assert.deepEqual(
     snapshotProviders().map((provider) => provider.id),

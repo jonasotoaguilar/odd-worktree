@@ -7,7 +7,7 @@
  * the style: the only way to decorate it from here is a tool DESIGN, and a design that wants to
  * honour the user's selection has to be able to SEE it.
  *
- * `ctx` therefore carries the resolved selection, under the same three answers the bridge itself
+ * `ctx` therefore carries the resolved selection, under the same three answers the shell API itself
  * degrades from: `native` (nobody chose a style), `style` (the live registration), `missing` (a style
  * that was disposed while it was selected — a `/reload`, an unloaded plugin). The field is additive
  * and resolved ON ACCESS, at most once per pass: a design that never reads it draws exactly the rows
@@ -208,7 +208,7 @@ test("S22/T43: a style disposed while it was selected answers `missing`", () => 
   assert.deepEqual(
     seen[0],
     { kind: "missing", id: "loon.doomed" },
-    "the bridge degrades to native and SAYS which id went missing, instead of throwing",
+    "the shell API degrades to native and SAYS which id went missing, instead of throwing",
   );
 });
 
@@ -274,7 +274,7 @@ test("S22/T43: one pass answers ONE style, even if the selection changes mid-pas
     apply(lines: readonly string[], ctx: ToolDesignContext): string[] {
       const first = ctx.cardStyle;
       // A switch landing BETWEEN two reads of the same pass (a row action, a keypress) must not
-      // produce a card that is half of each: the bridge resolves the pass's answer once.
+      // produce a card that is half of each: the shell API resolves the pass's answer once.
       setCardStyleSelection("loon.second");
       answers.push(first, ctx.cardStyle);
       return [...lines];

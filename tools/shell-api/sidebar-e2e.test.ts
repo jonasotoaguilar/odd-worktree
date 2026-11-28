@@ -26,9 +26,9 @@ import {
   type SidebarSection,
 } from "../../lib/shell-api/index.ts";
 // The real Pi entry, armed and commanded exactly as Pi loads it.
-import gentleShellBridge, {
-  type BridgeExtensionApi,
-  type BridgeSessionHandler,
+import gentleShellShellApi, {
+  type ShellExtensionApi,
+  type ShellSessionHandler,
 } from "../../lib/shell-api/extension.ts";
 // Teardown-only seams.
 import { resetBusForTests } from "../../lib/shell-api/bus.ts";
@@ -92,19 +92,19 @@ test.afterEach(() => {
 });
 
 interface Entry {
-  sessionHandlers: BridgeSessionHandler[];
+  sessionHandlers: ShellSessionHandler[];
 }
 
 const loadEntry = (): Entry => {
-  const sessionHandlers: BridgeSessionHandler[] = [];
-  const pi: BridgeExtensionApi = {
+  const sessionHandlers: ShellSessionHandler[] = [];
+  const pi: ShellExtensionApi = {
     // `gentle-pi` is present, so `session_start` arms the row side and the rail (S9/T12).
     getCommands: () => [{ name: "gentle:customize" }],
     on(_event, handler) {
       sessionHandlers.push(handler);
     },
   };
-  gentleShellBridge(pi);
+  gentleShellShellApi(pi);
   return { sessionHandlers };
 };
 
@@ -195,7 +195,7 @@ test("the same holds when the host registers its rail AFTER the arm", () => {
   assert.deepEqual(cardTitles(), ["FOOTER", "MUSIC"]);
 });
 
-test("the widget the bridge installs renders no rows", () => {
+test("the widget the shell API installs renders no rows", () => {
   const host = createFakeHost();
   const widgets = installWidgetSurface(host);
   registerNativeFooter();
@@ -291,7 +291,7 @@ test("the row side still behaves in the same process, alongside the sections", (
   assert.deepEqual(
     injected.slice(2).map((row) => row.category),
     ["Sections", "Sections"],
-    "the bridge's own rows follow",
+    "the shell API's own rows follow",
   );
   const lines = host.toggleLines();
   assert.ok(lines.some((line) => line.startsWith("Loon banner source")));

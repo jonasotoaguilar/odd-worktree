@@ -27,9 +27,9 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
 const {
-  BRIDGE_SLOT,
+  SHELL_SLOT,
   LIB_DIR,
-  defaultBridge,
+  defaultShellApi,
   stubbedSource,
   withGhPath,
 } = require('./fixtures/load-extension.js');
@@ -159,18 +159,18 @@ async function waitFor(predicate, label) {
   throw new Error(`timed out waiting for ${label}`);
 }
 
-// One extension load per test. `modules` is the bridge's own store document, so
+// One extension load per test. `modules` is the shell API's own store document, so
 // `{ worktrees: false }` is exactly the Worktrees+ switch a host would have.
 let loads = 0;
 async function load(modules) {
-  const bridge = defaultBridge();
+  const shellApi = defaultShellApi();
   const document = modules === undefined ? undefined : { ...modules };
-  bridge.api.createStore = () => ({
+  shellApi.api.createStore = () => ({
     get: (key, fallback) => (key === 'modules' && document !== undefined ? document : fallback),
     set: () => {},
     delete: () => {},
   });
-  globalThis[BRIDGE_SLOT] = bridge.api;
+  globalThis[SHELL_SLOT] = shellApi.api;
   return withGhPath('present', async () => {
     process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-panel-ext-'));

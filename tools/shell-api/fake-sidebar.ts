@@ -3,16 +3,16 @@
  *
  * The real host cannot be imported: Pi loads every extension through its own jiti loader with
  * `moduleCache: false`, so gentle-shell's modules are not reachable from this package, and the
- * host is not a dependency we may patch. This file models only the seams the bridge touches:
+ * host is not a dependency we may patch. This file models only the seams the shell API touches:
  *
  * 1. **The state slot.** The host keeps its rail state on the *terminal* object behind
  *    `Symbol.for("gentle-pi.experimental-sidebar.state")` (`lib/shell-sidebar.ts:6,78-80`), not in
  *    module scope, so separately loaded copies see one rail map. The fake hangs the same slot on
- *    the same kind of object, which is why a test can assert the bridge reached the host's map
+ *    the same kind of object, which is why a test can assert the shell API reached the host's map
  *    rather than a module-level singleton of its own.
  * 2. **The rail map.** `state.parts` is a real `Map<string, Rail>`, written through `set` exactly
  *    like `sidebarPart` does (`:88-89`). Registration is therefore observable at any time —
- *    including after the bridge armed, which is the ordering S4 has to survive. The only rail
+ *    including after the shell API armed, which is the ordering S4 has to survive. The only rail
  *    keys the layout paints are `["todo", "jobs", "agents", "footer"]`
  *    (`lib/shell-sidebar-layout.ts:344`), so an unknown key never renders and a new rail key is
  *    not a way to add a section.
@@ -26,7 +26,7 @@
  * proves.
  */
 
-/** The host's own state key: shared across copies, and the seam the bridge intercepts. */
+/** The host's own state key: shared across copies, and the seam the shell API intercepts. */
 export const SIDEBAR_STATE_KEY: symbol = Symbol.for("gentle-pi.experimental-sidebar.state");
 
 /**
@@ -46,13 +46,13 @@ const DEFAULT_WIDTH = 40;
 
 /**
  * A rail slot (`SidebarRail`, `lib/shell-sidebar.ts:17-66`). A real rail is a TUI `Component`; the
- * fields below are the ones the bridge reads, passthroughs and test readers depend on.
+ * fields below are the ones the shell API reads, passthroughs and test readers depend on.
  */
 export interface Rail {
   render(width: number): string[];
   /**
    * The `Component`'s normalized mouse handler (`@earendil-works/pi-tui` `Component.handleMouse`).
-   * The host dispatches a hit on this part here, so the bridge must delegate to it, never replace it.
+   * The host dispatches a hit on this part here, so the shell API must delegate to it, never replace it.
    */
   handleMouse?(event: unknown): unknown;
   /** Row ranges of the section cards this part draws; absent means "one card for the whole part". */
@@ -134,7 +134,7 @@ interface NativeRailOptions {
   /**
    * Model the host's own part-level pointer dispatch. `true` for the real `footer`, which the host
    * wraps in a `NativePointerRegion` (`extensions/gentle-shell.ts:2766`): its `handleMouse` answers
-   * EVERY `move` inside the part's frame, so it never declines one and the bridge's wrapper above it
+   * EVERY `move` inside the part's frame, so it never declines one and the shell API's wrapper above it
    * never sees the event (`lib/native-pointer-region.ts:80-88`,
    * `extensions/gentle-shell.ts:2732-2741`).
    */
@@ -168,7 +168,7 @@ function nativeRail(
  *
  * Exported so a test can perform the host's own "the pointer left the rail" step —
  * `setSidebarHover(tui)` with no owner (`lib/shell-sidebar-layout.ts:280,447`) — against the same
- * slot the bridge claims.
+ * slot the shell API claims.
  */
 export function setHostHover(owner?: object, clear?: () => void): void {
   const state = fakeState();
@@ -195,8 +195,8 @@ function isPointerEvent(event: unknown): event is { type: string; button?: strin
  * button is handed to the callbacks, and gentle-shell's `onHover` (`extensions/gentle-shell.ts:2732-2741`)
  * answers EVERY one of them — it claims the shared pointer for a row it owns
  * (`setSidebarHover(tui, statusRegion, …)`) and clears it otherwise (`setSidebarHover(tui)`), returning
- * `{ handled: true }` either way. A move over a row the bridge APPENDED to this part is therefore
- * consumed by the host's region before the bridge's wrapper is reached; that is the model T40 had to
+ * `{ handled: true }` either way. A move over a row the shell API APPENDED to this part is therefore
+ * consumed by the host's region before the shell API's wrapper is reached; that is the model T40 had to
  * correct. A click is answered only on a row the region owns and declines everywhere else
  * (`extensions/gentle-shell.ts:2747-2757`), which is why a click on a contributed row works.
  */
@@ -231,8 +231,8 @@ function hostPartPointer(ownRows: number): (event: unknown) => unknown {
 }
 
 /**
- * Register the host's own `footer` part; callable before or after the bridge armed. The footer is
- * the part the bridge appends to, and the real one carries a `NativePointerRegion` (see
+ * Register the host's own `footer` part; callable before or after the shell API armed. The footer is
+ * the part the shell API appends to, and the real one carries a `NativePointerRegion` (see
  * `hostPartPointer`), so it is modelled by default.
  */
 export function registerNativeFooter(
@@ -243,7 +243,7 @@ export function registerNativeFooter(
 
 /** Register any painted part (`todo`, `jobs`, `agents`, `footer`), replacing its slot in place. */
 export function registerNativeRail(key: string, rail: Rail): Rail {
-  // Written through the live map, like `sidebarPart` (`lib/shell-sidebar.ts:88`): a bridge that
+  // Written through the live map, like `sidebarPart` (`lib/shell-sidebar.ts:88`): a shell API that
   // intercepts the map's `set` (or replaces `parts`) sees this registration whenever it happens.
   fakeState().parts.set(key, rail);
   return rail;
@@ -364,8 +364,8 @@ function isCache(value: unknown): value is { revision: number } {
  * frames, so a test that restyles them proves the repaint against host output, not against a shape
  * this package invented.
  *
- * `RAIL_HOST_CARD` is a host section (`STATS`, two body rows); `RAIL_BRIDGE_CARD` is a
- * bridge-contributed one (`Music`, two body rows). Both carry the header as a content row directly
+ * `RAIL_HOST_CARD` is a host section (`STATS`, two body rows); `RAIL_SHELL_API_CARD` is a
+ * shell-API-contributed one (`Music`, two body rows). Both carry the header as a content row directly
  * after the opener — the layout puts the title and the body in ONE card, so no separator row appears.
  */
 export const RAIL_HOST_CARD: readonly string[] = [
@@ -376,7 +376,7 @@ export const RAIL_HOST_CARD: readonly string[] = [
   " \u001b[48;5;236m\u001b[90m▎\u001b[39m\u001b[90m                                     \u001b[39m\u001b[49m ",
 ];
 
-export const RAIL_BRIDGE_CARD: readonly string[] = [
+export const RAIL_SHELL_API_CARD: readonly string[] = [
   " \u001b[48;5;236m\u001b[90m▎\u001b[39m\u001b[90m                                     \u001b[39m\u001b[49m ",
   " \u001b[48;5;236m\u001b[90m▎\u001b[39m\u001b[90m \u001b[39m\u001b[95m▾ Music\u001b[39m\u001b[90m                           \u001b[39m\u001b[90m  \u001b[39m\u001b[49m ",
   " \u001b[48;5;236m\u001b[90m▎\u001b[39m track one                          \u001b[90m \u001b[39m\u001b[49m ",

@@ -1,5 +1,5 @@
 /**
- * Sidebar rail interception (S4, S9): the backend that lets the bridge contribute to
+ * Sidebar rail interception (S4, S9): the backend that lets the shell API contribute to
  * gentle-shell's fullscreen rail.
  *
  * ## Why the rail map, and not an API
@@ -8,7 +8,7 @@
  * on the terminal object → `state.parts`, a `Map<string, SidebarRail>` (`lib/shell-sidebar.ts:6,78-90`).
  * The layout paints only the hard-coded keys `["todo","jobs","agents","footer"]`
  * (`lib/shell-sidebar-layout.ts:344`), so a new key never renders: contributing rows to one of those
- * parts is the only way in. The bridge wraps ALL FOUR, because a section may ask to sit before the
+ * parts is the only way in. The shell API wraps ALL FOUR, because a section may ask to sit before the
  * first one, after one of the middle ones, or after the last (`SIDEBAR_RAIL_KEY`); the status
  * sections themselves live in a closure (`lib/shell-bar.ts:247,251-316`) we cannot reach — the
  * documented limit, and the reason "after a status section" is not offered.
@@ -99,11 +99,11 @@ import type { RailPart } from "./types.ts";
 const HOST_STATE = Symbol.for("gentle-pi.experimental-sidebar.state");
 
 /** Process-global backend state, shared across copies like the bus (jiti's `moduleCache: false`). */
-const BACKEND_STATE = Symbol.for("gentle-shell-bridge.sidebar.state.v1");
+const BACKEND_STATE = Symbol.for("odd-worktree.sidebar.state.v1");
 /** Own property on an intercepted map → the exact `set` function this module installed. */
-const PARTS_INTERCEPTED = Symbol.for("gentle-shell-bridge.sidebar.parts.v1");
+const PARTS_INTERCEPTED = Symbol.for("odd-worktree.sidebar.parts.v1");
 /** Own property on a wrapper rail → the exact host rail object it wraps. */
-const RAIL_WRAPPED = Symbol.for("gentle-shell-bridge.sidebar.rail.v1");
+const RAIL_WRAPPED = Symbol.for("odd-worktree.sidebar.rail.v1");
 
 /**
  * The part that ends the rail, and the one `"end"` means. The layout paints
@@ -113,7 +113,7 @@ const RAIL_WRAPPED = Symbol.for("gentle-shell-bridge.sidebar.rail.v1");
  */
 export const SIDEBAR_RAIL_KEY = "footer";
 
-/** Whether a map key is a part the layout paints, and therefore one the bridge wraps. */
+/** Whether a map key is a part the layout paints, and therefore one the shell API wraps. */
 function isPaintedRailKey(key: string): key is RailPart {
   return (RAIL_PARTS as readonly string[]).includes(key);
 }
@@ -159,7 +159,7 @@ export interface SidebarRailLike {
 }
 
 /**
- * A value in the host's rail map. The host types it as a map of rails; the bridge hands anything it
+ * A value in the host's rail map. The host types it as a map of rails; the shell API hands anything it
  * cannot wrap back unchanged instead of claiming every value is a rail, so a foreign write cannot
  * crash a read.
  */
@@ -482,7 +482,7 @@ function attemptInstall(resolveTui: SidebarTuiResolver): InstallSidebarResult {
 
   const parts = resolveParts(resolved);
   if (parts === undefined) return { installed: false, outcome: "no-sidebar-state", rail: "pending" };
-  // One of the objects the bridge is handed: if a host ever publishes its panel builders on the
+  // One of the objects the shell API is handed: if a host ever publishes its panel builders on the
   // sidebar state, the section renderer uses them and the diagnostics record says so (N11, N15).
   const hostState = hostSidebarStateOf(resolved);
   notePanelCandidate("the terminal sidebar state", hostState);
@@ -705,7 +705,7 @@ function wrapRail(parts: RailMap, key: string, rail: RailMapValue): RailMapValue
 
   // The host's panel builders are looked for on the part itself (N11, N15): if a host ever publishes
   // `renderPanelHeader`/`renderPanelRow` here, the section renderer uses them instead of its local
-  // port, and the diagnostics record says so. Looking on every object the bridge is handed is what makes
+  // port, and the diagnostics record says so. Looking on every object the shell API is handed is what makes
   // "the host's builders are unreachable" a measurement rather than a claim.
   notePanelCandidate("the rail part", original);
 

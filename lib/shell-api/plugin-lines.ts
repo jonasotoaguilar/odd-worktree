@@ -1,5 +1,5 @@
 /**
- * The INTEGRATIONS line (I1–I7): exactly one footer row per plugin that registers with this bridge.
+ * The INTEGRATIONS line (I1–I7): exactly one footer row per plugin that registers with this shell API.
  *
  * Pi renders an extension's own `ctx.ui.setStatus(key, text)` map: a row is the WHOLE opaque status
  * string the extension set (`extensions/gentle-shell.ts:357-385`, `lib/shell-bar.ts:289-298`). So a
@@ -64,7 +64,7 @@
  * ## What the row is, and is not
  *
  * The text is OPAQUE to the host: it is rendered as one string, its ANSI sequences are stripped
- * (`lib/shell-bar.ts:151-155`) and it is painted with the host's own status role. So the bridge puts
+ * (`lib/shell-bar.ts:151-155`) and it is painted with the host's own status role. So the shell API puts
  * any glyph INSIDE the text (`Name · ready`), never in colour: colour belongs to the host.
  *
  * This module is internal: `src/index.ts` does not re-export it.
@@ -84,13 +84,13 @@ import {
 } from "./row-names.ts";
 
 /** Prefix every key this module writes carries; the host's own keys can never match it. */
-export const PLUGIN_LINE_PREFIX = "gentle-shell-bridge.plugin.";
+export const PLUGIN_LINE_PREFIX = "odd-worktree.plugin.";
 
 /**
  * Keys gentle-shell paints itself and removes from INTEGRATIONS (`extensions/gentle-shell.ts:357-385`):
  * `gentle-fast` and `gentle-jobs` are filtered out of the list, `gentle:mode` and `gentle:yolo` are
  * shown as the permissions row instead. Reusing one would make a plugin's line disappear or be
- * re-read as a permission mode, so the bridge's prefix is deliberately disjoint from all four.
+ * re-read as a permission mode, so the shell API's prefix is deliberately disjoint from all four.
  */
 export const HOST_OWN_STATUS_KEYS: readonly string[] = [
   "gentle-fast",
@@ -108,7 +108,7 @@ export type PluginSurface =
   | "tool design"
   | "message design";
 
-/** One registration the bridge refused, reported by the plugin report (I4). */
+/** One registration the shell API refused, reported by the plugin report (I4). */
 export interface PluginRejection {
   surface: PluginSurface;
   /** The registration's id as the author wrote it, for finding the call. */
@@ -142,7 +142,7 @@ export interface PluginLineRecord {
   rejected: PluginRejection[];
   /** Later registrations that declared a different name; the first name was kept (I9). */
   nameConflicts: PluginNameConflict[];
-  /** What the bridge last did with the key: painted, cleared with `undefined`, or never set. */
+  /** What the shell API last did with the key: painted, cleared with `undefined`, or never set. */
   line: "set" | "not-set" | "cleared";
   /** Only when `line` is not `set`: why the row is absent. */
   reason?: string;
@@ -159,13 +159,13 @@ type Owner =
   | { kind: "package"; root: string; name: string; modulePath: string }
   | { kind: "pi"; root: string; name: string; modulePath: string }
   | { kind: "module"; modulePath: string }
-  // The literal is `bridge` on purpose: the cache this value lands in is a shared `Symbol.for` slot, and an
+  // The literal is `shell API` on purpose: the cache this value lands in is a shared `Symbol.for` slot, and an
   // older copy of this API reads and writes the same kind, so renaming it would make a reader throw.
-  | { kind: "bridge" };
+  | { kind: "shell-api" };
 
 type Attribution =
   | (Extract<Owner, { kind: "package" | "pi" | "module" }> & { identity: PluginIdentity })
-  | Extract<Owner, { kind: "bridge" }>;
+  | Extract<Owner, { kind: "shell-api" }>;
 
 /**
  * What a plugin IS (I8, I10): its owning package root, or the registering module when no package
@@ -217,13 +217,13 @@ interface PluginLinesState {
  * Stable process-global slot, like the bus: two copies of this package must agree on the one line a
  * plugin gets, and the state has to survive jiti loading each copy separately.
  */
-const PLUGIN_LINES_KEY = Symbol.for("gentle-shell-bridge.plugin-lines.v1");
+const PLUGIN_LINES_KEY = Symbol.for("odd-worktree.plugin-lines.v1");
 
 /**
  * The shell API's own directory: its frames are skipped when the caller is captured, so a
  * registration the shell API makes on a plugin's behalf is never attributed to a frame of plumbing.
  */
-const BRIDGE_SRC_DIR = dirname(fileURLToPath(import.meta.url));
+const SHELL_API_SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
 function pluginLinesHost(): Record<symbol, PluginLinesState | undefined> {
   // SAFETY: only this module writes the key, and `pluginLinesState()` re-checks the shapes before
@@ -400,7 +400,7 @@ function resolveOwner(modulePath: string): Owner {
 /** Resolve the whole answer ONCE per module: owner, identity and (for a plugin) its record seed. */
 function resolveAttribution(modulePath: string): Attribution {
   const owner = resolveOwner(modulePath);
-  if (owner.kind === "bridge") return owner;
+  if (owner.kind === "shell-api") return owner;
   if (owner.kind === "package") return { ...owner, identity: packageIdentity(owner.root) };
   // A Pi-owned module fails closed exactly like an unattributable one (I11), so its plugin is the
   // module itself, never the Pi distribution's package root.
@@ -440,7 +440,7 @@ function callerModule(): string | undefined {
     if (!frame.startsWith("at ")) continue;
     const path = framePath(frame.slice(3));
     if (path === undefined) continue;
-    if (path === BRIDGE_SRC_DIR || path.startsWith(`${BRIDGE_SRC_DIR}${sep}`)) continue;
+    if (path === SHELL_API_SRC_DIR || path.startsWith(`${SHELL_API_SRC_DIR}${sep}`)) continue;
     return path;
   }
   return undefined;
@@ -454,7 +454,7 @@ function attributionOfCaller(): Attribution {
     modulePath = undefined;
   }
   // No caller frame means the shell API itself (an internal helper): never a plugin line.
-  if (modulePath === undefined) return { kind: "bridge" };
+  if (modulePath === undefined) return { kind: "shell-api" };
 
   const state = pluginLinesState();
   const cached = state.modules.get(modulePath);
@@ -526,7 +526,7 @@ function rowNameRejectionFor(
   );
 }
 
-function ensureRecord(attribution: Exclude<Attribution, { kind: "bridge" }>): PluginRecordInternal {
+function ensureRecord(attribution: Exclude<Attribution, { kind: "shell-api" }>): PluginRecordInternal {
   const state = pluginLinesState();
   const identity = attribution.identity;
   const existing = state.plugins.find((record) => record.identity === identity.id);
@@ -831,7 +831,7 @@ export function attributeRegistration(
 ): () => void {
   const attribution = attributionOfCaller();
   // The shell API's own plumbing claims nothing; an unattributable internal helper claims nothing.
-  if (attribution.kind === "bridge") return store();
+  if (attribution.kind === "shell-api") return store();
 
   const record = ensureRecord(attribution);
   const id = registrationId(registration);

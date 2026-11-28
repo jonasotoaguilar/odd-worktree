@@ -3,7 +3,7 @@
  *
  * ⚠️  UNVERIFIED BRANCH. No host has been observed exposing
  * `globalThis[Symbol.for("gentle-pi.customize-row-providers")]`; the key arrives from the
- * verified probe notes, but its value shape does not. The bridge therefore accepts exactly two
+ * verified probe notes, but its value shape does not. The shell API therefore accepts exactly two
  * shapes and reports anything else:
  *
  * - a plain `Array` — the fan-out provider is appended with `push`;
@@ -43,15 +43,15 @@ import {
   type RowBuildFailure,
 } from "./rows.ts";
 
-/** The host registry key from S4. Read only; the bridge never creates it. */
+/** The host registry key from S4. Read only; the shell API never creates it. */
 const HOOK_REGISTRY = Symbol.for("gentle-pi.customize-row-providers");
 /** Best-effort non-enumerable marker on the registry: this package pushed its fan-out provider. */
-const HOOK_ARMED = Symbol.for("gentle-shell-bridge.hook.armed.v1");
+const HOOK_ARMED = Symbol.for("odd-worktree.hook.armed.v1");
 /** Process-global state for diagnostics, shared across package copies. */
-const HOOK_STATE = Symbol.for("gentle-shell-bridge.hook.state.v1");
+const HOOK_STATE = Symbol.for("odd-worktree.hook.state.v1");
 
-/** Stable id of the single provider the bridge pushes into a host registry. */
-export const FAN_OUT_PROVIDER_ID = "gentle-shell-bridge";
+/** Stable id of the single provider the shell API pushes into a host registry. */
+export const FAN_OUT_PROVIDER_ID = "shell-api";
 
 /**
  * The provider pushed into the host registry. Its shape is a guess constrained by the unproven
@@ -67,7 +67,7 @@ export type HookShape = "array" | "register" | "unusable";
 export type HookOutcome = "hooked" | "no-hook" | "unusable-hook" | "install-failed";
 
 export interface InstallHookResult {
-  /** True when the registry now holds — or already held — the bridge's fan-out provider. */
+  /** True when the registry now holds — or already held — the shell API's fan-out provider. */
   installed: boolean;
   outcome: HookOutcome;
   shape?: HookShape;

@@ -1,13 +1,13 @@
 'use strict';
 // S1/S2 (modular-tools): what the extension registers for each setting of the two module
-// switches. The switches are read ONCE, when the extension registers, from the bridge's
+// switches. The switches are read ONCE, when the extension registers, from the shell API's
 // store, and a missing document keeps everything on — so every other suite in this package
 // loads the whole thing.
 const { test, describe, after, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
 
-const { BRIDGE_SLOT, defaultBridge, loadExtension } = require('./fixtures/load-extension.js');
+const { SHELL_SLOT, defaultShellApi, loadExtension } = require('./fixtures/load-extension.js');
 
 // The prompt assertions below read the extension's own `before_agent_start`, which honors these
 // two switches from the ambient environment: a suite that ran inside a subagent child (or under
@@ -26,30 +26,30 @@ after(() => {
   }
 });
 
-const saved = globalThis[BRIDGE_SLOT];
+const saved = globalThis[SHELL_SLOT];
 afterEach(() => {
-  if (saved === undefined) delete globalThis[BRIDGE_SLOT];
-  else globalThis[BRIDGE_SLOT] = saved;
+  if (saved === undefined) delete globalThis[SHELL_SLOT];
+  else globalThis[SHELL_SLOT] = saved;
 });
 
-// A bridge whose own-store `modules` document is the one handed in; everything else the
-// default bridge does stays as it is.
+// A shell API whose own-store `modules` document is the one handed in; everything else the
+// default shell API does stays as it is.
 async function load(modules, { selection, host } = {}) {
-  const bridge = defaultBridge();
+  const shellApi = defaultShellApi();
   const document = modules === undefined ? undefined : { ...modules };
-  bridge.api.createStore = () => ({
+  shellApi.api.createStore = () => ({
     get: (key, fallback) => (key === 'modules' && document !== undefined ? document : fallback),
     set: () => {},
     delete: () => {},
   });
   // S11: the `Card activity` reader the CodeGraph card follows, when a case needs one.
-  if (typeof selection === 'function') bridge.api.resolveToolDesignSelection = selection;
-  globalThis[BRIDGE_SLOT] = bridge.api;
+  if (typeof selection === 'function') shellApi.api.resolveToolDesignSelection = selection;
+  globalThis[SHELL_SLOT] = shellApi.api;
   const loaded = await loadExtension(host || {});
-  return { ...loaded, bridge };
+  return { ...loaded, shellApi };
 }
 
-/** The activity design, as the bridge answers it while `Card activity` is on `activity`. */
+/** The activity design, as the shell API answers it while `Card activity` is on `activity`. */
 const ACTIVITY = () => ({ kind: 'design', design: { id: 'odd-worktree.bash-activity' } });
 
 const toolCallHandlers = (loaded) => loaded.hooks.filter(([name]) => name === 'tool_call').length;
@@ -65,17 +65,17 @@ async function promptOf(loaded, selectedTools) {
 describe('the Tools page', () => {
   test('the extension registers one provider on the `Tools` page, whatever the switches say', async () => {
     for (const modules of [undefined, { codegraph: false }, { worktrees: false }, { codegraph: false, worktrees: false }]) {
-      const { bridge } = await load(modules);
-      const tools = bridge.rows.filter((provider) => provider.category === 'Tools');
+      const { shellApi } = await load(modules);
+      const tools = shellApi.rows.filter((provider) => provider.category === 'Tools');
       assert.equal(tools.length, 1, JSON.stringify(modules));
       assert.deepEqual(
         tools[0].rows({}).map((row) => `${row.choice.setting} ${row.choice.value}`),
-        ['Codegraph+ Off', 'Codegraph+ On', 'Worktrees+ Off', 'Worktrees+ On'],
+        ['Codegraph+ Off', 'Codegraph+ On', 'Worktrees+ Off', 'Worktrees+ On', 'Skills+ Off', 'Skills+ On'],
       );
       assert.deepEqual(
         tools[0].categoryPlacement,
         { after: 'Sections' },
-        'the page is placed by the bridge, right after the host Sections page',
+        'the page is placed by the shell API, right after the host Sections page',
       );
     }
   });
@@ -97,12 +97,13 @@ describe('Worktrees+', () => {
     assert.equal(off.commands.has('warp'), false);
     assert.equal(off.messageRenderers.has('worktree-warp'), false);
     assert.doesNotMatch(await promptOf(off, []), /## ODD worktrees/);
-    // the naming handler, the bash guard, the write guard, the skill-read bash guard and the
-    // whole-read rule go: every ``tool_call`` observation of the worktree half
-    assert.equal(toolCallHandlers(on) - toolCallHandlers(off), 5);
-    // The CodeGraph wiring adds ONE `tool_call` observation of its own, and only where its CLI is
-    // installed — so a host without it leaves zero, and neither answer is this half's.
-    assert.ok(toolCallHandlers(off) <= 1, `at most the CodeGraph observation is left, got ${toolCallHandlers(off)}`);
+    // Worktrees+ gates the two worktree guards and nothing else, now that the read rules are
+    // the `Skills+` half.
+    assert.equal(toolCallHandlers(on) - toolCallHandlers(off), 2);
+    // The two read rules are their own module, and the CodeGraph wiring adds ONE `tool_call`
+    // observation of its own, and only where its CLI is installed — so neither answer is this
+    // half's.
+    assert.ok(toolCallHandlers(off) <= 3, `at most the two read rules and the CodeGraph observation, got ${toolCallHandlers(off)}`);
     for (const name of ['odd', 'files']) assert.ok(off.commands.has(name), `${name} stays`);
     assert.equal(off.hooks.some(([hook]) => hook === 'agent_settled'), false, 'the warp settle tick goes');
   });
@@ -111,6 +112,27 @@ describe('Worktrees+', () => {
     const off = await load({ worktrees: false });
     assert.match(await promptOf(off, ['codegraph']), /## CodeGraph/);
     assert.ok(off.commands.has('issues'));
+  });
+});
+
+describe('Skills+', () => {
+  test('off (the default): the two read rules are not registered, and no worktree surface moves', async () => {
+    const on = await load({ skills: true });
+    const off = await load(undefined);
+    assert.equal(toolCallHandlers(on) - toolCallHandlers(off), 2, 'the skill-read guard and the whole-read rule');
+    assert.equal(toolCallHandlers(off), toolCallHandlers(await load({ skills: false })), 'an unset switch and a stored false are the same half');
+    for (const loaded of [off, await load({ skills: false })]) {
+      assert.ok(loaded.tools.has('worktree_create'), 'the worktree tools stay');
+      assert.ok(loaded.commands.has('warp'), '/warp stays');
+      assert.match(await promptOf(loaded, []), /## ODD worktrees/, 'the worktree text stays');
+    }
+  });
+
+  test('on: the two read rules register without the worktree half', async () => {
+    const on = await load({ skills: true, worktrees: false });
+    // Two worktree guards gone, the two read rules still here.
+    assert.equal(toolCallHandlers(on) - toolCallHandlers(await load({ worktrees: false })), 2);
+    assert.equal(on.commands.has('warp'), false, 'the worktree half is still off');
   });
 });
 

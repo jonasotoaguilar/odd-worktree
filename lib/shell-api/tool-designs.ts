@@ -9,7 +9,7 @@
  * (`dist/core/extensions/runner.js:550-553`) — so two plugins that each called it would each wrap the
  * other's component, and neither could see the other's choice.
  *
- * So the BRIDGE registers the resolver (`./tool-design-wiring.ts`), once, and fans it out to the
+ * So the SHELL API registers the resolver (`./tool-design-wiring.ts`), once, and fans it out to the
  * designs plugins contributed here. Two plugins contributing a design for the same line do not
  * collide: they are two VALUES of that line, and they only conflict when they claim the same identity
  * (`line` + `id`) or the same visible label — which is reported, never silently replaced.
@@ -40,7 +40,7 @@
  *
  * ## The selection
  *
- * One persisted value per line in the bridge's own store file (`bridge-tool-designs`, never the
+ * One persisted value per line in the shell API's own store file (`bridge-tool-designs`, never the
  * host's config): grouped lines live under `lines` (`{ "tools": "<id>" }`), ungrouped ones keep the
  * historical per-tool `selections` map (`{ "bash": "<id>" }`), untouched. The stored value is a design
  * ID — identity, so renaming a label never loses a user's choice — and `native` means "the host's own
@@ -75,10 +75,10 @@ export const TOOL_DESIGN_NATIVE = "native";
 export const TOOL_DESIGN_DEFAULT_LABEL = "default";
 
 /**
- * The bridge's own plugin id for the selection file. One namespaced file holds every line's value,
+ * The shell API's own plugin id for the selection file. One namespaced file holds every line's value,
  * so a selection never lands in the host's `visual-customization.json`.
  */
-export const TOOL_DESIGN_STORE_ID = "bridge-tool-designs";
+export const LEGACY_TOOL_DESIGN_STORE_ID = "bridge-tool-designs";
 
 /** The historical per-tool key: `{ "bash": "loon.bash-heading" }`. Untouched by lines (D3). */
 export const TOOL_DESIGN_STORE_KEY = "selections";
@@ -166,7 +166,7 @@ interface IndexedClaim {
 
 interface ToolDesignIndex {
   /**
-   * The SHAPE this index was built with (`TOOL_DESIGN_INDEX_SHAPE`). Two copies of the bridge can
+   * The SHAPE this index was built with (`TOOL_DESIGN_INDEX_SHAPE`). Two copies of the shell API can
    * share this process-global slot — a plugin pinned to an older release and the host on this one —
    * and the older copy leaves an index built from fields this one does not read. The stamp is what
    * lets a cached index be DROPPED instead of trusted (S18).
@@ -211,7 +211,7 @@ interface ToolDesignState {
   failures: ToolDesignFailure[];
   /**
    * How many times the persisted selections were READ since the last reset. One read is exactly one
-   * logical read of the bridge's store, so this counts the file work a render pass performs.
+   * logical read of the shell API's store, so this counts the file work a render pass performs.
    */
   selectionReads: number;
   /** Bumped by every registry mutation; the in-memory index is rebuilt only when it changes (D6). */
@@ -221,13 +221,13 @@ interface ToolDesignState {
 }
 
 /** Stable process-global slot, like the bus and the store: two copies must agree. */
-const DESIGNS_KEY = Symbol.for("gentle-shell-bridge.tool-designs.v1");
+const DESIGNS_KEY = Symbol.for("odd-worktree.tool-designs.v1");
 
 /**
  * The shape of the derived index: bumped whenever `ToolDesignIndex` gains, loses or renames a field
  * OR the meaning of one of them changes. The index is DERIVED and never persisted, so an index of
  * another shape is always safe to drop and rebuild — which is exactly what a slot warmed by another
- * copy of the bridge requires (S18). Shape 4 split the two orders shape 3 had collapsed: `lines` is
+ * copy of the shell API requires (S18). Shape 4 split the two orders shape 3 had collapsed: `lines` is
  * DISPLAY order (the first live entry, S2) and only `claimsByTool` is claim PRECEDENCE (`lineOrder`,
  * S10). An index of shape 3 ordered `lines` by precedence too, so it must be dropped, not read.
  *
@@ -346,7 +346,7 @@ function toolDesignIndex(state: ToolDesignState): ToolDesignIndex {
   const cached = state.index;
   if (cached !== undefined) {
     // A cached index is trusted only when it was built by THIS copy, for THIS revision. Another copy
-    // of the bridge can write the same slot between two calls, so the shape is checked HERE and not
+    // of the shell API can write the same slot between two calls, so the shape is checked HERE and not
     // only in the repair: dropping a derived value is always safe (S18).
     if (isCurrentIndexShape(cached) && cached.revision === state.revision) return cached;
     delete state.index;
@@ -438,7 +438,7 @@ export function snapshotToolDesigns(tool?: string): ToolDesignRegistration[] {
  * `undefined` — the claim every call of that tool, which is the historical meaning.
  */
 function scopeOfClaim(design: ToolDesignRegistration, tool: string): ToolDesignScope | undefined {
-  // SAFETY: the member is typed, but a plugin is plain JavaScript and another copy of the bridge may
+  // SAFETY: the member is typed, but a plugin is plain JavaScript and another copy of the shell API may
   // share this slot, so every reading is re-checked instead of trusted.
   //
   // This is the ONLY read of the claim, and it sees exactly the own keys `scopesProblem` validates
@@ -520,13 +520,13 @@ export function toolNamesWithDesigns(): string[] {
 function assertLabel(subject: string, id: string, label: unknown): void {
   if (typeof label !== "string" || label.trim() === "") {
     throw new Error(
-      `gentle-shell-bridge: invalid tool design ${JSON.stringify(id)} for ${subject}: label must be ` +
+      `odd-worktree: invalid tool design ${JSON.stringify(id)} for ${subject}: label must be ` +
         "a non-empty string. It is the value the user reads on the customize line, so keep it short.",
     );
   }
   if (label === TOOL_DESIGN_NATIVE || label === TOOL_DESIGN_DEFAULT_LABEL) {
     throw new Error(
-      `gentle-shell-bridge: invalid tool design label ${JSON.stringify(label)} for ` +
+      `odd-worktree: invalid tool design label ${JSON.stringify(label)} for ` +
         `${JSON.stringify(id)}: it is the reserved value meaning "the host's own card", so the line ` +
         `would show ${JSON.stringify(label)} twice. Pick a distinct label.`,
     );
@@ -536,7 +536,7 @@ function assertLabel(subject: string, id: string, label: unknown): void {
 function assertApplyFunction(subject: string, id: string, apply: unknown): void {
   if (typeof apply !== "function") {
     throw new Error(
-      `gentle-shell-bridge: invalid tool design ${JSON.stringify(id)} for ${subject}: apply must be ` +
+      `odd-worktree: invalid tool design ${JSON.stringify(id)} for ${subject}: apply must be ` +
         "a function of (lines, ctx) that returns the lines to draw. A design rewrites the rows the " +
         "host's card produced; the shell API hands a copy, isolates its throw and records it as a " +
         "failure (S5).",
@@ -558,7 +558,7 @@ interface NormalizedRegistration {
 function normalizeRegistration(design: ToolDesignRegistration): NormalizedRegistration {
   if (!isRecord(design)) {
     throw new Error(
-      "gentle-shell-bridge: invalid tool design: a registration must be an object with exactly one " +
+      "odd-worktree: invalid tool design: a registration must be an object with exactly one " +
         "of `tool` / (`line` + `tools`), plus `id`, `label` and `apply`.",
     );
   }
@@ -568,14 +568,14 @@ function normalizeRegistration(design: ToolDesignRegistration): NormalizedRegist
   const tool = design.tool;
   if (hasTool && (hasLine || hasTools)) {
     throw new Error(
-      "gentle-shell-bridge: invalid tool design: `tool` cannot be combined with `line` or `tools`. " +
+      "odd-worktree: invalid tool design: `tool` cannot be combined with `line` or `tools`. " +
         "Use `{ tool, id, label, apply }` for one tool, or `{ line, tools, id, label, apply }` for " +
         "one line over several tools.",
     );
   }
   if (!hasTool && !(hasLine && hasTools)) {
     throw new Error(
-      "gentle-shell-bridge: invalid tool design: exactly one of `tool` / (`line` + `tools`) is " +
+      "odd-worktree: invalid tool design: exactly one of `tool` / (`line` + `tools`) is " +
         "required. `{ tool, … }` gives the tool its own line; `{ line, tools, … }` paints several " +
         "tools from one line.",
     );
@@ -584,18 +584,18 @@ function normalizeRegistration(design: ToolDesignRegistration): NormalizedRegist
     assertRegistrationId("tool name", tool);
     if (typeof tool !== "string") {
       // `assertRegistrationId` narrows by throwing; this keeps the compiler honest.
-      throw new Error("gentle-shell-bridge: invalid tool name");
+      throw new Error("odd-worktree: invalid tool name");
     }
     return { scope: "tool", line: tool, tools: [tool] };
   }
   const line = design.line;
   assertRegistrationId("tool design line", line);
   if (typeof line !== "string") {
-    throw new Error("gentle-shell-bridge: invalid tool design line");
+    throw new Error("odd-worktree: invalid tool design line");
   }
   if (!Array.isArray(design.tools) || design.tools.length === 0) {
     throw new Error(
-      `gentle-shell-bridge: invalid tool design for line ${JSON.stringify(line)}: tools must be a ` +
+      `odd-worktree: invalid tool design for line ${JSON.stringify(line)}: tools must be a ` +
         "non-empty array of tool names.",
     );
   }
@@ -606,7 +606,7 @@ function normalizeRegistration(design: ToolDesignRegistration): NormalizedRegist
   }
   if (new Set(tools).size !== tools.length) {
     throw new Error(
-      `gentle-shell-bridge: invalid tool design for line ${JSON.stringify(line)}: tools must be ` +
+      `odd-worktree: invalid tool design for line ${JSON.stringify(line)}: tools must be ` +
         "deduplicated. List each tool once; the line's tool set is the union of its designs.",
     );
   }
@@ -632,7 +632,7 @@ function assertLabelIsDistinct(registration: NormalizedRegistration, design: Too
   if (clash === undefined) return;
   const subject = subjectOf(registration);
   const message =
-    `gentle-shell-bridge: invalid tool design label ${JSON.stringify(design.label)} for ` +
+    `odd-worktree: invalid tool design label ${JSON.stringify(design.label)} for ` +
     `${JSON.stringify(design.id)}: it is already used by ${JSON.stringify(clash.design.id)} on ` +
     `${subject}. Two values reading the same cannot be told apart on the line. Pick a distinct label.`;
   recordConflict({
@@ -674,7 +674,7 @@ function assertToolsAreFree(registration: NormalizedRegistration, design: ToolDe
         ? `its own Card ${JSON.stringify(tool)} line`
         : `the line ${JSON.stringify(live.line.line)}`;
     const message =
-      `gentle-shell-bridge: tool ${JSON.stringify(tool)} already belongs to ${current}, so design ` +
+      `odd-worktree: tool ${JSON.stringify(tool)} already belongs to ${current}, so design ` +
       `${JSON.stringify(design.id)} for ${subjectOf(registration)} was refused whole (S5/D1). A tool ` +
       "belongs to at most one line; register it on that line or remove the other registration.";
     recordConflict({ tool, id: design.id, kind: "line", message });
@@ -710,13 +710,13 @@ function assertScope(registration: NormalizedRegistration, design: ToolDesignReg
     // `scopes` carries the per-tool wording — and that wording names `scopes`, the member it used.
     const message =
       scopes === undefined
-        ? `gentle-shell-bridge: invalid tool design ${JSON.stringify(design.id)} for tool ` +
+        ? `odd-worktree: invalid tool design ${JSON.stringify(design.id)} for tool ` +
           `${JSON.stringify(registration.line)}: a scope is declared on a GROUPED registration only, and ` +
           `\`{ tool, id, label, apply }\` is that tool's own Card ${JSON.stringify(registration.line)} ` +
           "line, which means every call of the tool. To claim only SOME calls, register a grouped line " +
           "`{ line, tools, scope, id, label, apply }` for the tool beside the line that already claims " +
           "it. The registration was refused whole."
-        : `gentle-shell-bridge: invalid tool design ${JSON.stringify(design.id)} for tool ` +
+        : `odd-worktree: invalid tool design ${JSON.stringify(design.id)} for tool ` +
           `${JSON.stringify(registration.line)}: a scope is declared on a GROUPED registration only, and ` +
           `\`{ tool, id, label, apply }\` is that tool's own Card ${JSON.stringify(registration.line)} ` +
           "line, which means every call of the tool. To claim only SOME calls, register a grouped line " +
@@ -728,7 +728,7 @@ function assertScope(registration: NormalizedRegistration, design: ToolDesignReg
   // The two spellings of one claim would disagree, so they cannot be combined.
   if (scope !== undefined && scopes !== undefined) {
     const message =
-      `gentle-shell-bridge: invalid tool design ${JSON.stringify(design.id)} for ` +
+      `odd-worktree: invalid tool design ${JSON.stringify(design.id)} for ` +
       `${subjectOf(registration)}: \`scope\` and \`scopes\` cannot be combined. \`scope\` is the ` +
       "shorthand for the SAME scope on every tool of `tools`; use `scopes` keyed by tool to give each " +
       "tool its own scope. The registration was refused whole.";
@@ -739,7 +739,7 @@ function assertScope(registration: NormalizedRegistration, design: ToolDesignReg
     const problem = scopesProblem(scopes, registration.tools);
     if (problem !== undefined) {
       const message =
-        `gentle-shell-bridge: invalid tool design ${JSON.stringify(design.id)} for ` +
+        `odd-worktree: invalid tool design ${JSON.stringify(design.id)} for ` +
         `${subjectOf(registration)}: ${problem} A scope is { description, matches }: ` +
         "`description` is the one line the menu shows, and `matches(call)` answers " +
         "whether the line owns that call (the call is { tool, args }). The registration was refused whole.";
@@ -751,7 +751,7 @@ function assertScope(registration: NormalizedRegistration, design: ToolDesignReg
   const problem = scopeProblem(scope);
   if (problem === undefined) return;
   const message =
-    `gentle-shell-bridge: invalid tool design ${JSON.stringify(design.id)} for ` +
+    `odd-worktree: invalid tool design ${JSON.stringify(design.id)} for ` +
     `${subjectOf(registration)}: scope ${problem}. A scope is { description, matches }: ` +
     "`description` is the one line the menu shows, and `matches(call)` answers " +
     "whether this line owns that call (the call is { tool, args }). The registration was refused whole.";
@@ -849,11 +849,11 @@ function assertOneScopePerClaim(
       // per-tool wording belongs to a registration that SPELLS `scopes`.
       const message =
         design.scopes === undefined
-          ? `gentle-shell-bridge: design ${JSON.stringify(design.id)} for ${subjectOf(registration)} was ` +
+          ? `odd-worktree: design ${JSON.stringify(design.id)} for ${subjectOf(registration)} was ` +
             `refused whole: the line already carries a different scope on design ` +
             `${JSON.stringify(entry.design.id)}. One line is one switch, so every live registration of a ` +
             "line must share the SAME scope object (S8); re-register the same (line, id) to change it."
-          : `gentle-shell-bridge: design ${JSON.stringify(design.id)} for ${subjectOf(registration)} ` +
+          : `odd-worktree: design ${JSON.stringify(design.id)} for ${subjectOf(registration)} ` +
             `was refused whole: the line already carries a different scope on tool ` +
             `${JSON.stringify(tool)} (design ${JSON.stringify(entry.design.id)}). One line is one switch ` +
             `per call of a tool, so every live registration of a line that names tool ` +
@@ -884,7 +884,7 @@ function recordConflict(conflict: ToolDesignConflict): void {
  * of registrations of either shape, and return a disposer that removes exactly what this call
  * registered. Two designs of one line from one call are the same as two calls: they join that line.
  *
- * Same entry discipline as every other bridge surface, because a plugin author should not have to
+ * Same entry discipline as every other shell API surface, because a plugin author should not have to
  * learn two:
  *
  * - a second registration with the same (`line`, `id`) replaces the previous one IN PLACE, so the
@@ -969,7 +969,7 @@ function registerToolDesignStored(design: ToolDesignRegistration): () => void {
         id: design.id,
         kind: "replaced",
         message:
-          `gentle-shell-bridge: design ${JSON.stringify(design.id)} for ${ownership} ` +
+          `odd-worktree: design ${JSON.stringify(design.id)} for ${ownership} ` +
           `${JSON.stringify(registration.line)} was registered again and the later registration is ` +
           `the live one. Only one design can own a (${ownership}, id); the replacement is reported ` +
           "here instead of happening silently.",
@@ -1107,13 +1107,13 @@ function asRecord(value: unknown): Record<string, unknown> {
 /**
  * The persisted selections, read live. An unreadable or malformed file reads as empty, so a
  * hand-edited file can never select a design the user did not choose. ONE logical read of the
- * bridge's store per call, which is what the cost bound counts (S9/D6).
+ * shell API's store per call, which is what the cost bound counts (S9/D6).
  */
 function readSelections(): SelectionState {
   designState().selectionReads += 1;
   // ONE `get`, therefore one file read: the line map travels inside the same value under a reserved
   // key (S9/D6). A file written before grouped lines is a flat `{ <tool>: <id> }` and reads as-is.
-  const stored = asRecord(createStore(TOOL_DESIGN_STORE_ID).get<unknown>(TOOL_DESIGN_STORE_KEY, {}));
+  const stored = asRecord(createStore(LEGACY_TOOL_DESIGN_STORE_ID).get<unknown>(TOOL_DESIGN_STORE_KEY, {}));
   const { [TOOL_DESIGN_LINE_STORE_KEY]: lines, ...tools } = stored;
   return { tools, lines: asRecord(lines) };
 }
@@ -1128,7 +1128,7 @@ function writeSelections(state: SelectionState): void {
   if (Object.keys(state.lines).length > 0) {
     document[TOOL_DESIGN_LINE_STORE_KEY] = state.lines;
   }
-  createStore(TOOL_DESIGN_STORE_ID).set(TOOL_DESIGN_STORE_KEY, document);
+  createStore(LEGACY_TOOL_DESIGN_STORE_ID).set(TOOL_DESIGN_STORE_KEY, document);
 }
 
 function storedId(map: Record<string, unknown>, key: string): string {
@@ -1139,7 +1139,7 @@ function storedId(map: Record<string, unknown>, key: string): string {
 
 /**
  * How many persisted-selection reads happened since the last reset. Each one is a single logical read
- * of the bridge's tool-design store, so a caller can bound the file work a switch or a frame performs
+ * of the shell API's tool-design store, so a caller can bound the file work a switch or a frame performs
  * instead of timing it (S13/T23). Read by the cost test; not part of the public API.
  */
 export function getToolDesignSelectionReads(): number {
@@ -1321,7 +1321,7 @@ function scopeMatches(claim: IndexedClaim, tool: string, args: unknown): boolean
         "instead of a boolean, and a paint cannot await; the call counts as one the line does not " +
         "own, so the line declined it. Return true or false from matches.",
     );
-    // A scope that returned a Promise is a plugin bug the bridge must not turn into a host crash: an
+    // A scope that returned a Promise is a plugin bug the shell API must not turn into a host crash: an
     // unhandled rejection can take the process down on a host that treats it as fatal, and this paint
     // declines the call anyway. Inspection itself is isolated, so a thenable that throws while it is
     // read or drained leaves the failure recorded above as the whole report.

@@ -1,8 +1,8 @@
 /**
  * The runtime handshake (S1, S5 "zero extra steps"): the published API object, its shape gate and
- * the `bridgeApi()` helper a plugin calls from its own `session_start` handler.
+ * the `shellApi()` helper a plugin calls from its own `session_start` handler.
  *
- * A plugin and the bridge are two independent projects. Pi gives them one sanctioned channel that
+ * A plugin and the shell API are two independent projects. Pi gives them one sanctioned channel that
  * needs no path: `globalThis`. These tests pin that channel only — the symbol, the frozen object,
  * the gate and the absent-means-absent rule — because a path or an environment variable is exactly
  * what the rejected design offered and what this design replaces.
@@ -17,12 +17,12 @@ import test from "node:test";
 import {
   API_SCHEMA,
   API_VERSION,
-  BRIDGE_API_KEY,
+  SHELL_API_KEY,
   VERSION,
-  bridgeApi,
-  isBridgeApi,
-  publishBridgeApi,
-  resetBridgeApiForTests,
+  shellApi,
+  isShellApi,
+  publishShellApi,
+  resetShellApiForTests,
 } from "../../lib/shell-api/api.ts";
 import {
   resetBusForTests,
@@ -31,9 +31,9 @@ import {
   snapshotSections,
 } from "../../lib/shell-api/bus.ts";
 import { disableCaptureBackend, getCaptureDiagnostics, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
-import gentleShellBridge, {
-  type BridgeExtensionApi,
-  type BridgeSessionHandler,
+import gentleShellShellApi, {
+  type ShellExtensionApi,
+  type ShellSessionHandler,
 } from "../../lib/shell-api/extension.ts";
 import { resetHookStateForTests } from "../../lib/shell-api/hook.ts";
 import {
@@ -78,7 +78,7 @@ const section = (id: string, title = "MUSIC"): SidebarSection => ({
   lines: () => ["track  one"],
 });
 
-/** Every terminal write the process would show; the bridge must produce none. */
+/** Every terminal write the process would show; the shell API must produce none. */
 const captureConsole = (): { writes: string[]; restore: () => void } => {
   const writes: string[] = [];
   const sink = (globalThis as unknown as { console: { log: unknown; warn: unknown; error: unknown } })
@@ -119,7 +119,7 @@ test.after(() => {
 
 test.beforeEach(() => {
   rmSync(join(configHome, "gentle-shell-bridge"), { recursive: true, force: true });
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetNoticesForTests();
   resetBusForTests();
   resetSectionsForTests();
@@ -146,9 +146,9 @@ test.afterEach(() => {
 // ---------------------------------------------------------------------------------------------
 
 test("publishing stores one frozen, versioned API object at the stable symbol", () => {
-  const api = publishBridgeApi();
+  const api = publishShellApi();
 
-  assert.equal(hostSlot()[BRIDGE_API_KEY], api, "the slot holds exactly the object published");
+  assert.equal(hostSlot()[SHELL_API_KEY], api, "the slot holds exactly the object published");
   assert.ok(Object.isFrozen(api), "the published contract is frozen: nobody may extend it in place");
   assert.deepEqual(Object.keys(api).sort(), [
     "VERSION",
@@ -164,16 +164,16 @@ test("publishing stores one frozen, versioned API object at the stable symbol", 
     "schema",
     "version",
   ]);
-  assert.equal(api.schema, "gentle-shell-bridge/api");
+  assert.equal(api.schema, "odd-worktree/shell-api");
   assert.equal(api.version, 1);
   assert.equal(api.VERSION, VERSION);
   assert.equal(api.schema, API_SCHEMA);
   assert.equal(api.version, API_VERSION);
-  assert.equal(isBridgeApi(api), true);
+  assert.equal(isShellApi(api), true);
 });
 
 test("the published functions are the working ones, not a stale copy", () => {
-  const api = publishBridgeApi();
+  const api = publishShellApi();
 
   const disposeRows = api.registerRows(provider("loon.banner-source"));
   const disposeSection = api.registerSection(section("loon.music"));
@@ -188,7 +188,7 @@ test("the published functions are the working ones, not a stale copy", () => {
 });
 
 test("the published object answers which design a tool draws, one read per call", () => {
-  const api = publishBridgeApi();
+  const api = publishShellApi();
   const read = api.resolveToolDesignSelection;
   assert.equal(
     read,
@@ -234,7 +234,7 @@ test("the published object answers which design a tool draws, one read per call"
 });
 
 test("the published object registers a message design through the same registry", () => {
-  const api = publishBridgeApi();
+  const api = publishShellApi();
   const register = api.registerMessageDesign;
   assert.equal(
     register,
@@ -270,16 +270,16 @@ test("the shape gate accepts only the v1 surface it advertises", () => {
     createStore: () => ({}),
   };
 
-  assert.equal(isBridgeApi(valid), true);
+  assert.equal(isShellApi(valid), true);
 
   // Every mismatch is "absent", so the caller sees `undefined` instead of an error path.
   for (const rejected of [
     undefined,
     null,
-    "gentle-shell-bridge",
+    "odd-worktree/shell-api",
     42,
     {},
-    { ...valid, schema: "gentle-shell-bridge/api/v2" },
+    { ...valid, schema: "odd-worktree/shell-api/v2" },
     { ...valid, version: 2 },
     { ...valid, version: "1" },
     { schema: API_SCHEMA, version: API_VERSION },
@@ -287,30 +287,30 @@ test("the shape gate accepts only the v1 surface it advertises", () => {
     { ...valid, registerSection: "nope" },
     { ...valid, createStore: {} },
   ]) {
-    assert.equal(isBridgeApi(rejected), false, `must reject ${JSON.stringify(rejected)}`);
+    assert.equal(isShellApi(rejected), false, `must reject ${JSON.stringify(rejected)}`);
   }
 });
 
 test("a second publish keeps the first object: first wins", () => {
-  const first = publishBridgeApi();
-  const second = publishBridgeApi();
+  const first = publishShellApi();
+  const second = publishShellApi();
 
   assert.equal(second, first);
-  assert.equal(hostSlot()[BRIDGE_API_KEY], first);
+  assert.equal(hostSlot()[SHELL_API_KEY], first);
 });
 
 test("two loaded copies of the module publish one object and both work through it", async () => {
-  const first = publishBridgeApi();
+  const first = publishShellApi();
 
   // Pi loads every extension with `moduleCache: false`, so this package genuinely exists twice in
   // one process. A second copy is a second module instance, not a second global slot.
   const copyPath = new URL("../../lib/shell-api/api.ts?second-copy", import.meta.url).href;
   const second = (await import(copyPath)) as typeof import("../../lib/shell-api/api.ts");
 
-  assert.equal(hostSlot()[BRIDGE_API_KEY], first, "the second copy never overwrote the slot");
-  const secondApi = second.publishBridgeApi();
+  assert.equal(hostSlot()[SHELL_API_KEY], first, "the second copy never overwrote the slot");
+  const secondApi = second.publishShellApi();
   assert.equal(secondApi, first, "and publishing again hands the same object back");
-  assert.equal(second.isBridgeApi(hostSlot()[BRIDGE_API_KEY]), true);
+  assert.equal(second.isShellApi(hostSlot()[SHELL_API_KEY]), true);
 
   // Both copies register into the same process-global bus, which is what makes them interchangeable.
   first.registerRows(provider("shared"));
@@ -321,37 +321,37 @@ test("two loaded copies of the module publish one object and both work through i
 });
 
 // ---------------------------------------------------------------------------------------------
-// bridgeApi(): the object or undefined, never a wait
+// shellApi(): the object or undefined, never a wait
 // ---------------------------------------------------------------------------------------------
 
-test("bridgeApi returns undefined when nothing is published, and the object once it is", () => {
-  assert.equal(bridgeApi(), undefined, "no publication is absent, full stop");
+test("shellApi returns undefined when nothing is published, and the object once it is", () => {
+  assert.equal(shellApi(), undefined, "no publication is absent, full stop");
 
-  const api = publishBridgeApi();
-  assert.equal(bridgeApi(), api, "and the published object is handed back immediately");
+  const api = publishShellApi();
+  assert.equal(shellApi(), api, "and the published object is handed back immediately");
 });
 
-test("an object that fails the gate is absent: bridgeApi returns undefined, one notice, no throw", () => {
+test("an object that fails the gate is absent: shellApi returns undefined, one notice, no throw", () => {
   for (const incompatible of [
     { ...usableSurface(), schema: "someone-else/api" },
     { ...usableSurface(), version: 2 },
     { schema: API_SCHEMA, version: API_VERSION },
   ]) {
-    resetBridgeApiForTests();
+    resetShellApiForTests();
     resetNoticesForTests();
-    hostSlot()[BRIDGE_API_KEY] = incompatible;
+    hostSlot()[SHELL_API_KEY] = incompatible;
     const captured = captureConsole();
     let seen: unknown;
     try {
       assert.doesNotThrow(() => {
-        seen = bridgeApi();
+        seen = shellApi();
       });
     } finally {
       captured.restore();
     }
 
     assert.equal(seen, undefined, "a mismatched object is never handed to a plugin");
-    assert.equal(hostSlot()[BRIDGE_API_KEY], incompatible, "the slot is left exactly as it was");
+    assert.equal(hostSlot()[SHELL_API_KEY], incompatible, "the slot is left exactly as it was");
     assert.deepEqual(captured.writes, [], "the skew is never written to the terminal");
     const notices = snapshotNotices().entries;
     assert.equal(notices.length, 1, "and it is recorded once, not per call");
@@ -372,21 +372,21 @@ const usableSurface = (): Record<string, unknown> => ({
 
 test("an incompatible slot is never reset, and publishing still yields a working API", () => {
   const incompatible = { ...usableSurface(), version: 2 };
-  hostSlot()[BRIDGE_API_KEY] = incompatible;
+  hostSlot()[SHELL_API_KEY] = incompatible;
   const captured = captureConsole();
-  let published: ReturnType<typeof publishBridgeApi> | undefined;
+  let published: ReturnType<typeof publishShellApi> | undefined;
   try {
-    published = publishBridgeApi();
+    published = publishShellApi();
   } finally {
     captured.restore();
   }
 
   assert.deepEqual(captured.writes, []);
-  assert.equal(hostSlot()[BRIDGE_API_KEY], incompatible, "the slot is left exactly as it was");
-  assert.equal(isBridgeApi(hostSlot()[BRIDGE_API_KEY]), false);
-  assert.equal(bridgeApi(), undefined, "and consumers still see it as absent");
+  assert.equal(hostSlot()[SHELL_API_KEY], incompatible, "the slot is left exactly as it was");
+  assert.equal(isShellApi(hostSlot()[SHELL_API_KEY]), false);
+  assert.equal(shellApi(), undefined, "and consumers still see it as absent");
   assert.ok(published !== undefined, "this copy still has an object to register through");
-  assert.equal(isBridgeApi(published), true);
+  assert.equal(isShellApi(published), true);
   published.registerSection(section("loon.music"));
   assert.deepEqual(snapshotSections().map((registered) => registered.id), ["loon.music"]);
 });
@@ -407,8 +407,8 @@ const installWidgetSurface = (host: FakeHost): void => {
 };
 
 const armThroughEntry = (host: FakeHost): void => {
-  const handlers: BridgeSessionHandler[] = [];
-  const pi: BridgeExtensionApi = {
+  const handlers: ShellSessionHandler[] = [];
+  const pi: ShellExtensionApi = {
     // `gentle-pi` is present, so `session_start` arms (S9/T12).
     getCommands: () => [{ name: "gentle:customize" }],
     on(event, handler) {
@@ -416,7 +416,7 @@ const armThroughEntry = (host: FakeHost): void => {
     },
     registerCommand() {},
   };
-  gentleShellBridge(pi);
+  gentleShellShellApi(pi);
   assert.equal(handlers.length, 1);
   handlers[0]({}, { hasUI: true, ui: host.ui });
 };
@@ -426,9 +426,9 @@ test("a plugin that registers from session_start renders its section and its Sec
   installWidgetSurface(host);
   registerNativeFooter(); // the host's own rail
 
-  publishBridgeApi(); // the bridge loaded, as it always does before any session_start
+  publishShellApi(); // the shell API loaded, as it always does before any session_start
 
-  const api = bridgeApi();
+  const api = shellApi();
   assert.ok(api !== undefined, "the API is present in the handler: no waiting, no queue");
   api.registerRows({
     id: "loon.banner-source",
@@ -461,17 +461,17 @@ test("a plugin that registers from session_start renders its section and its Sec
 });
 
 test("PRESERVE: a session_start without a UI still arms nothing", () => {
-  const handlers: BridgeSessionHandler[] = [];
-  const pi: BridgeExtensionApi = {
+  const handlers: ShellSessionHandler[] = [];
+  const pi: ShellExtensionApi = {
     getCommands: () => [{ name: "gentle:customize" }],
     on(_event, handler) {
       handlers.push(handler);
     },
     registerCommand() {},
   };
-  gentleShellBridge(pi);
-  publishBridgeApi();
-  bridgeApi()?.registerRows(provider("queued.rows"));
+  gentleShellShellApi(pi);
+  publishShellApi();
+  shellApi()?.registerRows(provider("queued.rows"));
 
   handlers[0]({}, { hasUI: false });
 
@@ -479,6 +479,6 @@ test("PRESERVE: a session_start without a UI still arms nothing", () => {
   assert.deepEqual(
     snapshotProviders().map((registered) => registered.id),
     ["queued.rows"],
-    "registration from a plugin handler is independent of the bridge arming",
+    "registration from a plugin handler is independent of the shell API arming",
   );
 });

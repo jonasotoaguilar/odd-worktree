@@ -7,7 +7,7 @@
  * advertised as an assignable binding and could never honour it, so the category is reserved —
  * compared trimmed and case-insensitively, because ` Keymaps ` is the same page as `Keymaps`.
  *
- * The refusal reuses the bridge's ONE rejection channel, at the two boundaries that can see a
+ * The refusal reuses the shell API's ONE rejection channel, at the two boundaries that can see a
  * category:
  *
  * - registration (`./bus.ts`): the provider is refused BEFORE anything is stored, so the throw lands
@@ -28,8 +28,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
-import { publishBridgeApi, resetBridgeApiForTests } from "../../lib/shell-api/api.ts";
-import { armBridge } from "../../lib/shell-api/arm.ts";
+import { publishShellApi, resetShellApiForTests } from "../../lib/shell-api/api.ts";
+import { armShellApi } from "../../lib/shell-api/arm.ts";
 import {
   registerRows,
   resetBusForTests,
@@ -86,7 +86,7 @@ test.after(() => {
 
 test.beforeEach(() => {
   rmSync(join(configHome, "gentle-shell-bridge"), { recursive: true, force: true });
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetBusForTests();
   resetSectionsForTests();
   resetCardStylesForTests();
@@ -103,7 +103,7 @@ test.beforeEach(() => {
 
 const menuHost = (): FakeHost => {
   const host = createFakeHost();
-  armBridge(host.ui);
+  armShellApi(host.ui);
   return host;
 };
 
@@ -118,12 +118,12 @@ const button = (category: string, label: string): CustomizeRow => ({
 // ---------------------------------------------------------------------------------------------
 
 const registrationError = (category: string, id = "loon.keymaps"): string =>
-  `gentle-shell-bridge: cannot register row provider ${JSON.stringify(id)}: its category ` +
+  `odd-worktree: cannot register row provider ${JSON.stringify(id)}: its category ` +
   `${JSON.stringify(category)} is the reserved category "Keymaps". Keymaps ${RULE}. ` +
   `Place the rows in one of the host's other categories, e.g. "Cards".`;
 
 test("a provider registered in Keymaps is refused, and nothing is stored", () => {
-  const api = publishBridgeApi();
+  const api = publishShellApi();
 
   assert.throws(
     () => api.registerRows({ id: "loon.keymaps", category: "Keymaps", rows: () => [] }),
@@ -139,7 +139,7 @@ test("a provider registered in Keymaps is refused, and nothing is stored", () =>
 });
 
 test("every spelling of the same category is refused: trimmed and case-insensitive", () => {
-  const api = publishBridgeApi();
+  const api = publishShellApi();
   const spellings = ["keymaps", " Keymaps ", "KEYMAPS", "\tKeyMaps\n"];
 
   for (const [index, category] of spellings.entries()) {
@@ -154,7 +154,7 @@ test("every spelling of the same category is refused: trimmed and case-insensiti
 });
 
 test("lookalikes are ordinary categories: Keymap, Key maps and Cards are still allowed", () => {
-  const api = publishBridgeApi();
+  const api = publishShellApi();
   const categories = ["Keymap", "Key maps", "Cards"];
 
   for (const [index, category] of categories.entries()) {
@@ -198,7 +198,7 @@ const writePlugin = (packageName: string, body: string): string => {
   const file = join(dir, `plugin-${String(fixtureCount)}.mjs`);
   writeFileSync(
     file,
-    `const api = globalThis[Symbol.for("gentle-shell-bridge/api/v1")];\n${body}\n`,
+    `const api = globalThis[Symbol.for("odd-worktree/shell-api/v1")];\n${body}\n`,
   );
   return file;
 };

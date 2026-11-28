@@ -77,8 +77,8 @@ test.beforeEach(() => {
 });
 
 /**
- * The counts a transform records for itself. `report` is how a transform tells the bridge what its
- * own grammar saw; the bridge adds the line count and the outcome, so the two can never disagree
+ * The counts a transform records for itself. `report` is how a transform tells the shell API what its
+ * own grammar saw; the shell API adds the line count and the outcome, so the two can never disagree
  * about what the frame did.
  */
 const counts = (

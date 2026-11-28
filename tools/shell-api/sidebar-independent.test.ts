@@ -24,9 +24,9 @@ import {
   snapshotSections,
 } from "../../lib/shell-api/bus.ts";
 import { disableCaptureBackend, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
-import gentleShellBridge, {
-  type BridgeExtensionApi,
-  type BridgeSessionHandler,
+import gentleShellShellApi, {
+  type ShellExtensionApi,
+  type ShellSessionHandler,
 } from "../../lib/shell-api/extension.ts";
 import { resetHookStateForTests } from "../../lib/shell-api/hook.ts";
 import { resetRowBuildStateForTests } from "../../lib/shell-api/rows.ts";
@@ -109,19 +109,19 @@ function arm(): void {
 }
 
 interface Entry {
-  sessionHandlers: BridgeSessionHandler[];
+  sessionHandlers: ShellSessionHandler[];
 }
 
 const loadEntry = (): Entry => {
-  const sessionHandlers: BridgeSessionHandler[] = [];
-  const pi: BridgeExtensionApi = {
+  const sessionHandlers: ShellSessionHandler[] = [];
+  const pi: ShellExtensionApi = {
     // `gentle-pi` is present, so `session_start` arms and reports it (S9/T12).
     getCommands: () => [{ name: "gentle:customize" }],
     on(_event, handler) {
       sessionHandlers.push(handler);
     },
   };
-  gentleShellBridge(pi);
+  gentleShellShellApi(pi);
   return { sessionHandlers };
 };
 
@@ -219,7 +219,7 @@ test("B3: a row-only session through the entry registers no plugin provider", ()
   host.buildMenu();
 
   assert.deepEqual(
-    snapshotProviders().map((provider) => provider.id).filter((id) => !id.startsWith("bridge.")),
+    snapshotProviders().map((provider) => provider.id).filter((id) => !id.startsWith("shell-api.")),
     [],
     "only the shell API's own plumbing providers are there, never a plugin provider",
   );
@@ -232,9 +232,9 @@ test("B3: the internal Sections provider is never a plugin provider, and the rai
   host.buildMenu();
 
   const providerIds = snapshotProviders().map((provider) => provider.id);
-  assert.equal(providerIds.includes("bridge.sections"), true, "the Sections provider is installed");
+  assert.equal(providerIds.includes("shell-api.sections"), true, "the Sections provider is installed");
   assert.deepEqual(
-    providerIds.filter((id) => !id.startsWith("bridge.")),
+    providerIds.filter((id) => !id.startsWith("shell-api.")),
     [],
     "and it is the shell API's own plumbing, not a plugin provider",
   );

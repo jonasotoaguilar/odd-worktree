@@ -13,12 +13,12 @@
 //              comment and close actions when the repository permits them
 //
 // The bash heading is not a preference of this package either: it contributes one DESIGN
-// (`activity`) to gentle-shell-bridge's `/gentle:customize` → `Cards` page, on its
-// `Card activity` line when the bridge can group tools (`default` | `activity`) and on
-// the per-tool `bash` line on anything older, which the bridge owns, persists and
+// (`activity`) to the shell API's `/gentle:customize` → `Cards` page, on its
+// `Card activity` line when the shell API can group tools (`default` | `activity`) and on
+// the per-tool `bash` line on anything older, which the shell API owns, persists and
 // repaints (lib/bash-design.js). The skill/ODD file card owns no preference at all: it
 // is painted while that same `Card activity` line answers with this design, asked of the
-// bridge per paint (lib/file-card-resolver.js), and the host draws its own row for any
+// shell API per paint (lib/file-card-resolver.js), and the host draws its own row for any
 // other value. Nothing of that is registered here.
 //
 // Plus two tools: worktree_create and worktree_list. Create prompts for approval
@@ -34,14 +34,14 @@
 
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
-// S2/S4 (native-bridge T5): the shell API is THIS PACKAGE'S OWN CODE (`lib/shell-api/`), not a
+// S2/S4 (native-shell API T5): the shell API is THIS PACKAGE'S OWN CODE (`lib/shell-api/`), not a
 // second plugin. Importing it publishes the frozen API object at
-// `Symbol.for("gentle-shell-bridge/api/v1")` at MODULE LOAD — before any `session_start`,
+// `Symbol.for("odd-worktree/shell-api/v1")` at MODULE LOAD — before any `session_start`,
 // and with no external plugin required — which is why the slot is already published when
 // the factory below runs. A plain-JS host stubs this one import
 // (`tools/fixtures/load-extension.js`), which is what keeps `tools/*.test.js` free of
 // TypeScript.
-import bridgeExtension from "../lib/shell-api/extension.ts";
+import shellApiExtension from "../lib/shell-api/extension.ts";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -1441,6 +1441,11 @@ function closeSessionString(ctx, method) {
 // Returns {refused, text, notices, guard}. A broken guard module fails closed:
 // the removal cannot run without the check that gates it.
 async function checkoutSessionGuard({ ctx, target }) {
+  // modular-tools (`Worktrees+`): the guard belongs to the worktree half, like the removal
+  // it gates — with that module off the close path is not registered either, so the check
+  // answers clear instead of reading any store. This is the switch that owns the rule, not a
+  // way around it: it is the same `oddModules` every registration above and below reads.
+  if (!oddModules.worktrees) return { refused: false, text: null, notices: [], guard: { status: "module-off" } };
   let guardLib;
   try {
     guardLib = libRequire("worktree-session-guard.js");
@@ -2572,34 +2577,6 @@ function warpMeasuredSpan(startedAt, endedAt) {
   return Number.isFinite(span) && span >= 0 ? span : null;
 }
 
-// ---------------------------------------------------------------------------
-// Session auto-naming from ODD writes (S1 as narrowed by D7).
-//
-// The extension observes the Pi tool pipeline for the `read`, `edit` and
-// `write` tools. For each call it decides whether the touched path is a
-// `.md` document inside the principal checkout's `odd/` directory and, when it
-// is, names THIS session after the document that was written (see
-// lib/session-auto-name.js). The worktree of the agent's context — resolved
-// from the invoking context's working directory and matched against the
-// registry entries, never from the file path identity, because `odd/` is a
-// symlink into the principal checkout — only supplies the branch suffix of
-// that name.
-//
-// It writes NOTHING to the registry. S1 removed the issue/ODD association from
-// every worktree, so this hook records no association, neither from a touched
-// path nor from a scan of the worktree's `odd/` directory: a worktree carries
-// no document. What stays is the session name, which is a property of the
-// session and not of the worktree.
-//
-// The hook never throws and never blocks the pipeline: any failure (unreadable
-// registry, unknown context, a host without the session-name accessors) is
-// swallowed, and the handler returns nothing.
-// ---------------------------------------------------------------------------
-
-// Only these three tools carry a single document path worth reading for the
-// session name.
-const ODD_NAMING_TOOLS = new Set(["read", "edit", "write"]);
-
 function oddToolNameOf(event) {
   if (!event || typeof event !== "object") return undefined;
   const name = event.toolName ?? event.tool ?? event.name;
@@ -2637,91 +2614,7 @@ function oddEventCwd(event, ctx) {
   return process.cwd();
 }
 
-// The registry entry owning `cwd`: the entry whose worktree root is `cwd`
-// itself or its longest enclosing prefix. Anything else — the principal
-// checkout, an unregistered directory — yields null and captures nothing.
-function oddEntryForCwd(worktrees, cwd) {
-  const resolved = path.resolve(cwd);
-  let best = null;
-  let bestLen = -1;
-  for (const entry of worktrees) {
-    // Relative registry paths never participate: resolving one against
-    // the process cwd would attribute the call to the wrong worktree.
-    if (!entry || typeof entry.path !== "string" || !path.isAbsolute(entry.path)) continue;
-    let candidate;
-    try {
-      candidate = path.resolve(entry.path);
-    } catch {
-      continue;
-    }
-    if (resolved !== candidate && !resolved.startsWith(candidate + path.sep)) continue;
-    if (candidate.length > bestLen) {
-      best = entry;
-      bestLen = candidate.length;
-    }
-  }
-  return best;
-}
-
-// Best-effort real path: the file itself when it exists (resolving the
-// worktree `odd/` symlink into the principal checkout), else its parent
-// directory plus the basename (covers `write` of a not-yet-created doc),
-// else the lexical path.
-function oddRealPath(absPath) {
-  try {
-    return fs.realpathSync(absPath);
-  } catch {
-    // The file may not exist yet; resolve through its parent instead.
-  }
-  try {
-    return path.join(fs.realpathSync(path.dirname(absPath)), path.basename(absPath));
-  } catch {
-    return absPath;
-  }
-}
-
-// `odd/<rel>` for a touched absolute path, or null when the path is not a
-// `.md` document inside either the worktree's own `odd/` (lexical, through
-// the symlink) or the principal checkout's `odd/` (real path). The returned
-// rel is always relative to the shared `odd/` root so every worktree
-// records the same document under the same name.
-function oddRelFor(absPath, worktreePath, principalRoot) {
-  if (typeof absPath !== "string" || absPath.length === 0) return null;
-  const lexical = path.resolve(absPath);
-  if (!lexical.endsWith(".md")) return null;
-  const candidates = [lexical, path.resolve(oddRealPath(lexical))];
-  const oddRoots = [path.join(worktreePath, "odd"), path.join(principalRoot, "odd")];
-  const bases = [];
-  for (const base of oddRoots) {
-    bases.push(path.resolve(base));
-    try {
-      bases.push(path.resolve(fs.realpathSync(base)));
-    } catch {
-      // An absent `odd/` simply contributes no real base.
-    }
-  }
-  for (const candidate of candidates) {
-    for (const base of bases) {
-      if (candidate === base) continue;
-      if (!candidate.startsWith(base + path.sep)) continue;
-      const rel = path.relative(base, candidate).split(path.sep).join("/");
-      if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) continue;
-      return `odd/${rel}`;
-    }
-  }
-  return null;
-}
-
-// Bounded (`.md` only) listing of the worktree's own `odd/` directory,
-// relative to it (`tasks/plan.md`). Never throws: any unreadable directory
-// contributes nothing.
-// Hot path: `repoIdentity` spawns two git children (~17ms here) and the ODD
-// naming hook rides every `tool_call` and `tool_result`. A session's cwd resolves
-// to the same root/common dir for its whole life, so the answer is memoized per
-// cwd instead of respawned twice per tool call. Bounded LRU: a long session
-// visiting many checkouts keeps the most recent ones, never unbounded state.
-// S8 (T6): the filter below answers most events before this memo is even reached,
-// so the common tool call pays neither a `git` nor a lookup.
+// Bash and write guards reuse the repository identity for a checkout.
 const REPO_IDENTITY_CACHE_LIMIT = 32;
 const repoIdentityCache = new Map();
 
@@ -2742,218 +2635,6 @@ function cachedRepoIdentity(git, cwd) {
   return value;
 }
 
-// S8 (T6): the listing behind `git worktree list` is memoized per repository
-// root for a SHORT window, so a burst of tool events in one turn costs ONE `git`
-// instead of one per event. It is deliberately shorter than a turn, and a listing
-// taken BEFORE a checkout was created is never trusted — that is what
-// `notBefore` carries, so the memo cannot hide the checkout the agent just made.
-const WORKTREE_LISTING_MEMO_MS = 1500;
-const WORKTREE_LISTING_CACHE_LIMIT = 32;
-const worktreeListingCache = new Map();
-// When this process last OBSERVED a checkout being created, or null. Only a
-// timestamp: nothing is read from it and no git runs for it.
-let worktreeCreatedAt = null;
-// The one tool that creates a checkout, so its result is what a memoized listing
-// may not predate.
-const WORKTREE_CREATE_TOOL = "worktree_create";
-
-function cachedWorktreeListing(git, root, notBefore) {
-  const key = String(root);
-  const at = Date.now();
-  const hit = worktreeListingCache.get(key);
-  const age = hit === undefined ? Number.NaN : at - hit.at;
-  const recent = Number.isFinite(age) && age >= 0 && age < WORKTREE_LISTING_MEMO_MS;
-  // A listing older than `notBefore` — a checkout created after it — answers
-  // about a world that no longer exists, so it is bypassed instead of trusted.
-  const afterCreation = notBefore === null || notBefore === undefined
-    || (hit !== undefined && Number.isFinite(hit.at) && hit.at >= notBefore);
-  if (recent && afterCreation) {
-    // Refresh recency so the checkout in use is never the one evicted.
-    worktreeListingCache.delete(key);
-    worktreeListingCache.set(key, hit);
-    return hit.live;
-  }
-  const live = git.listWorktrees(key);
-  worktreeListingCache.set(key, { at, live });
-  if (worktreeListingCache.size > WORKTREE_LISTING_CACHE_LIMIT) {
-    worktreeListingCache.delete(worktreeListingCache.keys().next().value);
-  }
-  return live;
-}
-
-// S8 (T6): a touched path names a session only when it is an ODD TASK document
-// (`odd/tasks/*.md`), which is exactly what `lib/session-auto-name.js` derives a
-// label from. The test is lexical — the worktree's own `odd/` may be a symlink to
-// the principal's, and the document behind either spelling carries the same
-// segments — so it costs no child process and no file read.
-const ODD_TASK_PARENT = "tasks";
-const ODD_ROOT = "odd";
-
-function oddTaskDocumentPath(rawPath, cwd) {
-  if (typeof rawPath !== "string" || rawPath.length === 0) return false;
-  if (!rawPath.endsWith(".md")) return false;
-  let resolved;
-  try {
-    const abs = path.isAbsolute(rawPath) ? rawPath : path.join(cwd, rawPath);
-    resolved = path.resolve(abs);
-  } catch {
-    return false;
-  }
-  const segments = resolved.split(path.sep);
-  // The file itself is the last segment, so the parent pair is what is looked for.
-  for (let i = segments.length - 2; i >= 1; i -= 1) {
-    if (segments[i] === ODD_TASK_PARENT && segments[i - 1] === ODD_ROOT) return true;
-  }
-  return false;
-}
-
-// The gentle-pi ODD phase tool, read from `lib/session-auto-name.js` (the module
-// that owns the name) once per load instead of per event: this runs on every
-// non-naming `tool_result`, so the answer is memoized here.
-let oddPhaseToolNameCache;
-
-function oddPhaseToolName() {
-  if (oddPhaseToolNameCache === undefined) {
-    try {
-      const auto = libRequire("session-auto-name.js");
-      oddPhaseToolNameCache = typeof auto.ODD_PHASE_TOOL_NAME === "string" ? auto.ODD_PHASE_TOOL_NAME : "";
-    } catch {
-      oddPhaseToolNameCache = "";
-    }
-  }
-  return oddPhaseToolNameCache;
-}
-
-// S8 (T6): can this event name a session at all? The naming path only ever
-// applies to the `read`/`edit`/`write` tools touching an `odd/tasks/*.md`
-// document, plus the phase trigger, which carries no path and re-applies a label
-// the session already derived. Everything else answers `false` HERE — before any
-// `git`, which is the whole point: the observer used to spawn two blocking child
-// processes per tool call to learn there was nothing to name.
-function oddNamingCandidate(event, cwd, allowPhaseTrigger) {
-  const toolName = oddToolNameOf(event);
-  if (ODD_NAMING_TOOLS.has(toolName)) {
-    for (const raw of oddTouchedPaths(oddArgsOf(event))) {
-      if (oddTaskDocumentPath(raw, cwd)) return true;
-    }
-    return false;
-  }
-  if (allowPhaseTrigger !== true) return false;
-  const phaseTool = oddPhaseToolName();
-  return phaseTool.length > 0 && toolName === phaseTool;
-}
-
-// The pipeline hook proper (M1): every event is observed. Whether a session is
-// renamed at all is decided in lib/session-auto-name.js.
-function observeOddWriteForNaming(event, ctx, pi, allowPhaseTrigger) {
-  // S8 (T6): the create's own result is the fact that a memoized listing may now
-  // be wrong. It costs a timestamp and no git, and it is recorded before the
-  // filter so the events that follow it in the same turn see the new checkout.
-  if (allowPhaseTrigger === true && oddToolNameOf(event) === WORKTREE_CREATE_TOOL) {
-    worktreeCreatedAt = Date.now();
-  }
-  const cwd = oddEventCwd(event, ctx);
-  // S8 (T6): filter first, synchronously, with no child process.
-  if (!oddNamingCandidate(event, cwd, allowPhaseTrigger)) return;
-  const git = libRequire("worktree-git.js");
-  const registry = libRequire("worktree-registry.js");
-  let repo;
-  try {
-    repo = cachedRepoIdentity(git, cwd);
-  } catch {
-    return; // Unknown context: not a repository, nothing to name.
-  }
-  const principalRoot = path.basename(repo.commonDir) === ".git"
-    ? path.dirname(repo.commonDir)
-    : repo.root;
-  // Git's listing supplies the checkout this write happened in and its branch. There
-  // is no stored row to read (S3): the checkout's own path is the record. S8 (T6):
-  // the listing rides a short per-root memo, so a turn's burst of events pays one
-  // `git` — and a listing that predates a create is bypassed, so the memo can never
-  // hide the checkout the agent just made.
-  let live;
-  try {
-    live = cachedWorktreeListing(git, repo.root, worktreeCreatedAt);
-  } catch {
-    return;
-  }
-  const rows = registry.checkoutRows(live);
-  // The checkout this call names FROM: a registered worktree first (the longest
-  // match wins), else the principal checkout itself. An ODD write from the principal
-  // checkout renames the session exactly like one from a worktree — the rule follows
-  // the document, not the checkout it lives in.
-  const entry = oddEntryForCwd(rows, cwd) || principalEntryFor(cwd, principalRoot);
-  if (!entry) return;
-  const touched = [];
-  // The per-call leg applies to the read/edit/write tools, which carry a
-  // single document path. Every other tool (notably `bash`) carries no
-  // reliably parseable path and contributes nothing.
-  if (ODD_NAMING_TOOLS.has(oddToolNameOf(event))) {
-    for (const raw of oddTouchedPaths(oddArgsOf(event))) {
-      const abs = path.isAbsolute(raw) ? raw : path.join(cwd, raw);
-      // Naming follows the DOCUMENT, not the checkout the call started in: an
-      // `odd/tasks/<name>.md` inside a registered worktree names the session even
-      // when the session's cwd is the principal checkout, which is how a harness
-      // that keeps its session in `main` writes its ODDs.
-      const documentEntry = oddEntryForCwd(rows, abs) || entry;
-      const rel = oddRelFor(abs, documentEntry.path, principalRoot);
-      if (!rel) continue;
-      touched.push(rel);
-    }
-  }
-  // T2/D2-D7: the touched rels name the session after the ODD task document
-  // being WRITTEN. The naming decision (write-only, own name only,
-  // idempotent) lives in lib/session-auto-name.js; this is the call site.
-  const sessionId = oddSessionId(ctx);
-  autoNameSessionFromWrite(pi, oddToolNameOf(event), touched, sessionId);
-  // D3: an ODD phase transition carries no feature of its own, so it only
-  // re-applies the label this session last derived from a write. It is
-  // observed on `tool_result` (a gentle-pi tool, not a host event).
-  if (allowPhaseTrigger === true) {
-    autoNameSessionFromPhase(pi, sessionId, oddToolNameOf(event));
-  }
-}
-
-// The principal checkout as a naming target, in the shape a registry row has (`path`),
-// so ONE rel resolution serves both. Naming needs no branch (the name is the ODD's
-// own), and the rail's row election is untouched: this shape never reaches it.
-function principalEntryFor(cwd, principalRoot) {
-  if (typeof principalRoot !== "string" || principalRoot.length === 0) return null;
-  let resolved;
-  try {
-    resolved = path.resolve(cwd);
-  } catch {
-    return null;
-  }
-  const root = path.resolve(principalRoot);
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) return null;
-  return { path: root };
-}
-
-// The ODD names this session already WROTE, newest first, read from the durable touch
-// record (`odd-worktree.odd-touch`) the rail already keeps. Naming reads that ONE
-// record as the proof that a name this process did not write is still its own, which
-// is what survives a resume (D5). A host without the record simply has less evidence.
-function oddTouchedNames() {
-  try {
-    if (oddSession === null) return [];
-    const names = [];
-    for (const row of oddSession.touched()) {
-      if (row && typeof row.name === "string" && row.name.length > 0) names.push(row.name);
-    }
-    return names;
-  } catch {
-    return [];
-  }
-}
-
-// T2/D7: the session NAME is the only session-identity channel Pi exposes
-// (`setSessionName`; there is no subject/alias write). The session owns that
-// name only while it matches the pattern the plugin itself writes — anything
-// else came from a human and is never touched — and the principal checkout
-// never reaches this point, because `oddEntryForCwd` already returned null
-// for it (D6). A host without the name accessors is left alone rather than
-// guessed at: without `getSessionName` the ownership test cannot run.
 function oddSessionId(ctx) {
   try {
     const id = ctx && ctx.sessionManager && typeof ctx.sessionManager.getSessionId === "function"
@@ -2963,56 +2644,6 @@ function oddSessionId(ctx) {
   } catch {
     return undefined;
   }
-}
-
-function autoNameSessionFromWrite(pi, toolName, touched, sessionId) {
-  try {
-    if (!pi || typeof pi.getSessionName !== "function" || typeof pi.setSessionName !== "function") return;
-    const auto = libRequire("session-auto-name.js");
-    const label = auto.planSessionRename({
-      rels: touched,
-      isWrite: auto.isWriteToolName(toolName),
-      currentName: pi.getSessionName(),
-      sessionId,
-      touchedNames: oddTouchedNames(),
-    });
-    if (typeof label === "string" && label.length > 0) pi.setSessionName(label);
-  } catch {
-    // Naming is best effort: it never disturbs the pipeline it rides on.
-  }
-}
-
-// D3: a `gentle_odd_phase` transition re-applies the label the session last
-// derived from an ODD write. The phase names no feature, so nothing is
-// invented here; a session that never wrote an ODD document has nothing to
-// re-apply and is left alone.
-function autoNameSessionFromPhase(pi, sessionId, toolName) {
-  try {
-    if (!pi || typeof pi.getSessionName !== "function" || typeof pi.setSessionName !== "function") return;
-    const auto = libRequire("session-auto-name.js");
-    if (toolName !== auto.ODD_PHASE_TOOL_NAME) return;
-    const label = auto.planPhaseSessionRename({
-      sessionId,
-      currentName: pi.getSessionName(),
-      touchedNames: oddTouchedNames(),
-    });
-    if (typeof label === "string" && label.length > 0) pi.setSessionName(label);
-  } catch {
-    // Naming is best effort: it never disturbs the pipeline it rides on.
-  }
-}
-
-// The subscribed pipeline handler: never throws, never blocks, returns
-// nothing (a `tool_call` return value would mutate or block the call).
-// `allowPhaseTrigger` is set only on `tool_result`, where an ODD phase
-// transition is observable.
-function handleWorktreeOddEvent(event, ctx, pi, allowPhaseTrigger) {
-  try {
-    observeOddWriteForNaming(event, ctx, pi, allowPhaseTrigger);
-  } catch {
-    // Any failure is swallowed after the best-effort attempt above.
-  }
-  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -6937,7 +6568,7 @@ function oddTargetRequest(raw, cwd) {
 // dotfile — the segments come from the library that owns the rule instead of being
 // restated here, and the file has to be a regular one, exactly like the scan's own
 // row. The argument is RESOLVED first (`path.resolve` against the call's cwd, the
-// same rule `oddTaskDocumentPath` applies), because the grammar is about the path a
+// `odd/tasks` pair), because the grammar is about the path a
 // reader MEANS: `tasks/./x.md` and `tasks/../tasks/x.md` name the listed document,
 // and validating their raw segments refused paths `path.resolve` makes equal. Only
 // the resolved path is validated, so a sibling that resolves outside `odd/tasks`, a
@@ -8419,9 +8050,9 @@ function registerFilesCommand(pi) {
 // ---------------------------------------------------------------------------
 // `/identity` (identity-command S1/S2/S4): the user's own name.
 //
-// TRANSVERSAL, like `/files` and `/odd`: it is registered wherever the bridge is
+// TRANSVERSAL, like `/files` and `/odd`: it is registered wherever the shell API is
 // and takes no module switch, because the name is the person's, not one of the
-// package's optional halves. The name lives in the bridge's own store
+// package's optional halves. The name lives in the shell API's own store
 // (`lib/user-identity.js`, document `identity`), so it survives a restart, and
 // the card learns about it by READING that document on every paint — which is
 // why a change only has to ask for ONE repaint instead of invalidating
@@ -8462,7 +8093,7 @@ function registerIdentityCommand(pi) {
       try {
         const identity = libRequire('user-identity.js');
         const resolver = libRequire('file-card-resolver.js');
-        const api = resolver && typeof resolver.bridgeApi === 'function' ? resolver.bridgeApi() : undefined;
+        const api = resolver && typeof resolver.shellApi === 'function' ? resolver.shellApi() : undefined;
         const before = identity.readIdentityName(api);
         // No argument: report the state. Nothing is written and nothing repaints.
         if (raw.length === 0) {
@@ -8582,8 +8213,8 @@ let issuesGateGeneration = 0;
 // published slot, exactly as a third-party plugin reads it; the section reads ONE in-process
 // snapshot per frame and refreshes on its frame TTL and on the session's own activity behind
 // the floor below — never at `session_start`, and never while it is hidden (T13).
-const ISSUES_SIDEBAR_BRIDGE_SLOT = Symbol.for("gentle-shell-bridge/api/v1");
-const ISSUES_SIDEBAR_READY_EVENT = "gentle-shell-bridge:ready";
+const ISSUES_SIDEBAR_SHELL_SLOT = Symbol.for("odd-worktree/shell-api/v1");
+const ISSUES_SIDEBAR_READY_EVENT = "odd-worktree:shell-ready";
 // S3 (activity floor): a frame only exists when the host has a reason to produce
 // one, so the TTL never fires on a session that is merely in use. The session's
 // own events ask for a read at most once per this floor.
@@ -8618,11 +8249,11 @@ const ISSUES_CACHE_FULL_TTL_MS = 600000;
 let issuesSidebarCtx = null;
 // T18 (S11): the live binding of the rail section. `issuesSidebarHandle` is the
 // section module's handle (its `dispose()` is what finally stops the floor timer),
-// `issuesSidebarDisposer` is the bridge's own unregister for it, and
-// `issuesSidebarApi` is the published bridge object the bash design was registered
-// on. A new publication (a republished bridge) is a new object and therefore a
+// `issuesSidebarDisposer` is the shell API's own unregister for it, and
+// `issuesSidebarApi` is the published shell API object the bash design was registered
+// on. A new publication (a republished shell API) is a new object and therefore a
 // new binding; the previous one is torn down before the new one is made, exactly
-// like the file picker's own bridge contribution.
+// like the file picker's own shell API contribution.
 let issuesSidebarHandle = null;
 let issuesSidebarDisposer = null;
 let issuesSidebarApi = null;
@@ -8700,7 +8331,7 @@ function releaseIssuesPanelOpen(token) {
 }
 
 // Only a token from the CURRENT session generation blocks: `session_start`,
-// `session_shutdown` and a bridge rebinding each move that generation on.
+// `session_shutdown` and a shell API rebinding each move that generation on.
 function issuesPanelOpenBlocked() {
   if (issuesPanelOpenToken === null) return false;
   return issuesPanelOpenToken.generation === issuesSidebarCacheGeneration;
@@ -10135,8 +9766,8 @@ function issuesGateMessage(error) {
 //
 // Every other surface keeps working without `gh` — `/warp`, `/odd`, `/files`,
 // the tools, the cards, the bash design, the prompt append and CodeGraph — because
-// "no desactiva todo el plugin, eso dije". The bridge is this package's own now
-// (native-bridge S2), so the only plugin-wide switch left is the published
+// "no desactiva todo el plugin, eso dije". The shell API is this package's own now
+// (native-shell API S2), so the only plugin-wide switch left is the published
 // object's own schema and version gate (S18): an INCOMPATIBLE slot registers nothing.
 //
 // The guards below stay as DEFENCE IN DEPTH, not as the policy: a `gh` that
@@ -10359,13 +9990,13 @@ function registerIssuesCommand(pi) {
   issuesCommandHandler = handler;
 }
 
-// S2 (issues-sidebar): the published bridge object, read from its Symbol slot
+// S2 (issues-sidebar): the published shell API object, read from its Symbol slot
 // after its own gate. Absent or malformed is `null` — never an import, never a
 // dependency.
-function issuesSidebarBridge() {
+function issuesSidebarShellApi() {
   try {
-    const api = globalThis[ISSUES_SIDEBAR_BRIDGE_SLOT];
-    if (!api || api.schema !== "gentle-shell-bridge/api" || api.version !== 1) return null;
+    const api = globalThis[ISSUES_SIDEBAR_SHELL_SLOT];
+    if (!api || api.schema !== "odd-worktree/shell-api" || api.version !== 1) return null;
     if (typeof api.registerRows !== "function") return null;
     if (typeof api.registerSection !== "function") return null;
     if (typeof api.createStore !== "function") return null;
@@ -10927,7 +10558,7 @@ function dispatchIssuesPanel(pi, number, identity, _bucket, generation) {
   // Two facts decide whether that identity may still be trusted, and both belong to
   // the row, not to the click:
   // - the GENERATION its read was taken under. `session_start`, `session_shutdown`
-  //   and a bridge rebinding move the generation on without invalidating the row
+  //   and a shell API rebinding move the generation on without invalidating the row
   //   callbacks the host already holds, so a deferred click can land after the
   //   session that read its row has ended. It still dispatches `/<issues> N`, but it
   //   must leave no hint: the repository it names belongs to the session that ended,
@@ -10976,12 +10607,12 @@ function registerIssuesRefusalEntryRenderer(pi) {
   }
 }
 
-// T18 (S11): end ONE binding — the bridge's own unregister first, then the
+// T18 (S11): end ONE binding — the shell API's own unregister first, then the
 // section's `dispose()`, each guarded on its own so a teardown that throws still
 // leaves the caller free to register the replacement. The slots are cleared
 // BEFORE either call, so a re-entrant teardown cannot run twice and nothing keeps
 // pointing at a section this module no longer owns. It is what a replacement (a
-// republished bridge, a second mount) and `session_shutdown` both perform: without
+// republished shell API, a second mount) and `session_shutdown` both perform: without
 // it the abandoned section keeps its self-scheduled floor timer alive for the
 // rest of its drawn window and keeps reading the same `gh` traffic this feature
 // exists to remove.
@@ -10994,7 +10625,7 @@ function teardownIssuesSidebar() {
     try {
       disposer();
     } catch {
-      // A bridge that refuses the unregister still gets its section disposed.
+      // A shell API that refuses the unregister still gets its section disposed.
     }
   }
   if (handle !== null && typeof handle.dispose === "function") {
@@ -11006,7 +10637,7 @@ function teardownIssuesSidebar() {
   }
 }
 
-// S3 (issues-sidebar): the repaint the bridge offers is the only thing the
+// S3 (issues-sidebar): the repaint the shell API offers is the only thing the
 // refresh reports; a host that paints by other means gets nothing extra.
 function mountIssuesSidebar(pi, api) {
   let factory;
@@ -11017,11 +10648,11 @@ function mountIssuesSidebar(pi, api) {
   }
   if (!factory || typeof factory.createIssuesSection !== "function") return;
   // T18 (S11): a mount REPLACES the binding, so the previous one is torn down
-  // before a new section exists (`/reload`, a republished bridge, a second
+  // before a new section exists (`/reload`, a republished shell API, a second
   // mount). Tearing down only once the factory is known to exist keeps a broken
   // module from costing the rail that was working.
   teardownIssuesSidebar();
-  // T15 (S9, defect 4): binding the section to the bridge is a rebinding of this
+  // T15 (S9, defect 4): binding the section to the shell API is a rebinding of this
   // cache wiring, like `/reload`; an answer a previous binding still holds must
   // not land in the new section's cache. S1 (issues-sidebar-click T1): a rebinding
   // also ends any rail open the previous binding dispatched, so it releases the
@@ -11094,25 +10725,25 @@ function mountIssuesSidebar(pi, api) {
   issuesSidebarApi = api;
 }
 
-// The bridge announces its publication on ONE event, and this package answers it
+// The shell API announces its publication on ONE event, and this package answers it
 // with ONE subscription — a second `events.on` for the same announcement would be
-// a second surface listening to one fact. Every surface the bridge contributes
+// a second surface listening to one fact. Every surface the shell API contributes
 // (the issues rail and the bash design) registers its retry here, and the one
 // announcement runs them all.
-const bridgeReadyRetries = [];
-let bridgeReadySubscribed = false;
+const shellApiReadyRetries = [];
+let shellApiReadySubscribed = false;
 
-function subscribeBridgeReady(pi, retry) {
+function subscribeShellReady(pi, retry) {
   try {
     if (typeof retry !== "function") return false;
     const events = pi && pi.events ? pi.events : null;
     if (!events || typeof events.on !== "function") return false;
-    bridgeReadyRetries.push(retry);
-    if (bridgeReadySubscribed) return true;
-    bridgeReadySubscribed = true;
+    shellApiReadyRetries.push(retry);
+    if (shellApiReadySubscribed) return true;
+    shellApiReadySubscribed = true;
     try {
       events.on(ISSUES_SIDEBAR_READY_EVENT, () => {
-        for (const run of bridgeReadyRetries.slice()) {
+        for (const run of shellApiReadyRetries.slice()) {
           try {
             run();
           } catch {
@@ -11121,8 +10752,8 @@ function subscribeBridgeReady(pi, retry) {
         }
       });
     } catch {
-      bridgeReadySubscribed = false;
-      bridgeReadyRetries.pop();
+      shellApiReadySubscribed = false;
+      shellApiReadyRetries.pop();
       return false;
     }
     return true;
@@ -11131,17 +10762,17 @@ function subscribeBridgeReady(pi, retry) {
   }
 }
 
-// The bash activity design reaches the host ONLY through gentle-shell-bridge's
-// published object (`registerToolDesign`), never an import. The bridge owns the
+// The bash activity design reaches the host ONLY through the shell API's
+// published object (`registerToolDesign`), never an import. The shell API owns the
 // renderer resolver, the `bash` customize line, its persistence and the repaint of
 // cards already on screen, so nothing here depends on extension load order.
-// Without a bridge (or one older than the API) nothing is registered.
+// Without a shell API (or one older than the API) nothing is registered.
 function registerBashDesignRows(api) {
   try {
     const design = libRequire("bash-design.js");
     if (!design || typeof design.registerBashDesign !== "function") return false;
     const disposer = design.registerBashDesign(api);
-    // Only a registration the bridge accepted arms the user prompt card: the card's
+    // Only a registration the shell API accepted arms the user prompt card: the card's
     // whole gate is this line answering with this design, so installing it where
     // nothing was registered would wrap a class for a card that can never be drawn.
     if (typeof disposer !== "function") return false;
@@ -11157,12 +10788,12 @@ function registerBashDesignRows(api) {
 // ---------------------------------------------------------------------------
 // The user's own prompt, as a card (`lib/user-prompt-card.js`).
 //
-// The bridge has no surface for a prompt, so this card is a prototype shim: Pi's
+// The shell API has no surface for a prompt, so this card is a prototype shim: Pi's
 // `UserMessageComponent.prototype.render` is wrapped. The class is resolved through
 // the same lazy dynamic `import()` every other host package here uses, never a
 // static import, and it is HANDED to the lib module, which imports nothing from Pi
 // and stays testable with a stub class. A host without that export installs
-// nothing, and the card's own gate is the bridge line the block above registers.
+// nothing, and the card's own gate is the shell API line the block above registers.
 // ---------------------------------------------------------------------------
 let bashActivityRegistered = false;
 // The epoch a deferred install belongs to, and the epoch whose import is in flight. Both are
@@ -11173,7 +10804,7 @@ let userPromptCardEpoch = 0;
 let userPromptCardPendingEpoch;
 // Whether the session that owns this shim is the live one. It starts CLOSED — Pi loads the
 // factory before any session exists — and `session_start` opens it. Every path into the host
-// package (the design registration, a `gentle-shell-bridge:ready` announcement, a load that
+// package (the design registration, a `odd-worktree:shell-ready` announcement, a load that
 // resolved late) checks it before arming and again before patching.
 let userPromptCardSessionLive = false;
 // Whether this load already owns the session boundary (the pair below). A load may arm an
@@ -11236,11 +10867,11 @@ function installUserPromptCard() {
  *
  * A session restored from history builds its whole transcript before the deferred host import
  * above resolves, so the prompts already on screen keep Pi's rows until something unrelated
- * repaints. The bridge's published `requestRepaint` is the only repaint this package may ask
- * for, and it is OPTIONAL (`gentle-shell-bridge` publishes it; an older bridge, or none, does
+ * repaints. The shell API's published `requestRepaint` is the only repaint this package may ask
+ * for, and it is OPTIONAL (the shell API publishes it; an older one, or none, does
  * not): absent member, no request. The request is made per INSTALL, never per paint, and only
  * for an install that actually happened in a session that is still live — a refused install, a
- * closed session and a bridge without the member all ask nothing. Its answer is irrelevant to
+ * closed session and a shell API without the member all ask nothing. Its answer is irrelevant to
  * the card, so the result is ignored and a throw is swallowed.
  */
 function requestPromptCardRepaint(outcome) {
@@ -11249,24 +10880,24 @@ function requestPromptCardRepaint(outcome) {
 }
 
 /**
- * The one bridge call a repaint IS, extracted so every surface that needs one asks for exactly
+ * The one shell API call a repaint IS, extracted so every surface that needs one asks for exactly
  * one the same way: the card's own install (above) and `/identity` after a successful write or
  * clear (identity-command D5).
  *
  * Nothing is asked for by a session that is not the live one — the caller's outcome may not
- * decide that, and a repaint belongs to the transcript still on screen. The bridge's member is
- * OPTIONAL and its answer is irrelevant, so an absent member, an absent bridge and a throw all
+ * decide that, and a repaint belongs to the transcript still on screen. The shell API's member is
+ * OPTIONAL and its answer is irrelevant, so an absent member, an absent shell API and a throw all
  * end the same way: no repaint, no error.
  */
 function requestPromptCardRepaintNow() {
   if (!userPromptCardSessionLive) return;
   try {
     const resolver = libRequire("file-card-resolver.js");
-    const api = resolver && typeof resolver.bridgeApi === "function" ? resolver.bridgeApi() : undefined;
+    const api = resolver && typeof resolver.shellApi === "function" ? resolver.shellApi() : undefined;
     if (api === undefined || typeof api.requestRepaint !== "function") return;
     api.requestRepaint();
   } catch {
-    // A bridge that refuses its own repaint never breaks the surface it belongs to.
+    // A shell API that refuses its own repaint never breaks the surface it belongs to.
   }
 }
 
@@ -11276,7 +10907,7 @@ function requestPromptCardRepaintNow() {
  *
  * S7: the boundary may not live behind the surface's own registration (a load whose slot check
  * failed registered no surface and therefore no shutdown hook at all, so a session that woke the
- * surface left the class wrapped), and a bridge announced during a shutdown must find a session
+ * surface left the class wrapped), and a shell API announced during a shutdown must find a session
  * that is already closed. Registering the pair is not a SURFACE registration — it contributes no
  * command, tool, section, design or card — so a load that ships nothing still ships no surface.
  *
@@ -11329,7 +10960,141 @@ function uninstallUserPromptCard() {
   }
 }
 
-// T2 (S1/S2): the `Card diff` design paints `write` and `edit` as an IDE pane in the
+// ---------------------------------------------------------------------------
+// The assistant's FINAL answer, as a card (`lib/assistant-message-card.js`).
+//
+// The shell API has no surface for an assistant message either, so this card is the second
+// drawing shim: Pi's `AssistantMessageComponent.prototype.render` is wrapped through the shim
+// both message cards share (`lib/host-render-shim.js`), with this card's OWN state cell, so the
+// two cards install and uninstall independently. The class is resolved through the same lazy
+// dynamic `import()` and HANDED to the lib module, which imports nothing from Pi. The card's
+// stats come from the live session's own history, through the `entries` seam below: it is filled
+// at `session_start` from the CURRENT session's `sessionManager` and dropped at
+// `session_shutdown`, so a paint never reads a session that is gone.
+// ---------------------------------------------------------------------------
+// The epoch a deferred install belongs to, and the epoch whose import is in flight, per epoch
+// exactly as the prompt card keeps them: a shutdown inside the import window must neither patch
+// the class nor suppress the NEXT session's install.
+let assistantMessageCardEpoch = 0;
+let assistantMessageCardPendingEpoch;
+// Whether the session that owns this shim is the live one. Closed until `session_start` opens it,
+// and checked again immediately before the patch.
+let assistantMessageCardSessionLive = false;
+// Whether this load owns the session boundary (the shutdown that unwraps the card is a
+// precondition of installing, exactly as for the prompt card).
+let assistantMessageCardLifecycleRegistered = false;
+// The CURRENT session's own history reader, or `undefined` when it has none. The lib asks it on
+// every paint; an absent, throwing or non-array answer is "no stats", never an error.
+let assistantMessageCardEntries;
+
+let assistantMessageCardHostLoader = () => import("@earendil-works/pi-coding-agent");
+
+function setAssistantMessageCardHostLoader(loader) {
+  assistantMessageCardHostLoader = loader;
+}
+
+function installAssistantMessageCard() {
+  if (!assistantMessageCardLifecycleRegistered) return;
+  if (!bashActivityRegistered || !assistantMessageCardSessionLive) return;
+  if (assistantMessageCardPendingEpoch === assistantMessageCardEpoch) return;
+  assistantMessageCardPendingEpoch = assistantMessageCardEpoch;
+  const epoch = assistantMessageCardEpoch;
+  Promise.resolve()
+    .then(() => assistantMessageCardHostLoader())
+    .then((host) => {
+      if (epoch !== assistantMessageCardEpoch || !assistantMessageCardSessionLive) return;
+      const component = host && typeof host === "object" ? host.AssistantMessageComponent : undefined;
+      if (typeof component !== "function") return;
+      const lib = libRequire("assistant-message-card.js");
+      if (!lib || typeof lib.installAssistantMessageCard !== "function") return;
+      const outcome = lib.installAssistantMessageCard({
+        component,
+        metrics: () => resolveWorktreeToolCardMetrics(),
+        entries: () => readAssistantMessageCardEntries(),
+      });
+      // The same ONE repaint an install asks for (`requestPromptCardRepaint`): the transcript a
+      // session restored was built before this import resolved, so its answers already on screen
+      // come back as cards instead of waiting for unrelated input.
+      requestPromptCardRepaint(outcome);
+    })
+    .catch(() => {
+      // A host without the class keeps Pi's own answer rows.
+    })
+    .finally(() => {
+      if (assistantMessageCardPendingEpoch === epoch) assistantMessageCardPendingEpoch = undefined;
+    });
+}
+
+/** The live history reader's answer, or `undefined`; the lib treats every failure as "no stats". */
+function readAssistantMessageCardEntries() {
+  const read = assistantMessageCardEntries;
+  if (typeof read !== "function") return undefined;
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Point the card's stats at the session that just started: its own `getEntries`, asked at paint
+ * time so a live session's new turns reach the next frame. A session manager without it leaves no
+ * reader at all, so the heading keeps the clock alone instead of inventing turns.
+ */
+function readAssistantMessageCardSession(ctx) {
+  const manager = ctx && typeof ctx === "object" ? ctx.sessionManager : undefined;
+  if (manager === null || manager === undefined || typeof manager.getEntries !== "function") {
+    assistantMessageCardEntries = undefined;
+    return;
+  }
+  assistantMessageCardEntries = () => manager.getEntries();
+}
+
+/**
+ * The assistant card's session boundary — registered ONCE per load, beside the prompt card's, with
+ * the same shape: the SHUTDOWN hook is registered FIRST (owning the teardown is a precondition of
+ * installing, so a host that refuses it gets no patch), the start hook second, and the session is
+ * marked live only by a start that a load which owns both hooks received.
+ */
+function registerAssistantMessageCardLifecycle(pi) {
+  if (assistantMessageCardLifecycleRegistered) return true;
+  if (typeof pi?.on !== "function") return false;
+  try {
+    pi.on("session_shutdown", () => {
+      assistantMessageCardSessionLive = false;
+      assistantMessageCardEntries = undefined;
+      uninstallAssistantMessageCard();
+    });
+  } catch {
+    return false;
+  }
+  try {
+    pi.on("session_start", (_event, ctx) => {
+      if (!assistantMessageCardLifecycleRegistered) return;
+      readAssistantMessageCardSession(ctx);
+      assistantMessageCardSessionLive = true;
+      installAssistantMessageCard();
+    });
+  } catch {
+    // An accepted shutdown is still ownership: the teardown exists, so a session this load opened
+    // is still unwrapped.
+  }
+  assistantMessageCardLifecycleRegistered = true;
+  return true;
+}
+
+function uninstallAssistantMessageCard() {
+  assistantMessageCardEpoch += 1;
+  assistantMessageCardPendingEpoch = undefined;
+  try {
+    const lib = libRequire("assistant-message-card.js");
+    if (lib && typeof lib.uninstallAssistantMessageCard === "function") lib.uninstallAssistantMessageCard();
+  } catch {
+    // The answer stays whatever Pi drew; nothing else of the session is touched.
+  }
+}
+
+// T2 (S1/S2): the `Card file` design paints `write` and `edit` as an IDE pane in the
 // active theme's own roles. Its syntax highlighting is the SAME seam `/files` opens
 // (`filesAgentSeam`, Pi's own `highlightCode` and `getLanguageFromPath`), resolved
 // behind a stable facade because the seam is an async import while a design is
@@ -11366,17 +11131,17 @@ function diffDesignSeamFacade() {
   };
 }
 
-// S6: a bridge without `registerToolDesign`, or one older than the release whose
+// S6: a shell API without `registerToolDesign`, or one older than the release whose
 // per-(`line`, `tool`) claim lets a second line name `write` and `edit`, gets NO
 // registration and no seam work at all: the seam is warmed only AFTER a registration
-// the bridge accepted, so nothing is offered for a row the bridge would refuse, no
+// the shell API accepted, so nothing is offered for a row the shell API would refuse, no
 // import is started for it, and the host keeps drawing its own card.
 function registerDiffDesignRows(api) {
   try {
     const design = libRequire("diff-design.js");
     if (!design || typeof design.registerDiffDesign !== "function") return;
     if (api === null || typeof api !== "object" || typeof api.registerToolDesign !== "function") return;
-    if (design.bridgeSupportsDiffLine(api) !== true) return;
+    if (design.shellApiSupportsDiffLine(api) !== true) return;
     const registered = design.registerDiffDesign(api, diffDesignSeamFacade());
     if (registered === null) return;
     // Warm the seam once, at registration (a session start), so the first card that
@@ -11393,11 +11158,12 @@ function registerDiffDesignRows(api) {
   }
 }
 
-// modular-tools: the two module switches. `Codegraph+` and `Worktrees+` live on the
-// bridge's own `Tools` page as plain Off/On rows (`lib/modules.js`), persisted in this
+// modular-tools: the module switches. `Codegraph+`, `Worktrees+` and `Skills+` live on
+// the shell API's own `Tools` page as plain Off/On rows (`lib/modules.js`), persisted in this
 // package's store. They are read ONCE per registration episode, below: a change lands on
-// the next load, and the row says so through the session's own notifier.
-let oddModules = { codegraph: true, worktrees: true };
+// the next load, and the row says so through the session's own notifier. `Skills+` is the
+// one switch that is OFF until someone turns it on; the other two are on until turned off.
+let oddModules = { codegraph: true, worktrees: true, skills: false };
 
 function notifyModulesChange(text) {
   const ui = issuesSidebarCtx && issuesSidebarCtx.ui;
@@ -11410,7 +11176,25 @@ function registerModuleRows(api) {
     const modules = libRequire("modules.js");
     api.registerRows(modules.moduleRowsProvider({ api, notify: notifyModulesChange }));
   } catch {
-    // The page is optional: a bridge that refuses it keeps both modules on.
+    // The page is optional: a shell API that refuses it keeps both modules on.
+  }
+}
+
+// card-message: the ONE `Card message` Off/On line on the shell API's own `Cards` page
+// (`lib/card-message.js`). It gates the user prompt card — and, later, the assistant's final
+// answer and the `## User identity` prompt section — read live on every paint, so a change
+// applies at once: the row's own action asks the shell API for the repaint and says nothing.
+// Registered beside the other row providers, on the same published object and in the same
+// episode, so a republished shell API gets it again.
+function registerCardMessageRows(api) {
+  try {
+    if (!api || typeof api.registerRows !== "function") return;
+    const cardMessage = libRequire("card-message.js");
+    if (!cardMessage || typeof cardMessage.cardMessageRowsProvider !== "function") return;
+    api.registerRows(cardMessage.cardMessageRowsProvider({ api }));
+  } catch {
+    // The line is optional: a shell API that refuses it leaves `Card message` at its
+    // documented default, On.
   }
 }
 
@@ -11455,7 +11239,7 @@ function opencodePeakAlertEnabled(providerId) {
 	const mode = opencodeAlertLib("alert-mode.js");
 	if (!mode || typeof mode.readPeakAlert !== "function") return false;
 	try {
-		return mode.readPeakAlert(issuesSidebarBridge(), providerId) === true;
+		return mode.readPeakAlert(issuesSidebarShellApi(), providerId) === true;
 	} catch {
 		return false;
 	}
@@ -11553,7 +11337,7 @@ function registerAlertRows(api) {
 			}),
 		);
 	} catch {
-		// The page is optional: a bridge that refuses it leaves every row gated by the
+		// The page is optional: a shell API that refuses it leaves every row gated by the
 		// documented default alone.
 	}
 }
@@ -11570,23 +11354,24 @@ function teardownOpenCodePeakAlert() {
 	opencodeAlertWidgetUi = null;
 }
 
-// S2 (issues-sidebar): the section reaches the rail ONLY through the bridge's
+// S2 (issues-sidebar): the section reaches the rail ONLY through the shell API's
 // published object. A host without it is subscribed to the ready announcement
 // ONCE and nothing else happens: no notify, no throw, no other surface touched.
 // The bash design takes the same two paths, so one subscription carries every
-// bridge surface this package contributes.
+// shell API surface this package contributes.
 function registerIssuesSidebar(pi) {
   try {
-    const api = issuesSidebarBridge();
+    const api = issuesSidebarShellApi();
     if (api !== null) {
-      // T18 (S11): the SAME published object is the same bridge, so a second
+      // T18 (S11): the SAME published object is the same shell API, so a second
       // moment (a `session_start` after a `session_shutdown` disposed the
       // section) binds the rail again only when it has no section; otherwise it
-      // contributes nothing twice. A DIFFERENT object is a republished bridge:
+      // contributes nothing twice. A DIFFERENT object is a republished shell API:
       // its surfaces are registered on it and the previous binding is replaced,
       // with `mountIssuesSidebar` tearing the old section down first.
       if (api !== issuesSidebarApi) {
         registerModuleRows(api);
+        registerCardMessageRows(api);
         registerAlertRows(api);
         registerBashDesignRows(api);
         registerDiffDesignRows(api);
@@ -11603,7 +11388,7 @@ function registerIssuesSidebar(pi) {
       return;
     }
     if (issuesSidebarSubscribed) return;
-    const subscribed = subscribeBridgeReady(pi, () => {
+    const subscribed = subscribeShellReady(pi, () => {
       try {
         registerIssuesSidebar(pi);
       } catch {
@@ -11612,13 +11397,13 @@ function registerIssuesSidebar(pi) {
     });
     if (subscribed) issuesSidebarSubscribed = true;
   } catch {
-    // The rail is optional: a broken bridge never breaks this extension.
+    // The rail is optional: a broken shell API never breaks this extension.
   }
 }
 
 // ---------------------------------------------------------------------------
 // The ODD rail (odd-rail-section T4: S1, S2, S5, S6, S9, S12, S13). A SECOND
-// section beside the issues one, answered by the same bridge object and by the
+// section beside the issues one, answered by the same shell API object and by the
 // package's own `lib/odd-rail-section.js` factory. It is the sibling of
 // `registerIssuesSidebar` above, not a part of it: same gate, same subscription,
 // same teardown, different read.
@@ -11626,7 +11411,7 @@ function registerIssuesSidebar(pi) {
 // The corrected S7 is the reason nothing below reads `oddModules.worktrees`: the
 // rail is driven by the worktrees REGISTERED in this session (the `worktree_register`
 // entries `filesSessionWorktreeRoots` reads, the same reader the files panel uses),
-// so it works with Worktrees+ off. The ONE gate is the bridge having published a
+// so it works with Worktrees+ off. The ONE gate is the shell API having published a
 // compatible object — without it there is no rail to register.
 //
 // S9/S13: the rows are the grouped model's, scoped to the registered set, one row per
@@ -11643,7 +11428,7 @@ const ODD_RAIL_OPEN_GUARD_MS = 10000;
 const ODD_RAIL_DISPATCH_FAILED = "the /odd command could not be dispatched";
 
 // The live binding, torn down and remade exactly like the issues one: `oddRailHandle`
-// owns the section's floor timer, `oddRailDisposer` is the bridge's own unregister
+// owns the section's floor timer, `oddRailDisposer` is the shell API's own unregister
 // for it, and `oddRailApi` is the published object the section was registered on.
 let oddRailHandle = null;
 let oddRailDisposer = null;
@@ -11790,7 +11575,7 @@ function subscribeOddRailWorktreesChanged(pi) {
   }
 }
 
-// T18's teardown, for this section: the bridge's unregister first, then the
+// T18's teardown, for this section: the shell API's unregister first, then the
 // section's own `dispose()`, each guarded on its own so a teardown that throws still
 // leaves the caller free to register the replacement. The slots are cleared BEFORE
 // either call, so a re-entrant teardown cannot run twice and nothing keeps pointing
@@ -11807,7 +11592,7 @@ function teardownOddRail() {
     try {
       disposer();
     } catch {
-      // A bridge that refuses the unregister still gets its section disposed.
+      // A shell API that refuses the unregister still gets its section disposed.
     }
   }
   if (handle !== null && typeof handle.dispose === "function") {
@@ -11827,7 +11612,7 @@ function mountOddRail(pi, api) {
     return;
   }
   if (!factory || typeof factory.createOddRailSection !== "function") return;
-  // A mount REPLACES the binding (`/reload`, a republished bridge, a second mount).
+  // A mount REPLACES the binding (`/reload`, a republished shell API, a second mount).
   teardownOddRail();
   const onRefreshed = typeof api.requestRepaint === "function"
     ? () => {
@@ -11866,7 +11651,7 @@ function mountOddRail(pi, api) {
 }
 
 // T10 (S13): the session boundary for a rail that SURVIVES it. The section is torn
-// down on shutdown only, so a session_start on the same bridge would otherwise keep
+// down on shutdown only, so a session_start on the same shell API would otherwise keep
 // the PREVIOUS session's rows until the one-minute TTL happened to expire. Dropping
 // the snapshot here makes the next drawn frame reload — new, resumed, forked and
 // reloaded alike, because they all arrive through the one `session_start` hook.
@@ -11881,7 +11666,7 @@ function invalidateOddRail() {
   }
 }
 
-// The rail reaches the host ONLY through the published bridge object — the same gate
+// The rail reaches the host ONLY through the published shell API object — the same gate
 // the issues section uses, and the ONLY one: nothing here reads `oddModules`. A host
 // without the object is subscribed to the ready announcement ONCE and nothing else
 // happens (no notify, no throw, no other surface touched).
@@ -11891,19 +11676,19 @@ function registerOddRail(pi) {
     // once for the section's whole life and guarded like every other `pi.events`
     // listener here.
     subscribeOddRailWorktreesChanged(pi);
-    const api = issuesSidebarBridge();
+    const api = issuesSidebarShellApi();
     if (api !== null) {
-      // The SAME published object is the same bridge, so a second moment (a
+      // The SAME published object is the same shell API, so a second moment (a
       // `session_start` after a shutdown tore the section down) binds the rail again
       // only when it has no section; otherwise it contributes nothing twice. A
-      // DIFFERENT object is a republished bridge, and `mountOddRail` replaces the
+      // DIFFERENT object is a republished shell API, and `mountOddRail` replaces the
       // previous binding.
       if (api === oddRailApi && oddRailHandle !== null) return;
       mountOddRail(pi, api);
       return;
     }
     if (oddRailSubscribed) return;
-    const subscribed = subscribeBridgeReady(pi, () => {
+    const subscribed = subscribeShellReady(pi, () => {
       try {
         registerOddRail(pi);
       } catch {
@@ -11912,7 +11697,7 @@ function registerOddRail(pi) {
     });
     if (subscribed) oddRailSubscribed = true;
   } catch {
-    // The rail is optional: a broken bridge never breaks this extension.
+    // The rail is optional: a broken shell API never breaks this extension.
   }
 }
 
@@ -11975,7 +11760,7 @@ function bindFilesShortcut(pi) {
 // as a command with no key at all.
 const ISSUES_KEYMAP_ENV = "GENTLE_PI_ISSUES_KEY";
 // S5 (round L2): `alt+i` is the human's own call, exactly as `alt+p` was (S41),
-// and it is bound the same way: on the host, once, never through the bridge.
+// and it is bound the same way: on the host, once, never through the shell API.
 const ISSUES_KEYMAP_DEFAULT = "alt+i";
 const ISSUES_SHORTCUT_DESCRIPTION = "Open the issues panel: three scoped tabs, a filter and edits when permitted";
 
@@ -12076,7 +11861,7 @@ function issuesSidebarWasDrawn() {
 // sibling rule for the rail), and it runs only for the SAME section the host was
 // actually painting: a hidden, brand-new or re-mounted section starts its read
 // on the first DRAW, exactly as before, so nothing here spawns a child for a
-// section nobody sees, and a teardown-and-remount (a republished bridge) never
+// section nobody sees, and a teardown-and-remount (a republished shell API) never
 // adds a second read behind the replacement's own first draw.
 function preloadIssuesSidebar(handleBefore, wasDrawn) {
   if (handleBefore === null || wasDrawn !== true) return;
@@ -12167,7 +11952,7 @@ function oddSessionStillCurrent(ctx) {
   return event === undefined || event === current;
 }
 // ---------------------------------------------------------------------------
-// S18 (T14, L13; native-bridge T5): the shell API is this package's OWN code.
+// S18 (T14, L13; native-shell API T5): the shell API is this package's OWN code.
 // `lib/shell-api/` holds it as ordinary modules, never a nested package, and importing it —
 // the static import at the top of this file — publishes the compatible API object at the
 // process-global slot BEFORE any `session_start`, so the rail, the bash design, the `Cards`
@@ -12182,7 +11967,7 @@ function oddSessionStillCurrent(ctx) {
 // the foreign object as a notice instead. Nothing retries it either: the slot is read once
 // per factory call and the observer that used to wait for a later publication is gone.
 //
-// `subscribeBridgeReady` stays (the rail and the bash design rebind on a
+// `subscribeShellReady` stays (the rail and the bash design rebind on a
 // republished object, which is generic and harmless), and nothing may register
 // twice, whichever moment arrives first.
 let oddSurfaceRegistered = false;
@@ -12192,8 +11977,8 @@ let oddSurfaceRegistered = false;
 function registerOddWorktreeSurface(pi) {
   if (oddSurfaceRegistered) return false;
   // The slot is the precondition: an absent or incompatible published object is
-  // not a bridge this package may load on.
-  if (issuesSidebarBridge() === null) return false;
+  // not a shell API this package may load on.
+  if (issuesSidebarShellApi() === null) return false;
   oddSurfaceRegistered = true;
   try {
     registerOddWorktreeSurfaceEntries(pi);
@@ -12208,13 +11993,13 @@ export default function (pi) {
   // `/reload` and expects the same surfaces again, which is why the episode starts
   // HERE, so nothing can register the surface twice.
   oddSurfaceRegistered = false;
-  // S2/S3 (native-bridge T5): this package's own shell API factory FIRST. It republishes the
+  // S2/S3 (native-shell API T5): this package's own shell API factory FIRST. It republishes the
   // slot object and announces it on `pi.events`, and on `session_start` it arms the rows, the
   // rail and the card designs, so those surfaces exist before any part of this package looks for
   // the object. A shell API that throws on the way out is never fatal: every other surface of
   // this package still loads.
   try {
-    bridgeExtension(pi);
+    shellApiExtension(pi);
   } catch {
     // The shell API is this package's own code, but its failure still leaves the rest alone.
   }
@@ -12222,10 +12007,12 @@ export default function (pi) {
   // gate; an absent or INCOMPATIBLE slot (another plugin published first) leaves this
   // package's surface unregistered. Nothing is said here: the shell API records the foreign
   // object itself as a notice.
-  if (issuesSidebarBridge() !== null) {
+  if (issuesSidebarShellApi() !== null) {
     // S7: the prompt card's session boundary is owned here, before the surface registers, so
-    // this load always has the shutdown hook that closes the session it belongs to.
+    // this load always has the shutdown hook that closes the session it belongs to. The
+    // assistant card's boundary is its own pair beside it, so each card unwraps independently.
     registerUserPromptCardLifecycle(pi);
+    registerAssistantMessageCardLifecycle(pi);
     registerOddWorktreeSurface(pi);
   }
 }
@@ -12234,13 +12021,16 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
   // moves the session, so the command is where a handoff waits and lands.
   warpHandoffPi = pi;
-  // modular-tools: the two module switches are read ONCE, here. `Worktrees+` off leaves
+  // modular-tools: the three module switches are read ONCE, here. `Worktrees+` off leaves
   // out everything worktree below — the tools, `/warp` with its card and bookkeeping, the
-  // guards and the prompt text; `Codegraph+` off leaves out the CodeGraph wiring and text.
+  // worktree guards (the active-session guard included) and the prompt text; `Codegraph+`
+  // off leaves out the CodeGraph wiring and text; `Skills+` off, its own default, leaves out
+  // the two skill-read rules. The fallback is the same shape, with `Skills+` off like an
+  // unset switch: a store that cannot be read keeps the package whole and the read rules out.
   try {
-    oddModules = libRequire("modules.js").readModules(issuesSidebarBridge());
+    oddModules = libRequire("modules.js").readModules(issuesSidebarShellApi());
   } catch {
-    oddModules = { codegraph: true, worktrees: true };
+    oddModules = { codegraph: true, worktrees: true, skills: false };
   }
   // opencode-usage-alert: the OpenCode Go source registers at load AND at every
   // session start, so either load order works and a session switch re-targets the
@@ -12258,8 +12048,8 @@ function registerOddWorktreeSurfaceEntries(pi) {
   if (oddModules.worktrees) registerWarpQueueEntryRenderer(pi);
   // S9 (T10): the issues-panel refusal's one visible fallback line.
   registerIssuesRefusalEntryRenderer(pi);
-  // S2 (issues-sidebar): the rail section, only when gentle-shell-bridge
-  // published its API; otherwise one ready-announcement subscription. The same
+  // S2 (issues-sidebar): the rail section, only when the shell API
+  // is published; otherwise one ready-announcement subscription. The same
   // path contributes the bash activity design.
   registerIssuesSidebar(pi);
   // T4 (odd-rail-section): the ODD rail, a second section on the SAME published
@@ -12272,7 +12062,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // overlays, reads Git through the package's async runner and adds no tool.
   registerFilesCommand(pi);
   // identity-command (S1/S2/S4): the user's own name, transversal like the picker —
-  // it is registered wherever the bridge is and takes no module switch.
+  // it is registered wherever the shell API is and takes no module switch.
   registerIdentityCommand(pi);
   // S36 (files-picker T15): the picker's ONE key, bound directly on the host and
   // bound once — `alt+p` (S41) unless `GENTLE_PI_FILES_KEY` says otherwise.
@@ -12313,7 +12103,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // returns at once — on every session start and every session switch — and it
   // resolves the checkout first, so outside a repository it does not even start a
   // `gh` child. The handler is therefore NOT `async`.
-  // S36 (files-picker T15): the picker's key is no longer a bridge contribution
+  // S36 (files-picker T15): the picker's key is no longer a shell API contribution
   // that a later moment retries — it is bound ONCE at load through the host's own
   // `registerShortcut`, so this boundary has nothing of the picker's to do.
   pi.on("session_start", (event, ctx) => {
@@ -12342,9 +12132,9 @@ function registerOddWorktreeSurfaceEntries(pi) {
     const railHandleBefore = issuesSidebarHandle;
     const railWasDrawn = issuesSidebarWasDrawn();
     invalidateIssuesSidebar();
-    // T18 (S11): a shutdown disposed the section, and a republished bridge is a
+    // T18 (S11): a shutdown disposed the section, and a republished shell API is a
     // new binding. This is the moment both are picked up again; with a live
-    // section on the same bridge it is a no-op.
+    // section on the same shell API it is a no-op.
     registerIssuesSidebar(pi);
     // T4 (odd-rail-section): the same moment for the ODD rail, for the same reason.
     // T10 (S13): and the rows belong to the session that read them — a rail that
@@ -12411,7 +12201,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
     issuesSidebarCtx = null;
     // T18 (S11): the session that is ending leaves no floor timer behind. The
     // snapshot was dropped by `invalidateIssuesSidebar` above and the binding is
-    // ended here: the bridge's unregister and the section's own `dispose()`, so a
+    // ended here: the shell API's unregister and the section's own `dispose()`, so a
     // frame the host still paints after shutdown arms nothing and reads nothing.
     teardownIssuesSidebar();
     // T4 (odd-rail-section): the ODD rail goes with the session it read for, and
@@ -12436,12 +12226,9 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // opencode-usage-alert: a turn can cross a peak boundary, and the next one re-reads
   // the clock. It also settles the row right after the switch's own action.
   pi.on("turn_end", () => syncOpenCodePeakAlert());
-  if (oddModules.worktrees) pi.on("tool_call", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi));
   // S1/S3/S4/S9: the worktree guard, the first `tool_call` observation that refuses a
-  // `bash` command instead of observing it. It sits beside the naming handler and is
-  // one of the two handlers that return a `block` answer — the skill-read guard, below,
-  // is the other; every other tool call is left exactly as the host proposed it. Nothing
-  // about it is callable by the agent (S7).
+  // `bash` command instead of observing it. Nothing about the guard is callable
+  // by the agent (S7).
   if (oddModules.worktrees) pi.on("tool_call", (event, ctx) => guardWorktreeBashCall(event, ctx));
   // S4 (T3): the write guard, a second `tool_call` observation that refuses an `edit`
   // or `write` into the primary checkout while it sits on the default branch. It is a
@@ -12453,18 +12240,16 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // command text only, shares the same `ODD_WORKTREE_GUARD=0` switch, and adds no
   // command, tool, option or setting of its own.
   // invariant 22 (S5 of skill-read-full): the skill-read guard is the second refusal — a
-  // `bash` reader pointed at a skill file — and it follows the `Worktrees+` module, like every
-  // other guard here: with that module off, neither refusal nor the read rule below exists.
-  if (oddModules.worktrees) pi.on("tool_call", (event) => guardSkillReadBashCall(event));
+  // `bash` reader pointed at a skill file — and it follows the `Skills+` module: the two
+  // read rules are their own half, so `Worktrees+` off leaves them alone and `Skills+` off —
+  // its default — leaves them out without touching any worktree surface.
+  if (oddModules.skills) pi.on("tool_call", (event) => guardSkillReadBashCall(event));
   // S1/S2/S5 (skill-read-full): the other half of the same rule — a skill's or an ODD's
   // Markdown is read whole, so a `read` that pages through one has its range dropped before
-  // the host runs it. Same switch: with `Worktrees+` off, a read is left as the host proposed it.
-  if (oddModules.worktrees) pi.on("tool_call", (event) => keepSkillReadWholeCall(event));
-  if (oddModules.worktrees) pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
-  // S8/S9 (T8): the ODD documents THIS session wrote or edited. It is a THIRD
-  // `tool_result` observation beside the naming one — the two answer different
-  // questions about the same event — and it is `tool_result` on purpose: a write that
-  // never landed is not a touch. Nothing here draws: the record is what the rail's
+  // the host runs it. Same switch: with `Skills+` off, a read is left as the host proposed it.
+  if (oddModules.skills) pi.on("tool_call", (event) => keepSkillReadWholeCall(event));
+  // S8/S9 (T8): the ODD documents THIS session wrote or edited. This observes
+  // `tool_result` on purpose: a write that never landed is not a touch. Nothing here draws: the record is what the rail's
   // section reads (T4). It is deliberately NOT gated by `Worktrees+`: the rail's ODD
   // list belongs to that module, so the attribution must already be recording when the
   // module is off. Every worktree observation above and below keeps its own gate.
@@ -12610,20 +12395,24 @@ function registerOddWorktreeSurfaceEntries(pi) {
     }
   }
   // S1 (T2): the file cards, through the same host hook. A `read`/`edit`/`write` call whose
-  // path names a skill or an ODD artifact heads as that file while the bridge's `Card activity`
-  // line answers with this package's activity design; every other call keeps the host's own
-  // boxed row, which the card reproduces because the hook decides per tool name and never
-  // sees the arguments. No preference of ours is registered: the gate is the bridge's own
-  // published reader, asked on every paint. A host without `pi.registerToolRenderer`
-  // registers nothing and keeps drawing them itself.
+  // path names a skill or an ODD artifact heads as that file while the shell API's `Card activity`
+  // line answers with this package's activity design. A `read` of any OTHER path is this card's too,
+  // while the shell API's `Card file` line answers with the `color` design — that line does not claim
+  // `read`, it supplies that read's selection, so one read is still drawn once. Every other call
+  // keeps the host's own boxed row, which the card reproduces because the hook decides per tool name
+  // and never sees the arguments. No preference of ours is registered: the gates are the shell API's
+  // own published reader, asked on every paint. `agent` is the same Pi highlighter and language
+  // mapper facade `/files` and the `Card file` pane read, so a read is syntax-highlighted by the very
+  // seam the write pane uses; without it that body is drawn plain, never not at all. A host without
+  // `pi.registerToolRenderer` registers nothing and keeps drawing them itself.
   try {
-    libRequire("file-card-resolver.js").registerFileCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
+    libRequire("file-card-resolver.js").registerFileCard(pi, { metrics: () => resolveWorktreeToolCardMetrics(), agent: diffDesignSeamFacade() });
   } catch {
     // The card is cosmetic.
   }
   // The jobs card, through the same host hook: `bash_background`, `monitor`, `job_stop` and
   // `job_list` have no renderer of their own, so Pi draws a plain box and the conversation's
-  // card style never reaches them. While the bridge's `Card activity` line answers with this
+  // card style never reaches them. While the shell API's `Card activity` line answers with this
   // package's activity design for the tool, they are drawn on the card substrate in the
   // shell's own style; any other answer leaves Pi's drawing exactly as it was.
   try {
@@ -12632,7 +12421,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
     // The card is cosmetic.
   }
   // The CodeGraph card, through the same host hook and OUTSIDE both module switches: it paints a
-  // call, it does not run CodeGraph, so what decides it is the bridge's `Card activity` line — the
+  // call, it does not run CodeGraph, so what decides it is the shell API's `Card activity` line — the
   // `activity` value the file cards, the jobs card and the two message cards already follow —
   // asked on every paint. `Codegraph+` turns the CodeGraph wiring off and leaves this card alone;
   // `native` leaves every one of these rows exactly as the chain drew it.
@@ -12644,12 +12433,12 @@ function registerOddWorktreeSurfaceEntries(pi) {
   } catch {
     // The card is cosmetic.
   }
-  // The two ODD advisory MESSAGES, on the bridge's message-design surface: `gentle-pi.exploration-budget`
+  // The two ODD advisory MESSAGES, on the shell API's message-design surface: `gentle-pi.exploration-budget`
   // and `gentle-pi.verifier-settle-reminder` are custom messages no extension renders, so Pi draws its
   // default box. Each design FOLLOWS the `Card activity` line above, so the `activity` value that already
   // paints the jobs card paints both alerts too: no second switch, no row added to `Cards`, and the
   // follow is resolved on every pass, so a flip repaints — and turns off — what is already on screen.
-  // A bridge that cannot express a follow registers nothing at all: an older one would create a
+  // A shell API that cannot express a follow registers nothing at all: an older one would create a
   // `Message <type>` switch of its own, which is the parallel switch this package refuses to add.
   try {
     libRequire("message-card.js").registerMessageCards({ metrics: () => resolveWorktreeToolCardMetrics() });
@@ -12675,4 +12464,4 @@ function registerOddWorktreeSurfaceEntries(pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setUserPromptCardHostLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule, oddSession, oddAssociated, setOddSessionRefresh };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setUserPromptCardHostLoader, setAssistantMessageCardHostLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule, oddSession, oddAssociated, setOddSessionRefresh };

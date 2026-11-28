@@ -1,7 +1,7 @@
 /**
  * Optional namespaced store (S5, S8; docs/state.md).
  *
- * `<bridge config home>/<pluginId>.json`, one file per plugin, written atomically. The bridge
+ * `<shell API config home>/<pluginId>.json`, one file per plugin, written atomically. The shell API
  * composes rows; it does not own preferences, so this is a convenience for a plugin that has no
  * file of its own. `registerRows` never reads or writes these files.
  *
@@ -22,13 +22,13 @@
  * its other keys. For an unknown `schemaVersion` the write stores only the keys the caller sets —
  * re-labelling a future payload as schema 1 would be a lie about its format — and the discarded
  * payload is recorded as a store problem so the diagnostics record shows what happened. Foreign
- * top-level keys are always dropped, because the bridge cannot know what they mean.
+ * top-level keys are always dropped, because the shell API cannot know what they mean.
  */
 
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { getBridgeConfigHome } from "./config.ts";
+import { getShellApiConfigHome } from "./config.ts";
 import { isRecord } from "./rows.ts";
 
 /** Current document schema, an integer so a later shape change can migrate. */
@@ -40,7 +40,7 @@ export type StoreProblemKind =
   | "unsupported-schema-version"
   | "unreadable";
 
-/** A store file the bridge could not use, surfaced by `status` (S6). */
+/** A store file the shell API could not use, surfaced by `status` (S6). */
 export interface StoreProblem {
   pluginId: string;
   path: string;
@@ -58,7 +58,7 @@ export interface Store {
   set(key: string, value: unknown): void;
 }
 
-const STORE_STATE = Symbol.for("gentle-shell-bridge.store.state.v1");
+const STORE_STATE = Symbol.for("odd-worktree.store.state.v1");
 
 interface StoreState {
   /** Latest problem per plugin id, in first-report order. */
@@ -108,7 +108,7 @@ function clearProblem(pluginId: string): void {
 
 /**
  * Create the store for one plugin. The id is validated before any filesystem access: it must be a
- * non-empty single path segment, so it can never name a file outside the bridge directory.
+ * non-empty single path segment, so it can never name a file outside the shell API directory.
  * Invalid ids throw; they are never silently sanitised.
  */
 export function createStore(pluginId: string): Store {
@@ -159,7 +159,7 @@ export function createStore(pluginId: string): Store {
         read.problem !== undefined &&
         read.problem.kind === "unsupported-schema-version"
       ) {
-        // The write dropped a payload the bridge could not interpret; keep that fact visible.
+        // The write dropped a payload the shell API could not interpret; keep that fact visible.
         recordProblem({
           ...read.problem,
           message: `${read.problem.message}; its payload was discarded by this write, which stored only the keys set afterwards`,
@@ -176,7 +176,7 @@ let writeCounter = 0;
 function resolveStorePath(pluginId: string): string {
   const reject = (reason: string): never => {
     throw new Error(
-      `gentle-shell-bridge: invalid plugin id ${JSON.stringify(pluginId)}: ${reason}. ` +
+      `odd-worktree: invalid plugin id ${JSON.stringify(pluginId)}: ${reason}. ` +
         "A plugin id must be one non-empty path segment (no separators, no '.' or '..').",
     );
   };
@@ -187,10 +187,10 @@ function resolveStorePath(pluginId: string): string {
   if (pluginId.includes("/") || pluginId.includes("\\")) reject("it contains a path separator");
   if (pluginId.includes("..")) reject("it contains '..'");
 
-  const directory = getBridgeConfigHome();
+  const directory = getShellApiConfigHome();
   const path = join(directory, `${pluginId}.json`);
-  // Defence in depth: even a future id rule cannot place the file outside the bridge directory.
-  if (dirname(path) !== directory) reject("it resolves outside the bridge directory");
+  // Defence in depth: even a future id rule cannot place the file outside the shell API directory.
+  if (dirname(path) !== directory) reject("it resolves outside the shell API directory");
   return path;
 }
 
@@ -245,7 +245,7 @@ function readValues(pluginId: string, path: string): ReadResult {
 
   if (parsed.schemaVersion !== STORE_SCHEMA_VERSION) {
     return {
-      // An unknown schema's payload is NOT carried forward: the bridge cannot know its meaning,
+      // An unknown schema's payload is NOT carried forward: the shell API cannot know its meaning,
       // so a write must not re-label it as schema 1. It is reported instead (see `set`).
       values: {},
       carriesValues: false,

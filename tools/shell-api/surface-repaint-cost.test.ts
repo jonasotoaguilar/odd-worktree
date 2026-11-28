@@ -1,5 +1,5 @@
 /**
- * S19/T35–T36 — the WORK a bridge-owned switch does, counted instead of timed.
+ * S19/T35–T36 — the WORK a shell API-owned switch does, counted instead of timed.
  *
  * `requestSurfaceRepaint` used to be `tui.invalidate()` + `requestRender(force = true)`. Measuring
  * that against a differential frame on REAL pi components (T35, the tables in `src/repaint.ts`) says
@@ -14,7 +14,7 @@
  *   every pass (`src/card-style-wiring.ts` → `src/card-style-transform.ts`), so a component that
  *   answers from its own cache is restyled just the same;
  * - the RAIL is framed by the same wrapper over the host's rail component, so a host memo answering
- *   from its cache is restyled too; and a SECTION toggle moves the bridge's own section digest,
+ *   from its cache is restyled too; and a SECTION toggle moves the shell API's own section digest,
  *   which the host's memo already keys on (`src/sidebar-render.ts` `sectionRailDigest`), while the
  *   revision bump the request keeps is the host's documented part-owner step;
  * - a HOST style is inside the host card's own frame key (`cards-bash-v2`
@@ -137,7 +137,7 @@ interface Counters {
   proseInvalidations: number;
   /** A prose row re-parsed because its cache was empty. */
   proseCacheMisses: number;
-  /** A card's `invalidate()` ran (the bridge's old path called it on every mounted card). */
+  /** A card's `invalidate()` ran (the shell API's old path called it on every mounted card). */
   cardInvalidations: number;
   /** The host card's renderer ran (it may answer from its own cache). */
   hostRenders: number;
@@ -180,7 +180,7 @@ function proseRow(text: string, counted: Counters): { render(width: number): str
 /**
  * A host bash card whose renderer caches its frame the way `ToolCardRows` does
  * (`cards-bash-v2` `extensions/quiet-tools.ts:942-965`): keyed on width and the HOST's own style.
- * The bridge's style is not in that key — which is why the wrapper post-processes whatever rows the
+ * The shell API's style is not in that key — which is why the wrapper post-processes whatever rows the
  * host answers with instead of the tree being invalidated.
  */
 function hostCard(counted: Counters, world: { hostStyle: string }): {
@@ -322,7 +322,7 @@ const ctx = (): RowContext => ({ theme: undefined, configHome });
 async function pressStyle(value: string): Promise<void> {
   installCardStyleRows();
   const provider = snapshotProviders().find((entry) => entry.id === CARD_STYLE_ROWS_PROVIDER_ID);
-  assert.ok(provider !== undefined, "the bridge registers the fallback Card style line");
+  assert.ok(provider !== undefined, "the shell API registers the fallback Card style line");
   const row: CustomizeRow | undefined = provider
     .rows(ctx())
     .find((candidate) => candidate.choice?.value === value);
@@ -334,7 +334,7 @@ async function pressStyle(value: string): Promise<void> {
 async function pressSection(value: "shown" | "hidden"): Promise<void> {
   installSectionRows();
   const provider = snapshotProviders().find((entry) => entry.id === SECTION_ROWS_PROVIDER_ID);
-  assert.ok(provider !== undefined, "the bridge registers its own Sections provider");
+  assert.ok(provider !== undefined, "the shell API registers its own Sections provider");
   const row: CustomizeRow | undefined = provider
     .rows(ctx())
     .find((candidate) => candidate.choice?.value === value);

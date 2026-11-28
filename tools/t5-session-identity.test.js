@@ -28,7 +28,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { LIB_DIR, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
+const { SHELL_SLOT, LIB_DIR, defaultShellApi, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
 
 const guard = require('../lib/worktree-session-guard.js');
 
@@ -324,5 +324,108 @@ describe('S7 identity join through the removal the panel drives', () => {
       `every caveat is disclosed as best effort: ${JSON.stringify(closed.details.warnings)}`,
     );
     assert.equal(fs.existsSync(target), false, 'the notice never blocks the removal');
+  });
+});
+
+// modular-tools (`Worktrees+`): the active-session guard belongs to the worktree half —
+// the switch that owns the removal owns the check in front of it. With that module off the
+// close path is not registered anywhere, and the check reports nothing to refuse instead of
+// reading a store for a surface this load never registered. With it on, the same live peer
+// refuses the same removal.
+describe('the `Worktrees+` switch owns the active-session guard', () => {
+  const savedEnv = { ...process.env };
+  const HOME = agentHome();
+
+  before(() => {
+    delete process.env.GENTLE_PI_AGENT_HOME;
+    process.env.PI_CODING_AGENT_DIR = HOME;
+    process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
+  });
+
+  after(() => {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in savedEnv)) delete process.env[key];
+    }
+    for (const [key, value] of Object.entries(savedEnv)) process.env[key] = value;
+  });
+
+  // The module namespace for one setting of the switch: the shell API's own store answers the
+  // `modules` document, exactly like the real one. `factory(host)` is called because the
+  // switches are read while the extension registers, not when the module is imported — the
+  // close below is the same namespace instance the load just configured.
+  async function closeWith(modules) {
+    const shellApi = defaultShellApi();
+    shellApi.api.createStore = () => ({
+      get: (key, fallback) => (key === 'modules' && modules !== undefined ? modules : fallback),
+      set: () => {},
+      delete: () => {},
+    });
+    globalThis[SHELL_SLOT] = shellApi.api;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 't5-identity-gate-'));
+    try {
+      const copy = path.join(dir, 'odd-worktree-tools.mjs');
+      fs.writeFileSync(copy, stubbedSource());
+      const factory = (await import(pathToFileURL(copy).href)).default;
+      factory({
+        registerCommand: () => {},
+        registerTool: () => {},
+        registerMessageRenderer: () => {},
+        registerEntryRenderer: () => {},
+        appendEntry: () => {},
+        on: () => {},
+      });
+      return await import(pathToFileURL(copy).href);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  function makeRepo(tag) {
+    const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), `t5-identity-gate-repo-${tag}-`)));
+    const gitAt = (cwd, args) => {
+      const out = spawnSync('git', args, { cwd, encoding: 'utf8' });
+      if (out.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${out.stderr}`);
+      return out.stdout.trim();
+    };
+    gitAt(dir, ['init', '-b', 'main']);
+    gitAt(dir, ['config', 'user.email', 'test@example.test']);
+    gitAt(dir, ['config', 'user.name', 'Test']);
+    fs.writeFileSync(path.join(dir, 'README.md'), '# fixture\n');
+    gitAt(dir, ['add', 'README.md']);
+    gitAt(dir, ['commit', '-m', 'init']);
+    return { dir, gitAt };
+  }
+
+  const ctxFor = (repoRoot) => ({
+    cwd: repoRoot,
+    hasUI: false,
+    mode: 'tui',
+    sessionManager: { getSessionId: () => 't5-gate-session' },
+    ui: { confirm: async () => true, notify: () => {} },
+  });
+
+  test('on (the default): a live peer in the checkout still refuses the close', async () => {
+    const { dir, gitAt } = makeRepo('on');
+    const target = path.join(path.dirname(dir), `${path.basename(dir)}-worktrees`, 't5-gate-on');
+    gitAt(dir, ['worktree', 'add', target, '-b', 'feat/t5-gate-on']);
+    publishPresence(HOME, { sessionId: 'gate-peer-on', label: 'Peer', workspace: target, heartbeat: Date.now(), incarnationIndex: 7 });
+
+    const mod = await closeWith(undefined);
+    const closed = await mod.executeWorktreeClose({ path: target }, ctxFor(dir));
+    assert.equal(closed.isError, true, 'the guard still runs with the module on');
+    assert.ok(fs.existsSync(target), 'nothing was removed');
+  });
+
+  test('off: the same live peer does not block, because the close path is not part of that load', async () => {
+    const { dir, gitAt } = makeRepo('off');
+    const target = path.join(path.dirname(dir), `${path.basename(dir)}-worktrees`, 't5-gate-off');
+    gitAt(dir, ['worktree', 'add', target, '-b', 'feat/t5-gate-off']);
+    publishPresence(HOME, { sessionId: 'gate-peer-off', label: 'Peer', workspace: target, heartbeat: Date.now(), incarnationIndex: 8 });
+
+    const mod = await closeWith({ worktrees: false });
+    const closed = await mod.executeWorktreeClose({ path: target }, ctxFor(dir));
+    assert.notEqual(closed.isError, true, `the module that owns the rule is off: ${closed.content?.map((part) => part.text).join('\n')}`);
+    assert.deepEqual(closed.details.sessionCheck, { status: 'module-off' });
+    assert.equal(fs.existsSync(target), false, 'the removal ran');
   });
 });

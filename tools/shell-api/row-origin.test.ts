@@ -9,7 +9,7 @@
  * What is real here and what is modelled: pi-tui is not a dependency of this package, so
  * `FakeContainer` copies `Container.render` (`pi-tui/dist/tui.js:136-149`) — render each child,
  * record `{ component, height }`, publish `mouseLayout`, concatenate the rows. Everything else is
- * the bridge's own code: `src/row-origin.ts` reads that published layout, `./card-style-wiring.ts`
+ * the shell API's own code: `src/row-origin.ts` reads that published layout, `./card-style-wiring.ts`
  * builds the map after the host's render, and `./transform-pipeline.ts` hands it to the transform.
  * The rows are asserted through the public surfaces (the transform's `ctx`, the drawn frame), never
  * through an internal field.

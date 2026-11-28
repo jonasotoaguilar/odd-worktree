@@ -2,7 +2,7 @@
  * Arm lifecycle (S3 bullet 1, S4): one entry point that picks a backend and arms it.
  *
  * Pi keeps ONE `ctx.ui` object per runner but rebuilds it on every bind
- * (`runner.ts:895-898`, `:573`, `:577-587`), so the bridge arms from `session_start` — possibly
+ * (`runner.ts:895-898`, `:573`, `:577-587`), so the shell API arms from `session_start` — possibly
  * more than once per process, and against a fresh UI object each rebind. Arming is therefore
  * idempotent per UI object: the capture backend marks the target it wrapped, and the hook backend
  * marks the host registry it pushed into.
@@ -44,10 +44,10 @@ export interface ArmResult {
 }
 
 /**
- * Arm the bridge against a `ctx.ui`-shaped object and report what happened. Safe to call on every
+ * Arm the shell API against a `ctx.ui`-shaped object and report what happened. Safe to call on every
  * `session_start`, and safe to call with a missing UI context (reported, never thrown).
  */
-export function armBridge(ui: unknown): ArmResult {
+export function armShellApi(ui: unknown): ArmResult {
   const hook = installHookBackend();
   if (hook.installed) {
     // An earlier arm may have wrapped a UI object that is still live. Disable the previous path

@@ -2,7 +2,7 @@
  * Turning visible text into a settings row LABEL (N1–N3).
  *
  * The host prints `choice.setting` as a toggle line's name and `label` as a row's text
- * (`lib/visual-customize-view.ts:583-595`), so anything the bridge puts in either field is read by
+ * (`lib/visual-customize-view.ts:583-595`), so anything the shell API puts in either field is read by
  * a human. An id is not a label: `Section: bash-card.status` was a prefix nobody asked for plus a
  * dotted internal key, and a plugin author copying the docs copied the shape.
  *
@@ -12,12 +12,12 @@
  *   The one thing it must satisfy is the shape every row name satisfies (one to three plain words,
  *   no structural marks): a name that breaks it is rejected at registration and reported, never
  *   rewritten (`./row-names.ts`, N7–N9).
- * - otherwise the bridge derives one from the visible text the author already wrote (`title` for a
+ * - otherwise the shell API derives one from the visible text the author already wrote (`title` for a
  *   section, `label` for a card style): lowercase words joined by single spaces, dots and the rest
  *   of the punctuation dropped, no prefix, clamped to the same word limit. `"BASH CARD"` →
  *   `"bash card"`, `"usageCost"` → `"usage cost"`, `"bash-card.status"` → `"bash card status"`,
  *   `"MUSIC PLAYER NOW PLAYING"` → `"music player now"`. A derived name therefore always passes the
- *   shape check the bridge applies to an explicit one. * - two sections whose labels would read the same are told apart deterministically, and never by
+ *   shape check the shell API applies to an explicit one. * - two sections whose labels would read the same are told apart deterministically, and never by
  *   appending the raw id: the first keeps `music`, the next gets `music 2`, `music 3`, …
  *   the diagnostics record reports the same assignment (see `sectionRowLabels`) instead of recomputing it.
  *
@@ -62,11 +62,11 @@ export const SECTION_LABEL_FALLBACK = "section";
 export const CARD_STYLE_LABEL_FALLBACK = "card style";
 
 /**
- * Apply the row-name shape to derived text (N8): the same one-to-three-plain-words limit the bridge
+ * Apply the row-name shape to derived text (N8): the same one-to-three-plain-words limit the shell API
  * enforces on an author's name. Marks are already gone — `NON_WORD` turned every one of them into a
- * word break — so clamping is what keeps a long title from deriving a name the bridge would reject.
+ * word break — so clamping is what keeps a long title from deriving a name the shell API would reject.
  *
- * Clamping is the ONLY transformation the bridge performs, and it is confined to text it derives
+ * Clamping is the ONLY transformation the shell API performs, and it is confined to text it derives
  * itself: an author's own `rowLabel` is never rewritten, it is rejected (`./row-names.ts`).
  */
 function clampWords(text: string): string {
@@ -121,7 +121,7 @@ export interface SectionRowLabel {
 /**
  * The label an equal base takes when another registration already reads it: the base plus the
  * lowest free ordinal. The result still honours the row-name word limit, so a three-word base yields
- * `music player 2` (the ordinal replaces its last word) instead of a four-word name the bridge would
+ * `music player 2` (the ordinal replaces its last word) instead of a four-word name the shell API would
  * have refused from an author. Deterministic: the input order is the render order and the ordinal is
  * the lowest free integer.
  */

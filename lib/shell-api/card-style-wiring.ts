@@ -41,8 +41,8 @@
  * whose SECOND entry is that scroll view, and `ScrollView[LAYOUT_NODE]()` reports its child
  * (`pi-tui/dist/components/scroll-view.js:191-192`). That child renders the whole rail, so wrapping
  * its `render(width)` is the one place that sees every rail frame AFTER the host framed it — which
- * is exactly what a repaint needs, and why a style reaches host sections and bridge sections
- * without the bridge drawing either frame.
+ * is exactly what a repaint needs, and why a style reaches host sections and shell API sections
+ * without the shell API drawing either frame.
  *
  * The rail wrapper runs ONLY the card-style transform (`transformCardLines(..., "rail")`): the
  * registered transcript transforms are the conversation's extension point, and handing a plugin's
@@ -74,10 +74,10 @@ import { applyTransforms } from "./transform-pipeline.ts";
 const LAYOUT_NODE: symbol = Symbol.for("@earendil-works/pi-tui/layout-node");
 
 /** Own property on a wrapped component → the exact wrapper function this module installed. */
-const TRANSFORM_WRAPPED: symbol = Symbol.for("gentle-shell-bridge.card-style-transform.wrapped.v1");
+const TRANSFORM_WRAPPED: symbol = Symbol.for("odd-worktree.card-style-transform.wrapped.v1");
 
-/** Process-global, like every other piece of bridge state (`./bus.ts` explains why). */
-const WIRING_STATE: symbol = Symbol.for("gentle-shell-bridge.card-style-wiring.state.v1");
+/** Process-global, like every other piece of shell API state (`./bus.ts` explains why). */
+const WIRING_STATE: symbol = Symbol.for("odd-worktree.card-style-wiring.state.v1");
 
 /** Why the transform is (or is not) attached. Every value is reported, none is a throw. */
 export type CardStyleInstallOutcome =
@@ -321,7 +321,7 @@ function wrapComponent(component: Renderable, surface: PaintSurface): InstallCar
   const wrapper = function (this: unknown, width: number): readonly string[] {
     // S10: a tool design is adopted AFTER construction, on every conversation pass, BEFORE the host
     // renders its children. That is the path that survives the resolver order: when an earlier
-    // resolver answers a tool without calling `next()`, the bridge's resolver never runs, but this
+    // resolver answers a tool without calling `next()`, the shell API's resolver never runs, but this
     // wrapper already holds the container whose children are the cards. Adoption stamps its own
     // marker, so the resolver path and this path never stack on one card. A disabled transform (an
     // older generation) is a pass-through and adopts nothing, exactly as it transforms nothing.
@@ -329,7 +329,7 @@ function wrapComponent(component: Renderable, surface: PaintSurface): InstallCar
       try {
         adoptToolCards(component);
         // The message designs' capture point, on the same pass and for the same reason: Pi holds a
-        // custom message's renderer on the component it built, and this is the only place the bridge
+        // custom message's renderer on the component it built, and this is the only place the shell API
         // can reach it. It touches a message only when a live design claims its type (S4).
         adoptCustomMessages(component);
       } catch {
@@ -410,9 +410,9 @@ export function installRailCardStyleTransform(tui: unknown): InstallCardStyleRes
 }
 
 /**
- * Re-attempt every surface whose repaint path was not reached, against the `tui` the bridge captured.
+ * Re-attempt every surface whose repaint path was not reached, against the `tui` the shell API captured.
  *
- * Not a retry loop and not a poll: this runs exactly once per bridge-owned write, at the moment that
+ * Not a retry loop and not a poll: this runs exactly once per shell-API-owned write, at the moment that
  * write needs its surface repainted. The host's rail is mounted by the time a user can open the
  * customize menu, which is why that moment is the reliable one; when even then no rail is reachable,
  * the outcome stays recorded for the diagnostics record.

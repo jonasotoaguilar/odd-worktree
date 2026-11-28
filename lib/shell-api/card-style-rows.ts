@@ -3,14 +3,14 @@
  *
  * Two modes, and exactly one of them is live:
  *
- * - **`extended`** — the host's rows were located in the captured array and spliced, so the bridge
+ * - **`extended`** — the host's rows were located in the captured array and spliced, so the shell API
  *   appends one row per registered style to that SAME line
  *   (`./card-style-line.ts` explains the splice). The host's own `neon`/`float` row objects are the
  *   originals, untouched: their `current()` still reads the host's config file and their `action()`
- *   still writes it. Only the registered values are the bridge's.
+ *   still writes it. Only the registered values are the shell API's.
  * - **`separate`** — the host's line could not be located (renamed setting, a narrower host, no
- *   capture at all). The bridge then contributes its own line, `Bridge card style`, with `native`
- *   plus every registered style. `native` means "the bridge leaves the conversation alone". The
+ *   capture at all). The shell API then contributes its own line, `API card style`, with `native`
+ *   plus every registered style. `native` means "the shell API leaves the conversation alone". The
  *   mode is recorded so the diagnostics record can say which line the user is actually seeing.
  *
  * ## Why the fallback is a provider and not more splicing
@@ -19,20 +19,20 @@
  * never be consecutive with the host's own `Card style` rows and can never join that line — that is
  * exactly why the fallback uses a DIFFERENT setting name and label, and why the extended mode does
  * not use a provider at all. The provider exists only while the separate line is what the user sees;
- * a successful splice disposes it, so the bridge never contributes two lines.
+ * a successful splice disposes it, so the shell API never contributes two lines.
  *
  * ## Many styles, one line (S12)
  *
  * The values are `snapshotCardStyles()` in its deterministic order (optional `order`, then
  * registration order), nothing capped and nothing hidden. A style registered later shows up on the
  * next menu build with no re-registration, because rows are built per build and never cached. The
- * bridge does not control the width the host gives that line: if the host clips, that is the host's
+ * shell API does not control the width the host gives that line: if the host clips, that is the host's
  * behaviour, and the diagnostics record reports the count instead of masking it.
  *
  * This module is internal: `src/index.ts` does not re-export it.
  */
 
-import { registerBridgeRows, snapshotCardStyles } from "./bus.ts";
+import { registerShellApiRows, snapshotCardStyles } from "./bus.ts";
 import {
   CARD_STYLE_NATIVE,
   HOST_CARD_STYLE_CATEGORY,
@@ -51,26 +51,26 @@ import { cardStyleRowLabelText } from "./row-labels.ts";
 import { isRecord } from "./rows.ts";
 import type { CardStyleRegistration, CustomizeRow, RowPreview, RowProvider } from "./types.ts";
 
-/** The fallback provider's id; it is the bridge's own registration, never a plugin's. */
-export const CARD_STYLE_ROWS_PROVIDER_ID = "bridge.card-styles";
+/** The fallback provider's id; it is the shell API's own registration, never a plugin's. */
+export const CARD_STYLE_ROWS_PROVIDER_ID = "shell-api.card-styles";
 
 /**
- * The setting of the bridge's OWN line, used only in `separate` mode. Deliberately not the host's
+ * The setting of the shell API's OWN line, used only in `separate` mode. Deliberately not the host's
  * `Card style`: a second row sharing that setting, appended somewhere else in the array, would not
  * join the host's line and would make the diagnostics record report a duplicate.
  */
-export const CARD_STYLE_FALLBACK_SETTING = "Bridge card style";
+export const CARD_STYLE_FALLBACK_SETTING = "API card style";
 
 /**
  * The fallback line's own label; it names the line, and no value repeats it.
  *
  * Same vocabulary as every other row name (N7): one to three plain words, no arrow, colon, dot,
- * pipe, slash or bracket. The bridge enforces that shape on plugins (`./row-names.ts`), so its own
- * line reads the same way — `Bridge card style`, not `Bridge → card style` or `Bridge: card style`.
+ * pipe, slash or bracket. The shell API enforces that shape on plugins (`./row-names.ts`), so its own
+ * line reads the same way — `API card style`, not `ShellApi → card style` or `ShellApi: card style`.
  */
-export const CARD_STYLE_ROW_LABEL = "Bridge card style";
+export const CARD_STYLE_ROW_LABEL = "API card style";
 
-/** Which line the user sees: the host's, extended, or the bridge's own. */
+/** Which line the user sees: the host's, extended, or the shell API's own. */
 export type CardStyleRowMode = "extended" | "separate";
 
 interface CardStyleRowState {
@@ -83,7 +83,7 @@ interface CardStyleRowState {
 }
 
 /** Process-global, like the bus: a second copy of this package must see the same mode. */
-const ROW_STATE = Symbol.for("gentle-shell-bridge.card-styles.rows.v1");
+const ROW_STATE = Symbol.for("odd-worktree.card-styles.rows.v1");
 
 function rowHost(): Record<symbol, CardStyleRowState | undefined> {
   // SAFETY: only `rowState()` writes this key, and it re-checks every field before trusting a value
@@ -202,14 +202,14 @@ function nativeRow(setting: string): CustomizeRow {
     choice: {
       setting,
       value: CARD_STYLE_NATIVE,
-      // Same rule as every other value the bridge contributes (A1): the way back to the host's own
+      // Same rule as every other value the shell API contributes (A1): the way back to the host's own
       // cards is confirmed with Enter too, never applied by passing over it.
       applyOnMove: false,
       current: () => getCardStyleSelection() === CARD_STYLE_NATIVE,
     },
     preview: () => ({
       title: "Cards · native",
-      sample: "native: the bridge does not touch the conversation",
+      sample: "native: the shell API does not touch the conversation",
     }),
     action: () => selectStyle(CARD_STYLE_NATIVE),
   };
@@ -219,10 +219,10 @@ function nativeRow(setting: string): CustomizeRow {
  * Own property on a host row we already wrapped → the host row itself, so a second splice of the
  * same array cannot wrap our wrapper (which would delegate through two layers for no reason).
  */
-const NATIVE_ROW_WRAPPED = Symbol.for("gentle-shell-bridge.card-style-rows.wrapped.v1");
+const NATIVE_ROW_WRAPPED = Symbol.for("odd-worktree.card-style-rows.wrapped.v1");
 
 /** True while the stored selection names a style that is actually registered (S13). */
-function bridgeStyleActive(): boolean {
+function shellApiStyleActive(): boolean {
   // A `missing` selection (a style that was disposed while selected) is NOT active: the host's own
   // values must speak again, because `native` behaviour is the documented degrade (S12).
   return resolveCardStyleSelection().kind === "style";
@@ -231,16 +231,16 @@ function bridgeStyleActive(): boolean {
 /**
  * The host's own row, wrapped so exactly one value can be current (S13).
  *
- * The host normalizes an unknown stored style to `float`, so when a bridge style is selected the
+ * The host normalizes an unknown stored style to `float`, so when a shell API style is selected the
  * host's `float` row claims current too and the line shows two bullets. This wrapper overrides
  * `choice.current` — `false` while a registered style is the selection, otherwise the host's own
  * answer, delegated unchanged — and `action`, which is where the way back lives: pressing a host
- * value means "the host renders, the bridge does not", so the host's own action runs and the bridge
+ * value means "the host renders, the shell API does not", so the host's own action runs and the shell API
  * selection is cleared to `native`. Everything else — `choice.value`, `choice.setting`,
  * `choice.hint`, `choice.applyOnMove`, `label`, `preview`, whatever else the host put there — is
- * carried over as the same reference, so the host's persistence keeps running and the bridge does
+ * carried over as the same reference, so the host's persistence keeps running and the shell API does
  * not reimplement `neon`/`float`. That includes `choice.applyOnMove` (A3): the host's own values keep
- * applying on ←/→ if the host wrote them that way, while the bridge value spliced beside them waits
+ * applying on ←/→ if the host wrote them that way, while the shell API value spliced beside them waits
  * for Enter — inside one rendered line each row's own field governs its own behaviour.
  */
 function wrapHostRow(row: CustomizeRow): CustomizeRow {
@@ -256,10 +256,10 @@ function wrapHostRow(row: CustomizeRow): CustomizeRow {
     ...row,
     choice: {
       ...choice,
-      current: () => (bridgeStyleActive() ? false : originalCurrent.call(choice)),
+      current: () => (shellApiStyleActive() ? false : originalCurrent.call(choice)),
     },
-    // Pressing a host value is how a user leaves a bridge style: the host's own setter runs (so the
-    // host's config and its repaint behave exactly as before), and the bridge selection returns to
+    // Pressing a host value is how a user leaves a shell API style: the host's own setter runs (so the
+    // host's config and its repaint behave exactly as before), and the shell API selection returns to
     // `native` in `finally`, so a throwing setter cannot trap the session inside a style (S13).
     action: (inline) => {
       let result: unknown;
@@ -288,12 +288,12 @@ function wrapHostRow(row: CustomizeRow): CustomizeRow {
   return wrapper;
 }
 
-/** Record a host setter that threw, through the bridge's reporting channel (S13). */
+/** Record a host setter that threw, through the shell API's reporting channel (S13). */
 function recordActionFailure(value: string, error: unknown): void {
   recordNotice(
-    `gentle-shell-bridge: the host's Card style action for ${JSON.stringify(value)} threw: ` +
-      `${error instanceof Error ? error.message : String(error)}. The bridge returned to native ` +
-      "rendering so a broken setter cannot trap the session inside a bridge style.",
+    `odd-worktree: the host's Card style action for ${JSON.stringify(value)} threw: ` +
+      `${error instanceof Error ? error.message : String(error)}. The shell API returned to native ` +
+      "rendering so a broken setter cannot trap the session inside a shell API style.",
     "warning",
   );
 }
@@ -310,7 +310,7 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
  * The fallback provider. Its rows are rebuilt per menu build, never cached.
  *
  * With no style registered it contributes NOTHING: a session that never installed a style plugin
- * must not gain a `Bridge card style` line with a single `native` value on it. The provider is
+ * must not gain a `API card style` line with a single `native` value on it. The provider is
  * still registered (arming precedes the plugins' own `session_start` handlers), so the first style
  * to register appears on the next menu build with no re-registration.
  */
@@ -338,7 +338,7 @@ function disposeFallback(state: CardStyleRowState): void {
 /** Make the registered providers match the mode: one line, never two. */
 function sync(state: CardStyleRowState): void {
   if (state.wanted && state.mode === "separate") {
-    if (state.disposeFallback === undefined) state.disposeFallback = registerBridgeRows(fallbackProvider());
+    if (state.disposeFallback === undefined) state.disposeFallback = registerShellApiRows(fallbackProvider());
     return;
   }
   disposeFallback(state);
@@ -347,7 +347,7 @@ function sync(state: CardStyleRowState): void {
 /**
  * Register the fallback line for this process and return a disposer that withdraws it.
  *
- * Call it when the bridge arms; it needs no `tui` and no capture. Registering twice is a no-op (the
+ * Call it when the shell API arms; it needs no `tui` and no capture. Registering twice is a no-op (the
  * bus replaces a provider with the same id in place), and while the host's own line is reachable the
  * provider stays unregistered — the splice already carries the values.
  */
@@ -370,7 +370,7 @@ export function installCardStyleRows(): () => void {
  *
  * Called once per captured menu build, with the host's live rows array. It never throws: anything
  * that makes the line unreachable — no rows, a renamed setting, an array that refuses the edit —
- * records `separate` and lets the caller contribute the bridge's own line, which is reported rather
+ * records `separate` and lets the caller contribute the shell API's own line, which is reported rather
  * than silent.
  */
 export function extendCardStyleLine(rows: CustomizeRow[]): CardStyleRowMode {

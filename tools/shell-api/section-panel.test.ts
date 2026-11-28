@@ -21,7 +21,11 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { registerSection, resetBusForTests, resetSectionsForTests } from "../../lib/shell-api/bus.ts";
-import { setSectionTheme, resetSectionPanelForTests } from "../../lib/shell-api/section-panel.ts";
+import {
+  getPanelReport,
+  resetSectionPanelForTests,
+  setSectionTheme,
+} from "../../lib/shell-api/section-panel.ts";
 import {
   SIDEBAR_RAIL_KEY,
   disableSidebarBackend,
@@ -144,6 +148,29 @@ test("a structured row renders glyph, label and meta in the host's roles", () =>
     roleOf(body, "Blue in Green"),
     "the meta is painted in a different role than the label",
   );
+});
+
+test("a host that publishes its own builders is used, and reported as the source", () => {
+  setSectionTheme(fakeTheme());
+  registerSection(section("music"));
+  // The rail part is one of the objects this package is handed (`sidebar.ts` looks for the
+  // builders on it), so publishing them here is how a host that HAS `lib/shell-panel.ts` in its
+  // own module graph reaches this drawing.
+  const railPart = registerNativeFooter() as unknown as Record<string, unknown>;
+  railPart.renderPanelHeader = (_theme: unknown, _width: number, header: { title: string }) =>
+    `HOST HEADER ${header.title.toUpperCase()}`;
+  railPart.renderPanelRow = (_width: number, left: string) => `HOST ROW ${left}`;
+  installSidebarBackend(() => fakeTui());
+  installSectionRail();
+
+  assert.deepEqual(contributed(), [
+    "HOST HEADER MUSIC",
+    // A plain string row stays the bytes the author wrote, even when the host draws structured rows.
+    "body music",
+  ]);
+  const report = getPanelReport();
+  assert.equal(report.source, "host", "the report names the drawing that was used");
+  assert.deepEqual(report.missing, [], "and nothing is reported missing");
 });
 
 test("the fallback drawing equals the host's builders in every case we can compare", () => {

@@ -594,3 +594,18 @@ test("S2: the fallback box carries the message's CURRENT output padding", () => 
   // is what lets Pi run the default path that POPULATES the box for the rest of the session.
   assert.deepEqual(child.render(40), [`[${REMINDER}] pi's own box@40`], "Pi's own next frame");
 });
+
+// Coexistence: the adoption state lives on a process-global slot that an older copy of this API (a
+// standalone `gentle-shell-bridge` still installed) reads too, and that copy only trusts the slot
+// while `adoptedMessages` is an array — otherwise it overwrites the whole object and drops the live
+// adoption count and the per-container record. So the fields stay, even though nothing here reads
+// `adoptedMessages` for a report any more.
+test("the shared adoption state keeps the shape an older copy validates before trusting it", () => {
+  const slot = (globalThis as unknown as Record<symbol, Record<string, unknown> | undefined>)[
+    Symbol.for("gentle-shell-bridge.message-designs.adoption.v1")
+  ];
+  assert.ok(slot !== undefined, "resetting the adoption state publishes the slot");
+  assert.ok(Array.isArray(slot.adoptedMessages), "adoptedMessages stays an array, or an older copy resets the slot");
+  assert.equal(typeof slot.liveAdoptions, "number");
+  assert.ok(slot.adoptedByContainer instanceof WeakMap);
+});

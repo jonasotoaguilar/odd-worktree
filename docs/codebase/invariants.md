@@ -1020,4 +1020,10 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     package is simply unnecessary: both copies share every piece of global state
     ("first wins"), so this package's own surfaces are unaffected — and the older
     package's extra command name is the one visible difference, which is why
-    uninstalling it is the recommendation and not a requirement.
+    uninstalling it is the recommendation and not a requirement. That harmlessness
+    is a property of the shared state, so the SHAPE of every `Symbol.for` slot is
+    frozen too, not only its key: an older copy re-validates a slot by a field
+    and overwrites it when the field is missing, so a field nothing here reads any
+    more (`adoptedMessages` in the message-design adoption state, `owner` in the
+    tool-design index and its `TOOL_DESIGN_INDEX_SHAPE` stamp) stays.
+    `tools/shell-api/message-design-adoption.test.ts` pins the adoption one.

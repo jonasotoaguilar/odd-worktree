@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { registerRows, resetBusForTests } from "../../lib/shell-api/bus.ts";
+import { getRowPlacementLandings, registerRows, resetBusForTests } from "../../lib/shell-api/bus.ts";
 import { getCaptureDiagnostics, installCaptureBackend, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
 import { resetNoticesForTests, snapshotNotices } from "../../lib/shell-api/notices.ts";
 import type { CustomizeRow } from "../../lib/shell-api/types.ts";
@@ -229,6 +229,173 @@ test("rollback restores a host row object that a provider handed back", async ()
   assert.ok(
     rows.every((row, index) => row === before[index]),
     "the host's own row objects come back in the host's own order",
+  );
+});
+
+test("a read-only index skips the move instead of half-applying it", () => {
+  const rows = hostRows();
+  Object.defineProperty(rows, "1", {
+    value: rows[1],
+    writable: false,
+    enumerable: true,
+    configurable: true,
+  });
+  const host = lateOnlyHost(rows);
+  registerRows({
+    id: "loon.top",
+    category: "Cards",
+    placement: "start",
+    rows: () => [{ label: "Placed row", action: () => {} }],
+  });
+  installCaptureBackend(host.ui);
+
+  assert.doesNotThrow(() => host.build());
+
+  assert.deepEqual(labels(rows), [
+    "Card bash: builtin",
+    "Card output: builtin",
+    "Banner: builtin",
+    "Layout: builtin",
+    "Placed row",
+  ]);
+  assert.deepEqual(getCaptureDiagnostics().lastOutcome, { kind: "injected", injectedRows: 1 });
+
+  // The landing record is what the removed status module read for its `placement start → end` line:
+  // the block did not move, and the recorded reason says why instead of repeating the plan.
+  const landing = getRowPlacementLandings().find((entry) => entry.providerId === "loon.top");
+  assert.equal(landing?.requested, "start");
+  assert.equal(landing?.landed, "end");
+  assert.match(landing?.reason ?? "", /read-only|would not accept|planned write/);
+});
+
+test("a frozen array after the provisional injection reports the landing it really got", () => {
+  const rows = hostRows();
+  const ui = {
+    custom: (factory: (ui: unknown, theme: unknown, ...rest: unknown[]) => unknown): unknown =>
+      factory(ui, undefined),
+  };
+  const host = {
+    ui,
+    build: (): unknown =>
+      ui.custom(() => {
+        rows.map((row) => row.category ?? "Settings");
+        Object.freeze(rows);
+        return { invalidate: () => {} };
+      }),
+  };
+  registerRows({
+    id: "loon.top",
+    category: "Layout",
+    placement: "start",
+    rows: () => [{ label: "Top row", action: () => {} }],
+  });
+  installCaptureBackend(host.ui);
+
+  host.build();
+
+  assert.deepEqual(labels(rows), [
+    "Card bash: builtin",
+    "Card output: builtin",
+    "Banner: builtin",
+    "Layout: builtin",
+    "Top row",
+  ]);
+  const landing = getRowPlacementLandings().find((entry) => entry.providerId === "loon.top");
+  assert.equal(landing?.requested, "start");
+  assert.equal(landing?.landed, "end");
+  assert.match(landing?.reason ?? "", /frozen|read-only|would not accept|planned write/);
+});
+
+test("a recorded landing keeps the resolver's exact fallback reason", () => {
+  const rows = hostRows();
+  const host = lateOnlyHost(rows);
+  registerRows({
+    id: "loon.lost",
+    category: "Layout",
+    placement: { after: "loon.nope" },
+    rows: () => [{ label: "Lost row", action: () => {} }],
+  });
+  installCaptureBackend(host.ui);
+
+  host.build();
+
+  const landing = getRowPlacementLandings().find((entry) => entry.providerId === "loon.lost");
+  assert.equal(landing?.requested, 'after "loon.nope"');
+  assert.equal(landing?.landed, "end");
+  assert.equal(
+    landing?.reason,
+    'after "loon.nope" is not a registered row provider id',
+    "the verifier-pinned reason survives the landing report",
+  );
+});
+
+test("an after anchor naming an unopted provider lands after that provider's tail block", () => {
+  const rows = hostRows();
+  const host = lateOnlyHost(rows);
+  registerRows({
+    id: "loon.anchor",
+    // No placement and no order: this provider keeps the pre-feature tail append.
+    category: "Layout",
+    rows: () => [{ label: "Anchor row", action: () => {} }],
+  });
+  registerRows({
+    id: "loon.after",
+    category: "Layout",
+    placement: { after: "loon.anchor" },
+    rows: () => [{ label: "After row", action: () => {} }],
+  });
+  installCaptureBackend(host.ui);
+
+  host.build();
+
+  assert.deepEqual(page(rows, "Layout"), ["Layout: builtin", "Anchor row", "After row"]);
+  const landing = getRowPlacementLandings().find((entry) => entry.providerId === "loon.after");
+  assert.equal(landing?.requested, 'after "loon.anchor"');
+  assert.equal(landing?.landed, 'after "loon.anchor"');
+  assert.equal(landing?.reason, undefined);
+});
+
+test("two after followers of one unopted anchor keep the resolver's order inside its tail block", () => {
+  const rows = hostRows();
+  const host = lateOnlyHost(rows);
+  registerRows({
+    id: "loon.anchor",
+    category: "Layout",
+    rows: () => [{ label: "Anchor row", action: () => {} }],
+  });
+  registerRows({
+    id: "loon.second",
+    category: "Layout",
+    placement: { after: "loon.anchor" },
+    rows: () => [{ label: "Second row", action: () => {} }],
+  });
+  registerRows({
+    id: "loon.first",
+    category: "Layout",
+    placement: { after: "loon.anchor" },
+    rows: () => [{ label: "First row", action: () => {} }],
+  });
+  installCaptureBackend(host.ui);
+
+  host.build();
+
+  // Both followers hang off the ONE tail segment the unopted anchor owns, so they stay a block after
+  // that anchor, in the resolver's own order (id, since neither names one), and never drift into the
+  // category's `after` slot.
+  assert.deepEqual(page(rows, "Layout"), [
+    "Layout: builtin",
+    "Anchor row",
+    "First row",
+    "Second row",
+  ]);
+  assert.deepEqual(
+    getRowPlacementLandings()
+      .filter((entry) => entry.providerId !== "loon.anchor")
+      .map((entry) => [entry.providerId, entry.requested, entry.landed]),
+    [
+      ["loon.first", 'after "loon.anchor"', 'after "loon.anchor"'],
+      ["loon.second", 'after "loon.anchor"', 'after "loon.anchor"'],
+    ],
   );
 });
 

@@ -453,6 +453,60 @@ describe('prs view buckets, list and search (S1, S3)', () => {
     assert.ok(view.state.scroll > 0 && view.state.scroll < down, 'ctrl+d is a half page');
   });
 
+  test('S6: the wheel over the pane scrolls it and never moves the list', async () => {
+    const body = Array.from({ length: 60 }, (_value, at) => `paragraph ${at}`).join('\n');
+    const source = pageSource({ mine: [pullRequest(1), pullRequest(2)], review: [], involved: [] });
+    const { view } = makeView({
+      loadPullRequestPage: source.load,
+      loadPullRequest: (number) => ({ ok: true, pullRequest: pullRequest(number, { body }), comments: [] }),
+    });
+    await tick();
+    const height = view.render(150).length;
+    const cell = paneCell(view, 150, 'paragraph 0');
+    const wheel = (over) => view.handleMouse({
+      type: 'wheel', button: 'none', wheelDelta: 1, x: cell.x, y: cell.y, width: 150, height, ...over,
+    });
+    assert.equal(view.state.scroll, 0);
+    assert.deepEqual(wheel({}), { handled: true, render: true });
+    assert.equal(view.state.scroll, 1, 'one notch scrolls the pane one line');
+    assert.equal(view.state.index, 0, 'and never moves the list');
+
+    assert.deepEqual(wheel({ wheelDelta: -1 }), { handled: true, render: true });
+    assert.equal(view.state.scroll, 0, 'a notch up scrolls it back');
+    assert.deepEqual(wheel({ wheelDelta: -1 }), { handled: true, render: false },
+      'a notch the pane cannot answer repaints nothing');
+
+    for (let step = 0; step < 200; step += 1) wheel({});
+    const reached = view.state.scroll;
+    assert.ok(reached > 0, 'the pane scrolled to its own end');
+    assert.deepEqual(wheel({}), { handled: true, render: false }, 'the clamped end repaints nothing');
+    assert.equal(view.state.scroll, reached);
+  });
+
+  test('S6: the wheel over the list walks it and never scrolls the pane', async () => {
+    const source = pageSource({ mine: [pullRequest(1), pullRequest(2)], review: [], involved: [] });
+    const { view } = makeView({ loadPullRequestPage: source.load });
+    await tick();
+    const height = view.render(150).length;
+    const wheel = (over) => view.handleMouse({
+      type: 'wheel', button: 'none', wheelDelta: 1, x: 3, y: 4, width: 150, height, ...over,
+    });
+    assert.equal(view.state.index, 0);
+    assert.deepEqual(wheel({}), { handled: true, render: true });
+    assert.equal(view.state.index, 1, 'the notch walks the list');
+    assert.equal(view.state.scroll, 0, 'and never scrolls the pane');
+    assert.equal(wheel({ x: 1 }), undefined, 'the frame border is not a pane');
+    assert.equal(wheel({ width: 100 }), undefined, 'another frame geometry is not this frame');
+    assert.equal(wheel({ wheelDelta: 0 }), undefined, 'a notch carrying no delta is not a scroll');
+    assert.equal(view.state.index, 1, 'an unhandled notch changes nothing');
+
+    // S6: the wheel acts only where the reader's own movement keys do.
+    view.handleInput('c');
+    assert.equal(view.state.mode, 'comment');
+    assert.equal(wheel({}), undefined, 'a step that owns the keyboard keeps the wheel');
+    assert.equal(view.state.index, 1);
+  });
+
   test('S3: the pane carries the Changes and Checks summary blocks', async () => {
     const source = pageSource({ mine: [pullRequest(1)], review: [], involved: [] });
     const { view } = makeView({ loadPullRequestPage: source.load });

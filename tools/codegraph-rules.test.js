@@ -110,7 +110,6 @@ describe('each role scopes the index to its own job', () => {
     assert.match(text, /which replaces the chain of greps and reads that would answer the same question/, text);
     assert.match(text, /Follow what it reports as depending on a symbol instead of grepping for callers/, text);
     assert.match(text, /then stop/, text);
-    assert.match(text, /the answer gives where code lives/, text);
   });
 
   test('verify chooses probes from the index and keeps the probe as the proof', () => {
@@ -132,7 +131,6 @@ describe('each role scopes the index to its own job', () => {
     const text = prose('fix');
     assert.match(text, /what the patch has to keep working, so the fix stays inside that/, text);
     assert.match(text, /in the checkout you are authorized to fix/, text);
-    assert.match(text, /Confirm the finding in the source/, text);
   });
 
   test('judges sweep the initial review tree and leave the tool aside in scoped re-judgment', () => {

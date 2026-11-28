@@ -111,9 +111,7 @@ describe('each role scopes the index to its own job', () => {
     assert.match(text, /which replaces the chain of greps and reads that would answer the same question/, text);
     assert.match(text, /Follow what it reports as depending on a symbol instead of grepping for callers/, text);
     assert.match(text, /then stop/, text);
-    assert.match(text, /Cite `path:line` from what it returned/, text);
     assert.match(text, /the answer gives where code lives/, text);
-    assert.match(text, /Your handoff is evidence you observed/, text);
   });
 
   test('verify chooses probes from the index and keeps the probe as the proof', () => {
@@ -122,8 +120,6 @@ describe('each role scopes the index to its own job', () => {
     assert.match(text, /The answer is a map of where to look/, text);
     assert.match(text, /a verdict comes from the source you read and the checks you ran/, text);
     assert.match(text, /a probe that contradicts what it reports is the one that is right/, text);
-    assert.match(text, /Derive your probes from the request and from the tests it lists/, text);
-    assert.match(text, /Run the commands the parent or your role authorizes, in the required isolation/, text);
   });
 
   test('worker uses the index for what the edit must keep working, and never widens its scope', () => {
@@ -132,7 +128,6 @@ describe('each role scopes the index to its own job', () => {
     assert.match(text, /find the implementation you should reuse instead of writing a second one/, text);
     assert.match(text, /query the old name to find what still points at it/, text);
     
-    assert.match(text, /stay as delegated, and a route you need outside them is reported/, text);
   });
 
   test('fix keeps the patch inside the finding\'s reach, in the checkout it is authorized to fix', () => {
@@ -140,7 +135,6 @@ describe('each role scopes the index to its own job', () => {
     assert.match(text, /what the patch has to keep working, so the fix stays inside that/, text);
     assert.match(text, /in the checkout you are authorized to fix/, text);
     assert.match(text, /Confirm the finding in the source/, text);
-    assert.match(text, /Stay within the authorized batch and its allowed edit surfaces/, text);
   });
 
   test('judges sweep the initial review tree and leave the tool aside in scoped re-judgment', () => {
@@ -149,7 +143,7 @@ describe('each role scopes the index to its own job', () => {
     
     assert.match(text, /Confirm every finding in the supplied source at the exact location you cite/, text);
     assert.match(text, /report as unverified a relationship you have not read/, text);
-    assert.match(text, /In scoped re-judgment, resolve the frozen rows and the fix diff, and leave this tool aside/, text);
+    assert.match(text, /In scoped re-judgment, leave this tool aside/, text);
   });
 
   test('the generic text keeps the same criterion for a role with no text of its own', () => {

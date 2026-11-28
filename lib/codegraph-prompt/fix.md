@@ -4,4 +4,4 @@
 
 Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` on the finding's code, in the checkout you are authorized to fix, and again on a symbol it surfaces only when the patch needs that layer. Confirm the finding in the source: the answer gives where code lives, and the source gives what it does. Name the symbols or files when you know them; a plain question works when you do not.
 
-The blocks it shows count as a Read of those files; the ones it only names, or leaves without code, you open with `read`. Stay within the authorized batch and its allowed edit surfaces.
+The blocks it shows count as a Read of those files; the ones it only names, or leaves without code, you open with `read`.

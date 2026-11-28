@@ -157,7 +157,7 @@ for each is in [`invariants.md`](invariants.md).
 | [28](invariants.md) | The `gh`-absent and non-repository states are settled, so nothing retries them. |
 | [29](invariants.md) | The two message cards draw the host's classes, gated by the `Card message` switch; the assistant card is the final answer only, and neither touches the host's text. |
 | [30](invariants.md) | ODD activity does not set the session name. |
-| [31](invariants.md) | The ODD panel folds by default, counts what it lists, and lines a document up under its group's name. |
+| [31](invariants.md) | The ODD panel is one flat listing, a checkout cell on every row and a count of the rows. |
 | [32](invariants.md) | The shell API is native: `lib/shell-api/` is this package's own code at the same slot and store, loaded first by the entry, with no external dependency, no import by package name and no copy rule. |
 
 ## Common Change Paths

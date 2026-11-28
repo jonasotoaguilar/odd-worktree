@@ -110,8 +110,7 @@ selectable, so the cursor only ever lands on a real checkout.
 | `r` | Reload the listing |
 | `esc`, `ctrl+c` | Close the panel |
 
-`/odd` — `↑`/`↓` select, `enter` opens or closes the focused checkout's group,
-`t` search (`T` and `/` also open the box), `o`
+`/odd` — `↑`/`↓` select, `t` search (`T` and `/` also open the box), `o`
 open the document in `$VISUAL`/`$EDITOR`, `s` toggles the order between `recent`
 and `name`, `r` reload, `esc` close. `←`/`→` and `[`/`]` scroll the list; the
 document pane pages with `ctrl+j`/`ctrl+k`.
@@ -1011,32 +1010,42 @@ a pull request in both buckets counts once.
   checkouts at a time, and everything is dropped at `session_shutdown`. A verdict that
   lands after its session was replaced is discarded.
 
-## The `/odd` panel: groups, folds and counts
+## The `/odd` panel: one listing, its checkout cell and its count
 
-The panel draws the same grouped model the `ODD` rail reads: the `main` checkout
-first, carrying every ODD of main, then one group per checkout whose `odd/tasks`
-holds something main does not. A copy whose bytes are already in main is not a
-difference, so an ODD that a pull brought into main belongs to `main` and the
-worktree left with nothing draws **no group at all** — and with no worktree group
-the listing is flat, with no headers and no division.
+The panel reads the same grouped model the `ODD` rail reads and draws it as ONE
+flat listing. The model's groups are the CANDIDATES — main's listing, and each
+worktree's delta against the merge base compared by content — and the model then
+elects ONE copy per ODD name across all of them, so a name is drawn once. Identical
+bytes in main and a worktree leave main's copy drawn; bytes that differ leave the
+most recently modified copy; with no copy in main and identical copies in several
+worktrees the ORIGIN is drawn — the grouped checkout whose name equals the ODD name
+— then the newest, then the earlier group; and an unreadable copy is never treated
+as identical. A copy whose bytes are already in main is not a difference, so an ODD
+that a pull brought into main is drawn at `main` and the worktree that inherited it
+contributes no row; a document a worktree inherited from the branch it was chained
+off is drawn once, at its origin. A document main no longer holds competes from
+every worktree that kept it, so a deleted ODD is still drawn where it lives, while
+a copy that differs from main only because MAIN advanced — the worktree never
+touched the file — never enters the election, however recent its timestamp.
 
-- **Groups open FOLDED.** A frame is a list of headers, each reading `main (40 odd)`
-or `<worktree> (N odd)`: how many ODDs that checkout is listing. `enter` opens the
-focused group and `enter` again closes it. A panel opened from a rail row, or from
-`/odd <target>`, opens with the group that OWNS that ODD expanded and every other
-group folded, and the cursor on that document; without a target nothing is expanded
-and the cursor rests on the first header, where the reading pane says
-`enter opens this group` instead of claiming a filter matched nothing.
-- **The title counts every document the panel is showing** — 40 in main plus 1 in a
-worktree reads `41 documents` — and folding never changes it, because the number is
-the sum of the groups' counts, not the rows on screen.
-- **A document starts at the column its group's name starts at.** The fold chevron
-has a column of its own, so `▾ main` sits over `  alpha`, the way the `CHANGES`
-panel draws a group over its files. Wrapped names carry the same indent.
-- **Two checkouts with the same name are qualified.** When two drawn groups would
-print the same name, each header adds the directory that holds it
-(`a/same checkout (1 odd)`), so a folded group is never indistinguishable from its
-twin.
+- **One list, no division.** A frame is a list of document rows, newest first — the
+most recently created or modified document on top, an exact tie settled by the name
+and then by the checkout that holds it, all code units. Nothing divides it: no
+checkout header row, no fold, no chevron, and `enter` on a row folds nothing. A
+panel opened from a rail row or from `/odd <target>` opens with that document
+selected and read; with no target the newest row is the selection.
+- **Each row says where its copy lives.** At the pane's right, in the muted
+right-hand role the `ODD` rail uses for its own metadata, a row carries `main` or
+the worktree's own name — two worktrees sharing a basename are told apart by the
+shortest trailing path segments that distinguish them. The cell is reserved: a pane
+too narrow for both shortens the NAME — wrapped while it has room, then cut with the
+pane's own ellipsis — and never drops the checkout.
+- **The title counts the listing.** `43 documents` is how many documents the ONE
+listing holds; a live query narrows the rows on screen, never this count.
+- **`a` decides which checkouts are candidates.** It alternates the session's
+registered worktrees with every worktree Git lists for the clone, and the model is
+reloaded in the scope it names. Nothing inside the listing is folded, added or
+removed by it.
 - **Freshness.** The panel re-reads the model every time it mounts and on `r`; the
 `ODD` rail re-reads on its own floor, on the session's touches and on the host's
 worktree registration announcement. Nothing polls in the background for the open
@@ -1053,9 +1062,12 @@ from the same grouped model `/odd` draws.
 - **One row per ODD NAME, never one per checkout.** An ODD that exists in main and in
 a worktree is ONE entry, and the row's right-hand column — the shell API's own muted
 `meta` cell — names the copy the click will open: `main`, or the worktree's own name,
-never a path. Which copy that is: the most recently modified document, and on an
-exact tie `main`, because `main` is a group label and a tie-break, not an override.
-Two worktrees at the same instant are settled by the model's own group order.
+never a path. That is the ONE copy the grouped model's election kept, so the rail and
+the panel never disagree about which checkout holds an ODD: identical bytes in main
+and a worktree leave `main`, bytes that differ leave the most recently modified
+copy, and with no copy in main and identical copies in several worktrees the ORIGIN
+— the grouped checkout whose name equals the ODD name — is drawn, then the newest,
+then the earlier group. An unreadable copy is never treated as identical.
 - **The scope is the session's ASSOCIATION, inside its registered worktrees.** The
 rail lists only the ODDs this session is associated with — never every document on
 disk. Association is by ODD NAME (`odd/tasks/<name>.md`), and it is rebuilt from the
@@ -1106,7 +1118,8 @@ again once the command runs, or after a bounded safety interval of about ten sec
 if the host never ran it. A path holding spaces is one argument, exactly as typed.
 - **A frame never runs `git`.** `lines()` reads one in-process snapshot and only ever
 SCHEDULES the read: the grouped model (`git worktree list`, then one comparison per
-worktree with something to compare) is read off the frame, behind the section's own
+worktree with something to compare, and one content hash only for a name more than
+one group carries) is read off the frame, behind the section's own
 TTL, and again — immediately — when the session records a touch, when a subagent
 result is persisted (the `gentle-agents.result` message is what the parent reads its
 own history from), or when the host announces

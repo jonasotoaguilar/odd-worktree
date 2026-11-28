@@ -15,8 +15,9 @@
 //   still end alike); a generated label that still hits a literal document name
 //   (or another label) takes ` #2`, ` #3`. Every label in the listing is unique.
 // - Order: ONE comparator (`compareEntries`) — `mtimeMs` descending, then name in
-//   code units, then path in code units, exactly the rule lib/odd-docs.js's
-//   `orderDocs` and lib/odd-group.js's `compareDocs` already use. A caller that
+//   code units, then the CHECKOUT that holds the copy, then path in code units,
+//   exactly the rule lib/odd-docs.js's `orderDocs` and lib/odd-group.js's
+//   `compareDocs` already use. A caller that
 //   hands an entry a finite `order` keeps ITS sequence (the extension passes main's
 //   lib/odd-docs.js rank, whose commit recency is not mtime), with
 //   `compareEntries` breaking ties; a caller that hands nothing gets the
@@ -24,6 +25,10 @@
 //   group by group, main's group first, so picking the first entry opens what the
 //   panel's first row shows (L11 defect: `/odd`'s degraded menu order had regressed
 //   against 53ae2b2, whose menu read a main checkout's documents in that rank).
+// - Checkout: every entry carries `checkout`, the checkout it was listed from — the
+//   model's own `checkoutName`, disambiguated by the same rule the labels use when two
+//   checkouts share a basename. The panel reads it at a row's right edge
+//   (odd-dedupe S6); the menu rows do not carry it, so the degraded menu is unchanged.
 // - Fail closed: junk is skipped, never thrown on; a document with no readable
 //   mtime is the oldest (`mtimeMs` 0) and still appears; an empty group vanishes.
 // - Pure: no fs, no git, no clock, and the inputs are never mutated.
@@ -69,7 +74,7 @@ describe('identity is the resolved absolute path', () => {
     });
     assert.equal(result.menu.length, 1, 'one document, one menu row');
     assert.deepEqual(result.groups[0].entries, [
-      { path: path.join(TASKS, 'alpha.md'), name: 'alpha', mtimeMs: 10, label: 'alpha' },
+      { path: path.join(TASKS, 'alpha.md'), name: 'alpha', mtimeMs: 10, checkout: 'main', label: 'alpha' },
     ], 'the FIRST occurrence supplies name, time and label');
   });
 
@@ -252,6 +257,27 @@ describe('labels: derived, unique, and stable', () => {
   });
 });
 
+describe('each entry carries the checkout that holds it', () => {
+  test('an entry names its own checkout, and two checkouts sharing a basename are told apart', () => {
+    const a = rootOf('a', 'proj-x');
+    const b = rootOf('b', 'proj-x');
+    const result = buildListing({
+      groups: [
+        checkoutGroup('main', MAIN_ROOT, [doc(MAIN_ROOT, 'alpha', 10)], true),
+        checkoutGroup('proj-x', a, [doc(a, 'beta', 20)]),
+        checkoutGroup('proj-x', b, [doc(b, 'gamma', 30)]),
+      ],
+    });
+    assert.deepEqual(result.groups.map((group) => group.entries.map((entry) => entry.checkout)), [
+      ['main'],
+      ['a/proj-x'],
+      ['b/proj-x'],
+    ], 'a checkout alone keeps the name the model gave it; twins get the distinguishing segments');
+    assert.equal(new Set(result.groups.flatMap((group) => group.entries.map((entry) => entry.checkout))).size, 3,
+      'so the panel can never paint the same right-hand cell for two different copies');
+  });
+});
+
 describe('order: ONE comparator, flattened group by group', () => {
   test('a main-only listing is mtime DESC, then name (the pre-redesign baseline)', () => {
     const result = buildListing({
@@ -294,6 +320,17 @@ describe('order: ONE comparator, flattened group by group', () => {
     assert.deepEqual(result.groups[0].entries.map((entry) => entry.path), [early, late]);
   });
 
+  test('an equal time and name are broken by the checkout, then the path', () => {
+    const main = { name: 'x', checkout: 'main', path: '/p/z/x.md', mtimeMs: 7 };
+    const worktree = { name: 'x', checkout: 'zz', path: '/p/a/x.md', mtimeMs: 7 };
+    assert.deepEqual([worktree, main].sort(compareEntries), [main, worktree],
+      'the checkout decides in code units (`main` before `zz`), never the path or the locale');
+    // The path is still the last resort, for two entries of the SAME checkout.
+    const first = { name: 'x', checkout: 'main', path: '/p/a/x.md', mtimeMs: 7 };
+    const second = { name: 'x', checkout: 'main', path: '/p/b/x.md', mtimeMs: 7 };
+    assert.deepEqual([second, first].sort(compareEntries), [first, second]);
+  });
+
   test('the menu is main’s group first, then each group in the order given', () => {
     const wtA = rootOf('checkout-worktrees', 'wt-a');
     const wtB = rootOf('checkout-worktrees', 'wt-b');
@@ -327,7 +364,7 @@ describe('order: ONE comparator, flattened group by group', () => {
       'mtime alone would read main-three, main-two, main-one');
     assert.deepEqual(result.groups[0].entries.map((entry) => entry.name), ['main-one', 'main-two', 'main-three'],
       'the panel list and the menu draw the one preserved order');
-    assert.deepEqual(Object.keys(result.groups[0].entries[0]).sort(), ['label', 'mtimeMs', 'name', 'path'],
+    assert.deepEqual(Object.keys(result.groups[0].entries[0]).sort(), ['checkout', 'label', 'mtimeMs', 'name', 'path'],
       'the order signal stays out of the entry value');
   });
 
@@ -455,7 +492,7 @@ describe('the value shape, and purity', () => {
     });
     assert.deepEqual(Object.keys(result).sort(), ['groups', 'menu']);
     assert.deepEqual(Object.keys(result.groups[0]).sort(), ['checkoutName', 'checkoutRoot', 'entries', 'isMain']);
-    assert.deepEqual(Object.keys(result.groups[0].entries[0]).sort(), ['label', 'mtimeMs', 'name', 'path']);
+    assert.deepEqual(Object.keys(result.groups[0].entries[0]).sort(), ['checkout', 'label', 'mtimeMs', 'name', 'path']);
     assert.deepEqual(Object.keys(result.menu[0]).sort(), ['label', 'name', 'path']);
     assert.equal(result.groups[0].isMain, true);
     assert.equal(result.groups[0].checkoutRoot, MAIN_ROOT);

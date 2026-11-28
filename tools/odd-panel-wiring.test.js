@@ -293,21 +293,23 @@ describe('the grouped listing the panel draws (S10, S13)', () => {
 
       const component = host.mounts[0].component;
       const text = frameText(component);
-      // S10/S13: main always carries every ODD of main; a registered worktree
-      // carries only what it has that main does not — and, per odd-panel-groups
-      // S1, both arrive FOLDED with their count.
-      assert.match(text, /\u25b8 main \(2 odd\)/, 'main is a folded group of its own');
-      assert.match(text, /\u25b8 wt-a \(1 odd\)/, 'the registered worktree is a folded group');
-      assert.ok(!text.includes('a-only'), `a folded group shows no document\n${text}`);
-      assert.ok(!text.includes('wt-b'), `an unregistered worktree is not a group\n${text}`);
+      // S6 (T4): ONE flat listing of the elected copies. Main and the registered
+      // worktree contribute ROWS, not headers, and each row says where its copy lives.
+      assert.deepEqual(rowLabels(component), ['a-only', 'main-two', 'main-one'],
+        `one row per document, newest modified first\n${text}`);
+      assert.deepEqual(rowMetas(component), ['wt-a', 'main', 'main'],
+        `each row names the checkout that holds it\n${text}`);
+      assert.ok(!/\(\d+ odd\)/.test(text), `no group header row is drawn\n${text}`);
+      assert.ok(!text.includes('\u25be'), `nor a fold chevron\n${text}`);
+      assert.ok(!text.includes('wt-b'), `an unregistered worktree is never named\n${text}`);
       assert.ok(!text.includes('b-only'), `nor is one of its documents listed\n${text}`);
       assert.match(text, /3 documents/, 'main’s two plus the worktree’s one');
-      // Opening the worktree group shows the document that belongs to it.
-      component.handleInput('down');
-      component.handleInput('enter');
-      const opened = frameText(component);
-      assert.match(opened, /\u25be wt-a \(1 odd\)/, 'Enter opens that group');
-      assert.match(opened, /a-only/, 'and its own document under it');
+
+      // S6 (T4): the worktree’s document is a row of the SAME list, and its row is
+      // the one that names the worktree it lives in.
+      await focusRow(component, 'a-only');
+      assert.equal(focusedLabel(component), 'a-only', 'its own row is selectable');
+      assert.match(frameText(component), /body of a-only/, 'and reads its own body');
 
       // The unregistered checkout was never asked anything: no worktree listing
       // of its own, no merge-base, no diff, no status.
@@ -322,7 +324,7 @@ describe('the grouped listing the panel draws (S10, S13)', () => {
     }
   });
 
-  test('a registered worktree with no difference from main draws no group chrome', async () => {
+  test('a registered worktree with no difference from main draws no chrome at all', async () => {
     const loaded = await load();
     const observed = observeGit(loaded.mod);
     try {
@@ -341,15 +343,16 @@ describe('the grouped listing the panel draws (S10, S13)', () => {
 
       const rows = renderedRows(host.mounts[0].component);
       const text = rows.join('\n');
-      // A drawn group always paints an EXPANDED header on a fresh mount (`▾`);
-      // `▸` alone would be ambiguous, because that is also the selection mark of
-      // the focused row.
+      // S6 (T4): the unchanged worktree contributes no ROW, so it is never named —
+      // and no fold chevron exists for any checkout.
       assert.ok(!rows.some((row) => row.includes('\u25be')),
-        `no group chrome is drawn for an empty delta\n${text}`);
+        `no fold chrome is drawn for an empty delta\n${text}`);
       assert.ok(!text.includes('wt-same'), `the unchanged worktree is never named\n${text}`);
+      assert.deepEqual(rowLabels(host.mounts[0].component), ['main-two', 'main-one'],
+        `main’s own documents, newest modified first\n${text}`);
+      assert.deepEqual(rowMetas(host.mounts[0].component), ['main', 'main'],
+        `and each names main\n${text}`);
       assert.match(text, /2 documents/, 'the ordinary main-only count');
-      assert.match(text, /main-one/);
-      assert.match(text, /main-two/);
 
       await closePanel(host, pending);
     } finally {
@@ -379,27 +382,26 @@ describe('the grouped listing the panel draws (S10, S13)', () => {
       observed.clear();
       component.handleInput('a');
       await waitFor(() => observed.readsIn(other).length > 0, 'the unscoped reload compared wt-b');
-      await waitFor(() => frameText(component).includes('wt-b'), 'the second group is drawn');
+      await waitFor(() => rowMetas(component).includes('wt-b'), 'the second checkout is drawn');
       assert.equal(observed.listing().length, 1, 'one grouped reload, one worktree listing');
       assert.match(frameText(component), /a session only/, 'the hint follows the mode');
-      // S1: the group the reload just added arrives folded; opening it is what
-      // reveals its document.
-      assert.match(frameText(component), /\u25b8 wt-b \(1 odd\)/);
-      component.handleInput('down');
-      component.handleInput('down');
-      component.handleInput('enter');
-      assert.match(frameText(component), /\u25be wt-b \(1 odd\)/, 'Enter opens the new group');
-      assert.match(frameText(component), /b-only/);
+      // S6 (T4): the reload adds ROWS to the same flat list, each naming its own
+      // checkout — never a header row for the new checkout.
+      assert.ok(rowLabels(component).includes('b-only'), 'the new candidate’s document is drawn');
+      assert.ok(rowMetas(component).includes('wt-b'), 'its row names the worktree it lives in');
+      assert.ok(!/\(\d+ odd\)/.test(frameText(component)), 'and no header row is drawn for it');
+      await focusRow(component, 'b-only');
+      assert.match(frameText(component), /body of b-only/, 'selecting it reads its own body');
 
       // `a` again: back to the session's registered set only.
       observed.clear();
       component.handleInput('a');
-      await waitFor(() => !frameText(component).includes('wt-b'), 'the unregistered group goes');
+      await waitFor(() => !frameText(component).includes('wt-b'), 'the unregistered row goes');
       assert.deepEqual(observed.readsIn(other), [],
         'the registered reload never asks an unregistered worktree anything');
       assert.equal(observed.listing().length, 1, 'and it re-enumerates the checkouts once');
       assert.match(frameText(component), /a all worktrees/, 'the hint returns with the mode');
-      assert.match(frameText(component), /\u25b8 wt-a \(1 odd\)/);
+      assert.ok(rowMetas(component).includes('wt-a'), 'the registered worktree still names itself');
 
       await closePanel(host, pending);
     } finally {
@@ -438,6 +440,61 @@ describe('main is the checkout the panel ranks (S6, S10, S12, S13)', () => {
         `the ranked refresh keeps the document the target opened\n${text}`);
       assert.ok(!text.includes('a-only'),
         `the session checkout's documents never become main's\n${text}`);
+
+      await closePanel(host, pending);
+    } finally {
+      observed.restore();
+    }
+  });
+
+  // odd-dedupe T3 (S3): `oddRankedMain` hands main's group a FRESH full listing of
+  // main's checkout after the model answered, so before this fix a main copy the
+  // election had dropped came back and the same ODD was drawn twice. The merge must
+  // keep exactly what the election kept: the count of ROWS is the proof, because a
+  // replaced group would carry main's older `main-zero` again beside the worktree's.
+  // S6 (T4) then draws those rows as ONE flat listing, newest modified first, each
+  // naming the checkout that holds its copy.
+  test('T3: the ranked-main merge keeps the election (S3)', async (t) => {
+    const loaded = await load();
+    const observed = observeGit(loaded.mod);
+    try {
+      const repo = makeRepo();
+      const worktree = addWorktree(repo, 'wt-a');
+      const at = (target, secondsAgo) => {
+        const when = (Date.now() - secondsAgo * 1000) / 1000;
+        fs.utimesSync(target, when, when);
+      };
+      // A third document, committed in MAIN after the worktree was branched, so main's
+      // group still holds two documents once the election takes this one away.
+      at(writeTask(repo, 'main-zero', '# body of main-zero\n'), 300);
+      git(repo, ['add', '-A']);
+      git(repo, ['commit', '-m', 'main-zero']);
+      // The registered worktree holds MAIN'S OWN ODD with different, NEWER bytes: the
+      // election draws only the worktree's copy (S3) and main's group loses the name.
+      at(writeTask(worktree, 'main-zero', '# body of the newer worktree copy\n'), 10);
+      const host = mountHost();
+      const pending = loaded.commands.get('odd').handler('', ctxFor(repo, host, [worktree]));
+      pending.catch(() => {});
+      await waitFor(() => host.mounts.length === 1, 'the panel mounts');
+      const component = host.mounts[0].component;
+
+      // The merge under test runs when the RANKED listing lands, after the first frame.
+      await waitForRankedListing(observed, [repo]);
+      t.diagnostic(`labels: ${JSON.stringify(rowLabels(component))}`);
+
+      // THREE rows, never four: main holds the two copies the election KEPT, and the
+      // worktree holds the surviving `main-zero`. A merge that replaced main's group
+      // would draw main's older copy as a fourth row.
+      assert.deepEqual(rowLabels(component), ['main-zero', 'main-two', 'main-one'],
+        `the merge keeps the election, in the listing's mtime order\n${frameText(component)}`);
+      assert.deepEqual(rowMetas(component), ['wt-a', 'main', 'main'],
+        `and the single main-zero row is the WORKTREE's copy\n${frameText(component)}`);
+
+      // Its body proves which copy that row is.
+      await focusRow(component, 'main-zero');
+      const text = frameText(component);
+      assert.match(text, /body of the newer worktree copy/, `the worktree copy is the one drawn\n${text}`);
+      assert.ok(!text.includes('body of main-zero'), `main's dropped copy is never drawn\n${text}`);
 
       await closePanel(host, pending);
     } finally {
@@ -627,9 +684,11 @@ describe('`/odd <target>` (S6)', () => {
       await waitFor(() => host.mounts.length === 1, 'the panel mounts');
 
       assert.deepEqual(host.notifications, [], 'the target is accepted, not refused');
-      const text = frameText(host.mounts[0].component);
-      assert.match(text, /\u25be wt-a/, 'its group is unfolded');
-      assert.match(text, /body of a-only/, 'and the panel is reading THAT document');
+      const component = host.mounts[0].component;
+      const text = frameText(component);
+      assert.ok(rowMetas(component).includes('wt-a'), 'its row names the worktree that holds it');
+      assert.equal(focusedLabel(component), 'a-only', 'and the requested row is the selection');
+      assert.match(text, /body of a-only/, 'the panel is reading THAT document');
 
       await closePanel(host, pending);
     } finally {
@@ -681,9 +740,11 @@ describe('`/odd <target>` (S6)', () => {
       await waitFor(() => host.mounts.length === 1, 'the panel mounts');
 
       assert.deepEqual(host.notifications, []);
-      const text = frameText(host.mounts[0].component);
+      const component = host.mounts[0].component;
+      const text = frameText(component);
       assert.match(text, /body of a-only/, 'the panel is reading the named ODD');
-      assert.match(text, /\u25be wt-a/, 'and its group is unfolded to show it');
+      assert.equal(focusedLabel(component), 'a-only', 'on its own selected row');
+      assert.ok(rowMetas(component).includes('wt-a'), 'which names the worktree that holds it');
 
       await closePanel(host, pending);
     } finally {
@@ -747,13 +808,13 @@ describe('T6 verifier regressions (S11, S13, D2)', () => {
     try {
       await waitFor(() => host.mounts.length === 1, 'mount');
       const view = host.mounts[0].component;
-      // odd-panel-groups S1: groups are folded, so the witness of a scope is its
-      // GROUP HEADER, which is drawn either way.
-      assert.doesNotMatch(frameText(view), /wt-t6-outside \(1 odd\)/);
+      // S6 (T4): the witness of a scope is the ROW of a document only that scope
+      // lists, and its right-hand cell names the checkout that holds it.
+      assert.ok(!rowMetas(view).includes('wt-t6-outside'), 'the outside worktree is not a candidate');
       view.handleInput('a');
       // An owned worktree's delta is a witness that this was not just the pre-reload frame.
-      await waitFor(() => /wt-t6-witness \(1 odd\)/.test(frameText(view)), 'all-mode reload');
-      assert.match(frameText(view), /wt-t6-outside \(1 odd\)/);
+      await waitFor(() => rowMetas(view).includes('wt-t6-witness'), 'all-mode reload');
+      assert.ok(rowMetas(view).includes('wt-t6-outside'), 'every worktree is a candidate now');
     } finally {
       await closePanel(host, pending);
     }
@@ -816,13 +877,14 @@ describe('T6 verifier regressions (S11, S13, D2)', () => {
       await waitFor(() => host.mounts.length === 1, 'mount');
       await waitForRankedListing(observed, [repo]);
       const view = host.mounts[0].component;
-      // odd-panel-groups S1: the group arrives folded, so its HEADER is the witness.
-      assert.doesNotMatch(frameText(view), /wt-t6-new-registration \(1 odd\)/);
+      // S6 (T4): the newly registered worktree's row — and its right-hand checkout
+      // cell — is the witness that the reload read the register at RELOAD time.
+      assert.ok(!rowMetas(view).includes('wt-t6-new-registration'));
       roots.push(linked);
       observed.clear();
       view.handleInput('r');
       await waitForRankedListing(observed, [repo]);
-      assert.match(frameText(view), /wt-t6-new-registration \(1 odd\)/);
+      assert.ok(rowMetas(view).includes('wt-t6-new-registration'));
     } finally {
       observed.restore();
       await closePanel(host, pending);
@@ -850,13 +912,13 @@ describe('the ODD panel is not gated by Worktrees+ (corrected S7)', () => {
       await waitFor(() => host.mounts.length === 1, 'the panel mounts');
       const component = host.mounts[0].component;
       assert.deepEqual(host.notifications, []);
-      assert.match(frameText(component), /\u25be wt-a/);
+      assert.ok(rowMetas(component).includes('wt-a'), 'the target’s row names its checkout');
       assert.match(frameText(component), /body of a-only/);
       assert.ok(!frameText(component).includes('wt-b'), 'the scope is still the registered set');
 
       observed.clear();
       component.handleInput('a');
-      await waitFor(() => frameText(component).includes('wt-b'), '`a` still shows every worktree');
+      await waitFor(() => rowMetas(component).includes('wt-b'), '`a` still shows every worktree');
 
       await closePanel(host, pending);
     } finally {
@@ -882,10 +944,10 @@ test('T6 independent: while an all-mode read is held the hint still matches the 
     delayed.arm();
     v.handleInput('a');
     await waitFor(() => delayed.pending.length === 1, 'held all-mode read');
-    assert.doesNotMatch(frameText(v), /held-all \(1 odd\)/);
+    assert.ok(!rowMetas(v).includes('held-all'), 'the held scope is not drawn yet');
     assert.match(frameText(v), /a all worktrees/);
     delayed.pending[0].resolve(await delayed.real(delayed.pending[0].input));
-    await waitFor(() => frameText(v).includes('held-all (1 odd)'), 'all-mode result');
+    await waitFor(() => rowMetas(v).includes('held-all'), 'all-mode result');
     assert.match(frameText(v), /a session only/);
   } finally {
     for (const read of delayed.pending) read.resolve([]);
@@ -918,8 +980,8 @@ test('T6 independent: a late initial rank cannot replace a newer all-mode listin
     writeTask(repo, 'late-main', '# Added while ranking\n');
     v.handleInput('a');
     await waitFor(
-      () => /rank-witness \(1 odd\)/.test(frameText(v)) && /main \(3 odd\)/.test(frameText(v)),
-      'new all-mode frame',
+      () => rowMetas(v).includes('rank-witness') && rowLabels(v).length === 4,
+      'new all-mode frame (main’s three plus the witness)',
     );
     const before = frameText(v);
     release();
@@ -966,7 +1028,7 @@ test('T6 round 4: latest r publishes the hint with the pending a scope (S11)', a
     v.handleInput('r');
     await waitFor(() => d.pending.length === 2, 'both requests held');
     d.pending[1].resolve(await d.real(d.pending[1].input));
-    await waitFor(() => /linked \(1 odd\)/.test(frameText(v)), 'latest r result');
+    await waitFor(() => rowMetas(v).includes('linked'), 'latest r result');
     assert.match(frameText(v), /a session only/);
   } finally {
     for (const read of d.pending) read.resolve(null);
@@ -993,7 +1055,7 @@ test('T6 round 4: a failed all-worktree Git read keeps drawn rows and hint (S11/
     await waitForRankedListing(observed, [repo]);
     const v = host.mounts[0].component;
     const before = frameText(v);
-    assert.match(before, /registered \(1 odd\)/);
+    assert.ok(rowMetas(v).includes('registered'), 'the registered worktree’s row is drawn');
     g.runArgvAsync = (bin, args, opts) => args.includes('worktree') && args.includes('list')
       ? (failedRead = run(bin, ['worktree', 'list', '--t6-invalid-option'], opts))
       : run(bin, args, opts);
@@ -1118,26 +1180,27 @@ test('T6 round 4: every release order leaves the latest applied load (S11/S13/D2
         if (kind === plan.latest) {
           expectedAll = kind === 'r';
           await waitFor(() => {
-            const text = frameText(view);
+            const drawn = rowMetas(view).includes('other');
+            const hint = frameText(view);
             return expectedAll
-              ? /other \(1 odd\)/.test(text) && /a session only/.test(text)
-              : !/other \(1 odd\)/.test(text) && /a all worktrees/.test(text);
+              ? drawn && /a session only/.test(hint)
+              : !drawn && /a all worktrees/.test(hint);
           }, `${label}: ${kind} applied`);
         } else {
           await new Promise((resolve) => setImmediate(resolve));
           assert.equal(frameText(view), before, `${label}: the superseded ${kind} changed nothing`);
         }
         const text = frameText(view);
-        assert.equal(/other \(1 odd\)/.test(text), expectedAll,
+        assert.equal(rowMetas(view).includes('other'), expectedAll,
           `${label}: the drawn rows follow the latest applied load`);
         assert.match(text, expectedAll ? /a session only/ : /a all worktrees/,
           `${label}: the hint describes that same applied load`);
-        assert.match(text, /registered \(1 odd\)/, `${label}: the session delta is drawn in both modes`);
+        assert.ok(rowMetas(view).includes('registered'), `${label}: the session delta is drawn in both modes`);
         releases += 1;
       }
       await new Promise((resolve) => setImmediate(resolve));
       const settled = frameText(view);
-      assert.equal(/other \(1 odd\)/.test(settled), expectedAll, `${label}: nothing stale lands afterwards`);
+      assert.equal(rowMetas(view).includes('other'), expectedAll, `${label}: nothing stale lands afterwards`);
       assert.match(settled, expectedAll ? /a session only/ : /a all worktrees/, `${label}: the final hint`);
     } finally {
       for (const read of deferred.pending) read.resolve(sessionModel);
@@ -1203,13 +1266,13 @@ function perms(plan) {
 }
 
 // The frame the E1 probe measures: the registered witness is always there, the
-// outside one only in the all-worktrees mode, and the hint names that mode.
+// outside one only in the all-worktrees mode, and the hint names that mode. S6 (T4):
+// the witness is the ROW of a document only that scope lists, and the checkout it
+// names at its right edge — the panel draws no group headers at all.
 function markFrame(v, all) {
   const text = frameText(v);
-  // odd-panel-groups S1: every group is folded, so the scope is read from the group
-  // HEADERS, which are painted whether a group is open or closed.
-  assert.match(text, /registered \(1 odd\)/);
-  assert.equal(/elsewhere \(1 odd\)/.test(text), all, text);
+  assert.ok(rowMetas(v).includes('registered'), text);
+  assert.equal(rowMetas(v).includes('elsewhere'), all, text);
   assert.ok(text.includes(all ? 'a session only' : 'a all worktrees'), text);
 }
 
@@ -1511,15 +1574,21 @@ test('F2 preserve: a standard repository still offers MAIN\u2019s documents when
 });
 
 // ---------------------------------------------------------------------------
-// T17/F3 (L11): the panel draws the LISTING's label, not the model's raw name. Two
-// registered checkouts that share a basename drew `collision` twice (the label the
-// listing had already made unique never reached the frame), so the human could not
-// tell the rows apart. The label is derived once, in lib/odd-listing.js, and the
-// wiring now hands it over with every document; keyboard selection still resolves
-// each row to its own absolute path, so each copy opens its own body.
+// T17/F3 (L11) → odd-dedupe T4 (S6): the panel draws the LISTING's labels, and each
+// row names the checkout that holds its copy at the right edge. Two registered
+// checkouts that share a basename drew the same label twice before L11; the label is
+// still derived once, in lib/odd-listing.js, and the copy's own checkout is derived
+// there too, so the two rows can be told apart by BOTH their names and their
+// right-hand checkout cell, and keyboard selection still resolves each row to its own
+// absolute path.
 //
-// A listing WITHOUT labels keeps the view's current behaviour: the standard
-// single-root repository paints plain names, exactly as before (pinned below).
+// odd-dedupe (S1): one ODD NAME is drawn once across main and every registered
+// worktree, so these two checkouts cannot both hold a `collision` document any more
+// — their DOCUMENTS are distinct and only the CHECKOUTS keep the shared basename,
+// which is what the right-hand cell must still tell apart.
+//
+// A listing WITHOUT a checkout keeps the view's current behaviour: the flat `docs`
+// path paints plain names and no checkout column, exactly as before (pinned below).
 // ---------------------------------------------------------------------------
 // The LEFT pane of a frame: the rows between the frame's own chrome — never the
 // border lines, the search box or the footer legend.
@@ -1527,21 +1596,25 @@ const listCells = (component) => renderedRows(component)
   .filter((line) => /^\u2502/.test(line))
   .map((line) => (line.split('\u2502')[1] || ''))
   .filter((cell) => cell.trim() !== '' && !/^\u203a|^\u2191/.test(cell.trim()));
-// A row's label with the CURSOR and the group's own fold marker removed, so a row
-// reads the same however it is drawn (odd-panel-groups S1 folds every group, so a
-// marker is present on rows that are not focused at all).
-const cellLabel = (cell) => cell.trim()
-  .replace(/^[\u25b8\u25be]\s*/, '')
-  .replace(/^[\u25b8\u25be]\s*/, '')
-  .replace(/\s+/g, ' ');
-const rowLabels = (component) => listCells(component)
-  .map(cellLabel)
-  .filter((cell) => cell !== '');
+// A row reads its document at the LEFT and the checkout that holds it at the RIGHT,
+// at least two cells apart (S6), so one split answers both parts and the cursor
+// (`\u25b8`) is accounted for on either side.
+const cellParts = (cell) => {
+  const text = cell.replace(/^\s*\u25b8\s*/, '').trim();
+  const split = /^(.*?)\s{2,}(\S.*)$/.exec(text);
+  return split === null ? { label: text, meta: '' } : { label: split[1].trim(), meta: split[2].trim() };
+};
+const rowParts = (component) => listCells(component)
+  .map((cell) => ({ focused: cell[1] === '\u25b8', ...cellParts(cell) }))
+  .filter((row) => row.label !== '');
+const rowLabels = (component) => rowParts(component).map((row) => row.label);
+// The checkout cell of every row, in the listing's order (S6).
+const rowMetas = (component) => rowParts(component).map((row) => row.meta);
 // The CURSOR is the first cell after the frame's `\u2502 `, so it sits at index 1 of
-// the pane cell while a folded group's marker is indented past it.
+// the pane cell.
 const focusedLabel = (component) => {
-  const cell = listCells(component).find((value) => value[1] === '\u25b8');
-  return cell === undefined ? null : cellLabel(cell);
+  const row = rowParts(component).find((entry) => entry.focused);
+  return row === undefined ? null : row.label;
 };
 async function focusRow(component, label) {
   let guard = 0;
@@ -1567,31 +1640,34 @@ test('F3: two registered checkouts sharing a basename paint two different labels
   };
   const a = linkedAt('a', 'feat/first-same');
   const b = linkedAt('b', 'feat/second-same');
-  writeTask(a, 'collision', '# First copy\n');
-  writeTask(b, 'collision', '# Second copy\n');
-  const labelOf = (root) => `collision (${path.basename(path.dirname(root))}/${path.basename(root)})`;
+  // Distinct ODD names (S1: one name is drawn once across every checkout); the shared
+  // basename of the CHECKOUTS is what the right-hand cell must tell apart.
+  writeTask(a, 'collision-first', '# First copy\n');
+  writeTask(b, 'collision-second', '# Second copy\n');
+  const labelOf = (root) => `collision-${path.basename(path.dirname(root)) === 'a' ? 'first' : 'second'}`;
   const host = mountHost();
   const pending = doOdd(e, '', ctxFor(repo, host, [a, b]));
   try {
     await waitFor(() => host.mounts.length === 1, 'the panel mounts');
     const v = host.mounts[0].component;
     const text = frameText(v);
-    t.diagnostic(`labels: ${JSON.stringify(rowLabels(v))}`);
-    // odd-panel-groups S1: both groups arrive FOLDED, so their own headers are the
-    // rows that must tell them apart.
-    const headers = rowLabels(v).filter((label) => label.includes('same checkout'));
-    assert.equal(headers.length, 2, `both groups are listed\n${text}`);
-    assert.notEqual(headers[0], headers[1], 'the two headers read differently');
-    assert.deepEqual(headers.slice().sort(), [
-      'a/same checkout (1 odd)',
-      'b/same checkout (1 odd)',
-    ], 'each is qualified with the directory that tells it apart');
+    t.diagnostic(`labels: ${JSON.stringify(rowLabels(v))}; metadatas: ${JSON.stringify(rowMetas(v))}`);
+    // S6 (T4): both documents are ROWS of one flat list, and the shared checkout
+    // basename is told apart at each row's right edge, qualified with the directory
+    // that distinguishes the two checkouts.
+    assert.deepEqual(
+      rowLabels(v).filter((label) => label.startsWith('collision-')).sort(),
+      ['collision-first', 'collision-second'],
+      `both documents are listed\n${text}`,
+    );
+    assert.deepEqual(
+      rowMetas(v).filter((meta) => meta.endsWith('same checkout')).sort(),
+      ['a/same checkout', 'b/same checkout'],
+      `each row names its own checkout, told apart by its directory\n${text}`,
+    );
     for (const [root, body] of [[a, /First copy/], [b, /Second copy/]]) {
-      const parent = path.basename(path.dirname(root));
-      await focusRow(v, `${parent}/same checkout (1 odd)`);
-      v.handleInput('enter');
       await focusRow(v, labelOf(root));
-      assert.match(frameText(v), body, `${parent}: its own body is open`);
+      assert.match(frameText(v), body, `${path.basename(path.dirname(root))}: its own body is open`);
     }
   } finally {
     await closePanel(host, pending);
@@ -1605,13 +1681,15 @@ test('F3 preserve: a standard single-root repository still paints plain document
   const pending = doOdd(e, '', ctxFor(repo, host, []));
   try {
     await waitFor(() => host.mounts.length === 1, 'the panel mounts');
-    // The fixture's mtimes are deliberately the OPPOSITE of its rank (T16 depends on that),
-    // and the panel can paint the cheap mtime scan before the ranked listing lands, so the
-    // frame read here has to be the settled one: wait for the rank, then assert it.
-    await waitFor(() => rowLabels(host.mounts[0].component).join('|') === 'main-one|main-two',
-      'the settled frame is the ranked listing');
-    assert.deepEqual(rowLabels(host.mounts[0].component), ['main-one', 'main-two'],
-      'unique names keep their exact plain text, in the rank the panel reads');
+    // S6 (T4): the panel's order is modification time, so the later-stamped
+    // `main-two` is the first row — the cheap scan and the ranked merge both draw
+    // that order now, and the labels are still the listing's plain ones.
+    await waitFor(() => rowLabels(host.mounts[0].component).join('|') === 'main-two|main-one',
+      'the settled frame is the listing');
+    assert.deepEqual(rowLabels(host.mounts[0].component), ['main-two', 'main-one'],
+      'unique names keep their exact plain text, newest modified first');
+    assert.deepEqual(rowMetas(host.mounts[0].component), ['main', 'main'],
+      'and a filtered/single-checkout listing still names main per row');
   } finally {
     await closePanel(host, pending);
   }
@@ -1700,7 +1778,10 @@ test('E5: two registered real worktrees with the same basename cannot select eac
   const repo = makeRepo();
   const a = outside(repo, 'one', 'same checkout', 'feat/first-same');
   const b = outside(repo, 'two', 'same checkout', 'feat/second-same');
-  const pa = writeTask(a, 'collision', '# First copy'), pb = writeTask(b, 'collision', '# Second copy');
+  // Distinct ODD names: S1 draws one copy per name across every checkout, so the two
+  // checkouts keep their shared BASENAME and nothing else is shared.
+  const pa = writeTask(a, 'collision-first', '# First copy');
+  const pb = writeTask(b, 'collision-second', '# Second copy');
   assert.ok(git(repo, ['worktree', 'list', '--porcelain']).includes(a));
   assert.ok(git(repo, ['worktree', 'list', '--porcelain']).includes(b));
   const selections = [];
@@ -1842,7 +1923,7 @@ test('separated git dir named .git does not admit documents outside a checkout',
   } finally { g.runArgvAsync = real; await closePanel(host, pending); }
 });
 
-test('round-trip scope toggle preserves ranked order with identical rows', async () => {
+test('round-trip scope toggle preserves the drawn rows and their checkouts', async () => {
   const e = await load(), root = makeRepo(), host = mountHost();
   addWorktree(root, 'unchanged');
   const degraded = await chooseMenu(e, root, [], (labels) => labels[0]);
@@ -1850,13 +1931,19 @@ test('round-trip scope toggle preserves ranked order with identical rows', async
   try {
     await waitFor(() => host.mounts.length, 'mount');
     const view = host.mounts[0].component;
-    await waitFor(() => rowLabels(view).join(',') === 'main-one,main-two', 'ranked order');
-    assert.deepEqual(rowLabels(view), degraded.labels);
+    // S6 (T4): the panel's order is modification time, so main-two (the later
+    // stamp) is the first row; the menu keeps the RANK it is handed (T16). The two
+    // surfaces still draw the same DOCUMENTS under the same labels.
+    await waitFor(() => rowLabels(view).join(',') === 'main-two,main-one', 'the settled listing');
+    const settled = rowLabels(view);
+    assert.deepEqual(settled.slice().sort(), degraded.labels.slice().sort(),
+      'the panel and the menu draw the same documents, under the same labels');
     view.handleInput('a');
     await waitFor(() => frameText(view).includes('a session only'), 'all applied');
     view.handleInput('a');
     await waitFor(() => frameText(view).includes('a all worktrees'), 'session applied');
-    assert.deepEqual(rowLabels(view), degraded.labels);
+    assert.deepEqual(rowLabels(view), settled, 'the rows a scope round trip draws are the same ones');
+    assert.deepEqual(rowMetas(view), ['main', 'main'], 'and each still names main');
   } finally { await closePanel(host, pending); }
 });
 

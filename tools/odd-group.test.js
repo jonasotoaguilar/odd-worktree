@@ -8,6 +8,15 @@
 // not a document) named by the last segment of that path, carrying ONLY the
 // documents that are new or modified relative to main.
 //
+// S1-S5 (odd-dedupe): those two lists are CANDIDATES. A worktree CHAIN (a worktree
+// created from another feature branch) repeats its ancestor's ODD documents, so one
+// name arrives in several groups, and exactly ONE copy per name is drawn across main
+// and every grouped worktree. Identity is CONTENT (sha256 of the copy's bytes, read
+// only for a name that has more than one copy), an unreadable copy is UNKNOWN rather
+// than identical, main wins an identical pair, and otherwise the newest copy wins —
+// with the ORIGIN worktree (the grouped checkout NAMED after the ODD) winning between
+// identical copies main does not have.
+//
 // "New or modified" is two comparisons, both required: the candidate set is what
 // the worktree's branch changed relative to the MERGE BASE with main (`git
 // merge-base HEAD <mainHead>`, then a name-status diff against that base), so a
@@ -232,14 +241,15 @@ describe('S10: a worktree carries only its delta against main', () => {
     });
     assert.deepEqual(groups[1].docs.map((doc) => doc.docPath), [fresh, changed]);
     assert.deepEqual(groups[1].docs.map((doc) => doc.mtimeMs), [mtimeOf(fresh), mtimeOf(changed)]);
-    // Main still carries every one of its own documents, alpha included.
-    assert.deepEqual(groups[0].docs.map((doc) => doc.name), ['beta', 'alpha']);
+    // Main still carries every document it KEEPS: `beta` is drawn from the worktree
+    // now, because its copy is the newer one (S3), so only `alpha` is left here.
+    assert.deepEqual(groups[0].docs.map((doc) => doc.name), ['alpha']);
   });
 
   test('added is a path main does not have; modified is a path it does', async () => {
     const box = machine('statuses');
     const worktree = box.worktree('odd-rail');
-    writeDoc(box.mainRoot, 'kept', { body: 'main\n' });
+    writeDoc(box.mainRoot, 'kept', { body: 'main\n', at: '2020-01-01T00:00:00.000Z' });
     writeDoc(worktree, 'kept', { body: 'worktree\n', at: '2020-02-01T00:00:00.000Z' });
     writeDoc(worktree, 'brand-new', { body: '# brand-new\n', at: '2020-01-01T00:00:00.000Z' });
     const git = fakeGit({ paths: [box.mainRoot, worktree] });
@@ -288,7 +298,7 @@ describe('S10: a worktree carries only its delta against main', () => {
   test('a committed change still counts: the diff is against the merge base, not the working tree', async () => {
     const box = machine('committed');
     const worktree = box.worktree('odd-rail');
-    writeDoc(box.mainRoot, 'spec', { body: 'before\n' });
+    writeDoc(box.mainRoot, 'spec', { body: 'before\n', at: '2020-01-01T00:00:00.000Z' });
     writeDoc(worktree, 'spec', { body: 'after\n', at: '2020-02-01T00:00:00.000Z' });
     const git = fakeGit({ paths: [box.mainRoot, worktree] });
     git.delta(worktree, [['M', 'odd/tasks/spec.md']]);
@@ -372,11 +382,14 @@ describe('S10: group order and per-group order', () => {
     const box = machine('order-docs');
     const worktree = box.worktree('odd-rail');
     const stamp = '2020-03-01T00:00:00.000Z';
+    // The worktree's two copies are NEWER, so they are the ones drawn (S3) and the
+    // code-unit tie between them is what its own order shows.
+    const newer = '2020-04-01T00:00:00.000Z';
     writeDoc(box.mainRoot, 'b', { at: stamp });
     writeDoc(box.mainRoot, 'a', { at: stamp });
     writeDoc(box.mainRoot, 'z', { at: '2020-01-01T00:00:00.000Z' });
-    writeDoc(worktree, 'B', { body: 'worktree B\n', at: stamp });
-    writeDoc(worktree, 'a', { body: 'worktree a\n', at: stamp });
+    writeDoc(worktree, 'B', { body: 'worktree B\n', at: newer });
+    writeDoc(worktree, 'a', { body: 'worktree a\n', at: newer });
     writeDoc(worktree, 'older', { body: 'worktree older\n', at: '2020-01-01T00:00:00.000Z' });
     const git = fakeGit({ paths: [box.mainRoot, worktree] });
     git.delta(worktree, [
@@ -385,9 +398,181 @@ describe('S10: group order and per-group order', () => {
 
     const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync });
 
+    // `a` is drawn from the worktree (its copy is newer), so main keeps `b` and `z`.
+    assert.deepEqual(groups[0].docs.map((doc) => doc.name), ['b', 'z']);
     // `B` sorts before `a` by code unit, never by locale.
-    assert.deepEqual(groups[0].docs.map((doc) => doc.name), ['a', 'b', 'z']);
     assert.deepEqual(groups[1].docs.map((doc) => doc.name), ['B', 'a', 'older']);
+  });
+});
+
+// S1-S5 (odd-dedupe): the candidate lists above can name the SAME ODD in several
+// groups, because a worktree chain inherits its ancestor's documents. The panel and
+// the rail draw one row per name, so the copies are ELECTED here: one per name
+// across main and every grouped worktree, the losers dropped from their own group.
+// Identity is the copy's own bytes; recency is the copy's own mtime; the ORIGIN is
+// the grouped worktree NAMED after the ODD, which is how this package creates one.
+describe('S1-S5: one ODD name is drawn once across main and every worktree', () => {
+  // Every group's document names, flattened in group order: a repeat is a duplicate.
+  const drawn = (groups) => groups.flatMap((group) => group.docs.map((doc) => doc.name));
+
+  test('S1: one name is never drawn in two groups, in either scope', async () => {
+    const box = machine('dedupe-s1');
+    const worktree = box.worktree('odd-rail');
+    writeDoc(box.mainRoot, 'shared', { body: 'main\n', at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(worktree, 'shared', { body: 'worktree, newer\n', at: '2020-03-01T00:00:00.000Z' });
+
+    for (const scope of [{ roots: [worktree] }, { all: true }]) {
+      const git = fakeGit({ paths: [box.mainRoot, worktree] });
+      git.delta(worktree, [['M', 'odd/tasks/shared.md']]);
+
+      const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync, ...scope });
+
+      assert.deepEqual(groups.map((group) => group.checkoutName), ['main', 'odd-rail']);
+      assert.deepEqual(drawn(groups), ['shared'], `one copy under ${JSON.stringify(scope)}`);
+    }
+  });
+
+  test('S2: an identical copy in main and a worktree is drawn only from main', async () => {
+    const box = machine('dedupe-s2');
+    const worktree = box.worktree('odd-rail');
+    writeDoc(box.mainRoot, 'shared', { body: '# shared\n\nthe same bytes\n' });
+    writeDoc(worktree, 'shared', { body: '# shared\n\nthe same bytes\n', at: '2020-03-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, worktree] });
+    git.delta(worktree, [['M', 'odd/tasks/shared.md']]);
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync });
+
+    assert.deepEqual(groups[0].docs.map((doc) => doc.name), ['shared'], 'main keeps its own copy');
+    assert.deepEqual(groups[1].docs, [], 'the identical worktree copy is not drawn');
+    assert.deepEqual(drawn(groups), ['shared']);
+  });
+
+  test('S3: different content draws only the most recently modified copy', async () => {
+    const box = machine('dedupe-s3');
+    const worktree = box.worktree('odd-rail');
+    writeDoc(box.mainRoot, 'shared', { body: 'main, older\n', at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(worktree, 'shared', { body: 'worktree, newer\n', at: '2020-06-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, worktree] });
+    git.delta(worktree, [['M', 'odd/tasks/shared.md']]);
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync });
+
+    assert.deepEqual(groups[0].docs, [], 'main holds the older copy, so it is not drawn');
+    assert.deepEqual(contract(groups[1]).docs, [{ name: 'shared', status: 'modified' }]);
+    assert.deepEqual(drawn(groups), ['shared']);
+  });
+
+  // S3, the other half of the gate: a worktree copy that differs only because MAIN
+  // advanced is no difference of the worktree's own, so it never enters the election
+  // — not even when its inherited mtime is the newer one.
+  test('S3: a worktree that never touched the document cannot win on mtime', async () => {
+    const box = machine('no-touch');
+    const worktree = box.worktree('odd-rail');
+    writeDoc(box.mainRoot, 'shared', { body: 'main\n', at: '2020-01-01T00:00:00.000Z' });
+    // Newer bytes, but nothing on the worktree's branch: Git names no path at all.
+    writeDoc(worktree, 'shared', { body: 'inherited\n', at: '2020-02-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, worktree] });
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync });
+
+    assert.deepEqual(groups.map((group) => group.docs.map((doc) => doc.name)), [['shared'], []]);
+    assert.deepEqual(drawn(groups), ['shared'], 'main keeps the only row');
+  });
+
+  // S4, the case the gate missed: main DELETED the ODD, so nothing on the worktree's
+  // branch changed and Git names no path — yet main's own listing proves the copies
+  // are `added`, so the origin is still the row.
+  test('S4: a document main no longer holds is a candidate without Git naming it', async () => {
+    const box = machine('dedupe-s4-deleted');
+    const origin = box.worktree('no-bridge-naming');
+    const chained = box.worktree('card-file');
+    writeDoc(origin, 'no-bridge-naming', { body: '# no-bridge-naming\n', at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(chained, 'no-bridge-naming', { body: '# no-bridge-naming\n', at: '2020-05-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, chained, origin] });
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync });
+
+    assert.deepEqual(groups.map((group) => group.checkoutName), ['main', 'card-file', 'no-bridge-naming']);
+    assert.deepEqual(contract(groups[1]).docs, [], 'the inheriting worktree loses the identical copy');
+    assert.deepEqual(contract(groups[2]).docs, [{ name: 'no-bridge-naming', status: 'added' }],
+      'the ORIGIN is drawn although Git named no path');
+    assert.deepEqual(drawn(groups), ['no-bridge-naming']);
+    // The cost model is untouched: the same three reads per worktree with documents.
+    assert.deepEqual(
+      git.verbs().filter((call) => call.cwd === origin).map((call) => call.verb),
+      ['merge-base', 'diff', 'status'],
+    );
+  });
+
+  test('S4: identical copies with no main copy keep the origin worktree', async () => {
+    const box = machine('dedupe-s4');
+    // `no-bridge-naming` is the worktree that created the ODD, so it is the origin;
+    // `card-file` was created from its branch and inherited the document.
+    const origin = box.worktree('no-bridge-naming');
+    const chained = box.worktree('card-file');
+    writeDoc(origin, 'no-bridge-naming', { body: '# no-bridge-naming\n', at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(chained, 'no-bridge-naming', { body: '# no-bridge-naming\n', at: '2020-05-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, chained, origin] });
+    git.delta(origin, [['A', 'odd/tasks/no-bridge-naming.md']]);
+    git.delta(chained, [['A', 'odd/tasks/no-bridge-naming.md']]);
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync });
+
+    assert.deepEqual(groups.map((group) => group.checkoutName), ['main', 'card-file', 'no-bridge-naming']);
+    assert.deepEqual(groups[1].docs, [], 'the inheriting worktree loses the identical copy');
+    assert.deepEqual(contract(groups[2]).docs, [{ name: 'no-bridge-naming', status: 'added' }]);
+    assert.deepEqual(drawn(groups), ['no-bridge-naming'], 'the ORIGIN wins, not the newest copy');
+  });
+
+  test('S5: the reported chain lists each name only under the worktree that owns it', async () => {
+    const box = machine('dedupe-s5');
+    // The reported shape: `card-file` was created from `feat/card-message`, so it
+    // inherits BOTH of the ancestor branches' ODD documents, and main has neither.
+    const cardMessage = box.worktree('card-message');
+    const noBridge = box.worktree('no-bridge-naming');
+    const cardFile = box.worktree('card-file');
+    writeDoc(cardMessage, 'card-message', { body: '# card-message\n', at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(noBridge, 'no-bridge-naming', { body: '# no-bridge-naming\n', at: '2020-01-02T00:00:00.000Z' });
+    writeDoc(cardFile, 'card-message', { body: '# card-message\n', at: '2020-02-01T00:00:00.000Z' });
+    writeDoc(cardFile, 'no-bridge-naming', { body: '# no-bridge-naming\n', at: '2020-02-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, cardMessage, noBridge, cardFile] });
+    git.delta(cardMessage, [['A', 'odd/tasks/card-message.md']]);
+    git.delta(noBridge, [['A', 'odd/tasks/no-bridge-naming.md']]);
+    git.delta(cardFile, [['A', 'odd/tasks/card-message.md'], ['A', 'odd/tasks/no-bridge-naming.md']]);
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync });
+
+    assert.deepEqual(groups.map((group) => group.checkoutName), [
+      'main', 'card-file', 'card-message', 'no-bridge-naming',
+    ]);
+    const byCheckout = new Map(groups.map((group) => [group.checkoutName, group.docs.map((doc) => doc.name)]));
+    assert.deepEqual(byCheckout.get('card-file'), [], 'the chain draws none of the inherited names');
+    assert.deepEqual(byCheckout.get('card-message'), ['card-message']);
+    assert.deepEqual(byCheckout.get('no-bridge-naming'), ['no-bridge-naming']);
+    // Attribution: every row is drawn from the group of the worktree it belongs to,
+    // which is what the panel's label and the rail's row read.
+    for (const group of groups) {
+      for (const doc of group.docs) assert.equal(group.checkoutName, doc.name);
+    }
+  });
+
+  test('preserve: a unique new document stays added, an identical copy stays dropped, an empty delta stays a group', async () => {
+    const box = machine('dedupe-preserve');
+    const oddA = box.worktree('odd-a');
+    const oddB = box.worktree('odd-b');
+    writeDoc(box.mainRoot, 'shared', { body: '# shared\n\nsame bytes\n', at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(oddA, 'shared', { body: '# shared\n\nsame bytes\n', at: '2020-01-01T00:00:00.000Z' });
+    const fresh = writeDoc(oddA, 'fresh', { body: '# fresh\n', at: '2020-02-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, oddA, oddB] });
+    git.delta(oddA, [['M', 'odd/tasks/shared.md'], ['A', 'odd/tasks/fresh.md']]);
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync });
+
+    assert.deepEqual(groups.map((group) => group.checkoutName), ['main', 'odd-a', 'odd-b']);
+    assert.deepEqual(groups[0].docs.map((doc) => doc.name), ['shared'], 'main still lists its own document');
+    assert.deepEqual(contract(groups[1]).docs, [{ name: 'fresh', status: 'added' }]);
+    assert.deepEqual(groups[1].docs.map((doc) => doc.docPath), [fresh], 'nobody else copies it, so it stays');
+    assert.deepEqual(groups[2].docs, [], 'a group with no delta keeps docs: []');
   });
 });
 

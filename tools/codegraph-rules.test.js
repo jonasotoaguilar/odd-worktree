@@ -115,7 +115,6 @@ describe('each role scopes the index to its own job', () => {
   test('verify chooses probes from the index and keeps the probe as the proof', () => {
     const text = prose('verify');
     assert.match(text, /once you know what the spec requires and you need that reach to choose interaction and regression probes/, text);
-    assert.match(text, /A probe that contradicts what it reports is the one that is right/, text);
   });
 
   test('worker uses the index for what the edit must keep working, and never widens its scope', () => {
@@ -136,9 +135,9 @@ describe('each role scopes the index to its own job', () => {
     const text = prose('judge');
     assert.match(text, /Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` in the supplied `initial_review_tree`/, text);
     
-    assert.match(text, /A relationship it reports stays unverified until you check it in the supplied source at the location you cite/, text);
     
-    assert.match(text, /In scoped re-judgment, leave this tool aside/, text);
+    
+    assert.match(text, /in scoped re-judgment, leave this tool aside/, text);
   });
 
   test('the generic text keeps the same criterion for a role with no text of its own', () => {

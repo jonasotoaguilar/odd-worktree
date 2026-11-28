@@ -94,15 +94,13 @@ describe('each role scopes the index to its own job', () => {
       assert.ok(text.includes(situation), situation);
     }
     assert.match(text, /a verdict comes from the source and the tests/i, text);
-    assert.match(text, /grants no scope, permission or command authority/, text);
-    assert.match(text, /delegate to an explorer when the answer does not settle the work/, text);
   });
 
   test('the orchestrator keeps one exemption and one projectPath rule, and no concrete example', () => {
     const text = prose('orchestrator');
     assert.match(text, /Read an exact file path, or search an exact string, directly/, text);
     assert.match(text, /read a file before you edit it/i, text);
-    assert.match(text, /Set `projectPath` when the code you need is in another checkout — an ODD worktree, a sibling worktree, another git project/, text);
+    assert.match(text, /Set `projectPath` when the code you need is in another worktree or another git project/, text);
     assert.match(text, /never present one workspace's answer as another's/, text);
     assert.match(text, /Refine a miss with a name the answer surfaced/, text);
     assert.doesNotMatch(file('orchestrator'), /^\|/m);

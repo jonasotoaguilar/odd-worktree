@@ -1,3 +1,7 @@
 ## CodeGraph
 
-Before you search or read code — `fd`, `find`, `rg`, `grep`, `read` or `cat` — call `mcp__codegraph__codegraph_explore` with the name of the symbol behind the finding (identifiers and file names, not a sentence). It returns the verbatim source, its callers, what it calls and the tests that cover it: the whole reach of the patch, so the fix stays inside it and those tests run. The source it returns is already read, so do not grep it again; you still read a file before you edit it. Use `read`, `grep` or `find` only for an exact string, for what it does not index (config, docs, prose) and for a file a ⚠ banner lists as edited after the last index update. If it reports a project as not indexed, stop calling it there.
+`mcp__codegraph__codegraph_explore` returns, in one call, for the symbol or file behind the finding, its source verbatim with line numbers, the call paths that reach it and leave it, what the patch would reach, and the tests that already touch it — the whole reach of the patch, so the fix stays inside it and the focused tests are the right ones.
+
+Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` on the finding's code, in the checkout you are authorized to fix. Confirm the finding in the source: the answer says where code lives, not what it does, so the source is what proves the defect. Name the symbols or files when you know them; a plain question works when you do not.
+
+The source it shows is already read, and you read the files the answer sends you to — and read a file before you edit it. This never widens the patch: stay within the authorized batch and its allowed edit surfaces.

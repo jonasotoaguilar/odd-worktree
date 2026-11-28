@@ -2365,25 +2365,22 @@ short hint; it can never land inside or in place of another extension's text.
 
 ## The `## CodeGraph` block in the system prompt
 
-A session that already holds `mcp__codegraph__codegraph_explore` — the only CodeGraph tool —
-gets a short section on what it is for and how to use it. Every role's text says the same four
-things: call it before searching or reading code; it returns the verbatim, line-numbered source,
-the call paths and the tests that cover it, so that source is already read and is not opened or
-grepped again; query it with names (identifiers, file names, the domain's own nouns) rather than a
-sentence, and call again with a name it surfaced when the first answer missed; and use `read`,
-`grep` or `find` only for an exact string, for what the index does not cover (config, docs) or for a
-file the answer flags as changed on disk. No text calls the other tools "still available", which a
-model reads as permission to skip it. The orchestrator's text names the cases a model can match —
-find where something lives or how it works, change or reuse something in code it has not read, size
-or hand off work, read a file or symbol it can name — puts the call before a delegated lookup,
-keeps one exemption (an exact string or a file path the user gave) and points its look at the ODD's
-own worktree through `projectPath` when the session runs elsewhere; the explorer's text calls the
-tool its first tool, not a fallback, and gives its second look a stop. Each role gets its
-own text, read from `lib/codegraph-prompt/<role>.md`: the primary session the
-orchestrator's, a gentle-shell child (explore, verify, worker, fix, judges) its
-own, chosen from the agent name in the child's own command line, and any other
-child a generic one. A `review-*` agent and a session without a CodeGraph tool get
-nothing.
+A session holding `mcp__codegraph__codegraph_explore` gets the rule for its role, read from
+`lib/codegraph-prompt/<role>.md`. Every rule says what one call returns — the source verbatim with
+line numbers, the call paths between those symbols, what a change reaches and the tests that already
+touch it — that the source shown already counts as read with the files it names read directly, and
+that the query takes known symbols or files, or a plain question. None of them explains how CodeGraph
+works: indexing, sync and init belong to the package and never to the agent.
+
+The tool is support, never authority. The orchestrator names the situations it meets — changing code
+it has not read, tracing a bug or a flow across files, what an edit would reach, sizing or handing
+off — keeps one exemption and points `projectPath` at another checkout. Explore uses it in place of
+the chain of greps for callers and reads what it points at, because the answer says where code lives,
+not what it does. Verify chooses probes with it, and the probe is what proves. Worker uses it for what
+the edit must keep working. Fix stays inside the finding's reach, in the checkout it is authorized to
+fix. The judges sweep with it in initial discovery and leave it aside in scoped re-judgment. None of
+them lets it widen a scope, an edit surface or a batch. Unknown child roles get the generic rule;
+`review-*` agents and sessions without the tool get no section.
 
 It is appended the same way as the worktrees block, after whatever the host put
 there, and skipped when its heading is already present. The prompt section only

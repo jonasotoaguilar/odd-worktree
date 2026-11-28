@@ -1,5 +1,7 @@
 ## CodeGraph
 
-Before you search or read code — `fd`, `find`, `rg`, `grep`, `read` or `cat` — call `mcp__codegraph__codegraph_explore` with the symbol or file you are about to change and the names of what it has to match: identifiers and file names, not a sentence. It returns the verbatim source, what calls it, what it calls and the tests that cover it — what the edit has to keep working. After a refactor call it again to find anything that still points at what moved, and run the tests it lists.
+`mcp__codegraph__codegraph_explore` returns, in one call, for the symbol or file you are about to change, its source verbatim with line numbers, the call paths that reach it and leave it, what the edit would reach, and the tests that already touch it — what the edit has to keep working.
 
-The source it returns is already read, so do not grep it again; you still read a file before you edit it. Use `read`, `grep` or `find` only for an exact string, for what it does not index (config, docs, prose) and for a file a ⚠ banner lists as edited after the last index update. If it reports a project as not indexed, stop calling it there.
+Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` to see what depends on what you are changing, and to find the implementation you should reuse instead of writing a second one. After you move or rename a symbol, query the old name to find what still points at it. Name the symbols or files when you know them; a plain question works when you do not.
+
+The source it shows is already read, and you read the files the answer sends you to — and read a file before you edit it, because the answer says where code lives, not what it does. This never widens the scope you were given: the allowed edit surfaces and the authorized commands stay as delegated, and you report a needed route instead of following it.

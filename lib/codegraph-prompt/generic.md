@@ -1,5 +1,7 @@
 ## CodeGraph
 
-Before you search or read code — `fd`, `find`, `rg`, `grep`, `read` or `cat` — your first call is `mcp__codegraph__codegraph_explore`: pass a question or the names you know (identifiers, file names, the code's own words) and it returns the verbatim, line-numbered source of the relevant code, its call paths, what depends on it and the tests that cover it. Use it to find where something lives or how it works, to follow how one symbol reaches another, to see who calls a symbol and what a change reaches, or to read a file or symbol you can name.
+`mcp__codegraph__codegraph_explore` returns, in one call, the source verbatim with line numbers, the call paths between those symbols, what a change reaches, and the tests that already touch it.
 
-The source it returns is already read: do not open or grep it again. Use `read`, `grep` or `find` only for an exact string, for what it does not index (config, docs, prose) and for a file a ⚠ banner lists as edited after the last index update. If it reports a project as not indexed, stop calling it there. Read a file before editing it.
+Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` when you are about to change code you have not read, tracing a flow or an error across files, sizing up what a change would reach, or reading a file whose neighbours you do not know. Name the symbols or files when you know them; a plain question works when you do not. The one exemption is an exact string or a file path you were given.
+
+The source it shows is already read, and you read the files the answer sends you to. Read a file before you edit it.

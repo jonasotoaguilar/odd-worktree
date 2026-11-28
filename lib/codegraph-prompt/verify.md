@@ -1,5 +1,7 @@
 ## CodeGraph
 
-Before you search or read code — `fd`, `find`, `rg`, `grep`, `read` or `cat` — call `mcp__codegraph__codegraph_explore` with the names of the symbols the change touches: identifiers and file names, not a sentence. It returns their verbatim source, their callers and dependents, and the tests that cover them. Choose interaction and regression probes from those callers, run the tests it lists, and call it again on a caller it surfaces when a probe needs the next layer.
+`mcp__codegraph__codegraph_explore` returns, in one call, for the symbols a change touches, their source verbatim with line numbers, the call paths between them, what the change reaches, and the tests that already touch them.
 
-The answer is a map, never evidence: a verdict comes from the source you read and the checks you run, and a probe that contradicts the graph is the one that is right. The source it returns is already read; Use `read`, `grep` or `find` only for an exact string, for what it does not index (config, docs, prose) and for a file a ⚠ banner lists as edited after the last index update. If it reports a project as not indexed, stop calling it there.
+Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` once you know what the spec requires and you need that reach to choose interaction and regression probes; call it again on a caller it surfaces when a probe needs the next layer. Name the symbols or files when you know them; a plain question works when you do not.
+
+The answer is a map, never evidence: the probe is what proves, a verdict comes from the source you read and the checks you ran, and a probe that contradicts the graph is the one that is right. Derive your probes from the request, not from the tests it lists. Run only the commands the parent or your role authorizes, in the required isolation. The source it shows is already read, and you read the files the answer sends you to.

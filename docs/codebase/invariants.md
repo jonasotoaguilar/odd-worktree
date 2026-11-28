@@ -513,13 +513,12 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     `fix` or `judge` (both judges share one); any other child, or a name that cannot
     be read, gets `generic.md`; a `review-*` agent gets nothing. A missing or
     heading-less file falls back to `generic.md`, and a missing generic means no
-    section. Every text names the MCP tool in full and none names a native tool or an operation, says
-    what it is for, how to query it (names, not sentences) and that the source it returns is already
-    read, and none calls the other tools "still available"; only the orchestrator text also points
-    that tool at another checkout through `projectPath` (a sibling worktree or another
-    git project) before it delegates an explorer there; no text mentions `init`, `sync` or an
-    index fallback, because no agent prepares the index: the package does
-    (invariant 19).
+    section. Every text names the MCP tool only, says what one call returns, that the source shown
+    counts as read with the files it names read directly, and that the query takes known names or a
+    plain question. No text explains how CodeGraph works: indexing, sync and init belong to the
+    package (invariant 19) and never to the agent. The tool is support, not authority: it never
+    widens a scope, an edit surface or an authorized batch, and scoped re-judgment leaves it aside.
+    Only the orchestrator points `projectPath` at another checkout.
 
 19. **CodeGraph runs only with its CLI, in the background, and writes one config
     entry.** `lib/codegraph-session.js` is the single wiring point (the extension

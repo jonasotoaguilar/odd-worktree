@@ -106,28 +106,48 @@ describe('the orchestrator and explore texts stay inside their role', () => {
 
   test('the orchestrator calls the graph first, itself, before searching and before delegating a lookup', () => {
     const text = prose('orchestrator');
-    assert.match(text, /before you `grep`, `rg`, `fd`, `find`, `read` or `cat`, and before you delegate a lookup to an explorer/i, text);
-    assert.match(text, /make it your first call/, 'it is a first call, not an option');
+    assert.match(text, /^## CodeGraph `[^`]+` queries a prebuilt index/, 'it opens by saying what the tool is');
+    assert.match(text, /Call it first — before you `grep`, `rg`, `fd`, `find`, `read` or `cat`, and before you delegate a lookup to an explorer/, text);
     assert.match(text, /Delegate to an explorer only when a few calls have not settled it/, 'delegation keeps its place');
   });
 
-  test('the orchestrator names the cases, among them changing code it has not read and sizing a handoff', () => {
+  test('the orchestrator lists the kinds of task as a table, with no example of a concrete change', () => {
     const text = prose('orchestrator');
-    assert.match(text, /change, add or reuse something in code you have not read/, text);
-    assert.match(text, /size, scope or hand off work/, text);
-    assert.match(text, /follow a flow from one symbol to another/, text);
+    for (const kind of ['Understand:', 'Investigate:', 'Change:', 'Plan or hand off:', 'Read a file or symbol you can name']) {
+      assert.ok(text.includes(`| ${kind}`), kind);
+    }
+    assert.match(text, /how A reaches B/, text);
+    assert.match(text, /dynamic dispatch, routes and cross-language calls/, text);
+    assert.doesNotMatch(text, /colou?r|"add an option|"use the/i, 'a rule states the kind of task, never one example of it');
   });
 
-  test('the orchestrator says how to query: names over sentences, and a second call with a name it surfaced', () => {
+  test('the orchestrator says how to query: identifiers and nouns over a sentence, and a second call with a name it surfaced', () => {
     const text = prose('orchestrator');
-    assert.match(text, /Name things the way the code does/, text);
+    assert.match(text, /identifiers, file names and the domain's nouns, not a sentence/, text);
     assert.match(text, /call again with a name it surfaced/, text);
   });
 
   test('the orchestrator keeps one exemption: an exact string or a file path the user gave', () => {
     const text = prose('orchestrator');
-    assert.match(text, /an exact string/, text);
-    assert.equal((text.match(/exemption/gi) || []).length, 1, 'and only one');
+    assert.match(text, /Exempt: an exact string or a file path the user gave you/, text);
+    assert.equal((text.match(/exempt/gi) || []).length, 1, 'and only one');
+  });
+
+  test('every text ends its rule with the same exception sentence for read, grep and find', () => {
+    const exception = 'Use `read`, `grep` or `find` only for';
+    for (const variant of rules.VARIANTS.filter((name) => name !== 'orchestrator' && name !== 'explore')) {
+      assert.ok(prose(variant).includes(`${exception} an exact string, for what it does not index (config, docs, prose)`), variant);
+    }
+    assert.ok(prose('explore').includes(`${exception} an exact string, for what it does not index (config, docs, prose)`));
+    assert.ok(prose('orchestrator').includes(`${exception} what it does not index (config, docs, prose)`));
+  });
+
+  test('every text says what to do with the index\'s own warnings: read a flagged file, stop on an unindexed project', () => {
+    for (const variant of rules.VARIANTS) {
+      const text = prose(variant);
+      assert.match(text, /⚠ banner lists as edited after the last index update/, variant);
+      assert.match(text, /not indexed, stop calling it/, variant);
+    }
   });
 
   test('the orchestrator looks at the ODD\'s own worktree through projectPath when the session runs elsewhere', () => {

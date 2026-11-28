@@ -220,7 +220,7 @@ describe('both off', () => {
 // S2/S3: what the switch wires beyond its own value. The fixture points the agent directory and the config home at
 // scratch directories, so these cases read and write only those; the CLI is a file named `codegraph` on a scratch PATH.
 describe('Codegraph+ wiring', () => {
-  const AGENT_NAMES = ['gentle-ai-explore', 'gentle-ai-verify', 'gentle-ai-worker', 'jd-fix-agent'];
+  const AGENT_NAMES = ['gentle-ai-explore', 'gentle-ai-verify', 'gentle-ai-worker', 'jd-fix-agent', 'jd-judge-a', 'jd-judge-b'];
   const mcpFile = () => path.join(process.env.PI_CODING_AGENT_DIR, 'mcp.json');
   const toolsFile = () => path.join(process.env.GENTLE_PI_CONFIG_HOME, 'tools.json');
   const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));

@@ -11,7 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 const agentTools = require('../lib/codegraph-agent-tools.js');
 
-const AGENTS = ['gentle-ai-explore', 'gentle-ai-verify', 'gentle-ai-worker', 'jd-fix-agent'];
+const AGENTS = ['gentle-ai-explore', 'gentle-ai-verify', 'gentle-ai-worker', 'jd-fix-agent', 'jd-judge-a', 'jd-judge-b'];
 const SERVER = 'mcp__codegraph';
 
 const scratch = [];
@@ -28,14 +28,14 @@ const read = (home) => JSON.parse(fs.readFileSync(file(home), 'utf8'));
 const leftovers = (home) => fs.readdirSync(home).filter((name) => name !== 'tools.json');
 const allAdd = () => Object.fromEntries(AGENTS.map((name) => [name, { add: [SERVER] }]));
 
-test('the entry is the CodeGraph server of the four CodeGraph agents', () => {
+test('the entry is the CodeGraph server of the six CodeGraph agents', () => {
   assert.deepEqual([...agentTools.CODEGRAPH_AGENTS], AGENTS);
   assert.equal(agentTools.CODEGRAPH_SERVER_TOOL, SERVER);
   assert.equal(agentTools.toolsConfigPath('/x/gentle-ai'), path.join('/x/gentle-ai', 'tools.json'));
 });
 
 describe('On: add only', () => {
-  test('creates the file with the four agents when it is missing', async () => {
+  test('creates the file with the six agents when it is missing', async () => {
     const home = dir();
     const result = await agentTools.reconcileAgentTools({ configHome: home, enabled: true });
     assert.equal(result.status, 'created');
@@ -60,6 +60,8 @@ describe('On: add only', () => {
       extra: 1,
       'gentle-ai-verify': { add: [SERVER] },
       'jd-fix-agent': { add: [SERVER] },
+      'jd-judge-a': { add: [SERVER] },
+      'jd-judge-b': { add: [SERVER] },
     });
   });
 
@@ -101,7 +103,7 @@ describe('On: add only', () => {
 });
 
 describe('Off: take only the CodeGraph server out', () => {
-  test('removes the server and its tool spellings from the four agents and keeps the rest', async () => {
+  test('removes the server and its tool spellings from the six agents and keeps the rest', async () => {
     const home = dir();
     put(home, {
       'gentle-ai-explore': { add: [SERVER, 'web_search'] },

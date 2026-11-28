@@ -532,7 +532,7 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     field, rewrites only when something changed, atomically and with the file's
     permission bits, and leaves an invalid file untouched. It is the only writer of
     the user's MCP configuration; the only writer of the agents' `tools.json` is
-    `lib/codegraph-agent-tools.js`, which adds or removes the one name `mcp__codegraph` in the four
+    `lib/codegraph-agent-tools.js`, which adds or removes the one name `mcp__codegraph` in the six
     CodeGraph agents through the same atomic writer. `tools/` never touches a real agent
     directory or config home: the shared fixture points both at scratch directories.
     (b) Session start (not `/reload`, not a subagent child, except a child in its own

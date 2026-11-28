@@ -2509,8 +2509,8 @@ package never stops a daemon it did not start.
 A subagent child reaches an MCP tool only through its server name, so Gentle Shell's per-agent overlay
 `<config home>/tools.json` (`GENTLE_PI_CONFIG_HOME`, else `GENTLE_SHELL_CONFIG_HOME`, else `~/.pi/gentle-ai`)
 has to carry `mcp__codegraph` — never the tool's own name, which Pi drops from a child's tool list without
-a word. While `Codegraph+` is On and the CLI is installed, the four CodeGraph agents (`gentle-ai-explore`,
-`gentle-ai-verify`, `gentle-ai-worker`, `jd-fix-agent`) carry it in their `add` list:
+a word. While `Codegraph+` is On and the CLI is installed, the six CodeGraph agents (`gentle-ai-explore`,
+`gentle-ai-verify`, `gentle-ai-worker`, `jd-fix-agent`, `jd-judge-a`, `jd-judge-b`) carry it in their `add` list:
 
 ```json
 { "gentle-ai-explore": { "add": ["mcp__codegraph"] } }

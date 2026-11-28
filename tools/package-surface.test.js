@@ -93,7 +93,7 @@ describe('manifest', () => {
     // the shell API's `Card activity` line, which is the shell API's, not ours. The user
     // prompt card is the one module that wraps a host class, and it adds no row, no
     // command and no design of its own.
-    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'gh-prs.js', 'pr-preview.js', 'prs-view.js', 'prs-rail-store.js', 'issues-section.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'skill-read-guard.js', 'bash-activity.js', 'bash-inline-script.js', 'bash-design.js', 'bash-frame.js', 'diff-design.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js', 'user-prompt-card.js', 'card-message.js']) {
+    for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'gh-prs.js', 'pr-preview.js', 'prs-view.js', 'prs-rail-store.js', 'issues-section.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'skill-read-guard.js', 'bash-activity.js', 'bash-inline-script.js', 'bash-design.js', 'bash-frame.js', 'diff-design.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js', 'user-prompt-card.js', 'assistant-message-card.js', 'host-render-shim.js', 'card-message.js']) {
       assert.ok(shipped.includes(kept), `lib/${kept} is shipped`);
     }
     for (const gone of ['card-files-mode.js', 'cards-customize.js']) {

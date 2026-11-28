@@ -1763,10 +1763,10 @@ carry this switch. Its document is one key of the shell API's own store (`odd-wo
 `card-message` → `{ schema: 1, on: <boolean> }`), the store `/identity` and the module switches
 write their own keys to; nothing here touches another key.
 
-It gates, today, the [user prompt card](#the-user-prompt-card) and the
-[`## User identity` block](#the--user-identity-block-in-the-system-prompt); the assistant's final
-answer joins them. `Card activity`, the file cards, the jobs card, the CodeGraph card and the two
-message cards are untouched by it.
+It gates the [user prompt card](#the-user-prompt-card), the
+[assistant answer card](#the-assistant-answer-card) and the
+[`## User identity` block](#the--user-identity-block-in-the-system-prompt). `Card activity`, the
+file cards, the jobs card, the CodeGraph card and the two message cards are untouched by it.
 
 - **Read live, never cached, and it repaints.** The cards ask `cardMessageOn()` inside their own
   paint, on every frame, so a flip reaches the transcript already on screen; the row's action then
@@ -1799,12 +1799,12 @@ style switch repaints the prompts already on screen.
 
 Pi publishes no extension seam for a `role: "user"` transcript entry —
 `UserMessageComponent` is constructed inside interactive mode, and `registerMessageRenderer`
-is for custom types only — so this is the ONE host class the package patches: its
-`render(width)` is wrapped once per process through a `Symbol.for` slot, the class handed in
-by the extension's lazy `import()` (so nothing under `lib/` imports a Pi package, and a host
-without the export installs nothing), the live logic replaced rather than double-wrapped on a
-second evaluation or `/reload`, re-installed on `session_start`, and restored to the original
-function BY REFERENCE on `session_shutdown`.
+is for custom types only — so this is one of the two host classes the package patches: its
+`render(width)` is wrapped once per process through `lib/host-render-shim.js` and this card's
+own `Symbol.for` slot, the class handed in by the extension's lazy `import()` (so nothing
+under `lib/` imports a Pi package, and a host without the export installs nothing), the live
+logic replaced rather than double-wrapped on a second evaluation or `/reload`, re-installed on
+`session_start`, and restored to the original function BY REFERENCE on `session_shutdown`.
 
 - **When it draws.** Only while this package's own `Card message` switch is On
   ([above](#the-card-message-switch)), asked INSIDE the patched `render` on every paint and never
@@ -1852,6 +1852,62 @@ function BY REFERENCE on `session_shutdown`.
 - **Tests.** `tools/user-prompt-card.test.js` drives the public seam — the `Card message` gate and
   its live flip on one mounted instance, the byte-for-byte native answers, the accent cells in
   `float` and `neon`, the zone markers, the wrap-once and uninstall-by-reference claims.
+
+## The assistant answer card
+
+`lib/assistant-message-card.js` draws the assistant's **final answer** as a card in the transcript —
+`✿ Gentleman · 21:53 (17 turns · 58m20s)`, the mark and the FIXED name `Gentleman` (a constant, never
+read from `/identity`), the clock, and the turn count and elapsed time of the turn that answer
+closes. Frame and title are painted in the theme role `mdHeading` — the role the `activity` design
+paints its `checking` heading with — so the box and the name wear whatever that role is in a theme.
+The body is Pi's OWN rendering of the answer: the component is rendered at the frame's inner width
+through its original `render`, its OSC 133 zone markers leave the rows Pi put them on, the leading
+blank row Pi's `Spacer` adds is dropped (the frame is the spacing) and one blank row is kept above
+the frame, so the separation from the previous block is unchanged. Those rows are placed with
+`cardPaintedRows`, never repainted. It obeys the shell's card style on every paint, so `float`
+draws its rail and `neon` its closed frame, and a style switch repaints the answers on screen.
+
+Pi publishes no seam for an assistant message either, so this is the SECOND drawing shim: it wraps
+`AssistantMessageComponent.prototype.render` through `lib/host-render-shim.js`, the helper both
+message cards share. Each card owns its own `Symbol.for` state cell, so the two install and uninstall
+independently, `/reload` replaces only the live logic, and a second evaluation never double-wraps.
+
+- **The final answer only.** The card draws a component only while its OWN `hasToolCalls` is
+  `false`: a message that made a tool call is an intermediate one, and Pi marks it exactly that way.
+  It is a property of the component's message, so a resumed session and an old session follow the
+  same rule as a live one. The herdr-style "no job or sub-agent pending" filter is NOT applied,
+  because it cannot be derived from a transcript or a resumed session: **a message that ends a turn
+  while a background sub-agent is still running is drawn as final.**
+- **The clock.** The component's own `timestamp` when Pi restored the message from a session entry,
+  else the clock captured at the card's first paint (held per component, so a later frame never
+  drifts), else no subtitle at all — nothing invented.
+- **The turn stats.** `turnStats(entries, messageId, nowMs)` reads the session history (`entries` is
+  what `ctx.sessionManager.getEntries()` returns, through the extension's `entries` seam, filled at
+  `session_start` from the CURRENT session and dropped at `session_shutdown`). The END is the entry
+  whose `id` is the component's `messageId`; a live message not persisted yet has no such entry, so
+  its end is a virtual one at `nowMs` after the last entry and it counts as one assistant turn. The
+  START is the last `user` message entry strictly before the end, and none means no stats. `turns`
+  counts the assistant-role entries in `(start, end]` plus the virtual one, and the elapsed time is
+  the end minus the start, never negative. The duration prints `42s`, `58m20s`, `1h02m20s`, and the
+  count is `1 turn` singular, `N turns` plural. A history seam that is absent, throws or answers
+  something that is not an array is "no stats": the heading keeps the clock alone, with no
+  parenthesis, and a timestamp nothing can parse states the turns without inventing a time.
+- **Switch it off and Pi owns the answer again.** `Card message` Off, an absent or throwing shell
+  API, a component whose `hasToolCalls` is not a boolean, a message with tool calls, a component that
+  renders no row, a width below six columns and a theme or measurement seam that throws all hand the
+  host's own rows back BYTE FOR BYTE (the very array `render` returned). This card fails CLOSED like
+  the prompt card, unlike the file cards whose pre-switch answer paints.
+- **The answer zone stays.** Pi prefixes the zone-start marker on its first row and the zone-end and
+  final markers on its last; the card carries the same three markers the same way — once each, never
+  appended — and the native path stays byte-identical.
+- **Cost.** Per paint: the gate (`Card message`, one document read through the published store,
+  which is what makes the flip instant), asked always; then the history seam, the shell's style and
+  the body's own render only while the card actually draws. Nothing is memoized: the body is Pi's
+  own render, and the component re-renders it every frame anyway.
+- **Tests.** `tools/assistant-message-card.test.js` drives the public seam — the `Card message` gate
+  and its live flip on one mounted instance, the final-answer filter, the byte-for-byte native
+  answers, the `mdHeading` cells in `float` and `neon`, the zone markers, the heading's clock, the
+  turn stats and the duration formatter, and the two cards' independent install/uninstall.
 
 ## The diff card
 

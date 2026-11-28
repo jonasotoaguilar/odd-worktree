@@ -11283,6 +11283,140 @@ function uninstallUserPromptCard() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The assistant's FINAL answer, as a card (`lib/assistant-message-card.js`).
+//
+// The shell API has no surface for an assistant message either, so this card is the second
+// drawing shim: Pi's `AssistantMessageComponent.prototype.render` is wrapped through the shim
+// both message cards share (`lib/host-render-shim.js`), with this card's OWN state cell, so the
+// two cards install and uninstall independently. The class is resolved through the same lazy
+// dynamic `import()` and HANDED to the lib module, which imports nothing from Pi. The card's
+// stats come from the live session's own history, through the `entries` seam below: it is filled
+// at `session_start` from the CURRENT session's `sessionManager` and dropped at
+// `session_shutdown`, so a paint never reads a session that is gone.
+// ---------------------------------------------------------------------------
+// The epoch a deferred install belongs to, and the epoch whose import is in flight, per epoch
+// exactly as the prompt card keeps them: a shutdown inside the import window must neither patch
+// the class nor suppress the NEXT session's install.
+let assistantMessageCardEpoch = 0;
+let assistantMessageCardPendingEpoch;
+// Whether the session that owns this shim is the live one. Closed until `session_start` opens it,
+// and checked again immediately before the patch.
+let assistantMessageCardSessionLive = false;
+// Whether this load owns the session boundary (the shutdown that unwraps the card is a
+// precondition of installing, exactly as for the prompt card).
+let assistantMessageCardLifecycleRegistered = false;
+// The CURRENT session's own history reader, or `undefined` when it has none. The lib asks it on
+// every paint; an absent, throwing or non-array answer is "no stats", never an error.
+let assistantMessageCardEntries;
+
+let assistantMessageCardHostLoader = () => import("@earendil-works/pi-coding-agent");
+
+function setAssistantMessageCardHostLoader(loader) {
+  assistantMessageCardHostLoader = loader;
+}
+
+function installAssistantMessageCard() {
+  if (!assistantMessageCardLifecycleRegistered) return;
+  if (!bashActivityRegistered || !assistantMessageCardSessionLive) return;
+  if (assistantMessageCardPendingEpoch === assistantMessageCardEpoch) return;
+  assistantMessageCardPendingEpoch = assistantMessageCardEpoch;
+  const epoch = assistantMessageCardEpoch;
+  Promise.resolve()
+    .then(() => assistantMessageCardHostLoader())
+    .then((host) => {
+      if (epoch !== assistantMessageCardEpoch || !assistantMessageCardSessionLive) return;
+      const component = host && typeof host === "object" ? host.AssistantMessageComponent : undefined;
+      if (typeof component !== "function") return;
+      const lib = libRequire("assistant-message-card.js");
+      if (!lib || typeof lib.installAssistantMessageCard !== "function") return;
+      const outcome = lib.installAssistantMessageCard({
+        component,
+        metrics: () => resolveWorktreeToolCardMetrics(),
+        entries: () => readAssistantMessageCardEntries(),
+      });
+      // The same ONE repaint an install asks for (`requestPromptCardRepaint`): the transcript a
+      // session restored was built before this import resolved, so its answers already on screen
+      // come back as cards instead of waiting for unrelated input.
+      requestPromptCardRepaint(outcome);
+    })
+    .catch(() => {
+      // A host without the class keeps Pi's own answer rows.
+    })
+    .finally(() => {
+      if (assistantMessageCardPendingEpoch === epoch) assistantMessageCardPendingEpoch = undefined;
+    });
+}
+
+/** The live history reader's answer, or `undefined`; the lib treats every failure as "no stats". */
+function readAssistantMessageCardEntries() {
+  const read = assistantMessageCardEntries;
+  if (typeof read !== "function") return undefined;
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Point the card's stats at the session that just started: its own `getEntries`, asked at paint
+ * time so a live session's new turns reach the next frame. A session manager without it leaves no
+ * reader at all, so the heading keeps the clock alone instead of inventing turns.
+ */
+function readAssistantMessageCardSession(ctx) {
+  const manager = ctx && typeof ctx === "object" ? ctx.sessionManager : undefined;
+  if (manager === null || manager === undefined || typeof manager.getEntries !== "function") {
+    assistantMessageCardEntries = undefined;
+    return;
+  }
+  assistantMessageCardEntries = () => manager.getEntries();
+}
+
+/**
+ * The assistant card's session boundary — registered ONCE per load, beside the prompt card's, with
+ * the same shape: the SHUTDOWN hook is registered FIRST (owning the teardown is a precondition of
+ * installing, so a host that refuses it gets no patch), the start hook second, and the session is
+ * marked live only by a start that a load which owns both hooks received.
+ */
+function registerAssistantMessageCardLifecycle(pi) {
+  if (assistantMessageCardLifecycleRegistered) return true;
+  if (typeof pi?.on !== "function") return false;
+  try {
+    pi.on("session_shutdown", () => {
+      assistantMessageCardSessionLive = false;
+      assistantMessageCardEntries = undefined;
+      uninstallAssistantMessageCard();
+    });
+  } catch {
+    return false;
+  }
+  try {
+    pi.on("session_start", (_event, ctx) => {
+      if (!assistantMessageCardLifecycleRegistered) return;
+      readAssistantMessageCardSession(ctx);
+      assistantMessageCardSessionLive = true;
+      installAssistantMessageCard();
+    });
+  } catch {
+    // An accepted shutdown is still ownership: the teardown exists, so a session this load opened
+    // is still unwrapped.
+  }
+  assistantMessageCardLifecycleRegistered = true;
+  return true;
+}
+
+function uninstallAssistantMessageCard() {
+  assistantMessageCardEpoch += 1;
+  assistantMessageCardPendingEpoch = undefined;
+  try {
+    const lib = libRequire("assistant-message-card.js");
+    if (lib && typeof lib.uninstallAssistantMessageCard === "function") lib.uninstallAssistantMessageCard();
+  } catch {
+    // The answer stays whatever Pi drew; nothing else of the session is touched.
+  }
+}
+
 // T2 (S1/S2): the `Card diff` design paints `write` and `edit` as an IDE pane in the
 // active theme's own roles. Its syntax highlighting is the SAME seam `/files` opens
 // (`filesAgentSeam`, Pi's own `highlightCode` and `getLanguageFromPath`), resolved
@@ -12197,8 +12331,10 @@ export default function (pi) {
   // object itself as a notice.
   if (issuesSidebarShellApi() !== null) {
     // S7: the prompt card's session boundary is owned here, before the surface registers, so
-    // this load always has the shutdown hook that closes the session it belongs to.
+    // this load always has the shutdown hook that closes the session it belongs to. The
+    // assistant card's boundary is its own pair beside it, so each card unwraps independently.
     registerUserPromptCardLifecycle(pi);
+    registerAssistantMessageCardLifecycle(pi);
     registerOddWorktreeSurface(pi);
   }
 }
@@ -12648,4 +12784,4 @@ function registerOddWorktreeSurfaceEntries(pi) {
   });
 }
 
-export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setUserPromptCardHostLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule, oddSession, oddAssociated, setOddSessionRefresh };
+export { executeWorktreeCreate, executePortedWorktreeCreate, executePortedWorktreeList, executeWorktreeClose, resolveThread, executeWorktreeWarp, emitOsc7, awaitPendingStartupTasks, scanLiveCheckouts, runStartupDiscovery, setWarpTuiLoader, setOddTuiLoader, setIssuesTuiLoader, setFilesTuiLoader, setFilesAgentLoader, setUserPromptCardHostLoader, setAssistantMessageCardHostLoader, setWorktreeCardHelpers, setWorktreeToolCardMetrics, setWarpDirtyAsker, setWarpFactsFactory, warpCreatePreflight, warpForkSourceUsable, dispatchIssuesPanel, issuesSidebarGeneration, issuesOpenInBrowser, libModule, oddSession, oddAssociated, setOddSessionRefresh };

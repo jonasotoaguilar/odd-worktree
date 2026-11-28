@@ -919,12 +919,24 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     `tools/issues-command.test.js` pins "without the CLI neither the command nor the
     rail section exists" and "the decision costs no child process, at load or at
     session start".
-29. **The user prompt card is a DRAWING shim, gated by this package's own `Card
+29. **The two message cards are DRAWING shims, gated by this package's own `Card
     message` switch and never touching the host's text.** `lib/user-prompt-card.js` wraps
-    `UserMessageComponent.prototype.render` — the one host class this package
-    patches — because Pi publishes no extension seam for a `role: "user"` entry: the
-    class is handed in from the extension's lazy `import()`, so `lib/` imports no Pi
-    package and a host without the export installs nothing. The card it draws is a
+    `UserMessageComponent.prototype.render` and `lib/assistant-message-card.js` wraps
+    `AssistantMessageComponent.prototype.render`, the two host classes this package
+    patches, because Pi publishes no extension seam for a `role: "user"` entry nor for an
+    assistant message: each class is handed in from the extension's lazy `import()`, so
+    `lib/` imports no Pi package and a host without the export installs nothing. Both
+    wrappers come from `lib/host-render-shim.js` with the card's own `Symbol.for` cell, so
+    the two cards install and uninstall independently and `/reload` replaces only the live
+    logic. The assistant card draws a message ONLY while its own `hasToolCalls` is
+    `false` — the final answer of a turn, in a resumed or an old session alike, never an
+    intermediate one — and the "no job or sub-agent pending" filter is NOT applied
+    because a transcript cannot prove it, so a message that ends a turn while a background
+    sub-agent is still running is drawn as final. Its heading is the fixed `✿ Gentleman`,
+    the clock and the turn stats of the session history (`turnStats` over the extension's
+    `entries` seam, the current session's own `getEntries()`), frame and title in the
+    theme role `mdHeading`, and its body is Pi's own rendering placed at the frame's inner
+    width, never repainted. The card it draws is a
     `✿ Jona · HH:MM` card — the name `/identity` stored, `You` while none is stored —
     on the card substrate (`float`/`neon` read live, tone `info`,
     the whole frame and the title in `accent`, the separator and the clock in

@@ -244,12 +244,12 @@ describe('Codegraph+ wiring', () => {
   async function pageRows(initial) {
     const loaded = await load(initial);
     let document = initial === undefined ? undefined : { ...initial };
-    loaded.bridge.api.createStore = () => ({
+    loaded.shellApi.api.createStore = () => ({
       get: (key, fallback) => (key === 'modules' && document !== undefined ? document : fallback),
       set: (key, value) => { if (key === 'modules') document = value; },
       delete: () => {},
     });
-    return loaded.bridge.rows.find((provider) => provider.category === 'Tools').rows({});
+    return loaded.shellApi.rows.find((provider) => provider.category === 'Tools').rows({});
   }
 
   const startSession = async (loaded) => {

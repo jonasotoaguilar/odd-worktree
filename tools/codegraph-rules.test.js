@@ -54,7 +54,7 @@ describe('the seven texts on disk', () => {
     for (const variant of rules.VARIANTS) {
       const text = prose(variant);
       assert.match(text, /Name the symbols or files when you know them; a plain question works when you do not/, variant);
-      assert.match(text, /count as a Read of those files; the ones it only names, or leaves without code, you open with `read`/, `${variant} says which blocks count as read and which to read`);
+      assert.match(text, /The blocks it shows count as a Read of those files/, `${variant} says the blocks count as read`);
       
     }
   });

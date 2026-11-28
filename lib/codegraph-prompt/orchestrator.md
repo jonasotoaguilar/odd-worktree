@@ -10,4 +10,4 @@ Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` when:
 
 Name the symbols or files when you know them; a plain question works when you do not. Refine a miss with a name the answer surfaced. Read an exact file path, or search an exact string, directly.
 
-The blocks it shows count as a Read of those files; the ones it only names, or leaves without code, you open with `read`. The answer belongs to the checkout it came from: set `projectPath` for another worktree or another git project, and say which checkout you used.
+The blocks it shows count as a Read of those files. The answer belongs to the checkout it came from: set `projectPath` for another worktree or another git project, and say which checkout you used.

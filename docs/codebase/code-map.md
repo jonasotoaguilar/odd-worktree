@@ -72,7 +72,7 @@ The question this page answers: which file owns a responsibility before you open
 | `lib/files-scope-view.js` | The scope step's card: one row per checkout with its `±n files`, the focused scope's detail line, the footer and the selection, and the `a` toggle between the registered checkouts and every worktree of the clone. |
 | `lib/files-picker-view.js` | The picker's composition: chrome, the always-active search row, the `listed/total (selected)` info row that carries the active order, the two panes, the keys and the mouse, the badges and ages, the Tab selection, and the insert/open/close outcomes it reports to the command. |
 | `lib/tui-paint.js`, `lib/view-layout.js`, `lib/preview-scroll-keys.js`, `lib/clipboard.js`, `lib/open-external.js` | Shared presentation helpers: the one palette, window/layout maths, the one preview scroll decision, clipboard, external opener. |
-| `lib/session-auto-name.js`, `lib/session-worktree-register.js` | Session bookkeeping: naming a session after an ODD write (the name IS the ODD's own `odd/tasks/<name>.md`, never the prose inside it), and the host's session-worktree registry entry. |
+| `lib/session-worktree-register.js` | Registers worktrees in the host session’s worktree registry. |
 | `tools/*.test.js`, `tools/fixtures/` | The plain-JavaScript test suites and their fixtures (`load-extension.js`, `gh-*.json`, `gh-pr-*.json`). |
 | `tools/shell-api/*.test.ts`, `tools/shell-api/*.test.mjs` | The shell API's own suite, run by `npm run test:shell-api` on Node >= 22.18 because it is TypeScript (CI: 22.x and 24.x). Repo-only: `docs/` and `tools/` are excluded from the tarball. |
 

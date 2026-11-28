@@ -4,4 +4,4 @@
 
 Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` once you know what the spec requires and you need that reach to choose interaction and regression probes; call it again on a symbol it surfaces when a probe needs the next layer. Name the symbols or files when you know them; a plain question works when you do not.
 
-The answer is a map of where to look: a probe that contradicts what it reports is the one that is right.
+A probe that contradicts what it reports is the one that is right.

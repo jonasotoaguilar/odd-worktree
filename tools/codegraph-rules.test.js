@@ -88,7 +88,7 @@ describe('each role scopes the index to its own job', () => {
       'about to change code you have not read',
       'tracing a bug or a flow across files',
       'what an edit would reach before you or a worker touch it',
-      'size a task or hand it off',
+      'size a task or delegate it to a subagent',
     ]) {
       assert.ok(text.includes(situation), situation);
     }

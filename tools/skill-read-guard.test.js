@@ -18,7 +18,27 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { decideSkillReadGuard } = require('../lib/skill-read-guard.js');
-const { loadExtension } = require('./fixtures/load-extension.js');
+const { BRIDGE_SLOT, defaultBridge, loadExtension } = require('./fixtures/load-extension.js');
+
+// modular-tools (`Skills+`): the two read rules are their own half and that switch is OFF
+// until someone turns it on, so a suite that proves the rule publishes the document first
+// and restores the slot after.
+const savedBridge = globalThis[BRIDGE_SLOT];
+async function loadWithModules(modules) {
+  const bridge = defaultBridge();
+  bridge.api.createStore = () => ({
+    get: (key, fallback) => (key === 'modules' && modules !== undefined ? modules : fallback),
+    set: () => {},
+    delete: () => {},
+  });
+  globalThis[BRIDGE_SLOT] = bridge.api;
+  try {
+    return await loadExtension({});
+  } finally {
+    if (savedBridge === undefined) delete globalThis[BRIDGE_SLOT];
+    else globalThis[BRIDGE_SLOT] = savedBridge;
+  }
+}
 
 // The refusal, written out: a reworded sentence fails here. It says the call did not
 // run, names the path it read and the ONE tool that replaces the command.
@@ -192,7 +212,7 @@ describe('the tool_call handler the extension registers', () => {
   let cwd;
 
   before(async () => {
-    loaded = await loadExtension({});
+    loaded = await loadWithModules({ skills: true });
     cwd = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-skill-read-guard-')));
   });
 
@@ -219,6 +239,17 @@ describe('the tool_call handler the extension registers', () => {
   test('lets every other call through', async () => {
     for (const command of [...ALLOWED, ...HEREDOCS]) {
       assert.equal(await callTool(loaded.hooks, bash(command), cwd), undefined, command);
+    }
+  });
+
+  test('Skills+ off — its default — registers nothing: the reader is not refused', async () => {
+    for (const modules of [undefined, { skills: false }, { worktrees: false }]) {
+      const off = await loadWithModules(modules);
+      assert.equal(
+        await callTool(off.hooks, bash('cat skills/x/SKILL.md'), cwd),
+        undefined,
+        JSON.stringify(modules),
+      );
     }
   });
 

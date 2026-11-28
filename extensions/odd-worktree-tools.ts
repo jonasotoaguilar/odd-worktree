@@ -1441,6 +1441,11 @@ function closeSessionString(ctx, method) {
 // Returns {refused, text, notices, guard}. A broken guard module fails closed:
 // the removal cannot run without the check that gates it.
 async function checkoutSessionGuard({ ctx, target }) {
+  // modular-tools (`Worktrees+`): the guard belongs to the worktree half, like the removal
+  // it gates — with that module off the close path is not registered either, so the check
+  // answers clear instead of reading any store. This is the switch that owns the rule, not a
+  // way around it: it is the same `oddModules` every registration above and below reads.
+  if (!oddModules.worktrees) return { refused: false, text: null, notices: [], guard: { status: "module-off" } };
   let guardLib;
   try {
     guardLib = libRequire("worktree-session-guard.js");
@@ -10978,11 +10983,12 @@ function registerDiffDesignRows(api) {
   }
 }
 
-// modular-tools: the two module switches. `Codegraph+` and `Worktrees+` live on the
-// bridge's own `Tools` page as plain Off/On rows (`lib/modules.js`), persisted in this
+// modular-tools: the module switches. `Codegraph+`, `Worktrees+` and `Skills+` live on
+// the bridge's own `Tools` page as plain Off/On rows (`lib/modules.js`), persisted in this
 // package's store. They are read ONCE per registration episode, below: a change lands on
-// the next load, and the row says so through the session's own notifier.
-let oddModules = { codegraph: true, worktrees: true };
+// the next load, and the row says so through the session's own notifier. `Skills+` is the
+// one switch that is OFF until someone turns it on; the other two are on until turned off.
+let oddModules = { codegraph: true, worktrees: true, skills: false };
 
 function notifyModulesChange(text) {
   const ui = issuesSidebarCtx && issuesSidebarCtx.ui;
@@ -11819,13 +11825,16 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
   // moves the session, so the command is where a handoff waits and lands.
   warpHandoffPi = pi;
-  // modular-tools: the two module switches are read ONCE, here. `Worktrees+` off leaves
+  // modular-tools: the three module switches are read ONCE, here. `Worktrees+` off leaves
   // out everything worktree below — the tools, `/warp` with its card and bookkeeping, the
-  // guards and the prompt text; `Codegraph+` off leaves out the CodeGraph wiring and text.
+  // worktree guards (the active-session guard included) and the prompt text; `Codegraph+`
+  // off leaves out the CodeGraph wiring and text; `Skills+` off, its own default, leaves out
+  // the two skill-read rules. The fallback is the same shape, with `Skills+` off like an
+  // unset switch: a store that cannot be read keeps the package whole and the read rules out.
   try {
     oddModules = libRequire("modules.js").readModules(issuesSidebarBridge());
   } catch {
-    oddModules = { codegraph: true, worktrees: true };
+    oddModules = { codegraph: true, worktrees: true, skills: false };
   }
   // opencode-usage-alert: the OpenCode Go source registers at load AND at every
   // session start, so either load order works and a session switch re-targets the
@@ -12035,13 +12044,14 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // command text only, shares the same `ODD_WORKTREE_GUARD=0` switch, and adds no
   // command, tool, option or setting of its own.
   // invariant 22 (S5 of skill-read-full): the skill-read guard is the second refusal — a
-  // `bash` reader pointed at a skill file — and it follows the `Worktrees+` module, like every
-  // other guard here: with that module off, neither refusal nor the read rule below exists.
-  if (oddModules.worktrees) pi.on("tool_call", (event) => guardSkillReadBashCall(event));
+  // `bash` reader pointed at a skill file — and it follows the `Skills+` module: the two
+  // read rules are their own half, so `Worktrees+` off leaves them alone and `Skills+` off —
+  // its default — leaves them out without touching any worktree surface.
+  if (oddModules.skills) pi.on("tool_call", (event) => guardSkillReadBashCall(event));
   // S1/S2/S5 (skill-read-full): the other half of the same rule — a skill's or an ODD's
   // Markdown is read whole, so a `read` that pages through one has its range dropped before
-  // the host runs it. Same switch: with `Worktrees+` off, a read is left as the host proposed it.
-  if (oddModules.worktrees) pi.on("tool_call", (event) => keepSkillReadWholeCall(event));
+  // the host runs it. Same switch: with `Skills+` off, a read is left as the host proposed it.
+  if (oddModules.skills) pi.on("tool_call", (event) => keepSkillReadWholeCall(event));
   // S8/S9 (T8): the ODD documents THIS session wrote or edited. This observes
   // `tool_result` on purpose: a write that never landed is not a touch. Nothing here draws: the record is what the rail's
   // section reads (T4). It is deliberately NOT gated by `Worktrees+`: the rail's ODD

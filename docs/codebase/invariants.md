@@ -89,14 +89,8 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    only its delta against main. `filesSessionWorktreeRoots` reads the same active
    branch, so a worktree registered only on an abandoned branch is out of scope.
 
-<<<<<<< HEAD
-   **Four switches are optional, and nothing else is.** The `Tools` page of
-||||||| parent of 2196bda (feat(codegraph-prompt): one MCP tool, with its use cases and how to query it)
-   **Three switches are optional, and nothing else is.** The `Tools` page of
-=======
-   **Three switches are optional, and nothing else is.** Both module switches read Off until the
+   **Three switches are optional, and nothing else is.** All three read Off until the
    human turns them on, and `Codegraph+` turns On only while the `codegraph` CLI is on `PATH`. The `Tools` page of
->>>>>>> 2196bda (feat(codegraph-prompt): one MCP tool, with its use cases and how to query it)
    `/gentle:customize` (`lib/modules.js`, a plain `registerRows` provider) holds the
    `Codegraph+`, `Worktrees+` and `Skills+` Off/On lines. They are read once, when the surface
    registers, from the package's own store; `Worktrees+` Off leaves out `/warp`, its
@@ -104,9 +98,9 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    and prompt text, `Skills+` Off leaves out the two read rules, and `Codegraph+` Off leaves
    out the CodeGraph wiring, prompt text and reminders. The CodeGraph CARD is not one of
    these: it is a design of the `Card activity` line and follows that switch. A change lands on
-   the next load, so each one says so. None adds a command or a tool name. `Codegraph+` and
-   `Worktrees+` are ON unless the stored value is exactly `false`; `Skills+` is OFF unless it is
-   exactly `true`, so an unset, malformed or unreadable document leaves the read rules out.
+   the next load, so each one says so. None adds a command or a tool name. All three are
+   OFF unless the stored value is exactly `true`, so an unset, malformed or unreadable
+   document leaves every half out.
 
    **`Card message` is this package's own line, applied live.** The
    `Cards` page gains one `registerRows` provider — `lib/card-message.js`, the setting

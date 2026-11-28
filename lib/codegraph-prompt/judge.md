@@ -1,9 +1,7 @@
 ## CodeGraph
 
-Run one `mcp__codegraph__codegraph_explore` — source plus call paths in one call — before you search or
-read code: `fd`, `find`, `rg`, `grep`, `read` or `cat`. Call it with the symbols the change touches: their
-callers and callees show how far a regression could reach and which relationships the change bends, so the
-sweep covers that radius and not only the diff. The other tools stay available after the first call.
+`mcp__codegraph__codegraph_explore` returns, in one call, for the symbols a change touches, their source verbatim with line numbers, the code that calls them, and the tests that cover them, so the sweep covers the callers and their tests and not only the diff. Its blocks count as a Read. Name the symbols or files when you know them; a plain question works when you do not.
 
-The answer is a map, never proof: confirm every finding in the source before reporting it, and an answer on
-its own is not a finding.
+Call it instead of `grep`, `find` or `read` in the supplied `initial_review_tree`, and again only when the sweep needs the next layer; in scoped re-judgment, leave this tool aside.
+
+For an exact file path use `read`, for an exact string use `grep`, and for a file that is not code — docs, config, data — use `find`.

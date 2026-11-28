@@ -1,7 +1,7 @@
 ## CodeGraph
 
-Run one `mcp__codegraph__codegraph_explore` — source plus call paths in one call — before you search or
-read code: `fd`, `find`, `rg`, `grep`, `read` or `cat`. Call it with the symbol you are about to change:
-what calls it and what it calls are what the edit has to keep working, and after a refactor you call it
-again to find anything that still points at what moved. The other tools stay available after the first
-call, and you read a file before editing it — the answer says where code lives, not what it does.
+`mcp__codegraph__codegraph_explore` returns, in one call, for the symbol or file you are about to change, its source verbatim with line numbers, the code that calls it, and the tests that cover it — the code your edit can break. Its blocks count as a Read. Name the symbols or files when you know them; a plain question works when you do not.
+
+Call it instead of `grep`, `find` or `read` to see what calls the files in your allowed edit surfaces, and to find the implementation you should reuse instead of writing a second one. After you move or rename a symbol, ask for the old name to find what still uses it.
+
+For an exact file path use `read`, for an exact string use `grep`, and for a file that is not code — docs, config, data — use `find`.

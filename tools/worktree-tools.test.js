@@ -647,6 +647,9 @@ describe('the create starts its setup behind the answer and persists no state', 
       '',
     ].join('\n'));
     const target = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, 'setup');
+    // Only the logs THIS run creates: earlier runs leave their own setup directories behind, and a
+    // stale one says nothing about this create.
+    const before = new Set(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith('odd-worktree-setup-')));
     const savedPath = process.env.PATH;
     process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
     try {
@@ -670,7 +673,8 @@ describe('the create starts its setup behind the answer and persists no state', 
       assert.equal(fs.existsSync(doneLog), true, 'the install finished in the background');
       assert.deepEqual(fs.readFileSync(argvLog, 'utf8').trim().split('\n'), ['ci'], 'one npm invocation, argv ci');
       assert.equal(fs.readFileSync(doneLog, 'utf8').trim(), 'ci', 'the command completed exactly once');
-      const setupLogs = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith('odd-worktree-setup-'));
+      const setupLogs = fs.readdirSync(os.tmpdir())
+        .filter((name) => name.startsWith('odd-worktree-setup-') && !before.has(name));
       assert.ok(setupLogs.length > 0, 'the task wrote its log under the system temp directory');
       for (const name of setupLogs) {
         const logPath = path.join(os.tmpdir(), name);

@@ -219,7 +219,19 @@ describe('S7 identity join through the removal the panel drives', () => {
     try {
       const copy = path.join(dir, 'odd-worktree-tools.mjs');
       fs.writeFileSync(copy, stubbedSource());
-      return await import(pathToFileURL(copy).href);
+      const namespace = await import(pathToFileURL(copy).href);
+      // The switches are read while the extension registers, so the copy's own factory has
+      // to run for its namespace to hold the package: a module imported and never
+      // registered stays at the fail-closed default, with every half out.
+      namespace.default({
+        registerCommand: () => {},
+        registerTool: () => {},
+        registerMessageRenderer: () => {},
+        registerEntryRenderer: () => {},
+        appendEntry: () => {},
+        on: () => {},
+      });
+      return namespace;
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -355,8 +367,12 @@ describe('the `Worktrees+` switch owns the active-session guard', () => {
   // close below is the same namespace instance the load just configured.
   async function closeWith(modules) {
     const shellApi = defaultShellApi();
+    // Every switch is Off until its document says `true`, so the load hands the whole
+    // document in: `undefined` is the package with all three on, which is what the
+    // "on" cases below are about.
+    const document = modules !== undefined ? modules : { codegraph: true, worktrees: true, skills: true };
     shellApi.api.createStore = () => ({
-      get: (key, fallback) => (key === 'modules' && modules !== undefined ? modules : fallback),
+      get: (key, fallback) => (key === 'modules' ? document : fallback),
       set: () => {},
       delete: () => {},
     });

@@ -1489,7 +1489,7 @@ function installShellApi() {
       }
       return () => {};
     },
-    createStore: () => ({}),
+    createStore: () => ({ get: (key) => (key === 'modules' ? { codegraph: true, worktrees: true } : undefined) }),
     requestRepaint: () => { repaints.push(1); },
   };
   return { registered, repaints, released };

@@ -158,20 +158,31 @@ test('S2: every other project marker next to .git also triggers init, and never 
   }
 });
 
-test('S2: .git without any project marker does nothing, and so do the markers without .git', async () => {
+test('S2: any git checkout is indexed, with no manifest to match, and a manifest outside git is not', async () => {
   const calls = [];
   const result = await autoIndex(bare({ exists: has('.git', 'README.md'), run: fakeRun(calls) }));
-  assert.deepEqual(calls, []);
-  assert.deepEqual(result, { action: 'none', ok: true });
+  assert.deepEqual(calls, [{ args: ['init', '-y'], cwd: CWD }]);
+  assert.deepEqual(result, { action: 'init', ok: true });
   const more = [];
   await autoIndex(bare({ exists: has('package.json', 'composer.json'), run: fakeRun(more) }));
-  assert.deepEqual(more, []);
+  assert.deepEqual(more, [], 'no .git, no index');
+});
+
+test('S2: ODD_WORKTREE_CODEGRAPH_INDEX=0 turns the automatic index off, and only that value', async () => {
+  for (const [value, expected] of [['0', 'none'], ['1', 'init'], [undefined, 'init']]) {
+    const calls = [];
+    const env = value === undefined ? {} : { ODD_WORKTREE_CODEGRAPH_INDEX: value };
+    const result = await autoIndex(bare({ exists: has('.git'), env, run: fakeRun(calls) }));
+    assert.equal(result.action, expected, String(value));
+    assert.equal(calls.length, expected === 'none' ? 0 : 1, String(value));
+  }
 });
 
 test('S2: planIndexAction is a pure decision over the three paths', () => {
   assert.equal(planIndexAction(CWD, has('.codegraph')), 'sync');
   assert.equal(planIndexAction(CWD, has('.git', 'package.json')), 'init');
-  assert.equal(planIndexAction(CWD, has()), 'none');
+  assert.equal(planIndexAction(CWD, has('.git')), 'init', 'any git checkout gets an index, with no manifest to match');
+  assert.equal(planIndexAction(CWD, has()), 'none', 'a directory outside git is never indexed');
 });
 
 test('S2: a subagent child never syncs or inits in the parent project', async () => {
@@ -205,7 +216,7 @@ test('S2: a failing or throwing command is reported as not ok and never rejects'
 });
 
 test('S2: onStart announces the action before the command runs, and only when one runs', async () => {
-  for (const [present, expected] of [[['.codegraph'], 'sync'], [['.git', 'package.json'], 'init']]) {
+  for (const [present, expected] of [[['.codegraph'], 'sync'], [['.git'], 'init']]) {
     const order = [];
     await autoIndex(bare({
       exists: has(...present),
@@ -219,7 +230,7 @@ test('S2: onStart announces the action before the command runs, and only when on
   }
   const silent = [];
   const skipped = [
-    { present: ['.git'], env: {}, reason: 'startup' },
+    { present: [], env: {}, reason: 'startup' },
     { present: ['.codegraph'], env: { GENTLE_PI_AGENTS_CHILD: '1' }, reason: 'startup' },
     { present: ['.codegraph'], env: {}, reason: 'reload' },
   ];
@@ -622,7 +633,7 @@ test('S2: a directory without .git, a plain repository, a broken pointer and the
   assert.deepEqual(worktreeOf(repo), { worktree: false });
 });
 
-test('S2: the worktree decision is seed, sync or the plain marker decision', () => {
+test('S2: the worktree decision is seed, sync or the plain git decision', () => {
   const base = temp('cg-decision-');
   const { repo, worktree } = linkedWorktree(path.join(base, 'a'));
   fs.mkdirSync(path.join(repo, '.codegraph'));
@@ -630,18 +641,14 @@ test('S2: the worktree decision is seed, sync or the plain marker decision', () 
   assert.deepEqual(worktreeIndexAction(worktree, fs.existsSync), { action: 'seed', commonRoot: repo });
 
   const plainWorktree = linkedWorktree(path.join(base, 'b')).worktree;
-  assert.deepEqual(worktreeIndexAction(plainWorktree, fs.existsSync), { action: 'none' });
-  fs.writeFileSync(path.join(plainWorktree, 'package.json'), '{}\n');
-  assert.deepEqual(worktreeIndexAction(plainWorktree, fs.existsSync), { action: 'init' });
+  assert.deepEqual(worktreeIndexAction(plainWorktree, fs.existsSync), { action: 'init' }, 'no index to seed and none of its own');
 
   fs.mkdirSync(path.join(worktree, '.codegraph'));
   assert.deepEqual(worktreeIndexAction(worktree, fs.existsSync), { action: 'sync' });
 
   const plain = path.join(base, 'plain-repo');
   fs.mkdirSync(path.join(plain, '.git'), { recursive: true });
-  assert.deepEqual(worktreeIndexAction(plain, fs.existsSync), { action: 'none' });
-  fs.writeFileSync(path.join(plain, 'package.json'), '{}\n');
-  assert.deepEqual(worktreeIndexAction(plain, fs.existsSync), { action: 'init' });
+  assert.deepEqual(worktreeIndexAction(plain, fs.existsSync), { action: 'init' }, 'a plain checkout gets its own index');
 });
 
 test('S2: seeding copies the db only from a main index nobody is writing, into the worktree', () => {
@@ -1837,7 +1844,7 @@ test('S2: a failed sync still warms, because the index exists', async () => {
 });
 
 test('S2: no index and nothing to init -> nothing is warmed', async () => {
-  const { log, input } = prepareSetup({ present: ['.git'] });
+  const { log, input } = prepareSetup({ present: [] });
   const result = await prepareProject(input);
   assert.deepEqual(log, []);
   assert.deepEqual(result, { index: { action: 'none', ok: true }, warm: 'skipped' });

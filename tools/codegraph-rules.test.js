@@ -28,83 +28,126 @@ const child = (agent, tools = [MCP]) => ({
 });
 
 describe('the seven texts on disk', () => {
-  test('each opens with the shared heading and names the same six search tools', () => {
-    for (const variant of rules.VARIANTS) {
-      const text = file(variant).replace(/\s+/g, ' ');
-      assert.ok(text.startsWith('## CodeGraph'), variant);
-      assert.match(text, /before you (search or read code|`grep`, `rg`, `fd`, `find`, `read` or `cat`)/i, `${variant} gates searching and reading code`);
-      for (const binary of ['fd', 'find', 'rg', 'grep', 'read', 'cat']) {
-        assert.ok(text.includes(`\`${binary}\``), `${variant} names ${binary}`);
-      }
-      // S1: the primary and the generic texts carry no permission sentence; the five role texts keep theirs.
-      if (variant === 'orchestrator' || variant === 'generic') {
-        assert.doesNotMatch(text, /other tools stay|rather than a lookup|answer is a map|not proof/i, `${variant} has no escape hatch`);
-      } else {
-        assert.match(text, /other tools stay|may skip it/, `${variant} leaves the other tools available`);
-      }
-    }
-  });
+  const prose = (variant) => file(variant).replace(/\s+/g, ' ');
 
-  test('no text tells an agent to create, refresh or locate an index', () => {
+  test('every text is the CodeGraph heading and names the MCP tool, and nothing else CodeGraph', () => {
     for (const variant of rules.VARIANTS) {
-      assert.doesNotMatch(file(variant), /\binit\b|\bsync\b|create it|no index|fall back to/i, variant);
-    }
-  });
-
-  test('only the roles holding the native tool name its operations; the MCP tool is named in full', () => {
-    assert.match(file('explore'), /`codegraph` `query`/, 'explore');
-    assert.match(file('orchestrator'), /`codegraph` with `operation: "explore"`[\s\S]*`operation: "query"`/, 'orchestrator');
-    for (const variant of ['verify', 'worker', 'fix', 'judge']) {
       const text = file(variant);
-      assert.ok(text.includes(`\`${MCP}\``), variant);
-      assert.doesNotMatch(text, /`query`|`explore`|`codegraph`/, variant);
+      assert.ok(text.startsWith('## CodeGraph'), variant);
+      assert.ok(text.includes(`\`${MCP}\``), `${variant} names the MCP tool in full`);
+      assert.ok(text.includes('`mcp__codegraph__codegraph_explore` returns, in one call,'), `${variant} says what one call returns`);
+      assert.doesNotMatch(text, /`query`|`explore`|`codegraph`|operation:|⚠/, `${variant} names no native tool, operation or icon`);
     }
-    assert.doesNotMatch(file('generic'), /`query`|`explore`|`mcp__/, 'generic names no operation');
-    assert.doesNotMatch(
-      rules.VARIANTS.map(file).join('\n'),
-      /`codegraph_explore`/,
-      'the MCP tool is never named without its prefix',
-    );
+    assert.doesNotMatch(rules.VARIANTS.map(file).join('\n'), /`codegraph_explore`/, 'never named without its prefix');
   });
 
-  test('only the orchestrator points the MCP tool at another checkout, through projectPath, and still delegates', () => {
-    const text = file('orchestrator').replace(/\s+/g, ' ');
-    assert.ok(text.includes(`\`${MCP}\``), 'it names the MCP tool in full');
-    assert.match(text, /`projectPath`/, 'it names the argument that selects the checkout');
-    assert.match(text, /sibling worktree/, 'it covers a worktree of the same project');
-    assert.match(text, /another git project/, 'it covers another project');
-    assert.match(text, /delegate/, 'it keeps delegation for what a look does not settle');
-    assert.match(text, /never present/, 'it keeps one workspace\'s answer from standing for another');
-    for (const variant of rules.VARIANTS.filter((name) => name !== 'orchestrator')) {
-      assert.doesNotMatch(file(variant), /projectPath/, `${variant} does not name projectPath`);
+  test('every text says what one call returns, in the terms the tool documents', () => {
+    for (const variant of rules.VARIANTS) {
+      const text = prose(variant);
+      assert.match(text, /source verbatim with line numbers/, `${variant} names the source`);
+      assert.match(text, /the code that calls (it|them|the symbols you name)/, `${variant} names the callers`);
+      assert.match(text, /the tests that cover (it|them)/, `${variant} names the tests that cover the symbols`);
+    }
+  });
+
+  test('every text says how to ask, and what to do with the answer', () => {
+    for (const variant of rules.VARIANTS) {
+      const text = prose(variant);
+      assert.match(text, /Name the symbols or files when you know them; a plain question works when you do not/, variant);
+      assert.match(text, /Its blocks count as a Read\./, `${variant} says the blocks it shows count as read`);
+      
+    }
+  });
+
+  test('every text names the search it replaces', () => {
+    for (const variant of rules.VARIANTS) {
+      assert.match(prose(variant), /`grep`, `find` or `read`/, variant);
+    }
+  });
+
+  test('no text names a category instead of the situations, lists what the tool is not for, or makes it a ritual', () => {
+    for (const variant of rules.VARIANTS) {
+      const text = prose(variant);
+      assert.doesNotMatch(text, /discovery that comes|the work that comes before|before anything is edited|not better for|stay with the direct tools|keep the direct tools|stay available|only tool you need|test leads/i, variant);
+    }
+  });
+
+  test('no text explains how CodeGraph works: no index, reindex, sync or init', () => {
+    for (const variant of rules.VARIANTS) {
+      assert.doesNotMatch(file(variant), /index|reindex|\bsync\b|\binit\b|stale|daemon/i, variant);
     }
   });
 });
 
-describe('the orchestrator and explore texts stay inside their role', () => {
+describe('each role scopes the index to its own job', () => {
   const prose = (variant) => file(variant).replace(/\s+/g, ' ');
 
-  test('the orchestrator calls the graph first for a where/who/how/what-reaches question, with one exemption and one literal call', () => {
+  test('the orchestrator names the four situations it meets, and what scope and size depend on', () => {
     const text = prose('orchestrator');
-    assert.match(text, /to answer where code lives, who calls it, how it works, or what a change reaches, your first call is CodeGraph/, text);
-    assert.match(text, /`codegraph` with `operation: "explore"` and `query: "<symbols or the question>"`/, 'the literal call');
-    assert.match(text, /The one exemption is an exact string or a file path the user gave you/, 'one exemption');
-    assert.equal((text.match(/exemption|skip/gi) || []).length, 1, 'and only one');
-    assert.match(text, /what scope, size and any handoff depend on/, 'the sizing use is kept');
+    for (const situation of [
+      'about to change code you have not read',
+      'you are chasing a bug or an error across files',
+      'you or a worker are about to change code, and you need to see what calls it and which tests cover it',
+      'size a task or delegate it to a subagent',
+    ]) {
+      assert.ok(text.includes(situation), situation);
+    }
   });
 
-  test('the orchestrator looks at the ODD\'s own worktree through projectPath when the session runs elsewhere', () => {
+  test('the orchestrator keeps one exemption and one projectPath rule, and no concrete example', () => {
     const text = prose('orchestrator');
-    assert.match(text, /An ODD works in its own worktree: when the session runs elsewhere, look at that worktree, at a sibling worktree or at another git project/, text);
-    assert.match(text, /`projectPath` set to that checkout/, text);
+    for (const variant of rules.VARIANTS) {
+      assert.match(prose(variant), /For an exact file path use `read`, for an exact string use `grep`, and for a file that is not code — docs, config, data — use `find`/, `${variant} names the three tools that answer a direct lookup`);
+    }
+    assert.match(text, /set `projectPath` for another worktree or another git project, and say which checkout you used/, text);
+    assert.match(text, /An answer belongs to the checkout it came from/, text);
+    assert.match(text, /The code it returns is the code nearest your query: when that is not what you meant, ask again with a name the answer surfaced/, text);
+    assert.doesNotMatch(file('orchestrator'), /^\|/m);
+    assert.doesNotMatch(text, /colou?r|"add an option|"use the/i, 'a rule states the situation, never one example of it');
+    assert.doesNotMatch(text, /authori[sz]ation|ask first/i);
   });
 
-  test('the orchestrator repeats no permission rule: that one is stated, and guarded, elsewhere', () => {
-    assert.doesNotMatch(prose('orchestrator'), /authori[sz]ation|ask first|permission/i);
+  test('explore replaces the chain of greps, follows what depends on a symbol and defers what code does to the source', () => {
+    const text = prose('explore');
+    assert.match(text, /one call instead of the chain of greps and reads that would answer the same question/, text);
+    assert.match(text, /Follow the callers it reports instead of grepping for them/, text);
   });
 
-  test('the explorer\'s second look has a stop', () => {
-    assert.match(prose('explore'), /when the next layer is what the question needs, then stop/);
+  test('verify chooses probes from the index and keeps the probe as the proof', () => {
+    const text = prose('verify');
+    assert.match(text, /once you know what the spec requires and you need to see what else calls those symbols before you choose your probes/, text);
+  });
+
+  test('worker uses the index for what the edit must keep working, and never widens its scope', () => {
+    const text = prose('worker');
+    assert.match(text, /the code your edit can break/, text);
+    assert.match(text, /what calls the files in your allowed edit surfaces/, text);
+    assert.match(text, /find the implementation you should reuse instead of writing a second one/, text);
+    assert.match(text, /ask for the old name to find what still uses it/, text);
+    
+  });
+
+  test('fix keeps the patch inside the finding\'s reach, in the checkout it is authorized to fix', () => {
+    const text = prose('fix');
+    assert.match(text, /the code the patch can break, so the fix stays inside it/, text);
+    assert.match(text, /within your allowed edit surfaces and the checkout you are authorized to fix/, text);
+  });
+
+  test('judges sweep the initial review tree and leave the tool aside in scoped re-judgment', () => {
+    const text = prose('judge');
+    assert.match(text, /Call it instead of `grep`, `find` or `read` in the supplied `initial_review_tree`/, text);
+    
+    
+    
+    assert.match(text, /in scoped re-judgment, leave this tool aside/, text);
+  });
+
+  test('the generic text keeps the same criterion for a role with no text of its own', () => {
+    const text = prose('generic');
+    assert.match(text, /when you are about to change code you have not read/, text);
+    for (const variant of rules.VARIANTS) {
+      assert.match(prose(variant), /For an exact file path use `read`, for an exact string use `grep`, and for a file that is not code — docs, config, data — use `find`/, `${variant} names the three tools that answer a direct lookup`);
+    }
   });
 });
 

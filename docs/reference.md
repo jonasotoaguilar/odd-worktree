@@ -2045,9 +2045,9 @@ opens on the host's own card (`default`) until a choice is made.
 
 ## The module switches
 
-`/gentle:customize` gains a `Tools` page when the required host (`gentle-pi`) is present, with three Off/On lines:
-`Codegraph+` and `Worktrees+` are On by default and `Skills+` is OFF by default. Everything not named
-here (the issues surfaces, `/odd`, `/files`, `/identity`, every card) is transversal and has no switch.
+`/gentle:customize` gains a `Tools` page when `gentle-shell-bridge` is installed, with two Off/On lines.
+Both are Off by default, and everything not named here (the issues surfaces, `/odd`, `/files`,
+`/identity`, every card, the skill-read guard) is transversal and has no switch.
 
 The page sits right after the host's `Sections` page and before `Keymaps`: the provider asks for that
 position with `categoryPlacement: { after: "Sections" }`, because the shell API derives its page list from
@@ -2056,16 +2056,24 @@ page opens at the end instead — everything else works the same.
 
 | Switch | Default | Off leaves out |
 | --- | --- | --- |
-| `Codegraph+` | On | the `## CodeGraph` prompt text for every role, the two CodeGraph reminders and the whole CodeGraph session wiring (index, daemon, MCP entry, edit sync). The CodeGraph CARD is not here: it is a design, so it follows `Card activity` → `activity` |
-| `Worktrees+` | On | the `## ODD worktrees` prompt text, the tools `worktree_create` and `worktree_list`, `/warp` with its card, queue and bookkeeping, the bash and write guards and the active-session guard a removal runs |
+| `Codegraph+` | **Off** (needs the `codegraph` CLI on `PATH`) | the `## CodeGraph` prompt text for every role, its one reminder and the whole CodeGraph session wiring (index, daemon, MCP entry, edit sync). The CodeGraph CARD is not here: it is a design, so it follows `Card activity` → `activity` |
+| `Worktrees+` | **Off** | the `## ODD worktrees` prompt text, the tools `worktree_create` and `worktree_list`, `/warp` with its card, queue and bookkeeping, the bash and write guards and the active-session guard a removal runs |
 | `Skills+` | **Off** | the skill-read guard — a `bash` reader pointed at a skill file is refused — and the whole-read rule that drops `offset` and `limit` from a `read` of a skill's or an ODD's Markdown |
 
 The choice is one document in the shell API's own store (`odd-worktree` → `modules`), read once when the
 extension registers. A change is saved at once and says so in one line — `Codegraph+ Off · run /reload
 and start a new session to apply` — because a reload alone is not enough: the session in progress already
 carries the prompt text and the registered guards. Choosing the value a line already has changes nothing
-and says nothing. A missing, malformed or unreadable document keeps `Codegraph+` and `Worktrees+` On and
-leaves `Skills+` Off: that switch is the one that is opt-in, so unset and OFF are the same answer.
+and says nothing. A missing, malformed or unreadable document reads both Off, and a value counts as On only
+when it is exactly `true`.
+
+**`Codegraph+` needs the CLI.** Choosing On while no `codegraph` file is on `PATH` (a local walk, never a
+child process, asked at that moment) saves nothing and says one line instead —
+`Codegraph+ needs the codegraph CLI on PATH · install it first`. Choosing On with the CLI there saves the
+value, says the restart line, and wires what the next `/reload` needs: the `codegraph` server in
+`<agent dir>/mcp.json` and the CodeGraph agents in `<config home>/tools.json`
+([the agents' `tools.json`](#the-agents-toolsjson)). Choosing Off takes the agents out of `tools.json` and
+leaves the user's MCP entry alone. `Worktrees+` needs nothing and wires nothing.
 
 ## The OpenCode Go usage source and the peak rows above the editor
 
@@ -2310,10 +2318,10 @@ reaching them.
 - **They judge the orchestrator, not a subagent child.** Creating a worktree and leaving the default
   branch are the primary session's actions (a child is handed the worktree it works in), so a session
   started as a child (`GENTLE_PI_AGENTS_CHILD=1`) is judged by neither this guard nor the `edit` and
-  `write` guard below. The skill-read guard still applies to every session that has `Skills+` on.
-- `ODD_WORKTREE_GUARD=0` turns the two worktree guards and the skill-read refusal off for the
-  process, like `ODD_WORKTREE_PROMPT=0` for the prompt blocks. Neither is a switch you can turn back
-  on from the panel: `Skills+` and `Worktrees+` decide first, and this only takes their guards away.
+  `write` guard below. The skill-read guard still applies to every session.
+- `ODD_WORKTREE_GUARD=0` turns them off for the process, like `ODD_WORKTREE_PROMPT=0`
+  for the prompt blocks and `ODD_WORKTREE_CODEGRAPH_INDEX=0` for the automatic index
+  below. No other value does, and nothing else configures them.
 
 ### The `edit` and `write` guard
 
@@ -2388,19 +2396,22 @@ short hint; it can never land inside or in place of another extension's text.
 
 ## The `## CodeGraph` block in the system prompt
 
-A session that already holds a CodeGraph tool (the native `codegraph` tool or
-`mcp__codegraph__codegraph_explore`) gets a short section on how to use it: call
-the graph before searching or reading code, treat its answer as a map and not as
-proof, and keep the other tools for what it does not index. The orchestrator's text also
-names one literal call (`codegraph` with `operation: "explore"`) and one exemption (an exact
-string or a file path the user gave), and points its look at the ODD's own worktree
-through `projectPath` when the session runs elsewhere; the explorer's text gives its
-second look a stop. Each role gets its
-own text, read from `lib/codegraph-prompt/<role>.md`: the primary session the
-orchestrator's, a gentle-shell child (explore, verify, worker, fix, judges) its
-own, chosen from the agent name in the child's own command line, and any other
-child a generic one. A `review-*` agent and a session without a CodeGraph tool get
-nothing.
+A session holding `mcp__codegraph__codegraph_explore` gets the rule for its role, read from
+`lib/codegraph-prompt/<role>.md`. Every rule says what one call returns — the source verbatim with
+line numbers, the call paths between those symbols, what a change reaches and the tests that already
+touch it — that the source shown already counts as read with the files it names read directly, and
+that the query takes known symbols or files, or a plain question. None of them explains how CodeGraph
+works: indexing, sync and init belong to the package and never to the agent.
+
+The tool is support, never authority. The orchestrator names the situations it meets — changing code
+it has not read, tracing a bug or a flow across files, what an edit would reach, sizing or handing
+off — reads an exact path or searches an exact string directly, and points `projectPath` at another checkout. Explore uses it in place of
+the chain of greps for callers and reads what it points at, because the answer says where code lives,
+not what it does. Verify chooses probes with it, and the probe is what proves. Worker uses it for what
+the edit must keep working. Fix stays inside the finding's reach, in the checkout it is authorized to
+fix. The judges sweep with it in initial discovery and leave it aside in scoped re-judgment. None of
+them lets it widen a scope, an edit surface or a batch. Unknown child roles get the generic rule;
+`review-*` agents and sessions without the tool get no section.
 
 It is appended the same way as the worktrees block, after whatever the host put
 there, and skipped when its heading is already present. The prompt section only
@@ -2430,14 +2441,14 @@ The name is normalized before it is stored and may not carry a markdown heading 
 so it can never form the marker of this block or of the two above it; `C#` and `#designer`
 are names, and the refusal says what a name may be.
 
-## The two CodeGraph reminders
+## The CodeGraph reminder
 
-The primary session, when it already holds a CodeGraph tool, also gets two short reminders, appended as one extra
-text part to the result of a finished tool call. They are advice in the same words the prompt block
-uses: they never block a call, never replace a result, never arrive as a separate message, and add no
-tool or command. Both are gated exactly like the prompt block — only with the `codegraph` CLI installed
-and only when the session already holds a CodeGraph tool. They cite the CodeGraph rule, so
-`ODD_WORKTREE_PROMPT=0` silences them together with it.
+The primary session, when it already holds a CodeGraph tool, also gets one short reminder, appended as one extra
+text part to the result of a finished tool call. It is advice in the same words the prompt block
+uses: it never blocks a call, never replaces a result, never arrives as a separate message, and adds no
+tool or command. It is gated exactly like the prompt block — only with the `codegraph` CLI installed
+and only when the session already holds a CodeGraph tool. It cites the CodeGraph rule, so
+`ODD_WORKTREE_PROMPT=0` silences it together with that block.
 
 They cover `grep`, `find`, `ls`, `read` and `bash`, because those are the calls the rule asks the agent
 to replace with a `codegraph` `query` or an `explore`. `read` counts only for code: `.md`, `.json`,
@@ -2448,7 +2459,7 @@ search. A verb right after a single pipe only filters the output of the command 
 `curl … | head` and `ps aux | grep node` are not searches, while `cat src/a.ts | head` still is: the
 `cat` is the read.
 
-**Guard 1, another checkout.** The primary session, once per other checkout per session:
+**What it fires on.** The primary session, once per other checkout per session, and never in a subagent child:
 
 ```text
 This call went to <path>, another checkout. Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` with `projectPath` set to <path> first.
@@ -2459,25 +2470,9 @@ fires for the same project's other worktree and for another repository alike, an
 child. It stays silent, using up no slot, for a checkout this session already explored with
 `projectPath` since the last compaction.
 
-**Guard 2, the session's own checkout.** The primary session alone: a child lives a message or two and
-its own `## CodeGraph` text already says the rule. It fires on the first search of the checkout the session is in, while CodeGraph is unused:
-
-```text
-Follow the CodeGraph rule: run `codegraph` `query` or `explore` first.
-```
-
-for the primary session (the native wording only when it holds the native tool), and
-
-```text
-Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first.
-```
-
-when it holds only the MCP tool. It fires once per checkout per request, on that checkout's first search while the
-graph is unused: no later search of the same request repeats it, and using `codegraph` or the MCP tool
-after it changes nothing. Its first-search slot and its "already used" flag are per request: every new
-request re-arms guard 2 with both, while guard 1's slots and the explored checkouts stay per session,
-and a compaction or a new session still forgets everything. The reminder is keyed by the checkout, so a
-`/warp` re-arms it, and it stays silent while CodeGraph has been used in that request.
+Reaching CodeGraph first inside the session's own checkout is the `## CodeGraph` section's job, not a
+reminder's: every role's text names the tool, what it returns and when to call it, so nothing repeats that
+rule after the fact. A compaction or a new session forgets the reminded and explored checkouts.
 
 **What is "another checkout".** A different git toplevel (`git -C <dir> rev-parse --show-toplevel`),
 read once per directory and cached for the session. It comes from a tool's own path, or from a `cd`
@@ -2489,7 +2484,7 @@ file returned nothing the model could read, so no reminder rides that error resu
 slot is spent, and a failed `codegraph` or `explore` call does not count as a use of the graph. The
 next call that does answer is still reminded.
 
-**What forgets a reminder.** A compaction forgets both guards and what the session already used, and so
+**What forgets a reminder.** A compaction forgets the reminded and the explored checkouts, and so
 does a new session in the same process (a new, resumed or forked session; a `/reload` keeps the current
 one). A reminder that does not fire uses up no slot.
 
@@ -2533,10 +2528,20 @@ with its permission bits; the formatting is not preserved beyond its indentation
 invalid file is left untouched and reported. After a change Pi must be reloaded for the MCP
 tool to appear. A project-level MCP file is never edited.
 
-**Daemon.** The daemon is resolved per checkout from CodeGraph's own registry
-(`~/.codegraph/daemons`), a live one is reused before warming one through `codegraph serve
---mcp`, and a registered MCP entry is never taken as proof that a daemon is reachable. The
-package never stops a daemon it did not start.
+**Creating or syncing it.** A primary session's first `session_start` (not `/reload`, not a subagent
+child unless that child stands in its own linked worktree) prepares one index for its checkout, off the
+host's path, and a search that arrives while it runs joins it for at most five seconds. The decision is
+by path: an existing `.codegraph` is synced; a linked worktree with no index of its own is seeded from
+the main checkout's database and then synced; any other git checkout with no `.codegraph` is
+initialised with `codegraph init -y`; a directory that is not a git checkout is left alone. A manifest
+is not consulted — CodeGraph reads the code, so a repository of any language gets its index. A
+compaction requests a sync, never an init, and the read-only roles (verify and the judges) never start
+an index write.
+
+A search never waits longer than the join budget, and a queued, coalesced or failed run is never
+reported as synced: the notice says which of those happened. `ODD_WORKTREE_CODEGRAPH_INDEX=0` turns
+the automatic preparation off for the process — the guards, the prompt block and the rest stay on —
+which is what the suite uses so a scratch checkout never spawns the CLI.
 
 ## The CodeGraph card
 

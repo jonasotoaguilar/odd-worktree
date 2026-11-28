@@ -1,11 +1,14 @@
 'use strict';
 // S1/S2 (modular-tools): what the extension registers for each setting of the two module
 // switches. The switches are read ONCE, when the extension registers, from the shell API's
-// store, and a missing document keeps everything on — so every other suite in this package
-// loads the whole thing.
+// store, and a missing document leaves all three out. The shared test bridge
+// (`fixtures/load-extension.js`) stores them On, so every other suite in this package loads the
+// whole thing; the cases here hand their own document in.
 const { test, describe, after, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const os = require('node:os');
+const path = require('node:path');
 
 const { SHELL_SLOT, defaultShellApi, loadExtension } = require('./fixtures/load-extension.js');
 
@@ -49,6 +52,8 @@ async function load(modules, { selection, host } = {}) {
   return { ...loaded, shellApi };
 }
 
+const BOTH = { codegraph: true, worktrees: true };
+
 /** The activity design, as the shell API answers it while `Card activity` is on `activity`. */
 const ACTIVITY = () => ({ kind: 'design', design: { id: 'odd-worktree.bash-activity' } });
 
@@ -82,8 +87,8 @@ describe('the Tools page', () => {
 });
 
 describe('Worktrees+', () => {
-  test('on (the default): the two tools, /warp, its card and every worktree guard and text', async () => {
-    const loaded = await load(undefined);
+  test('on: the two tools, /warp, its card and every worktree guard and text', async () => {
+    const loaded = await load(BOTH);
     assert.deepEqual([...loaded.tools.keys()].filter((name) => name.startsWith('worktree_')).sort(), ['worktree_create', 'worktree_list']);
     assert.ok(loaded.commands.has('warp'));
     assert.ok(loaded.messageRenderers.has('worktree-warp'));
@@ -91,8 +96,8 @@ describe('Worktrees+', () => {
   });
 
   test('off: no tools, no /warp, no warp card, no worktree text and fewer guards, while everything else stays', async () => {
-    const on = await load(undefined);
-    const off = await load({ worktrees: false });
+    const on = await load(BOTH);
+    const off = await load({ ...BOTH, worktrees: false });
     assert.equal([...off.tools.keys()].some((name) => name.startsWith('worktree_')), false);
     assert.equal(off.commands.has('warp'), false);
     assert.equal(off.messageRenderers.has('worktree-warp'), false);
@@ -109,7 +114,7 @@ describe('Worktrees+', () => {
   });
 
   test('off keeps the CodeGraph text and the issues surface', async () => {
-    const off = await load({ worktrees: false });
+    const off = await load({ ...BOTH, worktrees: false });
     assert.match(await promptOf(off, ['codegraph']), /## CodeGraph/);
     assert.ok(off.commands.has('issues'));
   });
@@ -117,11 +122,11 @@ describe('Worktrees+', () => {
 
 describe('Skills+', () => {
   test('off (the default): the two read rules are not registered, and no worktree surface moves', async () => {
-    const on = await load({ skills: true });
-    const off = await load(undefined);
+    const on = await load({ skills: true, worktrees: true, codegraph: true });
+    const off = await load({ skills: false, worktrees: true, codegraph: true });
     assert.equal(toolCallHandlers(on) - toolCallHandlers(off), 2, 'the skill-read guard and the whole-read rule');
-    assert.equal(toolCallHandlers(off), toolCallHandlers(await load({ skills: false })), 'an unset switch and a stored false are the same half');
-    for (const loaded of [off, await load({ skills: false })]) {
+    assert.equal(toolCallHandlers(off), toolCallHandlers(await load({ worktrees: true, codegraph: true })), 'an unset switch and a stored false are the same half');
+    for (const loaded of [off, await load({ skills: false, worktrees: true, codegraph: true })]) {
       assert.ok(loaded.tools.has('worktree_create'), 'the worktree tools stay');
       assert.ok(loaded.commands.has('warp'), '/warp stays');
       assert.match(await promptOf(loaded, []), /## ODD worktrees/, 'the worktree text stays');
@@ -129,20 +134,20 @@ describe('Skills+', () => {
   });
 
   test('on: the two read rules register without the worktree half', async () => {
-    const on = await load({ skills: true, worktrees: false });
+    const on = await load({ skills: true, worktrees: false, codegraph: true });
     // Two worktree guards gone, the two read rules still here.
-    assert.equal(toolCallHandlers(on) - toolCallHandlers(await load({ worktrees: false })), 2);
+    assert.equal(toolCallHandlers(on) - toolCallHandlers(await load({ worktrees: false, codegraph: true })), 2);
     assert.equal(on.commands.has('warp'), false, 'the worktree half is still off');
   });
 });
 
 describe('Codegraph+', () => {
-  test('on (the default): the role text rides the prompt of a session holding a CodeGraph tool', async () => {
-    assert.match(await promptOf(await load(undefined), ['codegraph']), /## CodeGraph/);
+  test('on: the role text rides the prompt of a session holding a CodeGraph tool', async () => {
+    assert.match(await promptOf(await load(BOTH), ['codegraph']), /## CodeGraph/);
   });
 
   test('off: no CodeGraph text, and the worktrees half is untouched', async () => {
-    const off = await load({ codegraph: false });
+    const off = await load({ ...BOTH, codegraph: false });
     const prompt = await promptOf(off, ['codegraph']);
     assert.doesNotMatch(prompt, /## CodeGraph/);
     assert.match(prompt, /## ODD worktrees/);
@@ -195,10 +200,127 @@ describe('the CodeGraph card', () => {
 });
 
 describe('both off', () => {
+  test('is the default: nothing stored leaves both halves out', async () => {
+    for (const modules of [undefined, {}, { codegraph: 'yes', worktrees: 1 }]) {
+      const loaded = await load(modules);
+      assert.equal(await promptOf(loaded, ['codegraph']), '', JSON.stringify(modules));
+      assert.equal([...loaded.tools.keys()].some((name) => name.startsWith('worktree_')), false, JSON.stringify(modules));
+      assert.equal(loaded.commands.has('warp'), false, JSON.stringify(modules));
+    }
+  });
+
   test('the package keeps its transversal surface and adds neither half', async () => {
     const off = await load({ codegraph: false, worktrees: false });
     assert.equal(await promptOf(off, ['codegraph']), '');
     assert.equal(off.tools.size, 0);
     for (const name of ['odd', 'files', 'issues']) assert.ok(off.commands.has(name), `${name} stays`);
+  });
+});
+
+// S2/S3: what the switch wires beyond its own value. The fixture points the agent directory and the config home at
+// scratch directories, so these cases read and write only those; the CLI is a file named `codegraph` on a scratch PATH.
+describe('Codegraph+ wiring', () => {
+  const AGENT_NAMES = ['gentle-ai-explore', 'gentle-ai-verify', 'gentle-ai-worker', 'jd-fix-agent', 'jd-judge-a', 'jd-judge-b'];
+  const mcpFile = () => path.join(process.env.PI_CODING_AGENT_DIR, 'mcp.json');
+  const toolsFile = () => path.join(process.env.GENTLE_PI_CONFIG_HOME, 'tools.json');
+  const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+  const clean = () => [mcpFile(), toolsFile()].forEach((file) => fs.rmSync(file, { force: true }));
+
+  /** Runs `body` with `codegraph` on PATH (or without it), then restores PATH. */
+  async function withCli(present, body) {
+    const saved = process.env.PATH;
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-cli-'));
+    if (present) fs.writeFileSync(path.join(bin, 'codegraph'), '#!/bin/sh\n', { mode: 0o755 });
+    process.env.PATH = bin;
+    try {
+      await body();
+    } finally {
+      process.env.PATH = saved;
+      fs.rmSync(bin, { recursive: true, force: true });
+    }
+  }
+
+  /** The page's rows over a store that keeps what the page writes. */
+  async function pageRows(initial) {
+    const loaded = await load(initial);
+    let document = initial === undefined ? undefined : { ...initial };
+    loaded.shellApi.api.createStore = () => ({
+      get: (key, fallback) => (key === 'modules' && document !== undefined ? document : fallback),
+      set: (key, value) => { if (key === 'modules') document = value; },
+      delete: () => {},
+    });
+    return loaded.shellApi.rows.find((provider) => provider.category === 'Tools').rows({});
+  }
+
+  const startSession = async (loaded) => {
+    for (const [name, handler] of loaded.hooks) {
+      if (name === 'session_start') {
+        try {
+          await handler({ reason: 'startup' }, { cwd: os.tmpdir(), ui: { notify: () => {} } });
+        } catch {
+          // Another handler of the same event is not what these cases look at.
+        }
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  };
+
+  test('turning Codegraph+ On adds the server to the MCP configuration and the agents to tools.json', async () => {
+    clean();
+    await withCli(true, async () => {
+      const rows = await pageRows({});
+      clean();
+      await rows[1].action();
+    });
+    assert.deepEqual(readJson(mcpFile()).mcpServers.codegraph.args, ['serve', '--mcp']);
+    assert.deepEqual(Object.keys(readJson(toolsFile())).sort(), AGENT_NAMES);
+    assert.deepEqual(readJson(toolsFile())['gentle-ai-explore'], { add: ['mcp__codegraph'] });
+  });
+
+  test('turning it On without the CLI writes neither file', async () => {
+    clean();
+    await withCli(false, async () => {
+      const rows = await pageRows({});
+      clean();
+      await rows[1].action();
+    });
+    assert.equal(fs.existsSync(mcpFile()), false);
+    assert.equal(fs.existsSync(toolsFile()), false);
+  });
+
+  test('turning it Off takes the agents out and leaves the MCP entry the user has', async () => {
+    clean();
+    await withCli(true, async () => {
+      const rows = await pageRows({ codegraph: true });
+      clean();
+      fs.writeFileSync(toolsFile(), JSON.stringify({ 'gentle-ai-explore': { add: ['mcp__codegraph', 'web_search'] }, other: { add: ['x'] } }));
+      fs.writeFileSync(mcpFile(), JSON.stringify({ mcpServers: { codegraph: { command: 'codegraph' } } }));
+      await rows[0].action();
+    });
+    assert.deepEqual(readJson(toolsFile()), { 'gentle-ai-explore': { add: ['web_search'] }, other: { add: ['x'] } });
+    assert.ok(readJson(mcpFile()).mcpServers.codegraph);
+  });
+
+  test('a session start checks the file: Off or no CLI takes the agents out, On with the CLI puts them back', async () => {
+    const seed = () => fs.writeFileSync(toolsFile(), JSON.stringify(Object.fromEntries(AGENT_NAMES.map((name) => [name, { add: ['mcp__codegraph'] }]))));
+    for (const [modules, cli, expected] of [
+      [{ codegraph: false, worktrees: true }, true, {}],
+      [{ codegraph: true, worktrees: true }, false, {}],
+      [{ codegraph: true, worktrees: true }, true, Object.fromEntries(AGENT_NAMES.map((name) => [name, { add: ['mcp__codegraph'] }]))],
+    ]) {
+      await withCli(cli, async () => {
+        const loaded = await load(modules);
+        clean();
+        seed();
+        await startSession(loaded);
+      });
+      assert.deepEqual(readJson(toolsFile()), expected, `${JSON.stringify(modules)} cli=${cli}`);
+    }
+    await withCli(true, async () => {
+      const loaded = await load({ codegraph: true, worktrees: true });
+      clean();
+      await startSession(loaded);
+    });
+    assert.deepEqual(Object.keys(readJson(toolsFile())).sort(), AGENT_NAMES, 'a missing file is created while On');
   });
 });

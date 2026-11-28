@@ -11161,9 +11161,9 @@ function registerDiffDesignRows(api) {
 // modular-tools: the module switches. `Codegraph+`, `Worktrees+` and `Skills+` live on
 // the shell API's own `Tools` page as plain Off/On rows (`lib/modules.js`), persisted in this
 // package's store. They are read ONCE per registration episode, below: a change lands on
-// the next load, and the row says so through the session's own notifier. `Skills+` is the
-// one switch that is OFF until someone turns it on; the other two are on until turned off.
-let oddModules = { codegraph: true, worktrees: true, skills: false };
+// the next load, and the row says so through the session's own notifier. All three are OFF
+// until someone turns them on, and `Codegraph+` needs the CLI before it can be.
+let oddModules = { codegraph: false, worktrees: false, skills: false };
 
 function notifyModulesChange(text) {
   const ui = issuesSidebarCtx && issuesSidebarCtx.ui;
@@ -11174,7 +11174,12 @@ function registerModuleRows(api) {
   try {
     if (!api || typeof api.registerRows !== "function") return;
     const modules = libRequire("modules.js");
-    api.registerRows(modules.moduleRowsProvider({ api, notify: notifyModulesChange }));
+    // S2/S3: a kept `Codegraph+` switch wires the MCP entry and the agents' tools.json (`lib/codegraph-session.js`).
+    api.registerRows(modules.moduleRowsProvider({
+      api,
+      notify: notifyModulesChange,
+      onChange: (key, on) => libRequire("codegraph-session.js").onCodegraphSwitch(key, on),
+    }));
   } catch {
     // The page is optional: a shell API that refuses it keeps both modules on.
   }
@@ -12056,7 +12061,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
   try {
     oddModules = libRequire("modules.js").readModules(issuesSidebarShellApi());
   } catch {
-    oddModules = { codegraph: true, worktrees: true, skills: false };
+    oddModules = { codegraph: false, worktrees: false, skills: false };
   }
   // opencode-usage-alert: the OpenCode Go source registers at load AND at every
   // session start, so either load order works and a session switch re-targets the
@@ -12418,13 +12423,13 @@ function registerOddWorktreeSurfaceEntries(pi) {
   });
   // CodeGraph, only with its CLI installed: the global MCP entry, create-or-sync at session
   // start, the compaction sync, the observed native init and the edit/write sync. Every
-  // piece runs in the background and none can fail the host.
-  if (oddModules.codegraph) {
-    try {
-      libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
-    } catch {
-      // CodeGraph is best effort.
-    }
+  // piece runs in the background and none can fail the host. The one registration is made with
+  // the module Off too, and then it only keeps the agents' `tools.json` free of the CodeGraph server.
+  const codegraphOn = oddModules.codegraph === true;
+  try {
+    libRequire("codegraph-session.js").registerCodegraph(pi, { enabled: codegraphOn, metrics: () => resolveWorktreeToolCardMetrics() });
+  } catch {
+    // CodeGraph is best effort.
   }
   // S1 (T2): the file cards, through the same host hook. A `read`/`edit`/`write` call whose
   // path names a skill or an ODD artifact heads as that file while the shell API's `Card activity`

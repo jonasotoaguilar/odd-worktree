@@ -89,7 +89,8 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    only its delta against main. `filesSessionWorktreeRoots` reads the same active
    branch, so a worktree registered only on an abandoned branch is out of scope.
 
-   **Four switches are optional, and nothing else is.** The `Tools` page of
+   **Three switches are optional, and nothing else is.** All three read Off until the
+   human turns them on, and `Codegraph+` turns On only while the `codegraph` CLI is on `PATH`. The `Tools` page of
    `/gentle:customize` (`lib/modules.js`, a plain `registerRows` provider) holds the
    `Codegraph+`, `Worktrees+` and `Skills+` Off/On lines. They are read once, when the surface
    registers, from the package's own store; `Worktrees+` Off leaves out `/warp`, its
@@ -97,9 +98,9 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    and prompt text, `Skills+` Off leaves out the two read rules, and `Codegraph+` Off leaves
    out the CodeGraph wiring, prompt text and reminders. The CodeGraph CARD is not one of
    these: it is a design of the `Card activity` line and follows that switch. A change lands on
-   the next load, so each one says so. None adds a command or a tool name. `Codegraph+` and
-   `Worktrees+` are ON unless the stored value is exactly `false`; `Skills+` is OFF unless it is
-   exactly `true`, so an unset, malformed or unreadable document leaves the read rules out.
+   the next load, so each one says so. None adds a command or a tool name. All three are
+   OFF unless the stored value is exactly `true`, so an unset, malformed or unreadable
+   document leaves every half out.
 
    **`Card message` is this package's own line, applied live.** The
    `Cards` page gains one `registerRows` provider — `lib/card-message.js`, the setting
@@ -499,35 +500,39 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     It rides `systemPromptOptions.appendSystemPrompt` like invariant 14: appended,
     idempotent by heading, never a returned `systemPrompt`, suppressed by
     `ODD_WORKTREE_PROMPT=0`. It is added only when the session already holds the
-    native `codegraph` tool or `mcp__codegraph__codegraph_explore` (in a child, the
+    `mcp__codegraph__codegraph_explore`, the only CodeGraph tool (in a child, the
     requested-tools list counts). The text is chosen by role: a primary session gets
     `orchestrator.md`; a child's agent name, read from its own argv
     (`gentle-pi-subagent-<agent>-<random>/`), picks `explore`, `verify`, `worker`,
     `fix` or `judge` (both judges share one); any other child, or a name that cannot
     be read, gets `generic.md`; a `review-*` agent gets nothing. A missing or
     heading-less file falls back to `generic.md`, and a missing generic means no
-    section. Only the orchestrator and explore texts name the native operations; the
-    other roles name the MCP tool in full, and only the orchestrator text also points
-    that tool at another checkout through `projectPath` (a sibling worktree or another
-    git project) before it delegates an explorer there; no text mentions `init`, `sync` or an
-    index fallback, because no agent prepares the index: the package does
-    (invariant 19).
+    section. Every text names the MCP tool only, says what one call returns, that the source shown
+    counts as read with the files it names read directly, and that the query takes known names or a
+    plain question. No text explains how CodeGraph works: indexing, sync and init belong to the
+    package (invariant 19) and never to the agent. The tool is support, not authority: it never
+    widens a scope, an edit surface or an authorized batch, and scoped re-judgment leaves it aside.
+    Only the orchestrator points `projectPath` at another checkout.
 
 19. **CodeGraph runs only with its CLI, in the background, and writes one config
     entry.** `lib/codegraph-session.js` is the single wiring point (the extension
-    calls `registerCodegraph(pi)` once) and registers nothing when the `codegraph`
-    CLI is not installed; the probe runs once per process, so installing it needs a
-    restart. With the CLI: (a) a primary session ensures, once per process,
+    calls `registerCodegraph(pi)` once, with the module Off too) and registers nothing
+    but the `tools.json` check when the `codegraph` CLI is not installed or `Codegraph+`
+    is Off; the probe runs once per process, so installing it needs a restart. With the CLI: (a) a primary session ensures, once per process,
     `mcpServers.codegraph` of `<agent dir>/mcp.json` (`command: "codegraph"`,
     `args: ["serve", "--mcp"]`, `toolExposure.codegraph_explore: "direct"`) — it adds
     the entry or fixes only the fields that differ, keeps every other server and
     field, rewrites only when something changed, atomically and with the file's
     permission bits, and leaves an invalid file untouched. It is the only writer of
-    the user's configuration, and `tools/` never touches a real agent directory.
+    the user's MCP configuration; the only writer of the agents' `tools.json` is
+    `lib/codegraph-agent-tools.js`, which adds or removes the one name `mcp__codegraph` in the six
+    CodeGraph agents through the same atomic writer. `tools/` never touches a real agent
+    directory or config home: the shared fixture points both at scratch directories.
     (b) Session start (not `/reload`, not a subagent child, except a child in its own
     linked worktree) creates or syncs the session's index and warms its daemon; a
     linked worktree without an index is seeded from the main checkout's and never
-    shares it. (c) A compaction requests one sync, never an init. (d) After a
+    shares it. The decision is by path alone: an existing `.codegraph` is synced, any
+    other git checkout is initialised, and no manifest is consulted. (c) A compaction requests one sync, never an init. (d) After a
     successful native `codegraph init` the package requests one coordinated sync in
     the background and appends NOTHING to the tool result when it completes: the
     tool's own content is the whole answer. Only a sync that did not complete appends
@@ -573,42 +578,32 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     this same line, never a module switch;
     this package registers no other tool-renderer resolver for `bash`.
 
-21. **The two CodeGraph reminders advise, never block, add no surface, and belong to the primary session.**
+21. **The CodeGraph reminder advises, never blocks, adds no surface, and belongs to the primary session.**
     `lib/codegraph-guard.js` decides, and `lib/codegraph-session.js` appends its
     sentence as ONE extra text part to the result of that finished tool call — never
     a separate message, never a block, and the result (its own parts and its
     structured content) is kept whole. No tool, command, card or notification is
     added, and nothing runs in the foreground beyond one bounded, cached git read.
-    Both are gated like the prompt section: only with the `codegraph` CLI installed
+    It is gated like the prompt section: only with the `codegraph` CLI installed
     (invariant 19's registration) and only when the session holds a CodeGraph tool,
     which the wiring records from `before_agent_start`'s
-    `systemPromptOptions.selectedTools` — no other source. They cite the CodeGraph
-    rule, so `ODD_WORKTREE_PROMPT=0` silences them together with it.
+    `systemPromptOptions.selectedTools` — no other source. It cites the CodeGraph
+    rule, so `ODD_WORKTREE_PROMPT=0` silences it together with the rule text.
 
-    **Guard 1** is the primary session's alone and fires once per other checkout per
-    session: `This call went to <path>, another checkout. Follow the CodeGraph rule:
-    call mcp__codegraph__codegraph_explore with projectPath set to <path> first.` —
-    with `mcp__codegraph__codegraph_explore` and `projectPath` in backticks and
-    `<path>` the checkout's real git toplevel. It stays silent, using up no slot, for
-    a checkout this session already explored with that tool's `projectPath` since the
-    last compaction.
-    **Guard 2** is the primary session's alone: a child lives a message or two and its own
-    `## CodeGraph` text already states the rule, so it hears no reminder at all.
-    It fires once per checkout per request, on the first search of the session's own
-    checkout while CodeGraph is unused in that request (keyed by the checkout, so a
-    `/warp` re-arms it); no later search of the same request repeats it, and a use of
-    `codegraph` or the MCP tool after it changes nothing.
-    Its first-search slot and its `used` flag are per request: every
-    new request (`before_agent_start`) forgets them, while guard 1's slots and the
-    explored checkouts stay per session, and a compaction or a new session forgets
-    everything. The primary session gets `Follow the CodeGraph rule: run codegraph query
-    or explore first.` (`codegraph`, `query` and `explore` in backticks; with only the MCP
-    tool, `Follow the CodeGraph rule: call mcp__codegraph__codegraph_explore first.`).
-    It is advice: it never blocks.
+    **The one reminder is about another checkout**, fired once per other checkout
+    per session and never in a subagent child: `This call went to <path>, another
+    checkout. Follow the CodeGraph rule: call mcp__codegraph__codegraph_explore with
+    projectPath set to <path> first.` — with `mcp__codegraph__codegraph_explore`
+    and `projectPath` in backticks and `<path>` the checkout's real git toplevel. It
+    stays silent, using up no slot, for a checkout this session already explored
+    with that tool's `projectPath` since the last compaction. Reaching CodeGraph
+    first inside the session's OWN checkout is the prompt section's job: the
+    `## CodeGraph` text of every role says which tool answers what, so no
+    after-the-fact reminder states that rule a second time.
 
     **A call that failed is no subject at all**: the model got no result to read, so
     no reminder rides an error result, no once-per-key slot is spent, and a failed
-    `codegraph` or explore call is no use of the graph either.
+    explore call records no explored checkout.
     **What counts as a call** is `grep`, `find`, `ls`, `read` and `bash`: `read` only
     for code, never for the `.md`/`.json`/`.yml`/`.yaml`/`.toml`/`.txt` the rule
     exempts, and `bash` only when a segment runs `grep`, `rg`, `find`, `fd`, `ls`,
@@ -620,9 +615,9 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     and cached), from a tool's path or from a `cd` target or absolute path argument
     of a shell command; a path outside every checkout and a command that only
     mentions one (`git -C`, `curl`, `echo`) triggers nothing. A compaction forgets
-    both guards and what the session used, and so does a new session in the same
-    process (`session_start` new, resume or fork; not `/reload`). The reminder is
-    advice, so no test may assert it blocks, refuses or notifies.
+    the reminded checkouts and the explored ones, and so does a new session in the
+    same process (`session_start` new, resume or fork; not `/reload`). The reminder
+    is advice, so no test may assert it blocks, refuses or notifies.
 
 22. **The tool guards read text and paths, fail open and add no surface.** The
     extension's `tool_call` handlers decide three things — two in

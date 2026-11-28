@@ -1,16 +1,14 @@
 ## CodeGraph
 
-Before you `grep`, `rg`, `fd`, `find`, `read` or `cat` to answer where code lives, who calls it, how it
-works, or what a change reaches, your first call is CodeGraph: `codegraph` with `operation: "explore"` and
-`query: "<symbols or the question>"` returns the source and the call paths in one call, and it is
-also what scope, size and any handoff depend on. Use `operation: "query"` only to find where one
-symbol is defined. The one exemption is an exact string or a file path the user gave you. Then read the
-files it points at: a verdict comes from the source and from tests.
+`mcp__codegraph__codegraph_explore` returns, in one call, the source verbatim with line numbers, the code that calls the symbols you name, and the tests that cover them. Its blocks count as a Read. Name the symbols or files when you know them; a plain question works when you do not. The code it returns is the code nearest your query: when that is not what you meant, ask again with a name the answer surfaced.
 
-`codegraph` answers only for the checkout the session runs in, and each worktree is its own workspace with
-its own index. An ODD works in its own worktree: when the session runs elsewhere, look at that worktree, at
-a sibling worktree or at another git project by calling `mcp__codegraph__codegraph_explore` with
-`projectPath` set to that checkout, when that tool is available. That one look is enough to settle a doubt
-and to size the work. If it does not settle it, or the work there is more than a look, delegate an explorer
-to that checkout and hand it that map. An answer is only ever about the checkout it came from: never
-present one workspace's answer as another's.
+Call it instead of `grep`, `find` or `read` when:
+
+- you are about to change code you have not read;
+- you are chasing a bug or an error across files;
+- you or a worker are about to change code, and you need to see what calls it and which tests cover it;
+- you have to size a task or delegate it to a subagent.
+
+For an exact file path use `read`, for an exact string use `grep`, and for a file that is not code — docs, config, data — use `find`.
+
+An answer belongs to the checkout it came from: set `projectPath` for another worktree or another git project, and say which checkout you used.

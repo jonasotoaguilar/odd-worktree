@@ -96,8 +96,8 @@ describe('each role scopes the index to its own job', () => {
 
   test('the orchestrator keeps one exemption and one projectPath rule, and no concrete example', () => {
     const text = prose('orchestrator');
-    for (const variant of ['orchestrator', 'explore', 'generic']) {
-      assert.match(prose(variant), /For an exact file path use `read`, for an exact string use `grep`, and for a file that is not code — docs, config, data — use `find`/, variant);
+    for (const variant of rules.VARIANTS) {
+      assert.match(prose(variant), /For an exact file path use `read`, for an exact string use `grep`, and for a file that is not code — docs, config, data — use `find`/, `${variant} names the three tools that answer a direct lookup`);
     }
     assert.match(text, /set `projectPath` for another worktree or another git project, and say which checkout you used/, text);
     assert.match(text, /An answer belongs to the checkout it came from/, text);
@@ -145,8 +145,8 @@ describe('each role scopes the index to its own job', () => {
   test('the generic text keeps the same criterion for a role with no text of its own', () => {
     const text = prose('generic');
     assert.match(text, /when you are about to change code you have not read/, text);
-    for (const variant of ['orchestrator', 'explore', 'generic']) {
-      assert.match(prose(variant), /For an exact file path use `read`, for an exact string use `grep`, and for a file that is not code — docs, config, data — use `find`/, variant);
+    for (const variant of rules.VARIANTS) {
+      assert.match(prose(variant), /For an exact file path use `read`, for an exact string use `grep`, and for a file that is not code — docs, config, data — use `find`/, `${variant} names the three tools that answer a direct lookup`);
     }
   });
 });

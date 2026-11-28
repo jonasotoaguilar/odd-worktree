@@ -96,7 +96,7 @@ describe('each role scopes the index to its own job', () => {
 
   test('the orchestrator keeps one exemption and one projectPath rule, and no concrete example', () => {
     const text = prose('orchestrator');
-    assert.match(text, /With an exact file path, use `read`; with an exact string, use `grep`/, text);
+    assert.match(text, /For an exact file path, use `read`; for an exact string, use `grep`/, text);
     assert.match(text, /set `projectPath` for another worktree or another git project, and say which checkout you used/, text);
     assert.match(text, /The answer belongs to the checkout it came from/, text);
     assert.match(text, /The code it returns is the code nearest your query: when that is not what you meant, ask again with a name the answer surfaced/, text);
@@ -143,7 +143,7 @@ describe('each role scopes the index to its own job', () => {
   test('the generic text keeps the same criterion for a role with no text of its own', () => {
     const text = prose('generic');
     assert.match(text, /about to change code you have not read, tracing a flow or an error across files/, text);
-    assert.match(text, /With an exact file path, use `read`; with an exact string, use `grep`/, text);
+    assert.match(text, /For an exact file path, use `read`; for an exact string, use `grep`/, text);
   });
 });
 

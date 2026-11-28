@@ -685,7 +685,7 @@ installed, configured or imported.
 
 - `pi-lens` mounts its IO shell API at a stable `Symbol.for` key with a version constant, first-wins
   and frozen, and a breaking major takes a **new** symbol key instead of mutating the old slot
-  (`clients/io-shell API-contract.ts:25-32`, `clients/process-shell API.ts:48-81`).
+  (the IO contract and process modules under its `clients/` directory).
 - gentle-shell names its shared payloads with a `schema` string and gates on the exact shape
   before using them (`lib/card-content-policy.ts:11,40`, `lib/card-style-policy.ts:29`).
 

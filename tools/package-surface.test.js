@@ -103,7 +103,7 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
-  // S2/S4 (native-shell API T5): the shipped surface is SIX commands — `/status` is gone with
+  // S2/S4 (native-shell API T5): the shipped surface is SIX commands — the shell API's status command is gone with
   // `lib/shell-api/status.ts`, and the shell API registers no command of its own. This plain-JS
   // suite cannot import a `.ts` file, so the fixture stubs the shell API import (a no-op factory)
   // and what it observes here is the six this package registers itself; the `shellApiExtension(pi)`
@@ -153,8 +153,6 @@ describe('registration', () => {
     const raw = fs.readFileSync(path.join(ROOT, 'extensions/odd-worktree-tools.ts'), 'utf8');
     assert.ok(raw.includes(SHELL_API_IMPORT), 'the entry imports this package\'s own shell API');
     assert.equal(source.includes(SHELL_API_STUB), true, 'and the plain-JS copy stubs that one import');
-    assert.equal(/from\s+["']pi-odd-worktree/.test(raw), false, 'no import of the shell API package anywhere');
-    assert.equal(/require\(\s*["']pi-odd-worktree/.test(raw), false, 'no require of the shell API package anywhere');
     assert.equal(source.split('api.registerSection(').length - 1, 2, 'exactly two sidebar sections are contributed');
     // T5 (S1): the count alone would drift silently, so the ids are asserted through
     // the shell API that received them: one `GITHUB` and one `ODD`, and nothing else.

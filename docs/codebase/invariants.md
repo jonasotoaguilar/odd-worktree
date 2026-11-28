@@ -1040,7 +1040,7 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     is missing, so a field nothing here reads any more (`adoptedMessages` in the
     message-design adoption state, `owner` in the tool-design index and its
     `TOOL_DESIGN_INDEX_SHAPE` stamp) stays, and the plugin-line attribution kind
-    stays `shell API`, because an older copy writes and reads it.
+    stays `shell-api`, because an older copy writes and reads it.
     `tools/shell-api/message-design-adoption.test.ts` and
     `tools/shell-api/compatibility-regression.test.mjs` pin the adoption slot, the
     attribution kind and a foreign object that throws when described.

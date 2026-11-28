@@ -1894,7 +1894,7 @@ opens on the host's own card (`default`) until a choice is made.
 
 ## The module switches
 
-`/gentle:customize` gains a `Tools` page, with two Off/On lines.
+`/gentle:customize` gains a `Tools` page when the required host (`gentle-pi`) is present, with two Off/On lines.
 Both are On by default, and everything not named here (the issues surfaces, `/odd`, `/files`,
 `/identity`, every card, the skill-read guard) is transversal and has no switch.
 

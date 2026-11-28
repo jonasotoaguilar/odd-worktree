@@ -267,7 +267,7 @@ test("the derived name is clamped to three words, stripped of marks, and always 
   assert.equal(derivePluginName("@acme/loon-kit"), "Loon kit");
   assert.equal(derivePluginName("a-b-c-d-e"), "A b c");
   assert.equal(derivePluginName("!!!"), undefined);
-  for (const packageName of ["@acme/loon-kit", "shell-api", "a-b-c-d-e"]) {
+  for (const packageName of ["@acme/loon-kit", "gentle.shell.kit", "a-b-c-d-e"]) {
     const derived = derivePluginName(packageName);
     assert.ok(derived !== undefined);
     assert.equal(rowNameProblem(derived), undefined, `"${derived}" must satisfy the shape rule`);

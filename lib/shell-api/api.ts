@@ -35,8 +35,8 @@
  * Why a symbol instead of a path or `GENTLE_SHELL_API_MODULE`: a path is not a contract between
  * two projects — it names one checkout on one machine, and it breaks the day either project moves.
  * The symbol key is the contract, and `v1` in the key is the major version: a future major takes a
- * NEW key rather than mutating this one. `pi-lens` publishes its IO shell API the same way
- * (`clients/io-shell API-contract.ts:26-31`, `clients/process-shell API.ts:31-66`): stable symbol, a
+ * NEW key rather than mutating this one. `pi-lens` publishes its IO contract the same way
+ * (the IO contract and process modules under its `clients/` directory): stable symbol, a
  * version constant, a frozen non-writable slot, and "version mismatch means unsupported".
  *
  * ## First wins, and nothing is ever reset

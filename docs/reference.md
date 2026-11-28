@@ -1756,7 +1756,13 @@ the name you stored with `/identity` (`You` while none is stored) and the whole 
 role and the clock in `muted` beside it (the message's own
 `timestamp` when Pi restored it from a session entry, else the clock captured at the prompt's first
 paint, else nothing: no clock is invented), the body your own text
-rendered by Pi's Markdown with the user-message background dropped. It obeys the shell's
+rendered by Pi's Markdown with the user-message background dropped. The ` ❯ ` mark an extension
+markdown transformer prepends to a user message (pi-pretty) is dropped: the card's Markdown clone
+wraps the host's composed `transform` and consumes exactly ONE leading ` ❯ ` from its answer, so the
+body re-wraps at the frame's full inner width instead of hanging below a mark nothing indents, a
+person who typed `❯` at the start of their own prompt keeps their own character (their run arrives
+after the decoration), and a prompt no transformer decorated is drawn byte for byte as before.
+It obeys the shell's
 card style on every paint, so `float` draws its rail and `neon` its closed frame, and a
 style switch repaints the prompts already on screen.
 

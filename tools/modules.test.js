@@ -82,6 +82,10 @@ describe('the Tools page rows', () => {
       assert.equal(row.category, 'Tools');
       assert.match(row.choice.setting, /^[A-Za-z]+\+?$/, 'a row name the shell API accepts');
       assert.equal(typeof row.action, 'function');
+      // The customize menu shows one line under the setting; without it the page reads
+      // "Preview unavailable".
+      assert.equal(typeof row.choice.hint, 'string', `${row.choice.setting} ${row.choice.value} has a description`);
+      assert.ok(row.choice.hint.length > 0 && !/[\r\n]/.test(row.choice.hint), 'one line, not empty');
     }
   });
 

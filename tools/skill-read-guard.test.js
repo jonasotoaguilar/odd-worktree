@@ -212,7 +212,7 @@ describe('the tool_call handler the extension registers', () => {
   let cwd;
 
   before(async () => {
-    loaded = await loadWithModules({ skills: true });
+    loaded = await loadWithModules({ skills: true, worktrees: true });
     cwd = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-skill-read-guard-')));
   });
 

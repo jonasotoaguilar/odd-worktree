@@ -78,6 +78,15 @@ describe('the Alert page', () => {
     }
   });
 
+  test('each pair says one line about its window, so the page never reads "Preview unavailable"', () => {
+    const { rows: built } = provider(fakeShellApi().api);
+    for (const row of built()) {
+      assert.equal(typeof row.choice.hint, 'string', `${row.choice.setting} ${row.choice.value}`);
+      assert.ok(row.choice.hint.length > 0 && !/[\r\n]/.test(row.choice.hint), 'one line, not empty');
+    }
+    assert.match(built()[0].choice.hint, /peak window/);
+  });
+
   test('labels each pair with its provider\'s setting, not with a fixed name', () => {
     const built = provider(fakeShellApi().api).rows();
     for (const entry of PROVIDERS) {

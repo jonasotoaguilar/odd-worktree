@@ -33,6 +33,7 @@
     ]
   },
   "scripts": {
-    "test": "node --test tools/*.test.js"
+    "test": "node --test tools/*.test.js",
+    "test:shell-api": "node --test tools/shell-api/*.test.ts tools/shell-api/*.test.mjs"
   }
 }

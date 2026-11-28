@@ -1,10 +1,13 @@
 name: CI
 
-# The package's only gate: `node --test tools/*.test.js` (package.json `test`).
-# The suite uses Node builtins only, so no install step and no lockfile are
-# needed. The matrix is the range `engines` declares (>=18), 18.x as its floor.
-# Pushes are covered by branch, PRs by every base: a same-repo branch push runs
-# once, through the PR, instead of twice.
+# Two gates: `node --test tools/*.test.js` (package.json `test`) on every
+# Node the range `engines` declares (>=18), 18.x as its floor, and the shell
+# API's own suite (`node --test tools/shell-api/*.test.ts
+# tools/shell-api/*.test.mjs`, package.json `test:shell-api`) on the two
+# versions that can strip its TypeScript: 22.x (from 22.18) and 24.x. Neither
+# needs an install step or a lockfile — both use Node builtins only. Pushes are
+# covered by branch, PRs by every base: a same-repo branch push runs once,
+# through the PR, instead of twice.
 
 on:
   push:
@@ -42,3 +45,11 @@ jobs:
 
       - name: Run the test suite
         run: node --test tools/*.test.js
+
+      # native-bridge T5: the shell API is this package's own code, so its
+      # suite lives with the other tests (`tools/shell-api/`). It is TypeScript,
+      # so it needs type stripping, which is on by default from Node 22.18, and
+      # it is skipped below that rather than failing on a syntax error.
+      - name: Run the shell API's suite
+        if: matrix.node == '22.x' || matrix.node == '24.x'
+        run: node --test tools/shell-api/*.test.ts tools/shell-api/*.test.mjs

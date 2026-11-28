@@ -27,31 +27,50 @@ const TYPE_STUB = [
 
 // The stubbed source is read once per process; a test that asserts on the
 // source itself can read SRC directly.
+//
+// S2/S3 (native-bridge T5): the entry statically imports the shell API from
+// `../lib/shell-api/extension.ts` — odd-worktree's own code, which publishes the API slot at
+// module load and arms the shell surfaces. A plain-JS suite may import neither a `.ts` file nor
+// its TypeScript graph, so that import is stubbed here exactly like the two Pi package imports:
+// the scratch `.mjs` gets a no-op factory and the slot is whatever the fixture publishes (see
+// `installDefaultBridge`).
+const BRIDGE_IMPORT = 'import bridgeExtension from "../lib/shell-api/extension.ts";';
+const BRIDGE_STUB = 'const bridgeExtension = () => {};';
+
+function stubOnce(source, needle, replacement) {
+  if (source.includes(needle) === false) return null;
+  return source.split(needle).join(replacement);
+}
+
 let cached = null;
 function stubbedSource() {
   if (cached !== null) return cached;
   const srcText = fs.readFileSync(SRC, 'utf8');
-  const stubbed = srcText
-    .replace('import { Type } from "@earendil-works/pi-ai";', TYPE_STUB)
-    .replace('import { defineTool } from "@earendil-works/pi-coding-agent";', 'const defineTool = (def) => def;');
-  if (stubbed === srcText) throw new Error('expected both Pi package import lines to be stubbed');
+  const stubbedType = stubOnce(srcText, 'import { Type } from "@earendil-works/pi-ai";', TYPE_STUB);
+  const stubbedTool = stubOnce(stubbedType === null ? srcText : stubbedType,
+    'import { defineTool } from "@earendil-works/pi-coding-agent";',
+    'const defineTool = (def) => def;');
+  const stubbed = stubOnce(stubbedTool === null ? srcText : stubbedTool, BRIDGE_IMPORT, BRIDGE_STUB);
+  if (stubbedType === null || stubbedTool === null || stubbed === null || stubbed === srcText) {
+    throw new Error('expected all imports stubbed: the two Pi package imports and the vendored bridge import');
+  }
   cached = stubbed;
   return cached;
 }
 
-// S18 (issues-startup-performance T14): this package loads NOTHING without
-// gentle-shell-bridge, so a host double that publishes no bridge would see an
-// empty extension and every suite here would be asserting nothing. The fake host
-// therefore HAS the plugin: `defaultBridge()` is the published object with the
-// schema and version the code validates and the members the surfaces this package
-// contributes actually use — the rail's `registerSection`, the `Cards` rows'
-// `registerRows`, the design's `registerToolDesign`, the picker's keymap action and
-// palette row, and the store. Nothing here weakens `issuesSidebarBridge()`'s gate:
-// the object is a real enough bridge, not a thin one.
+// S18 (issues-startup-performance T14) as amended by native-bridge T2/T5: the shell API is
+// NATIVE (`lib/shell-api/`, stubbed out of this plain-JS copy), so a host double
+// that publishes nothing on the slot gets an extension that registers NOTHING — every suite
+// here would then be asserting nothing. The fake host therefore HAS the bridge:
+// `defaultBridge()` is the published object with the schema and version the code validates
+// and the members the surfaces this package contributes actually use — the rail's
+// `registerSection`, the `Cards` rows' `registerRows`, the design's `registerToolDesign`, the
+// picker's keymap action and palette row, and the store. Nothing here weakens
+// `issuesSidebarBridge()`'s slot check: the object is a real enough bridge, not a thin one.
 //
 // `loadExtension(pi, { bridge: false })` is the opt-out for a suite that must
-// prove the absent case: it publishes nothing and touches no slot, so the test
-// itself decides what is on it.
+// prove the absent-or-incompatible case: it publishes nothing and touches no slot, so the
+// test itself decides what is on it.
 function defaultBridge() {
   const sections = [];
   const rows = [];
@@ -145,9 +164,10 @@ async function withGhPath(mode, run) {
 // Load the extension with the injected `pi` double. Returns the registered
 // commands and tools keyed by name, exactly as the host received them.
 //
-// S18 (T14): the bridge is published BEFORE the factory runs, because registration
-// waits for it; with no bridge the extension is expected to register nothing at
-// all, so a suite that wants that passes `{ bridge: false }`.
+// S18 (T14): the slot is checked ONCE, in the factory, and the vendored bridge's own factory
+// is stubbed here (no `.ts` may be imported by a plain-JS suite), so the fixture publishes the
+// bridge BEFORE the factory runs. With no bridge the extension registers nothing at all, so a
+// suite that wants that passes `{ bridge: false }`.
 //
 // S13 (T11): `gh` is present on PATH unless the suite passes `{ gh: false }`, for the
 // same reason — the issues surfaces do not exist without it.
@@ -190,6 +210,8 @@ module.exports = {
   LIB_DIR,
   SRC,
   BRIDGE_SLOT,
+  BRIDGE_IMPORT,
+  BRIDGE_STUB,
   loadExtension,
   stubbedSource,
   defaultBridge,

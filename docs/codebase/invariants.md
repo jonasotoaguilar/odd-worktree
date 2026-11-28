@@ -2,26 +2,31 @@
 
 The question this page answers: which rules must every change preserve, and what does each one refuse?
 
+Where a rule below says "the API", it means the shell API this package owns (`lib/shell-api/`,
+invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on purpose.
+
 1. **One extension entry point.** `package.json` `pi.extensions` is exactly
    `["./extensions/odd-worktree-tools.ts"]`, and `extensions/` holds no other
-   file. A second entry point changes what the host loads.
+   file. A second entry point changes what the host loads. `lib/shell-api/` has no
+   manifest of its own: it is ordinary package code, reached through the root
+   entry's own import and never loaded as a second package (invariant 32).
 2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
    invariants 18 and 19 allow.** No customize COMMAND, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
    `herdr-gentle:` command name. This package owns exactly FOUR preferences, each an
-   Off/On row registered through the bridge and stored in the bridge's own store:
+   Off/On row registered through the shell API and stored in its own store:
    `Codegraph+`, `Worktrees+` (`Tools` page), `Deepseek peak` and `Claude peak`
    (`Alert` page). All four read Off until the human turns them on.
    Everything else it contributes to `/gentle:customize` is a DESIGN: the two
    (`activity` and `color`) on
-   gentle-shell-bridge's own `Cards` page — a `Card activity` line, or its `Card bash`
-   line on a bridge older than 0.6.0, and a `Card diff` line on 0.9.0 and later
+   the shell API's own `Cards` page — a `Card activity` line, or its `Card bash`
+   line on a published object older than 0.6.0, and a `Card diff` line on 0.9.0 and later
    (invariant 3). The skill/ODD file cards obey the `activity` design's line
    (invariant 23) and contribute no row of their own, and never the `color` one; neither design is a
-   preference here, because the bridge owns those choices and its store. It registers no customize
+   preference here, because the shell API owns those choices and its store. It registers no customize
    COMMAND, no settings file of its own and no key of its own beyond the TWO host shortcuts, the file
    picker's `alt+p` and the issues panel's `alt+i` (invariant 3): its two menu pages (`Tools`, `Alert`)
-   are row providers on the bridge's menu, never a command and never a store of this package's own. CodeGraph
+   are row providers on the shell API's menu, never a command and never a store of this package's own. CodeGraph
    adds no command and no model-facing tool: no `/codegraph-*` command, no tool
    named `codegraph`, no override of another extension's tool.
    `tools/package-surface.test.js` asserts the loaded surface, the one-line
@@ -29,7 +34,9 @@ The question this page answers: which rules must every change preserve, and what
    what each may do.
 3. **The shipped surface is exactly six commands, two tools, TWO sidebar
    sections and two tool designs.** `/warp`, `/odd`,
-   `/files`, `/identity`, `/issues`, `/prs`; `worktree_create`, `worktree_list`; the one fourth kind of
+   `/files`, `/identity`, `/issues`, `/prs` — six, with no diagnostics command among
+   them: what the API reports to a user are the notices of invariant 32 and the ones
+   its own surfaces raise, and nothing else; `worktree_create`, `worktree_list`; the one fourth kind of
    surface, a sidebar section — and there are TWO of them, each neither a command nor a
    tool and each registering no name the host or the agent can call: the issues rail
    (`lib/issues-section.js`, id `odd-worktree.issues`, headed `GITHUB`, `rowLabel`
@@ -39,7 +46,7 @@ The question this page answers: which rules must every change preserve, and what
    "agents" }`, scoped to the ODDs the SESSION is associated with inside its
    registered worktrees and therefore independent
    of `Worktrees+`); the two designs
-   (`lib/bash-design.js`, `lib/diff-design.js`) on the two lines the bridge owns, one
+   (`lib/bash-design.js`, `lib/diff-design.js`) on the two lines the shell API owns, one
    `Card activity` line over `bash`, `read`, `write`, `edit` and the three
    read-only shell tools `grep`, `find`, `ls` (the single `tool: "bash"` design on a bridge older
    than 0.6.0) and one `Card diff` line over `write` and `edit`, the first claiming `write` and
@@ -94,39 +101,43 @@ The question this page answers: which rules must every change preserve, and what
    providers are unaffected, and nothing here depends on the session's model or on a usage
    key being present. Unlike the two module switches these land in the session in progress:
    the extension reads them on every sync, and a row's own action re-syncs. The values are
-   booleans in the bridge's own store (`odd-worktree` → `alerts` → `{ peaks: { … } }`), and an
+   booleans in the shell API's store (`odd-worktree` → `alerts` → `{ peaks: { … } }`), and an
    absent, malformed or unreadable document reads Off; nothing is written at load.
 
-   **The sections reach the host only through gentle-shell-bridge.** Both the issues
-   rail and the ODD rail are published through that package's sidebar-section API alone: the object read from
-   its `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
-   gate, or the one `gentle-shell-bridge:ready` announcement when the bridge
-   publishes later. There is NO dependency on that package and no import of it
-   anywhere in this repo. Without a bridge this package loads NOTHING — no command,
-   no tool, no message or entry renderer, no card, no rail, no hook and no prompt
-   append: the whole surface is deferred behind that gate and registers the moment
-   the bridge is known present (published at load, or announced later), at most
-   once. What stays registered while the gate is closed is the ONE `session_start`
-   observer the missing-plugin notice needs, because `ctx.ui.notify` lives on a
-   session; it is released when the surface registers. A host
-   that HAS the bridge but draws no rail registers the section and never paints it,
-   which is the bridge's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
-   contributed by the bridge, not by this package (invariant 2 keeps every customize
-   surface out of it except the two tool-design rows this package puts on the bridge's
+   **The shell API is native, and the sections reach the host only through it.** Both
+   the issues rail and the ODD rail are published through the shell API's
+   sidebar-section API alone: the object read from its
+   `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
+   gate, or the one `gentle-shell-bridge:ready` announcement when an API
+   publishes later. That API SHIPS IN THIS PACKAGE — this package's own code at
+   `lib/shell-api/`, imported by the entry as `../lib/shell-api/extension.ts`
+   (invariant 32) — so no host installs anything for this package's surface to
+   exist, the slot is published at module load, and the package is reached by
+   RELATIVE import, never by the package name and never through a runtime
+   dependency. An INCOMPATIBLE object on the slot — another plugin published
+   first — leaves this package's whole surface unregistered: no command, no
+   tool, no section, no design, no row, no second attempt. The package says so ONCE
+   in its own words, naming the slot, the schema and version it actually holds, and
+   the surfaces it turned off. What the host still supplies is
+   `gentle-pi`, the package registering `/gentle:customize`: rows and the rail arm only
+   when the context has a UI AND that host is present, and without it nothing
+   arms and the package says so once, naming `gentle-pi` and the surfaces that are
+   off — its own text, never an install line.
+   A host
+   that has the API but draws no rail registers the section and never paints it,
+   which is the API's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
+   contributed by the shell API, not by this package (invariant 2 keeps every customize
+   surface out of it except the two tool-design rows this package puts on the shell API's
    own `Card activity` and `Card diff` lines), and the section declares NO
    preview: every `Sections` row draws the host's one shared list of active sections
-   and the bridge adds this section's `rowLabel` to it itself, shown or left out
+   and the API adds this section's `rowLabel` to it itself, shown or left out
    with the row's own hypothetical (`registerSection` has no `preview` field — do
-   not add one). A host without the bridge otherwise hears nothing about it;
-   the one warning it can get is discoverability — once per process, from a primary
-   session only (`GENTLE_PI_AGENTS_CHILD` is not `1`), naming
-   `pi install npm:gentle-shell-bridge`, timed after the announcement window because
-   an empty slot at `session_start` may still be a bridge that has not loaded, and
-   immediate on a host with no event bus to announce on. That warning is the ONLY
-   thing a host without the bridge ever receives from this package.
-   `tools/issues-section.test.js` pins the gate from the outside — no bridge and no
-   bus registers nothing, an announcement alone registers nothing until it fires —
-   and `tools/package-surface.test.js` pins that the bridge is never imported.
+   not add one).
+   `tools/issues-section.test.js` pins the slot gate from the outside — an
+   incompatible object registers nothing and says so once, an announcement alone
+   registers nothing until it fires —
+   and `tools/package-surface.test.js` pins that the shell API is imported from
+   `lib/shell-api/` only and never by the package name.
 
    **`/files` is a panel and nothing else.** It mounts its OWN overlay through
    `ctx.ui.custom` (the scope step's small card, then the picker), and a host with
@@ -134,8 +145,8 @@ The question this page answers: which rules must every change preserve, and what
    session with overlay support` — and no second surface in its place: no
    transcript dump, no sub-command, nothing written. Being a command, it needs no
    other package to DRAW: its overlay comes from the host's own `ctx.ui.custom`,
-   not from the bridge — although, like every surface here, it is registered only
-   once the bridge is published (invariant 3). This package binds exactly TWO host
+   not from the shell API — although, like every surface here, it is registered only
+   once the API is published (invariant 3). This package binds exactly TWO host
    shortcuts, and each one keeps every property below: the picker's `alt+p` and
    the issues panel's `alt+i` (invariant 28). The picker's key is bound DIRECTLY
    on the host, at extension load, through `pi.registerShortcut`: `alt+p` by default
@@ -145,17 +156,17 @@ The question this page answers: which rules must every change preserve, and what
    context the host hands a shortcut. A host with no `registerShortcut`, a host
    that throws from it and a missing command handler are the same silence: no key,
    no message, nothing else touched. It registers NO keymap action and NO palette
-   row — through gentle-shell-bridge or otherwise — because no installed host lists
+   row — through this package's shell API or otherwise — because no installed host lists
    a row a plugin contributes, so such a row could never appear and claiming it
    would be false. The command itself registers no store and writes nothing: it
    reads Git through the ordinary fixed argv (invariant 9) and paints.
 
-   **The cards are a design on the bridge, not a preference here.**
+   **The cards are a design on the shell API, not a preference here.**
    `lib/bash-design.js` registers ONE design (id `odd-worktree.bash-activity`, label
-   `activity`) through the bridge's published `registerToolDesign` API, at most once per
+   `activity`) through the shell API's published `registerToolDesign`, at most once per
    process, with an idempotent disposer, and does nothing at all when the API is absent or
    older — no throw, no command, no warning beyond the section's own discoverability one.
-   The shape follows the bridge's own `VERSION` and is decided BEFORE anything is
+   The shape follows the shell API's own `VERSION` and is decided BEFORE anything is
    registered: one line over `bash`, `grep`, `find`, `ls`, `read` and `write` on `0.6.0` and
    later (one `Card activity` row), gaining `edit`, and the scope on `write` and `edit` limited to skill
    and ODD paths, from `0.9.0` on — six tools there, seven here — and the single `tool: "bash"` design on anything older (one
@@ -167,17 +178,17 @@ The question this page answers: which rules must every change preserve, and what
    `diff`, stored as `native` | the design id) on
    every render pass and persists each choice in its own store. This package writes exactly three
    things to that store. The first is the first-run `activity` seed: `seedBashDesignSelection` selects `activity`
-   once, for `bash`, only when the bridge holds no `bash` choice, and it does so BEFORE the
+   once, for `bash`, only when the API holds no `bash` choice, and it does so BEFORE the
    registration, because a `0.6.0` bridge carries that choice over to its line's value at
    registration time; it records `bashActivitySeeded` in its own `odd-worktree` store so a
    later `native` is never undone. The second is the one-time line-key carry-over, which moves a
    value stored at `selections.$lines.tools` — the line's row was `Card tools` before the rename —
    to `selections.$lines.tags`, ONLY when `tags` is absent, and BEFORE the registration, so the
-   bridge's own migration finds the key taken and copies nothing over it; a store that is absent,
+   API's own migration finds the key taken and copies nothing over it; a store that is absent,
    unreadable, of another shape or that throws carries nothing over and throws nothing. The third
    is the `diff` line's own first-run seed: `seedDiffDesignSelection` selects `color` on `diff`
-   once, only when the bridge holds no `diff` choice, and — because there is no legacy per-tool
-   value for that line to inherit — it runs AFTER the registration the bridge accepted, so a
+   once, only when the API holds no `diff` choice, and — because there is no legacy per-tool
+   value for that line to inherit — it runs AFTER the registration the API accepted, so a
    refused registration never leaves a value naming a design nobody registered; its
    `diffDesignSeeded` marker lives in that same `odd-worktree` store. A stored
    choice is never overwritten, a reserved line
@@ -229,7 +240,7 @@ The question this page answers: which rules must every change preserve, and what
    and no second surface in its place. It registers no key of its own, and its
    capabilities are invariant 7's.
 
-   **The file cards add no surface and own no switch.** They obey the bridge's own
+   **The file cards add no surface and own no switch.** They obey the shell API's own
    `Card activity` line: the card is painted while that line answers with this
    package's activity design (`odd-worktree.bash-activity`), so the file cards
    contribute no `Cards` row, no preference and no document of their own, and they
@@ -279,8 +290,12 @@ The question this page answers: which rules must every change preserve, and what
    true for a pull request that is not a draft in a repository that allows at least
    one merge method, with the merge form's chosen method re-checked against the freshly read `mergeMethods` before the seam. A refused key paints no hint and reaches no seam;
    `tools/prs-view.test.js` pins every refusal sentence and that no seam is called.
-8. **The package ships only `extensions`, `lib`, `tools`, `README.md`.** Adding a
+8. **The package ships `extensions`, `lib`, `tools` and `README.md`.** `files[]` is exactly
+   `["extensions", "lib", "tools", "README.md"]`. Adding a
    shipped path means changing `files[]` and the package-surface test together.
+   `docs/` is repo-only — it is not in the tarball — so a plugin author reads
+   `docs/shell-api/` in the repository (the README links those GitHub paths), while
+   the suites ship beside the code they test, under `tools/`.
 9. **Fixed argv, never a shell string.** Every child (`git`, `gh`, package
    managers) gets a binary plus an argument array with a bounded timeout. Both
    `gh` seams — `lib/gh-issues.js` and `lib/gh-prs.js` — spawn through the same
@@ -332,7 +347,7 @@ The question this page answers: which rules must every change preserve, and what
     never reported as a failed create.
 14. **The prompt block is append-only.** The `## ODD worktrees` section reaches
     the model only through `systemPromptOptions.appendSystemPrompt`; no handler
-    returns a replacement `systemPrompt` (the bridge drops it) and no existing
+    returns a replacement `systemPrompt` (the API drops it) and no existing
     text is removed. The primary session gets one text
     (`lib/odd-prompt/odd-worktrees.md`); a child and a named agent get none. It is
     idempotent by content and `ODD_WORKTREE_PROMPT=0` suppresses it.
@@ -525,7 +540,7 @@ The question this page answers: which rules must every change preserve, and what
     proved is returned unchanged: those three have no generic word of their own. The
     line also declares `read` and `write` (`lib/bash-design.js`) even though the design draws
     nothing for either: `exploring` names what a SHELL COMMAND does, and a read runs no
-    command. The declaration is what lets the file card ask the bridge about a read or a
+    command. The declaration is what lets the file card ask the API about a read or a
     write, and the rows of both come back byte for byte. Any
     other case, a row with no fill to pay for the word included, keeps the host's `$`
     or its own `<glyph> <tool>` exactly as drawn, and a tool the design does not cover
@@ -657,7 +672,7 @@ The question this page answers: which rules must every change preserve, and what
     `grep` or an `ls` that names such a path is still the activity design's row. The card states that identity's mark and label, the tool,
     the path and — for a read only — the line range the call asked for. A path
     naming neither identity is the chain's own row, and so is a row of one of these
-    three tools while the bridge's line answers with anything but this design.
+    three tools while the API's line answers with anything but this design.
 
     **The host's shell is fixed per tool name, so the card reproduces its box.**
     `registerToolRenderer` decides per TOOL NAME and never sees a call's arguments,
@@ -694,8 +709,8 @@ The question this page answers: which rules must every change preserve, and what
     self-framed tool gets the host's separator blank row above it, exactly as the
     file card's forwarded rows already do.
 
-    **The bridge's design selection is the one switch, and this card owns none of
-    it.** The card is painted while — and only while — the bridge's published
+    **The API's design selection is the one switch, and this card owns none of
+    it.** The card is painted while — and only while — the API's published
     reader answers that this package's activity design draws the tool being
     painted. That reader is `api.resolveToolDesignSelection(tool)`, reached from
     the `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
@@ -913,10 +928,10 @@ The question this page answers: which rules must every change preserve, and what
     decoration), and a prompt no transformer decorated is drawn byte for byte as
     before, so the body re-wraps at the frame's full inner width instead of hanging
     below a mark nothing indents.
-    A successful install asks the bridge for ONE `requestRepaint` (a differential
+    A successful install asks the API for ONE `requestRepaint` (a differential
     frame) so a transcript restored before the deferred host import resolves comes
     back as cards instead of waiting for unrelated input; a refused install, a
-    closed session and a bridge without that member request nothing.
+    closed session and an API without that member request nothing.
     It adds NO row, command, setting or design of its own, so the surface invariant 3
     lists is unchanged by it. The gate is `Card activity` answering this package's
     `activity` design, asked INSIDE the patched `render` on every paint and never cached, which
@@ -981,3 +996,53 @@ The question this page answers: which rules must every change preserve, and what
     `tools/odd-view.test.js` (S1-S5 of odd-panel-groups) and
     `tools/odd-rail-section.test.js` (S7) pin the shapes; `tools/odd-panel-wiring.test.js`
     pins that a scope is read from the headers it draws.
+
+32. **The shell API is native.** `lib/shell-api/` is this package's own code — no
+    nested package, no manifest of its own, no second copy anywhere, and no
+    copy-into-this-package rule: it is edited like any other module (its public entry
+    is `lib/shell-api/index.ts`, its Pi-side factory `lib/shell-api/extension.ts`).
+    What never changes is the COMPATIBILITY SURFACE, because third-party plugins and
+    users' saved choices depend on it: the slot
+    `Symbol.for("gentle-shell-bridge/api/v1")` publishing a frozen object at module
+    load (schema `gentle-shell-bridge/api`, version 1, `VERSION` 0.16.2, twelve
+    members), every `Symbol.for("gentle-shell-bridge…")` key, the
+    `gentle-shell-bridge:ready` event, `bridgeApi()`/`onBridgeApi`, and the
+    `<config home>/gentle-shell-bridge` store directory — all exactly as they were, so
+    a plugin that reads the slot keeps working through this package alone and a user
+    keeps every saved choice. The entry loads it FIRST —
+    `extensions/odd-worktree-tools.ts` imports `../lib/shell-api/extension.ts` and
+    calls that factory before any surface of its own — so the slot is published before
+    anything here looks for its object. There is NO external dependency and NO import
+    by package name anywhere: the root manifest names no `dependencies` at all. An
+    INCOMPATIBLE object already on the slot (another plugin published first) leaves
+    this package's whole surface UNREGISTERED — no command, no tool, no section, no
+    design, no row of its own, no second attempt (the API's own plumbing rows, such
+    as the `Sections` visibility line, still arm for a host that has `gentle-pi`, as
+    they always did) — and the package says so ONCE in its own
+    words, naming the slot, the schema and version it actually holds, and the
+    surfaces that are off. Its surfaces still arm only for a host that has
+    `gentle-pi`, the package registering `/gentle:customize`: without it nothing arms
+    and the package says so once per continuous absence (a host that appears and
+    disappears again earns a new notice), naming `gentle-pi` and what is off. Neither
+    notice is silent. The missing-host case leaves the commands and tools working; the
+    foreign-object case does not (it takes the whole surface down, as stated above),
+    and describing that object can never throw, because it is another plugin's. Its tests are
+    `tools/shell-api/*.test.ts` and `tools/shell-api/*.test.mjs`, run by
+    `npm run test:shell-api` on Node >= 22.18 (the suite is TypeScript) in CI on 22.x
+    and 24.x, while its core never runs in the plain-JS suite at all (the fixture
+    stubs the one import). A standalone `gentle-shell-bridge` installed beside this
+    package is simply unnecessary: both copies share the global state ("first wins"),
+    so this package's own surfaces are unaffected, and what differs is visible but
+    small — the older package's extra `/bridge-status` command, and which copy's words
+    a shared notice such as the missing-`gentle-pi` warning uses (whoever runs it
+    first). Uninstalling it is the recommendation and not a requirement. That
+    harmlessness is a property of the shared state, so the SHAPE of every
+    `Symbol.for` slot is frozen too, not only its key — including the values cached in
+    it. An older copy re-validates a slot by a field and overwrites it when the field
+    is missing, so a field nothing here reads any more (`adoptedMessages` in the
+    message-design adoption state, `owner` in the tool-design index and its
+    `TOOL_DESIGN_INDEX_SHAPE` stamp) stays, and the plugin-line attribution kind
+    stays `bridge`, because an older copy writes and reads it.
+    `tools/shell-api/message-design-adoption.test.ts` and
+    `tools/shell-api/compatibility-regression.test.mjs` pin the adoption slot, the
+    attribution kind and a foreign object that throws when described.

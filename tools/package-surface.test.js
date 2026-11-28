@@ -12,10 +12,10 @@
 // are shipped; `/issues` is the T3 command that mounts them, without any
 // worktree↔issue association.
 //
-// The bash activity is not a preference here: it is a design on gentle-shell-bridge's
-// own `Card activity` line, so the shipped surface is exactly six commands, two tools, TWO
-// sidebar sections, one tools design and the one `Cards` row group the two file-card
-// switches carry. `/identity` is the name the person stores for their own prompt card and
+// The bash activity is not a preference here: it is a design on this package's own shell
+// API `Card activity` line, so the shipped surface is exactly six commands, two tools,
+// TWO sidebar sections and the two designs (`activity`, `color`). `/identity` is the
+// name the person stores for their own prompt card and
 // the orchestrator prompt: transversal like `/files`, so no module switch gates it.
 //
 // Everything here reads the observable surface: the registered command and
@@ -24,7 +24,7 @@ const { test, describe, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { BRIDGE_SLOT, LIB_DIR, defaultBridge, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
+const { BRIDGE_IMPORT, BRIDGE_SLOT, BRIDGE_STUB, LIB_DIR, defaultBridge, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -38,17 +38,34 @@ after(() => {
 });
 
 describe('manifest', () => {
-  test('declares one Pi extension entry point and ships only that surface', () => {
+  test('declares one Pi extension entry point and ships only that surface (invariant 8)', () => {
     assert.equal(PKG.name, 'pi-odd-worktree');
     assert.ok(PKG.keywords.includes('pi-package'), 'keywords name the pi-package kind');
     assert.deepEqual(PKG.pi.extensions, ['./extensions/odd-worktree-tools.ts']);
-    for (const entry of ['extensions', 'lib', 'tools', 'README.md']) {
-      assert.ok(PKG.files.includes(entry), `files ships ${entry}`);
-    }
+    // native-bridge T5 (invariant 8): the shell API is this package's own code under `lib/`, so
+    // there is no nested package and no negation: the list is the plain four entries again.
+    assert.deepEqual(PKG.files, ['extensions', 'lib', 'tools', 'README.md'],
+      'files ships extensions, lib, tools and README.md');
     assert.equal(PKG.peerDependencies['@earendil-works/pi-coding-agent'], '*');
     assert.equal(PKG.peerDependencies['@earendil-works/pi-tui'], '*');
     assert.ok(!('dependencies' in PKG), 'no runtime dependencies are installed');
     assert.equal(/herdr/i.test(JSON.stringify(PKG)), false, 'the manifest claims no integration the package does not have');
+    // native-bridge T5: `test` is the plain-JS gate it always was, and the shell API's TypeScript
+    // suite is its own script — the same two globs CI runs.
+    assert.equal(PKG.scripts.test, 'node --test tools/*.test.js', 'the plain-JS gate is unchanged');
+    assert.equal(PKG.scripts['test:shell-api'], 'node --test tools/shell-api/*.test.ts tools/shell-api/*.test.mjs',
+      'the shell API suite has its own script');
+  });
+
+  // native-bridge T5 (invariant 1): there is ONE package manifest. The shell API is code inside
+  // this package — no `package.json` of its own — so its sources, its suite and its docs are
+  // shipped only through the root `files` list.
+  test('the shell API is code in this package, never a nested package (invariant 1)', () => {
+    assert.equal(fs.existsSync(path.join(ROOT, 'lib/shell-api/package.json')), false,
+      'no nested manifest exists');
+    assert.ok(!('name' in (PKG.lib ?? {})), 'and none is declared on the root manifest');
+    assert.ok(fs.existsSync(path.join(ROOT, 'lib/shell-api/extension.ts')), 'the entry can import the shell API factory');
+    assert.ok(fs.existsSync(path.join(ROOT, 'docs/shell-api/contract.md')), 'the contract ships for plugin authors');
   });
 
   test('ships no module for the removed commands', () => {
@@ -86,11 +103,17 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
+  // S2/S4 (native-bridge T5): the shipped surface is SIX commands — `/bridge-status` is gone with
+  // `lib/shell-api/status.ts`, and the shell API registers no command of its own. This plain-JS
+  // suite cannot import a `.ts` file, so the fixture stubs the shell API import (a no-op factory)
+  // and what it observes here is the six this package registers itself; the `bridgeExtension(pi)`
+  // call is pinned on the stubbed source below.
   test('registers /warp, /odd, /files, /issues, /prs, /identity and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
-    assert.deepEqual(registered, ['files', 'identity', 'issues', 'odd', 'prs', 'warp'], 'the command list is exactly the six panels');
+    assert.deepEqual(registered, ['files', 'identity', 'issues', 'odd', 'prs', 'warp'], 'exactly six commands');
+    assert.equal(stubbedSource().includes('bridgeExtension(pi)'), true, 'and the entry calls that factory plainly');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
@@ -122,10 +145,16 @@ describe('registration', () => {
     }
   });
 
-  test('the bridge is never imported, and the surface reaches it through its published object', async () => {
+  // native-bridge T2/T5 (S2/S4): the shell API is NATIVE — this package's own `lib/shell-api/`,
+  // imported by the entry itself — and it is reached ONLY that way: never by the package's name,
+  // so no host has to install anything for this extension to have the API.
+  test('the shell API is imported from this package only, and the surface still reaches it through its published object', async () => {
     const source = stubbedSource();
-    assert.equal(/from\s+["']gentle-shell-bridge/.test(source), false, 'no import of the bridge package anywhere');
-    assert.equal(/require\(\s*["']gentle-shell-bridge/.test(source), false, 'no require of the bridge package anywhere');
+    const raw = fs.readFileSync(path.join(ROOT, 'extensions/odd-worktree-tools.ts'), 'utf8');
+    assert.ok(raw.includes(BRIDGE_IMPORT), 'the entry imports this package\'s own shell API');
+    assert.equal(source.includes(BRIDGE_STUB), true, 'and the plain-JS copy stubs that one import');
+    assert.equal(/from\s+["']gentle-shell-bridge/.test(raw), false, 'no import of the bridge package anywhere');
+    assert.equal(/require\(\s*["']gentle-shell-bridge/.test(raw), false, 'no require of the bridge package anywhere');
     assert.equal(source.split('api.registerSection(').length - 1, 2, 'exactly two sidebar sections are contributed');
     // T5 (S1): the count alone would drift silently, so the ids are asserted through
     // the bridge that received them: one `GITHUB` and one `ODD`, and nothing else.

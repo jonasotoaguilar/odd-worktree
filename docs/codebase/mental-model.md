@@ -8,25 +8,29 @@ starts, which rule each change must preserve, and where to begin.
 One Pi extension package, `pi-odd-worktree`: two agent tools (`worktree_create`,
 `worktree_list`), five panels (`/warp`, `/odd`, `/files`, `/issues`, `/prs`), the
 `/identity` command, two
-optional sidebar sections — the `GITHUB` issues rail and the `ODD` rail — and two tool designs on the bridge — the `activity`
+optional sidebar sections — the `GITHUB` issues rail and the `ODD` rail — and two tool designs on the shell API — the `activity`
 value of its `Card activity` line (`bash`, the read-only shell tools `grep`, `find`,
 `ls`, and `read`, `write` and `edit`, the last two through a scope limited to
 skill and ODD paths, which is what lets the file cards ask about them) and the
 `color` value of its `Card diff` line (`write` and `edit`, drawn as an IDE pane
 in the active theme's own syntax roles) — and one stored value of its own: the
-user's name, kept by `/identity` in the bridge's own store, which heads the prompt
+user's name, kept by `/identity` in the shell API's store, which heads the prompt
 card instead of `You` and adds one line to the orchestrator's prompt. The skill/ODD
-file cards obey that same `Card activity` value. On a bridge that can put
+file cards obey that same `Card activity` value. On a shell API that can put
 several tools on one line the `Card activity` row was `Card tools` until this
 release (the older single row was `Card bash`), and a choice stored under the old
-key is carried over to `tags` before the design registers — only when the bridge
+key is carried over to `tags` before the design registers — only when the API
 reads it as a choice at all — so nobody loses the choice they made. It owns
 creating and listing the checkouts an ODD works in, reading a checkout's
 `odd/tasks/*.md`, browsing and previewing a
 checkout's files, reading and — role permitting — editing that checkout's GitHub
-issues and pull requests, and the drawing of its own cards. `git` is the only external requirement,
-and gentle-shell-bridge is the plugin's own prerequisite: without it the package
-loads nothing at all. With it, the bridge carries three control surfaces: the two
+issues and pull requests, and the drawing of its own cards. `git` is the only external requirement, and the shell API is not one: it is this
+package's OWN code under `lib/shell-api/`
+(invariant 32), imported by the entry as `../lib/shell-api/extension.ts`, so the slot
+`Symbol.for("gentle-shell-bridge/api/v1")`
+is published at module load with nothing installed beside this package. Other plugins keep
+using that slot, so they extend gentle-shell through odd-worktree too. That API carries
+three control surfaces: the two
 rail sections and the design (which the file cards read). The two host shortcuts are
 neither: the file picker's `alt+p` and the issues panel's `alt+i` are
 bound directly on the host, and `GENTLE_PI_FILES_KEY` and `GENTLE_PI_ISSUES_KEY`
@@ -54,7 +58,7 @@ never added — every other surface keeps working.
   draw, the reminders only advise, the guards read command text and paths (invariants 20, 21,
   22, 23).
 - Every other customize surface, plugin-tools toggle and companion-app
-  integration: the bash activity is a design on the bridge, the diff card is the
+  integration: the bash activity is a design on the shell API, the diff card is the
   second one, the file cards read the `activity` design's line and never the
   `color` one, and this package owns no
   preference at all (invariants 2, 3, 23).
@@ -62,15 +66,20 @@ never added — every other surface keeps working.
 
 ## Main Flow
 
-1. `extensions/odd-worktree-tools.ts` — the only entry point the host loads:
-   behind the bridge gate it registers the six commands (`/issues` and `/prs`
+1. `extensions/odd-worktree-tools.ts` — the only entry point the host loads. Its
+   factory calls the shell API's factory first (`lib/shell-api/`, imported as
+   `../lib/shell-api/extension.ts`, which published the API slot at module load), so
+   the API is published before anything here looks for its object; then, if the slot
+   holds a compatible object, it registers the six commands this package owns
+   (`/issues` and `/prs`
    only when the
    local `gh` probe finds the CLI), the two tools, the message renderer, the file
    card, the two rail sections (`GITHUB`, also `gh` only, and `ODD`, scoped to the
    ODDs the session is associated with inside its registered worktrees and therefore
    outside `Worktrees+`), the two tool
-   designs and the hooks —
-   deferred until gentle-shell-bridge is present, and nothing at all without it.
+   designs and the hooks. An ABSENT or INCOMPATIBLE object on the slot leaves this
+   package's own surface unregistered, and the package says so once in its own words
+   (invariant 32). Nothing else is deferred.
    Its `gh` gate is dispatched startup work under the generation the
    dispatch captured, never an awaited step of `session_start`, so a session start
    or switch pays no child process and no network call for it.
@@ -85,7 +94,7 @@ never added — every other surface keeps working.
    read that is already off the
    session path; `lib/issues-cache-store.js` and `lib/prs-rail-store.js` write the
    two cache documents
-   under the user's cache home; the file cards own no switch and ask the bridge's
+   under the user's cache home; the file cards own no switch and ask the shell API's
    published reader on every paint (invariant 23);
    `lib/codegraph-mcp-config.js` is the only
    writer of the user's own configuration (invariant 19).
@@ -96,7 +105,8 @@ Every module and what it owns is one row in [`code-map.md`](code-map.md).
 
 | Area | Responsibility | Start here |
 | --- | --- | --- |
-| Extension entry point | Registration, renderers, optional bridge surfaces, hooks | `extensions/odd-worktree-tools.ts` |
+| Extension entry point | Registration, renderers, optional shell API surfaces, hooks | `extensions/odd-worktree-tools.ts` |
+| Shell API | This package's own extension point for gentle-shell — the slot and every compat key, rows, the rail, card styles and transforms, tool and message designs, the store — plus its own suite and docs | `lib/shell-api/index.ts`, `lib/shell-api/extension.ts`, `docs/shell-api/` |
 | Worktrees | Create, list, ownership, removal, the `bash` guards | `lib/worktree-create.js` |
 | `/warp` panel | Selector, extended list, create wizard, delete confirmation, queued warp | `lib/warp-selector-view.js` |
 | ODD reader | `odd/tasks/*.md` discovery, ordering and markdown rendering; the grouped model and the `ODD` rail | `lib/odd-view.js` |
@@ -105,7 +115,7 @@ Every module and what it owns is one row in [`code-map.md`](code-map.md).
 | Cards | The card substrate, the tool cards, the file cards and the two tool designs | `lib/shell-card.js` |
 | Prompt blocks | The `## ODD worktrees` text and the `## CodeGraph` role texts | `lib/codegraph-rules.js` |
 | CodeGraph wiring | Index, lock, daemon, MCP entry, compaction, edit sync, reminders | `lib/codegraph-session.js` |
-| Tests | The suites and their fixtures | `tools/*.test.js` |
+| Tests | The plain-JS suites and their fixtures (`tools/*.test.js`), plus the shell API's own TypeScript suite (`tools/shell-api/*.test.ts`, `.test.mjs`) | `tools/*.test.js` |
 
 ## Core Invariants
 
@@ -117,12 +127,12 @@ for each is in [`invariants.md`](invariants.md).
 | --- | --- |
 | [1](invariants.md) | One extension entry point: `pi.extensions` is exactly `["./extensions/odd-worktree-tools.ts"]` and `extensions/` holds no other file. |
 | [2](invariants.md) | No customize command, plugin-tools toggle or Herdr panel surface; CodeGraph only as 18 and 19 allow. |
-| [3](invariants.md) | The shipped surface is exactly six commands, two tools, two sidebar sections and two tool designs. |
+| [3](invariants.md) | The shipped surface is exactly six commands (`/warp`, `/odd`, `/files`, `/identity`, `/issues` and `/prs`), two tools, two sidebar sections and two tool designs. |
 | [4](invariants.md) | Deletion refuses on a live session and discloses every caveat it could not resolve. |
 | [5](invariants.md) | Deletion is git only: `git worktree remove <absolute path>`, branch kept. |
 | [6](invariants.md) | `/issues` keeps repository identity pinning, and refuses a mutation after the remote moves. |
 | [7](invariants.md) | `/issues` capabilities fail closed: anything but a literal `true` means no mutation. |
-| [8](invariants.md) | The package ships only `extensions`, `lib`, `tools`, `README.md`. |
+| [8](invariants.md) | The package ships `extensions`, `lib`, `tools` and `README.md` only. |
 | [9](invariants.md) | Fixed argv, never a shell string, with a bounded timeout. |
 | [10](invariants.md) | There is no worktree document: the path is the whole record. |
 | [11](invariants.md) | The listing is read-only and has no state. |
@@ -144,13 +154,18 @@ for each is in [`invariants.md`](invariants.md).
 | [27](invariants.md) | A forced refresh happens only after a mutating `bash`, behind its cap. |
 | [28](invariants.md) | The `gh`-absent and non-repository states are settled, so nothing retries them. |
 | [29](invariants.md) | The user prompt card draws the host's class, gated by `Card activity`, and never touches its text. |
+| [30](invariants.md) | A session is named after the ODD it writes, and a name it cannot prove it wrote is never touched. |
+| [31](invariants.md) | The ODD panel folds by default, counts what it lists, and lines a document up under its group's name. |
+| [32](invariants.md) | The shell API is native: `lib/shell-api/` is this package's own code at the same slot and store, loaded first by the entry, with no external dependency, no import by package name and no copy rule. |
 
 ## Common Change Paths
 
 Work on a branch, never on `main`: an ODD gets its own checkout at
 `<repo-parent>/<repo-name>-worktrees/<odd>`, created with `worktree_create`
 (invariant 12). Verify with `node --test tools/*.test.js`, or with
-`node --test tools/issues-command.test.js` for one suite while iterating.
+`node --test tools/issues-command.test.js` for one suite while iterating; the
+shell API has its own gate under `node --test tools/shell-api/*.test.ts
+tools/shell-api/*.test.mjs` (`npm run test:shell-api`), which needs Node >= 22.18.
 
 | Change | Start here |
 | --- | --- |
@@ -160,8 +175,9 @@ Work on a branch, never on `main`: an ODD gets its own checkout at
 | Removal, or the deletion guard | `lib/worktree-remove.js`, `lib/worktree-session-guard.js` |
 | A queued warp or the busy evidence | `lib/worktree-warp-busy.js`, `lib/worktree-warp-sessions.js` |
 | How a card draws | `lib/shell-card.js` for the substrate, `lib/worktree-cards.js` |
+| The shell API, its slot or its runtime | `lib/shell-api/` — ordinary package code, edited like any other module (invariant 32) |
 | The bash heading design | `lib/bash-design.js`, `lib/bash-frame.js`, `lib/bash-activity.js`, `lib/bash-inline-script.js` |
-| A file card or the bridge gate it obeys | `lib/file-card.js`, `lib/skill-odd-card.js`, `lib/file-card-markdown.js`, `lib/file-card-resolver.js` |
+| A file card or the `Card activity` line it obeys | `lib/file-card.js`, `lib/skill-odd-card.js`, `lib/file-card-markdown.js`, `lib/file-card-resolver.js` |
 | The card of a background-job tool | `lib/jobs-card.js`, `lib/jobs-card-resolver.js` |
 | The two advisory message cards | `lib/message-card.js` |
 | The `opencode-go` usage source, or the peak rows above the editor | `lib/opencode-usage.js`, `lib/peak-schedule.js`, `lib/peak-providers.js`, `lib/peak-labels.js` |
@@ -177,7 +193,7 @@ Work on a branch, never on `main`: an ODD gets its own checkout at
 
 ## Related Decisions / Contracts
 
-- [`invariants.md`](invariants.md) — the 28 rules above, in full, with their tests and limits.
+- [`invariants.md`](invariants.md) — the 32 rules above, in full, with their tests and limits.
 - [`code-map.md`](code-map.md) — every module and the one responsibility it owns.
 - [`../reference.md`](../reference.md) — panel keys, refusals, and how each surface behaves.
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) — the Node versions the suite runs on.

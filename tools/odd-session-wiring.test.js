@@ -444,9 +444,8 @@ describe('the module switch and the neighbouring observations', () => {
       const off = await loadExtension({});
       const onToolResult = handlersOf(on, 'tool_result').length;
       const offToolResult = handlersOf(off, 'tool_result').length;
-      // Exactly ONE `tool_result` observation is the worktree half's: the ODD-naming
-      // observer. The touch observation and the issues one are NOT, so the gap is one.
-      assert.equal(onToolResult - offToolResult, 1);
+      // The ODD touch and issues observers do not depend on Worktrees+.
+      assert.equal(onToolResult, offToolResult);
       assert.ok(offToolResult >= 2, 'the touch observation is still registered with the module off');
 
       const ctx = ctxOf();
@@ -457,10 +456,12 @@ describe('the module switch and the neighbouring observations', () => {
 
   test('a write on an odd/tasks document reaches the existing tool_call observations unchanged', async () => {
     await presentGh(async () => {
-      publishShellApi(undefined);
+      // All three halves on: `Skills+` is OFF by default, so its two read rules would not be
+      // registered and this case is about a guard-free write with the whole package present.
+      publishShellApi({ skills: true });
       const loaded = await loadModule();
       const results = await fire(loaded, 'tool_call', writeEvent(), ctxOf());
-      assert.ok(results.length >= 4, 'the naming observer and the guards are all still there');
+      assert.ok(results.length >= 4, 'the guards are all still there');
       for (const result of results) assert.equal(result, undefined, 'nothing blocks a write on an odd document');
       assert.deepEqual(touches(loaded), [], 'a call that has not finished is not a touch');
     });

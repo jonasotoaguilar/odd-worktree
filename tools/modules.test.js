@@ -1,8 +1,8 @@
 'use strict';
-// S1/S3 (modular-tools): the two module switches, `Codegraph+` and `Worktrees+`. The
-// module reads and writes one persisted document through the shell API's store, builds the
-// `Tools` page's rows and says one short thing after a change. It is pure over the
-// injected shell API, so nothing here loads the extension.
+// S1/S3 (modular-tools): the three module switches, `Codegraph+`, `Worktrees+` and
+// `Skills+`. The module reads and writes one persisted document through the shell API's store,
+// builds the `Tools` page's rows and says one short thing after a change. It is pure over
+// the injected shell API, so nothing here loads the extension.
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -23,24 +23,29 @@ function fakeShellApi(initial = {}) {
 }
 
 describe('reading the switches', () => {
-  test('both modules are on when nothing is stored, and for every malformed document', () => {
-    assert.deepEqual(modules.readModules(fakeShellApi().api), { codegraph: true, worktrees: true });
-    for (const bad of [null, 42, 'off', [], { codegraph: 'no' }, { worktrees: null }]) {
+  test('the two worktree and CodeGraph modules are on when nothing is stored, `Skills+` is off', () => {
+    assert.deepEqual(modules.readModules(fakeShellApi().api), { codegraph: true, worktrees: true, skills: false });
+    for (const bad of [null, 42, 'off', [], { codegraph: 'no' }, { worktrees: null }, { skills: 'yes' }]) {
       const { api } = fakeShellApi({ 'odd-worktree': { modules: bad } });
       const read = modules.readModules(api);
       assert.equal(read.codegraph, true, JSON.stringify(bad));
       assert.equal(read.worktrees, true, JSON.stringify(bad));
+      assert.equal(read.skills, false, JSON.stringify(bad));
     }
   });
 
-  test('a stored false switches exactly that module off', () => {
+  test('a stored false switches exactly that module off, and only `true` turns `Skills+` on', () => {
     const { api } = fakeShellApi({ 'odd-worktree': { modules: { codegraph: false } } });
-    assert.deepEqual(modules.readModules(api), { codegraph: false, worktrees: true });
+    assert.deepEqual(modules.readModules(api), { codegraph: false, worktrees: true, skills: false });
+    const skills = fakeShellApi({ 'odd-worktree': { modules: { skills: true } } });
+    assert.equal(modules.readModules(skills.api).skills, true);
+    const off = fakeShellApi({ 'odd-worktree': { modules: { skills: false } } });
+    assert.equal(modules.readModules(off.api).skills, false);
   });
 
-  test('no shell API, no createStore and a throwing store all read as on and never throw', () => {
+  test('no shell API, no createStore and a throwing store all read as their defaults and never throw', () => {
     for (const api of [null, undefined, {}, { createStore: () => { throw new Error('disk'); } }]) {
-      assert.deepEqual(modules.readModules(api), { codegraph: true, worktrees: true });
+      assert.deepEqual(modules.readModules(api), { codegraph: true, worktrees: true, skills: false });
     }
   });
 });
@@ -63,13 +68,14 @@ describe('writing a switch', () => {
 describe('the Tools page rows', () => {
   const rowsOf = (shellApi, notices = []) => modules.moduleRowsProvider({ api: shellApi.api, notify: (text) => notices.push(text) }).rows({});
 
-  test('one provider on the `Tools` page, two Off/On toggles named exactly like the switches', () => {
+  test('one provider on the `Tools` page, three Off/On toggles named exactly like the switches', () => {
     const provider = modules.moduleRowsProvider({ api: fakeShellApi().api, notify: () => {} });
     assert.equal(provider.category, 'Tools');
     assert.equal(typeof provider.id, 'string');
     const rows = provider.rows({});
     assert.deepEqual(rows.map((row) => [row.choice.setting, row.choice.value]), [
       ['Codegraph+', 'Off'], ['Codegraph+', 'On'], ['Worktrees+', 'Off'], ['Worktrees+', 'On'],
+      ['Skills+', 'Off'], ['Skills+', 'On'],
     ]);
     for (const row of rows) {
       assert.equal(row.category, 'Tools');
@@ -78,10 +84,12 @@ describe('the Tools page rows', () => {
     }
   });
 
-  test('current() follows the stored value, On by default', () => {
+  test('current() follows the stored value, and `Skills+` is Off by default', () => {
     const shellApi = fakeShellApi({ 'odd-worktree': { modules: { worktrees: false } } });
     const rows = rowsOf(shellApi);
-    assert.deepEqual(rows.map((row) => row.choice.current()), [false, true, true, false]);
+    assert.deepEqual(rows.map((row) => row.choice.current()), [false, true, true, false, true, false]);
+    const withSkills = rowsOf(fakeShellApi({ 'odd-worktree': { modules: { skills: true } } }));
+    assert.deepEqual(withSkills.map((row) => row.choice.current()), [false, true, false, true, false, true]);
   });
 
   test('Enter persists first, then says one short thing about the restart', async () => {

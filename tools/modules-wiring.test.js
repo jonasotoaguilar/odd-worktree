@@ -70,7 +70,7 @@ describe('the Tools page', () => {
       assert.equal(tools.length, 1, JSON.stringify(modules));
       assert.deepEqual(
         tools[0].rows({}).map((row) => `${row.choice.setting} ${row.choice.value}`),
-        ['Codegraph+ Off', 'Codegraph+ On', 'Worktrees+ Off', 'Worktrees+ On'],
+        ['Codegraph+ Off', 'Codegraph+ On', 'Worktrees+ Off', 'Worktrees+ On', 'Skills+ Off', 'Skills+ On'],
       );
       assert.deepEqual(
         tools[0].categoryPlacement,
@@ -97,12 +97,13 @@ describe('Worktrees+', () => {
     assert.equal(off.commands.has('warp'), false);
     assert.equal(off.messageRenderers.has('worktree-warp'), false);
     assert.doesNotMatch(await promptOf(off, []), /## ODD worktrees/);
-    // the naming handler, the bash guard, the write guard, the skill-read bash guard and the
-    // whole-read rule go: every ``tool_call`` observation of the worktree half
-    assert.equal(toolCallHandlers(on) - toolCallHandlers(off), 5);
-    // The CodeGraph wiring adds ONE `tool_call` observation of its own, and only where its CLI is
-    // installed — so a host without it leaves zero, and neither answer is this half's.
-    assert.ok(toolCallHandlers(off) <= 1, `at most the CodeGraph observation is left, got ${toolCallHandlers(off)}`);
+    // Worktrees+ gates the two worktree guards and nothing else, now that the read rules are
+    // the `Skills+` half.
+    assert.equal(toolCallHandlers(on) - toolCallHandlers(off), 2);
+    // The two read rules are their own module, and the CodeGraph wiring adds ONE `tool_call`
+    // observation of its own, and only where its CLI is installed — so neither answer is this
+    // half's.
+    assert.ok(toolCallHandlers(off) <= 3, `at most the two read rules and the CodeGraph observation, got ${toolCallHandlers(off)}`);
     for (const name of ['odd', 'files']) assert.ok(off.commands.has(name), `${name} stays`);
     assert.equal(off.hooks.some(([hook]) => hook === 'agent_settled'), false, 'the warp settle tick goes');
   });
@@ -111,6 +112,27 @@ describe('Worktrees+', () => {
     const off = await load({ worktrees: false });
     assert.match(await promptOf(off, ['codegraph']), /## CodeGraph/);
     assert.ok(off.commands.has('issues'));
+  });
+});
+
+describe('Skills+', () => {
+  test('off (the default): the two read rules are not registered, and no worktree surface moves', async () => {
+    const on = await load({ skills: true });
+    const off = await load(undefined);
+    assert.equal(toolCallHandlers(on) - toolCallHandlers(off), 2, 'the skill-read guard and the whole-read rule');
+    assert.equal(toolCallHandlers(off), toolCallHandlers(await load({ skills: false })), 'an unset switch and a stored false are the same half');
+    for (const loaded of [off, await load({ skills: false })]) {
+      assert.ok(loaded.tools.has('worktree_create'), 'the worktree tools stay');
+      assert.ok(loaded.commands.has('warp'), '/warp stays');
+      assert.match(await promptOf(loaded, []), /## ODD worktrees/, 'the worktree text stays');
+    }
+  });
+
+  test('on: the two read rules register without the worktree half', async () => {
+    const on = await load({ skills: true, worktrees: false });
+    // Two worktree guards gone, the two read rules still here.
+    assert.equal(toolCallHandlers(on) - toolCallHandlers(await load({ worktrees: false })), 2);
+    assert.equal(on.commands.has('warp'), false, 'the worktree half is still off');
   });
 });
 

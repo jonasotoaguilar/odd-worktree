@@ -13,10 +13,10 @@ invariant 32). The one name it keeps from before is its store directory, spelled
 2. **No customize / plugin-tools / Herdr-panel surface, and CodeGraph only as
    invariants 18 and 19 allow.** No customize COMMAND, no plugin-tools toggles, no
    Herdr plugin management, no `worktree-mode` file, no perf tracing, and no
-   `herdr-gentle:` command name. This package owns exactly FOUR preferences, each an
+   `herdr-gentle:` command name. This package owns exactly FIVE preferences, each an
    Off/On row registered through the shell API and stored in its own store:
-   `Codegraph+`, `Worktrees+` (`Tools` page), `Deepseek peak` and `Claude peak`
-   (`Alert` page). All four read Off until the human turns them on.
+   `Codegraph+`, `Worktrees+` and `Skills+` (`Tools` page), `Deepseek peak` and
+   `Claude peak` (`Alert` page). All five read Off until the human turns them on.
    Everything else it contributes to `/gentle:customize` is a DESIGN: the two
    (`activity` and `color`) on
    the shell API's own `Cards` page — a `Card activity` line, or its `Card bash`
@@ -88,13 +88,15 @@ invariant 32). The one name it keeps from before is its store directory, spelled
 
    **Four switches are optional, and nothing else is.** The `Tools` page of
    `/gentle:customize` (`lib/modules.js`, a plain `registerRows` provider) holds the
-   `Codegraph+` and `Worktrees+` Off/On lines. They are read once, when the surface
+   `Codegraph+`, `Worktrees+` and `Skills+` Off/On lines. They are read once, when the surface
    registers, from the package's own store; `Worktrees+` Off leaves out `/warp`, its
-   card, the two tools, the worktree guards and prompt text, and `Codegraph+` Off leaves
+   card, the two tools, the worktree guards (the active-session guard a removal runs included)
+   and prompt text, `Skills+` Off leaves out the two read rules, and `Codegraph+` Off leaves
    out the CodeGraph wiring, prompt text and reminders. The CodeGraph CARD is not one of
    these: it is a design of the `Card activity` line and follows that switch. A change lands on
-   the next load, so each one says so. Neither adds a command or a tool name. The third
-   and fourth are the `Alert` page's per-provider lines below, applied live.
+   the next load, so each one says so. None adds a command or a tool name. `Codegraph+` and
+   `Worktrees+` are ON unless the stored value is exactly `false`; `Skills+` is OFF unless it is
+   exactly `true`, so an unset, malformed or unreadable document leaves the read rules out.
 
    **`Card message` is this package's own line, applied live.** The
    `Cards` page gains one `registerRows` provider — `lib/card-message.js`, the setting
@@ -272,7 +274,9 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    "could not be resolved". Nothing is auto-warped. The check is best effort:
    stale, unattributable and truncated evidence is disclosed — the panel notifies
    each caveat the guard could not resolve, one notice per caveat — never
-   silently dropped and never left blocking forever.
+   silently dropped and never left blocking forever. The check belongs to the worktree
+   half: it runs while `Worktrees+` is on, and with that module off the removal surface it
+   guards is not registered either.
 5. **Deletion is git only.** Removal is `git worktree remove <absolute path>`
    (with `--force` only when the caller asked) and the branch is kept. No other
    application is closed, opened or removed on any path — including the panel's
@@ -657,19 +661,21 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     (`lib/artifact-read-full.js`): a `read` of a `.md` below a `skills/` or an `odd/` folder has its
     `offset` and `limit` DELETED from the host's `event.input` before the tool runs, so a skill or an
     ODD is delivered whole and never half a procedure. It blocks nothing and answers nothing. Both
-    observations follow the `Worktrees+` module switch with the guards above.
+    observations follow the `Skills+` module switch — OFF by default — and touch no worktree surface.
 
     **Both worktree guards (the `bash` one and the `edit`/`write` one) judge the primary session only**:
     creating a worktree and leaving the default branch are the orchestrator's actions, so a subagent
     child (`GENTLE_PI_AGENTS_CHILD=1`, read per call) passes both. The skill-read guard and the
-    whole-read rule still apply to every session.
+    whole-read rule still apply to every session that has `Skills+` on.
 
     No guard ever throws (a throwing `tool_call` handler blocks the tool), an
     unreadable repository leaves only the `bash` worktree refusal active, and the
     default branch is resolved lazily and memoized per checkout.
-    `ODD_WORKTREE_GUARD=0` is the one way to turn all of them off, like
-    `ODD_WORKTREE_PROMPT=0` for the prompt blocks, and the `Worktrees+` switch
-    leaves the worktree guards out at registration (the skill-read guard stays); no
+    `ODD_WORKTREE_GUARD=0` takes the two worktree guards and the skill-read refusal away, like
+    `ODD_WORKTREE_PROMPT=0` for the prompt blocks, and the switches decide first:
+    `Worktrees+` off leaves the two worktree guards out at registration and `Skills+` off —
+    its default — leaves the two read rules out, each at registration, so neither the
+    module nor the environment variable can be worked around from a call; no
     other value, option or config file does, and they register no command or tool name (invariant 3). Each refusal
     names the tool that replaces the blocked action, and the prompt block (invariant
     14) is what keeps the agent from reaching them, so a change to one is read
@@ -990,26 +996,9 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     one instance, the byte-for-byte native answers, the accent cells in both styles,
     the zone markers and the wrap-once/uninstall-by-reference claims.
 
-30. **A session is named after the ODD it writes, and a name it cannot prove it
-    wrote is never touched.** `lib/session-auto-name.js` derives the label from the
-    document's own name — `odd/tasks/prompt-card-fix.md` is `Prompt card fix`, with
-    `-`, `_` and the `/` of a nested feature read as word breaks, the first letter
-    capitalized and the rest left exactly as the document named it — on every
-    `write`/`edit` landing on an `odd/tasks/*.md` document, from the primary checkout
-    and from a worktree alike, and never on a `read` or on any other path. The prose
-    INSIDE the document is not a source: a heading is its author's sentence, not the
-    ODD's identity, and a document that does not exist yet names the session the same.
-    The branch is not part of the name, so two checkouts of one ODD carry one label.
-    Ownership is what keeps the guarantee: the plugin writes only an empty name or one
-    it can prove it produced — the label it just derived, the label of an ODD this
-    session already wrote (the durable `odd-worktree.odd-touch` record, which is why a
-    resume keeps working), or the two shapes earlier versions wrote (`<slug>` and
-    `<slug> @ <branch>`). Anything else was typed by a human and is untouchable,
-    including by the `gentle_odd_phase` re-apply, which invents nothing for a session
-    that never wrote an ODD.
-    `tools/session-auto-name.test.js` pins the label shape, the re-name on every write,
-    the ownership cases and the resume path; `tools/session-auto-name-wiring.test.js`
-    pins that the primary checkout names too.
+30. **ODD activity does not set the session name.** Task writes and edits are
+    recorded for the ODD rail only; session naming belongs to the host's session
+    identity tool. `tools/session-name-ownership.test.js` pins this boundary.
 
 31. **The ODD panel folds by default, counts what it lists, and lines a document up
     under its group's name.** `lib/odd-view.js` keeps the OPENED checkouts in one

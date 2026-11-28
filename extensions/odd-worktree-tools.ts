@@ -1441,6 +1441,11 @@ function closeSessionString(ctx, method) {
 // Returns {refused, text, notices, guard}. A broken guard module fails closed:
 // the removal cannot run without the check that gates it.
 async function checkoutSessionGuard({ ctx, target }) {
+  // modular-tools (`Worktrees+`): the guard belongs to the worktree half, like the removal
+  // it gates — with that module off the close path is not registered either, so the check
+  // answers clear instead of reading any store. This is the switch that owns the rule, not a
+  // way around it: it is the same `oddModules` every registration above and below reads.
+  if (!oddModules.worktrees) return { refused: false, text: null, notices: [], guard: { status: "module-off" } };
   let guardLib;
   try {
     guardLib = libRequire("worktree-session-guard.js");
@@ -2572,34 +2577,6 @@ function warpMeasuredSpan(startedAt, endedAt) {
   return Number.isFinite(span) && span >= 0 ? span : null;
 }
 
-// ---------------------------------------------------------------------------
-// Session auto-naming from ODD writes (S1 as narrowed by D7).
-//
-// The extension observes the Pi tool pipeline for the `read`, `edit` and
-// `write` tools. For each call it decides whether the touched path is a
-// `.md` document inside the principal checkout's `odd/` directory and, when it
-// is, names THIS session after the document that was written (see
-// lib/session-auto-name.js). The worktree of the agent's context — resolved
-// from the invoking context's working directory and matched against the
-// registry entries, never from the file path identity, because `odd/` is a
-// symlink into the principal checkout — only supplies the branch suffix of
-// that name.
-//
-// It writes NOTHING to the registry. S1 removed the issue/ODD association from
-// every worktree, so this hook records no association, neither from a touched
-// path nor from a scan of the worktree's `odd/` directory: a worktree carries
-// no document. What stays is the session name, which is a property of the
-// session and not of the worktree.
-//
-// The hook never throws and never blocks the pipeline: any failure (unreadable
-// registry, unknown context, a host without the session-name accessors) is
-// swallowed, and the handler returns nothing.
-// ---------------------------------------------------------------------------
-
-// Only these three tools carry a single document path worth reading for the
-// session name.
-const ODD_NAMING_TOOLS = new Set(["read", "edit", "write"]);
-
 function oddToolNameOf(event) {
   if (!event || typeof event !== "object") return undefined;
   const name = event.toolName ?? event.tool ?? event.name;
@@ -2637,91 +2614,7 @@ function oddEventCwd(event, ctx) {
   return process.cwd();
 }
 
-// The registry entry owning `cwd`: the entry whose worktree root is `cwd`
-// itself or its longest enclosing prefix. Anything else — the principal
-// checkout, an unregistered directory — yields null and captures nothing.
-function oddEntryForCwd(worktrees, cwd) {
-  const resolved = path.resolve(cwd);
-  let best = null;
-  let bestLen = -1;
-  for (const entry of worktrees) {
-    // Relative registry paths never participate: resolving one against
-    // the process cwd would attribute the call to the wrong worktree.
-    if (!entry || typeof entry.path !== "string" || !path.isAbsolute(entry.path)) continue;
-    let candidate;
-    try {
-      candidate = path.resolve(entry.path);
-    } catch {
-      continue;
-    }
-    if (resolved !== candidate && !resolved.startsWith(candidate + path.sep)) continue;
-    if (candidate.length > bestLen) {
-      best = entry;
-      bestLen = candidate.length;
-    }
-  }
-  return best;
-}
-
-// Best-effort real path: the file itself when it exists (resolving the
-// worktree `odd/` symlink into the principal checkout), else its parent
-// directory plus the basename (covers `write` of a not-yet-created doc),
-// else the lexical path.
-function oddRealPath(absPath) {
-  try {
-    return fs.realpathSync(absPath);
-  } catch {
-    // The file may not exist yet; resolve through its parent instead.
-  }
-  try {
-    return path.join(fs.realpathSync(path.dirname(absPath)), path.basename(absPath));
-  } catch {
-    return absPath;
-  }
-}
-
-// `odd/<rel>` for a touched absolute path, or null when the path is not a
-// `.md` document inside either the worktree's own `odd/` (lexical, through
-// the symlink) or the principal checkout's `odd/` (real path). The returned
-// rel is always relative to the shared `odd/` root so every worktree
-// records the same document under the same name.
-function oddRelFor(absPath, worktreePath, principalRoot) {
-  if (typeof absPath !== "string" || absPath.length === 0) return null;
-  const lexical = path.resolve(absPath);
-  if (!lexical.endsWith(".md")) return null;
-  const candidates = [lexical, path.resolve(oddRealPath(lexical))];
-  const oddRoots = [path.join(worktreePath, "odd"), path.join(principalRoot, "odd")];
-  const bases = [];
-  for (const base of oddRoots) {
-    bases.push(path.resolve(base));
-    try {
-      bases.push(path.resolve(fs.realpathSync(base)));
-    } catch {
-      // An absent `odd/` simply contributes no real base.
-    }
-  }
-  for (const candidate of candidates) {
-    for (const base of bases) {
-      if (candidate === base) continue;
-      if (!candidate.startsWith(base + path.sep)) continue;
-      const rel = path.relative(base, candidate).split(path.sep).join("/");
-      if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) continue;
-      return `odd/${rel}`;
-    }
-  }
-  return null;
-}
-
-// Bounded (`.md` only) listing of the worktree's own `odd/` directory,
-// relative to it (`tasks/plan.md`). Never throws: any unreadable directory
-// contributes nothing.
-// Hot path: `repoIdentity` spawns two git children (~17ms here) and the ODD
-// naming hook rides every `tool_call` and `tool_result`. A session's cwd resolves
-// to the same root/common dir for its whole life, so the answer is memoized per
-// cwd instead of respawned twice per tool call. Bounded LRU: a long session
-// visiting many checkouts keeps the most recent ones, never unbounded state.
-// S8 (T6): the filter below answers most events before this memo is even reached,
-// so the common tool call pays neither a `git` nor a lookup.
+// Bash and write guards reuse the repository identity for a checkout.
 const REPO_IDENTITY_CACHE_LIMIT = 32;
 const repoIdentityCache = new Map();
 
@@ -2742,213 +2635,6 @@ function cachedRepoIdentity(git, cwd) {
   return value;
 }
 
-// S8 (T6): the listing behind `git worktree list` is memoized per repository
-// root for a SHORT window, so a burst of tool events in one turn costs ONE `git`
-// instead of one per event. It is deliberately shorter than a turn, and a listing
-// taken BEFORE a checkout was created is never trusted — that is what
-// `notBefore` carries, so the memo cannot hide the checkout the agent just made.
-const WORKTREE_LISTING_MEMO_MS = 1500;
-const WORKTREE_LISTING_CACHE_LIMIT = 32;
-const worktreeListingCache = new Map();
-// When this process last OBSERVED a checkout being created, or null. Only a
-// timestamp: nothing is read from it and no git runs for it.
-let worktreeCreatedAt = null;
-// The one tool that creates a checkout, so its result is what a memoized listing
-// may not predate.
-const WORKTREE_CREATE_TOOL = "worktree_create";
-
-function cachedWorktreeListing(git, root, notBefore) {
-  const key = String(root);
-  const at = Date.now();
-  const hit = worktreeListingCache.get(key);
-  const age = hit === undefined ? Number.NaN : at - hit.at;
-  const recent = Number.isFinite(age) && age >= 0 && age < WORKTREE_LISTING_MEMO_MS;
-  // A listing older than `notBefore` — a checkout created after it — answers
-  // about a world that no longer exists, so it is bypassed instead of trusted.
-  const afterCreation = notBefore === null || notBefore === undefined
-    || (hit !== undefined && Number.isFinite(hit.at) && hit.at >= notBefore);
-  if (recent && afterCreation) {
-    // Refresh recency so the checkout in use is never the one evicted.
-    worktreeListingCache.delete(key);
-    worktreeListingCache.set(key, hit);
-    return hit.live;
-  }
-  const live = git.listWorktrees(key);
-  worktreeListingCache.set(key, { at, live });
-  if (worktreeListingCache.size > WORKTREE_LISTING_CACHE_LIMIT) {
-    worktreeListingCache.delete(worktreeListingCache.keys().next().value);
-  }
-  return live;
-}
-
-// S8 (T6): a touched path names a session only when it is an ODD TASK document
-// (`odd/tasks/*.md`), which is exactly what `lib/session-auto-name.js` derives a
-// label from. The test is lexical — the worktree's own `odd/` may be a symlink to
-// the principal's, and the document behind either spelling carries the same
-// segments — so it costs no child process and no file read.
-const ODD_TASK_PARENT = "tasks";
-const ODD_ROOT = "odd";
-
-function oddTaskDocumentPath(rawPath, cwd) {
-  if (typeof rawPath !== "string" || rawPath.length === 0) return false;
-  if (!rawPath.endsWith(".md")) return false;
-  let resolved;
-  try {
-    const abs = path.isAbsolute(rawPath) ? rawPath : path.join(cwd, rawPath);
-    resolved = path.resolve(abs);
-  } catch {
-    return false;
-  }
-  const segments = resolved.split(path.sep);
-  // The file itself is the last segment, so the parent pair is what is looked for.
-  for (let i = segments.length - 2; i >= 1; i -= 1) {
-    if (segments[i] === ODD_TASK_PARENT && segments[i - 1] === ODD_ROOT) return true;
-  }
-  return false;
-}
-
-// The gentle-pi ODD phase tool, read from `lib/session-auto-name.js` (the module
-// that owns the name) once per load instead of per event: this runs on every
-// non-naming `tool_result`, so the answer is memoized here.
-let oddPhaseToolNameCache;
-
-function oddPhaseToolName() {
-  if (oddPhaseToolNameCache === undefined) {
-    try {
-      const auto = libRequire("session-auto-name.js");
-      oddPhaseToolNameCache = typeof auto.ODD_PHASE_TOOL_NAME === "string" ? auto.ODD_PHASE_TOOL_NAME : "";
-    } catch {
-      oddPhaseToolNameCache = "";
-    }
-  }
-  return oddPhaseToolNameCache;
-}
-
-// S8 (T6): can this event name a session at all? The naming path only ever
-// applies to the `read`/`edit`/`write` tools touching an `odd/tasks/*.md`
-// document, plus the phase trigger, which carries no path and re-applies a label
-// the session already derived. Everything else answers `false` HERE — before any
-// `git`, which is the whole point: the observer used to spawn two blocking child
-// processes per tool call to learn there was nothing to name.
-function oddNamingCandidate(event, cwd, allowPhaseTrigger) {
-  const toolName = oddToolNameOf(event);
-  if (ODD_NAMING_TOOLS.has(toolName)) {
-    for (const raw of oddTouchedPaths(oddArgsOf(event))) {
-      if (oddTaskDocumentPath(raw, cwd)) return true;
-    }
-    return false;
-  }
-  if (allowPhaseTrigger !== true) return false;
-  const phaseTool = oddPhaseToolName();
-  return phaseTool.length > 0 && toolName === phaseTool;
-}
-
-// The pipeline hook proper (M1): every event is observed. Whether a session is
-// renamed at all is decided in lib/session-auto-name.js.
-function observeOddWriteForNaming(event, ctx, pi, allowPhaseTrigger) {
-  // S8 (T6): the create's own result is the fact that a memoized listing may now
-  // be wrong. It costs a timestamp and no git, and it is recorded before the
-  // filter so the events that follow it in the same turn see the new checkout.
-  if (allowPhaseTrigger === true && oddToolNameOf(event) === WORKTREE_CREATE_TOOL) {
-    worktreeCreatedAt = Date.now();
-  }
-  const cwd = oddEventCwd(event, ctx);
-  // S8 (T6): filter first, synchronously, with no child process.
-  if (!oddNamingCandidate(event, cwd, allowPhaseTrigger)) return;
-  const git = libRequire("worktree-git.js");
-  const registry = libRequire("worktree-registry.js");
-  let repo;
-  try {
-    repo = cachedRepoIdentity(git, cwd);
-  } catch {
-    return; // Unknown context: not a repository, nothing to name.
-  }
-  const principalRoot = path.basename(repo.commonDir) === ".git"
-    ? path.dirname(repo.commonDir)
-    : repo.root;
-  // Git's listing supplies the checkout this write happened in and its branch. There
-  // is no stored row to read (S3): the checkout's own path is the record. S8 (T6):
-  // the listing rides a short per-root memo, so a turn's burst of events pays one
-  // `git` — and a listing that predates a create is bypassed, so the memo can never
-  // hide the checkout the agent just made.
-  let live;
-  try {
-    live = cachedWorktreeListing(git, repo.root, worktreeCreatedAt);
-  } catch {
-    return;
-  }
-  const rows = registry.checkoutRows(live);
-  // The checkout this call names FROM: a registered worktree first (the longest
-  // match wins), else the principal checkout itself. An ODD write from the principal
-  // checkout renames the session exactly like one from a worktree — the rule follows
-  // the document, not the checkout it lives in.
-  const entry = oddEntryForCwd(rows, cwd) || principalEntryFor(cwd, principalRoot);
-  if (!entry) return;
-  const touched = [];
-  // The per-call leg applies to the read/edit/write tools, which carry a
-  // single document path. Every other tool (notably `bash`) carries no
-  // reliably parseable path and contributes nothing.
-  if (ODD_NAMING_TOOLS.has(oddToolNameOf(event))) {
-    for (const raw of oddTouchedPaths(oddArgsOf(event))) {
-      const abs = path.isAbsolute(raw) ? raw : path.join(cwd, raw);
-      const rel = oddRelFor(abs, entry.path, principalRoot);
-      if (!rel) continue;
-      touched.push(rel);
-    }
-  }
-  // T2/D2-D7: the touched rels name the session after the ODD task document
-  // being WRITTEN. The naming decision (write-only, own name only,
-  // idempotent) lives in lib/session-auto-name.js; this is the call site.
-  const sessionId = oddSessionId(ctx);
-  autoNameSessionFromWrite(pi, oddToolNameOf(event), touched, sessionId);
-  // D3: an ODD phase transition carries no feature of its own, so it only
-  // re-applies the label this session last derived from a write. It is
-  // observed on `tool_result` (a gentle-pi tool, not a host event).
-  if (allowPhaseTrigger === true) {
-    autoNameSessionFromPhase(pi, sessionId, oddToolNameOf(event));
-  }
-}
-
-// The principal checkout as a naming target, in the shape a registry row has (`path`),
-// so ONE rel resolution serves both. Naming needs no branch (the name is the ODD's
-// own), and the rail's row election is untouched: this shape never reaches it.
-function principalEntryFor(cwd, principalRoot) {
-  if (typeof principalRoot !== "string" || principalRoot.length === 0) return null;
-  let resolved;
-  try {
-    resolved = path.resolve(cwd);
-  } catch {
-    return null;
-  }
-  const root = path.resolve(principalRoot);
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) return null;
-  return { path: root };
-}
-
-// The ODD names this session already WROTE, newest first, read from the durable touch
-// record (`odd-worktree.odd-touch`) the rail already keeps. Naming reads that ONE
-// record as the proof that a name this process did not write is still its own, which
-// is what survives a resume (D5). A host without the record simply has less evidence.
-function oddTouchedNames() {
-  try {
-    if (oddSession === null) return [];
-    const names = [];
-    for (const row of oddSession.touched()) {
-      if (row && typeof row.name === "string" && row.name.length > 0) names.push(row.name);
-    }
-    return names;
-  } catch {
-    return [];
-  }
-}
-
-// T2/D7: the session NAME is the only session-identity channel Pi exposes
-// (`setSessionName`; there is no subject/alias write). The session owns that
-// name only while it matches the pattern the plugin itself writes — anything
-// else came from a human and is never touched — and the principal checkout
-// never reaches this point, because `oddEntryForCwd` already returned null
-// for it (D6). A host without the name accessors is left alone rather than
-// guessed at: without `getSessionName` the ownership test cannot run.
 function oddSessionId(ctx) {
   try {
     const id = ctx && ctx.sessionManager && typeof ctx.sessionManager.getSessionId === "function"
@@ -2958,56 +2644,6 @@ function oddSessionId(ctx) {
   } catch {
     return undefined;
   }
-}
-
-function autoNameSessionFromWrite(pi, toolName, touched, sessionId) {
-  try {
-    if (!pi || typeof pi.getSessionName !== "function" || typeof pi.setSessionName !== "function") return;
-    const auto = libRequire("session-auto-name.js");
-    const label = auto.planSessionRename({
-      rels: touched,
-      isWrite: auto.isWriteToolName(toolName),
-      currentName: pi.getSessionName(),
-      sessionId,
-      touchedNames: oddTouchedNames(),
-    });
-    if (typeof label === "string" && label.length > 0) pi.setSessionName(label);
-  } catch {
-    // Naming is best effort: it never disturbs the pipeline it rides on.
-  }
-}
-
-// D3: a `gentle_odd_phase` transition re-applies the label the session last
-// derived from an ODD write. The phase names no feature, so nothing is
-// invented here; a session that never wrote an ODD document has nothing to
-// re-apply and is left alone.
-function autoNameSessionFromPhase(pi, sessionId, toolName) {
-  try {
-    if (!pi || typeof pi.getSessionName !== "function" || typeof pi.setSessionName !== "function") return;
-    const auto = libRequire("session-auto-name.js");
-    if (toolName !== auto.ODD_PHASE_TOOL_NAME) return;
-    const label = auto.planPhaseSessionRename({
-      sessionId,
-      currentName: pi.getSessionName(),
-      touchedNames: oddTouchedNames(),
-    });
-    if (typeof label === "string" && label.length > 0) pi.setSessionName(label);
-  } catch {
-    // Naming is best effort: it never disturbs the pipeline it rides on.
-  }
-}
-
-// The subscribed pipeline handler: never throws, never blocks, returns
-// nothing (a `tool_call` return value would mutate or block the call).
-// `allowPhaseTrigger` is set only on `tool_result`, where an ODD phase
-// transition is observable.
-function handleWorktreeOddEvent(event, ctx, pi, allowPhaseTrigger) {
-  try {
-    observeOddWriteForNaming(event, ctx, pi, allowPhaseTrigger);
-  } catch {
-    // Any failure is swallowed after the best-effort attempt above.
-  }
-  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -6932,7 +6568,7 @@ function oddTargetRequest(raw, cwd) {
 // dotfile — the segments come from the library that owns the rule instead of being
 // restated here, and the file has to be a regular one, exactly like the scan's own
 // row. The argument is RESOLVED first (`path.resolve` against the call's cwd, the
-// same rule `oddTaskDocumentPath` applies), because the grammar is about the path a
+// `odd/tasks` pair), because the grammar is about the path a
 // reader MEANS: `tasks/./x.md` and `tasks/../tasks/x.md` name the listed document,
 // and validating their raw segments refused paths `path.resolve` makes equal. Only
 // the resolved path is validated, so a sibling that resolves outside `odd/tasks`, a
@@ -11481,11 +11117,12 @@ function registerDiffDesignRows(api) {
   }
 }
 
-// modular-tools: the two module switches. `Codegraph+` and `Worktrees+` live on the
-// shell API's own `Tools` page as plain Off/On rows (`lib/modules.js`), persisted in this
+// modular-tools: the module switches. `Codegraph+`, `Worktrees+` and `Skills+` live on
+// the shell API's own `Tools` page as plain Off/On rows (`lib/modules.js`), persisted in this
 // package's store. They are read ONCE per registration episode, below: a change lands on
-// the next load, and the row says so through the session's own notifier.
-let oddModules = { codegraph: true, worktrees: true };
+// the next load, and the row says so through the session's own notifier. `Skills+` is the
+// one switch that is OFF until someone turns it on; the other two are on until turned off.
+let oddModules = { codegraph: true, worktrees: true, skills: false };
 
 function notifyModulesChange(text) {
   const ui = issuesSidebarCtx && issuesSidebarCtx.ui;
@@ -12343,13 +11980,16 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // `/warp` is the ONE entry point of the warp queue (S3): no agent surface
   // moves the session, so the command is where a handoff waits and lands.
   warpHandoffPi = pi;
-  // modular-tools: the two module switches are read ONCE, here. `Worktrees+` off leaves
+  // modular-tools: the three module switches are read ONCE, here. `Worktrees+` off leaves
   // out everything worktree below — the tools, `/warp` with its card and bookkeeping, the
-  // guards and the prompt text; `Codegraph+` off leaves out the CodeGraph wiring and text.
+  // worktree guards (the active-session guard included) and the prompt text; `Codegraph+`
+  // off leaves out the CodeGraph wiring and text; `Skills+` off, its own default, leaves out
+  // the two skill-read rules. The fallback is the same shape, with `Skills+` off like an
+  // unset switch: a store that cannot be read keeps the package whole and the read rules out.
   try {
     oddModules = libRequire("modules.js").readModules(issuesSidebarShellApi());
   } catch {
-    oddModules = { codegraph: true, worktrees: true };
+    oddModules = { codegraph: true, worktrees: true, skills: false };
   }
   // opencode-usage-alert: the OpenCode Go source registers at load AND at every
   // session start, so either load order works and a session switch re-targets the
@@ -12545,12 +12185,9 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // opencode-usage-alert: a turn can cross a peak boundary, and the next one re-reads
   // the clock. It also settles the row right after the switch's own action.
   pi.on("turn_end", () => syncOpenCodePeakAlert());
-  if (oddModules.worktrees) pi.on("tool_call", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi));
   // S1/S3/S4/S9: the worktree guard, the first `tool_call` observation that refuses a
-  // `bash` command instead of observing it. It sits beside the naming handler and is
-  // one of the two handlers that return a `block` answer — the skill-read guard, below,
-  // is the other; every other tool call is left exactly as the host proposed it. Nothing
-  // about it is callable by the agent (S7).
+  // `bash` command instead of observing it. Nothing about the guard is callable
+  // by the agent (S7).
   if (oddModules.worktrees) pi.on("tool_call", (event, ctx) => guardWorktreeBashCall(event, ctx));
   // S4 (T3): the write guard, a second `tool_call` observation that refuses an `edit`
   // or `write` into the primary checkout while it sits on the default branch. It is a
@@ -12562,18 +12199,16 @@ function registerOddWorktreeSurfaceEntries(pi) {
   // command text only, shares the same `ODD_WORKTREE_GUARD=0` switch, and adds no
   // command, tool, option or setting of its own.
   // invariant 22 (S5 of skill-read-full): the skill-read guard is the second refusal — a
-  // `bash` reader pointed at a skill file — and it follows the `Worktrees+` module, like every
-  // other guard here: with that module off, neither refusal nor the read rule below exists.
-  if (oddModules.worktrees) pi.on("tool_call", (event) => guardSkillReadBashCall(event));
+  // `bash` reader pointed at a skill file — and it follows the `Skills+` module: the two
+  // read rules are their own half, so `Worktrees+` off leaves them alone and `Skills+` off —
+  // its default — leaves them out without touching any worktree surface.
+  if (oddModules.skills) pi.on("tool_call", (event) => guardSkillReadBashCall(event));
   // S1/S2/S5 (skill-read-full): the other half of the same rule — a skill's or an ODD's
   // Markdown is read whole, so a `read` that pages through one has its range dropped before
-  // the host runs it. Same switch: with `Worktrees+` off, a read is left as the host proposed it.
-  if (oddModules.worktrees) pi.on("tool_call", (event) => keepSkillReadWholeCall(event));
-  if (oddModules.worktrees) pi.on("tool_result", (event, ctx) => handleWorktreeOddEvent(event, ctx, pi, true));
-  // S8/S9 (T8): the ODD documents THIS session wrote or edited. It is a THIRD
-  // `tool_result` observation beside the naming one — the two answer different
-  // questions about the same event — and it is `tool_result` on purpose: a write that
-  // never landed is not a touch. Nothing here draws: the record is what the rail's
+  // the host runs it. Same switch: with `Skills+` off, a read is left as the host proposed it.
+  if (oddModules.skills) pi.on("tool_call", (event) => keepSkillReadWholeCall(event));
+  // S8/S9 (T8): the ODD documents THIS session wrote or edited. This observes
+  // `tool_result` on purpose: a write that never landed is not a touch. Nothing here draws: the record is what the rail's
   // section reads (T4). It is deliberately NOT gated by `Worktrees+`: the rail's ODD
   // list belongs to that module, so the attribution must already be recording when the
   // module is off. Every worktree observation above and below keeps its own gate.

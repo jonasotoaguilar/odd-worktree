@@ -153,6 +153,11 @@ the bar reads only `All (<n>)`.
 | `enter` | Insert the focused issue into the chat input as `ISSUE #63`, and close the panel; inside the search box, an editor or the close confirmation the same key keeps that step's meaning | a loaded issue |
 | `esc`, `q`, `ctrl+c` | Close the reader | — |
 
+The wheel answers the pane under the pointer, exactly as it does in `/files`: a
+notch over the list walks the selection, a notch over the preview scrolls that
+preview one line, and a notch that lands on the divider or on the frame's own
+border is left to the host.
+
 **The shortcut teaches itself.** Outside `All` the footer reads `g all issues`;
 inside it the same key reads `g related issues`, because there it goes back — to
 the tab that was active when you entered, never always the first one. The key is
@@ -243,6 +248,11 @@ linked issues (and `space toggle · ctrl+j/k scroll · enter keep · esc discard
 inside the candidate list `n` opens), `enter add · esc cancel` while naming a new
 label, and `↑↓ field · ←→ method · enter select · ctrl+s merge · esc cancel` for
 the merge step.
+
+The wheel answers the pane under the pointer, exactly as it does in `/issues`:
+a notch over the list walks the selection, a notch over the pane scrolls that
+pane one line, and a notch that lands on the divider or on the frame's own border
+is left to the host.
 
 ## The deletion guard, and its honest limit
 
@@ -2019,25 +2029,27 @@ opens on the host's own card (`default`) until a choice is made.
 
 ## The module switches
 
-`/gentle:customize` gains a `Tools` page when the required host (`gentle-pi`) is present, with two Off/On lines.
-Both are On by default, and everything not named here (the issues surfaces, `/odd`, `/files`,
-`/identity`, every card, the skill-read guard) is transversal and has no switch.
+`/gentle:customize` gains a `Tools` page when the required host (`gentle-pi`) is present, with three Off/On lines:
+`Codegraph+` and `Worktrees+` are On by default and `Skills+` is OFF by default. Everything not named
+here (the issues surfaces, `/odd`, `/files`, `/identity`, every card) is transversal and has no switch.
 
 The page sits right after the host's `Sections` page and before `Keymaps`: the provider asks for that
 position with `categoryPlacement: { after: "Sections" }`, because the shell API derives its page list from
 the order of the rows while it builds the menu. A shell API older than `0.16.1` ignores the field, and the
 page opens at the end instead — everything else works the same.
 
-| Switch | Off leaves out |
-| --- | --- |
-| `Codegraph+` | the `## CodeGraph` prompt text for every role, the two CodeGraph reminders and the whole CodeGraph session wiring (index, daemon, MCP entry, edit sync). The CodeGraph CARD is not here: it is a design, so it follows `Card activity` → `activity` |
-| `Worktrees+` | the `## ODD worktrees` prompt text, the tools `worktree_create` and `worktree_list`, `/warp` with its card, queue and bookkeeping, the bash and write guards and the ODD session naming |
+| Switch | Default | Off leaves out |
+| --- | --- | --- |
+| `Codegraph+` | On | the `## CodeGraph` prompt text for every role, the two CodeGraph reminders and the whole CodeGraph session wiring (index, daemon, MCP entry, edit sync). The CodeGraph CARD is not here: it is a design, so it follows `Card activity` → `activity` |
+| `Worktrees+` | On | the `## ODD worktrees` prompt text, the tools `worktree_create` and `worktree_list`, `/warp` with its card, queue and bookkeeping, the bash and write guards and the active-session guard a removal runs |
+| `Skills+` | **Off** | the skill-read guard — a `bash` reader pointed at a skill file is refused — and the whole-read rule that drops `offset` and `limit` from a `read` of a skill's or an ODD's Markdown |
 
 The choice is one document in the shell API's own store (`odd-worktree` → `modules`), read once when the
 extension registers. A change is saved at once and says so in one line — `Codegraph+ Off · run /reload
 and start a new session to apply` — because a reload alone is not enough: the session in progress already
 carries the prompt text and the registered guards. Choosing the value a line already has changes nothing
-and says nothing. A missing, malformed or unreadable document keeps both On.
+and says nothing. A missing, malformed or unreadable document keeps `Codegraph+` and `Worktrees+` On and
+leaves `Skills+` Off: that switch is the one that is opt-in, so unset and OFF are the same answer.
 
 ## The OpenCode Go usage source and the peak rows above the editor
 
@@ -2119,33 +2131,6 @@ to go stale.
 The listing is **read-only**: it reads Git's own worktree set, writes nothing and
 prunes nothing.
 
-## The ODD session name
-
-Writing or editing an `odd/tasks/<name>.md` document names the session after that
-document, from the primary checkout and from a worktree alike:
-`odd/tasks/prompt-card-fix.md` names it `Prompt card fix`. The name IS the ODD's own —
-the separators a feature name uses (`-`, `_`, and the `/` of a nested feature) become
-spaces, the first letter is capitalized, the rest keeps the case the document gave it,
-and a name too long to read at a glance is cut at the last whole word inside 48
-characters. `odd/tasks/perf/plan.md` is `Perf plan`. The prose inside the document
-never names the session, so writing a document that does not exist yet names it just
-the same.
-
-Every write or edit re-derives the name: move on to another ODD and the session is
-renamed to that one. A `read` never renames, and neither does any path that is not
-`odd/tasks/*.md`. The branch is not part of the name, so two checkouts of the same ODD
-carry the same label; the session file, not the name, tells them apart.
-
-A name a person typed is never overwritten. The plugin writes only an empty name or
-one it can prove it produced: the label it just derived, the label of any ODD this
-session already wrote, or the two shapes earlier versions wrote — the dashed slug
-(`prompt-card-fix`) and that slug with a branch suffix
-(`prompt-card-fix @ feat/prompt-card-fix`). The proof comes from the session's own
-`odd-worktree.odd-touch` record, so it survives a resume, and a `gentle_odd_phase`
-transition re-applies the session's own label while a session that never wrote an ODD
-gets nothing invented for it. The admitted consequence: naming a session exactly like
-an ODD you wrote yourself gives that name to the plugin.
-
 ## Where state lives
 
 Nowhere for worktrees. A create always lands at
@@ -2155,8 +2140,8 @@ and that one path rule. There is no `<git-common-dir>/pi-worktrees.json`, no
 lock file and no second document in its place, so two versions of this package
 can never disagree about a stored row.
 
-Session names derived from an ODD write, and the warp's fork/resume bookkeeping,
-travel in the Pi session files the host already owns. The setup logs live under
+ODD touch records and the warp's fork/resume bookkeeping travel in the Pi session
+files the host already owns. This package does not set the session name. The setup logs live under
 the system temp directory (`odd-worktree-setup-*`), one directory per create.
 
 One cache document lives outside the checkout and outside the host's session
@@ -2244,13 +2229,16 @@ reaching them.
   card's own identity — is refused whole with: ``This bash call was not run: it reads the skill file
   <path> — read skill files with the `read` tool instead.`` Not refused: general `*.md` and `docs/**`, ODD
   artifacts, a skill path inside quoted text (`echo`, `git commit -m`), a heredoc body, `grep`/`rg` over
-  skills, writes (`sed -i`, `cat >`, `tee`) and `ls skills/`. The worktree guard decides first.
+  skills, writes (`sed -i`, `cat >`, `tee`) and `ls skills/`. The worktree guard decides first. It
+  follows the `Skills+` switch, not `Worktrees+`: the two read rules are their own half, and that half is
+  Off until it is turned on.
 - **They judge the orchestrator, not a subagent child.** Creating a worktree and leaving the default
   branch are the primary session's actions (a child is handed the worktree it works in), so a session
   started as a child (`GENTLE_PI_AGENTS_CHILD=1`) is judged by neither this guard nor the `edit` and
-  `write` guard below. The skill-read guard still applies to every session.
-- `ODD_WORKTREE_GUARD=0` turns them off for the process, like `ODD_WORKTREE_PROMPT=0`
-  for the prompt blocks. No other value does, and nothing else configures them.
+  `write` guard below. The skill-read guard still applies to every session that has `Skills+` on.
+- `ODD_WORKTREE_GUARD=0` turns the two worktree guards and the skill-read refusal off for the
+  process, like `ODD_WORKTREE_PROMPT=0` for the prompt blocks. Neither is a switch you can turn back
+  on from the panel: `Skills+` and `Worktrees+` decide first, and this only takes their guards away.
 
 ### The `edit` and `write` guard
 
@@ -2271,8 +2259,8 @@ sentence that is a reminder and not a copy of the rule:
   `odd/` folder has its `offset` and `limit` dropped before the tool runs, so the call delivers
   the file from its first line to its last: half a skill states an incomplete procedure. The
   folders decide, by the file card's own identity, and the host's own read budget (2000 lines or
-  50 KB) still applies. It blocks nothing and adds no name. Like the other guards, it exists only
-  while `Worktrees+` is on.
+  50 KB) still applies. It blocks nothing and adds no name. Like the other read rule, it exists
+  only while `Skills+` is on, and that switch is Off by default.
 - **An `odd/` path always passes.** A path below an `odd/` folder is never refused, on any
   branch: that folder is where an ODD is written down, so the branch a checkout happens to
   stand on cannot be a reason to block it. The folders decide, by the same identity the

@@ -1,6 +1,3 @@
 ## CodeGraph
 
-Run one `mcp__codegraph__codegraph_explore` — source plus call paths in one call — before you search or
-read code: `fd`, `find`, `rg`, `grep`, `read` or `cat`. Call it with the symbol behind the finding: the
-code, its callers and what it calls are the whole reach of the patch, so the fix stays inside them. The
-other tools stay available after the first call, and you read the file before editing it.
+Before you search or read code — `fd`, `find`, `rg`, `grep`, `read` or `cat` — call `mcp__codegraph__codegraph_explore` with the name of the symbol behind the finding (identifiers and file names, not a sentence). It returns the verbatim source, its callers, what it calls and the tests that cover it: the whole reach of the patch, so the fix stays inside it and those tests run. The source it returns is already read, so do not grep it again; you still read a file before you edit it. Use `read`, `grep` or `find` for an exact string, for what it does not index (config, docs) or for a file it flags as changed on disk.

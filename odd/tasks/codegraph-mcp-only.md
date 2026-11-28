@@ -36,7 +36,7 @@ que use mas la tool mcp codegraph, porque sigue usandola muy poco o mal". The re
 
 - [x] T1 (S4, S5) switches: default Off, `Codegraph+` On refused without the CLI. Route: inline. Commit: see git log (feat(modules))
 - [x] T2 (S2, S3) wiring: tools.json reconcile (On adds, Off removes, checked at session start) and the mcp.json entry at the moment of the switch. Route: inline. Commit: see git log (feat(codegraph))
-- [ ] T3 (S1, S6) prompts: every role's CodeGraph text, the runtime reminders, docs and tests name only `mcp__codegraph__codegraph_explore` and say what it is for and how to query it. Route: inline. Commit: -
+- [x] T3 (S1, S6) prompts: every role's CodeGraph text, the runtime reminders, docs and tests name only `mcp__codegraph__codegraph_explore` and say what it is for and how to query it. Route: inline. Commit: see git log (feat(codegraph-prompt))
 
 ## Log
 

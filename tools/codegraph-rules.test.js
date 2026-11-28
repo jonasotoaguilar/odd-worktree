@@ -28,20 +28,22 @@ const child = (agent, tools = [MCP]) => ({
 });
 
 describe('the seven texts on disk', () => {
+  const prose = (variant) => file(variant).replace(/\s+/g, ' ');
+
   test('each opens with the shared heading and names the same six search tools', () => {
     for (const variant of rules.VARIANTS) {
-      const text = file(variant).replace(/\s+/g, ' ');
+      const text = prose(variant);
       assert.ok(text.startsWith('## CodeGraph'), variant);
       assert.match(text, /before you (search or read code|`grep`, `rg`, `fd`, `find`, `read` or `cat`)/i, `${variant} gates searching and reading code`);
       for (const binary of ['fd', 'find', 'rg', 'grep', 'read', 'cat']) {
         assert.ok(text.includes(`\`${binary}\``), `${variant} names ${binary}`);
       }
-      // S1: the primary and the generic texts carry no permission sentence; the five role texts keep theirs.
-      if (variant === 'orchestrator' || variant === 'generic') {
-        assert.doesNotMatch(text, /other tools stay|rather than a lookup|answer is a map|not proof/i, `${variant} has no escape hatch`);
-      } else {
-        assert.match(text, /other tools stay|may skip it/, `${variant} leaves the other tools available`);
-      }
+    }
+  });
+
+  test('no text makes the tool optional: a model reads "stay available" as "skip it"', () => {
+    for (const variant of rules.VARIANTS) {
+      assert.doesNotMatch(prose(variant), /other tools stay|may skip it|rather than a lookup|stay available/i, variant);
     }
   });
 
@@ -51,15 +53,12 @@ describe('the seven texts on disk', () => {
     }
   });
 
-  test('only the roles holding the native tool name its operations; the MCP tool is named in full', () => {
-    assert.match(file('explore'), /`codegraph` `query`/, 'explore');
-    assert.match(file('orchestrator'), /`codegraph` with `operation: "explore"`[\s\S]*`operation: "query"`/, 'orchestrator');
-    for (const variant of ['verify', 'worker', 'fix', 'judge']) {
+  test('the MCP tool is the only CodeGraph tool: every text names it in full and none names a native tool or an operation', () => {
+    for (const variant of rules.VARIANTS) {
       const text = file(variant);
-      assert.ok(text.includes(`\`${MCP}\``), variant);
-      assert.doesNotMatch(text, /`query`|`explore`|`codegraph`/, variant);
+      assert.ok(text.includes(`\`${MCP}\``), `${variant} names the MCP tool in full`);
+      assert.doesNotMatch(text, /`query`|`explore`|`codegraph`|operation:/, `${variant} names no native tool or operation`);
     }
-    assert.doesNotMatch(file('generic'), /`query`|`explore`|`mcp__/, 'generic names no operation');
     assert.doesNotMatch(
       rules.VARIANTS.map(file).join('\n'),
       /`codegraph_explore`/,
@@ -67,9 +66,30 @@ describe('the seven texts on disk', () => {
     );
   });
 
+  test('every text says what the tool is for, in cases a model can match, and how to query it', () => {
+    for (const variant of rules.VARIANTS) {
+      const text = prose(variant);
+      assert.match(text, /verbatim/, `${variant} says it returns the source itself`);
+      assert.match(text, /already read/, `${variant} says the source it returns needs no second read`);
+      assert.match(text, /identifiers|names/i, `${variant} says to query with names`);
+      assert.match(text, /does not index|not index/, `${variant} says what it leaves to the other tools`);
+    }
+    for (const variant of ['orchestrator', 'explore', 'generic']) {
+      const text = prose(variant);
+      assert.match(text, /where something lives|find where/i, `${variant}: where`);
+      assert.match(text, /how it works/i, `${variant}: how`);
+      assert.match(text, /a file or symbol you can name/, `${variant}: it also reads what you can name`);
+    }
+  });
+
+  test('the roles that act on code name the tests it lists', () => {
+    for (const variant of ['orchestrator', 'explore', 'verify', 'worker', 'fix', 'judge']) {
+      assert.match(prose(variant), /tests/, variant);
+    }
+  });
+
   test('only the orchestrator points the MCP tool at another checkout, through projectPath, and still delegates', () => {
-    const text = file('orchestrator').replace(/\s+/g, ' ');
-    assert.ok(text.includes(`\`${MCP}\``), 'it names the MCP tool in full');
+    const text = prose('orchestrator');
     assert.match(text, /`projectPath`/, 'it names the argument that selects the checkout');
     assert.match(text, /sibling worktree/, 'it covers a worktree of the same project');
     assert.match(text, /another git project/, 'it covers another project');
@@ -84,13 +104,30 @@ describe('the seven texts on disk', () => {
 describe('the orchestrator and explore texts stay inside their role', () => {
   const prose = (variant) => file(variant).replace(/\s+/g, ' ');
 
-  test('the orchestrator calls the graph first for a where/who/how/what-reaches question, with one exemption and one literal call', () => {
+  test('the orchestrator calls the graph first, itself, before searching and before delegating a lookup', () => {
     const text = prose('orchestrator');
-    assert.match(text, /to answer where code lives, who calls it, how it works, or what a change reaches, your first call is CodeGraph/, text);
-    assert.match(text, /`codegraph` with `operation: "explore"` and `query: "<symbols or the question>"`/, 'the literal call');
-    assert.match(text, /The one exemption is an exact string or a file path the user gave you/, 'one exemption');
-    assert.equal((text.match(/exemption|skip/gi) || []).length, 1, 'and only one');
-    assert.match(text, /what scope, size and any handoff depend on/, 'the sizing use is kept');
+    assert.match(text, /before you `grep`, `rg`, `fd`, `find`, `read` or `cat`, and before you delegate a lookup to an explorer/i, text);
+    assert.match(text, /make it your first call/, 'it is a first call, not an option');
+    assert.match(text, /Delegate to an explorer only when a few calls have not settled it/, 'delegation keeps its place');
+  });
+
+  test('the orchestrator names the cases, among them changing code it has not read and sizing a handoff', () => {
+    const text = prose('orchestrator');
+    assert.match(text, /change, add or reuse something in code you have not read/, text);
+    assert.match(text, /size, scope or hand off work/, text);
+    assert.match(text, /follow a flow from one symbol to another/, text);
+  });
+
+  test('the orchestrator says how to query: names over sentences, and a second call with a name it surfaced', () => {
+    const text = prose('orchestrator');
+    assert.match(text, /Name things the way the code does/, text);
+    assert.match(text, /call again with a name it surfaced/, text);
+  });
+
+  test('the orchestrator keeps one exemption: an exact string or a file path the user gave', () => {
+    const text = prose('orchestrator');
+    assert.match(text, /an exact string/, text);
+    assert.equal((text.match(/exemption/gi) || []).length, 1, 'and only one');
   });
 
   test('the orchestrator looks at the ODD\'s own worktree through projectPath when the session runs elsewhere', () => {
@@ -105,6 +142,10 @@ describe('the orchestrator and explore texts stay inside their role', () => {
 
   test('the explorer\'s second look has a stop', () => {
     assert.match(prose('explore'), /when the next layer is what the question needs, then stop/);
+  });
+
+  test('the explorer treats the tool as its first tool, not a fallback', () => {
+    assert.match(prose('explore'), /is your first tool, not a fallback/);
   });
 });
 

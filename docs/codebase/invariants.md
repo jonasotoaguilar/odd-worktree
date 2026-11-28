@@ -89,7 +89,14 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    only its delta against main. `filesSessionWorktreeRoots` reads the same active
    branch, so a worktree registered only on an abandoned branch is out of scope.
 
+<<<<<<< HEAD
    **Four switches are optional, and nothing else is.** The `Tools` page of
+||||||| parent of 2196bda (feat(codegraph-prompt): one MCP tool, with its use cases and how to query it)
+   **Three switches are optional, and nothing else is.** The `Tools` page of
+=======
+   **Three switches are optional, and nothing else is.** Both module switches read Off until the
+   human turns them on, and `Codegraph+` turns On only while the `codegraph` CLI is on `PATH`. The `Tools` page of
+>>>>>>> 2196bda (feat(codegraph-prompt): one MCP tool, with its use cases and how to query it)
    `/gentle:customize` (`lib/modules.js`, a plain `registerRows` provider) holds the
    `Codegraph+`, `Worktrees+` and `Skills+` Off/On lines. They are read once, when the surface
    registers, from the package's own store; `Worktrees+` Off leaves out `/warp`, its
@@ -499,15 +506,16 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     It rides `systemPromptOptions.appendSystemPrompt` like invariant 14: appended,
     idempotent by heading, never a returned `systemPrompt`, suppressed by
     `ODD_WORKTREE_PROMPT=0`. It is added only when the session already holds the
-    native `codegraph` tool or `mcp__codegraph__codegraph_explore` (in a child, the
+    `mcp__codegraph__codegraph_explore`, the only CodeGraph tool (in a child, the
     requested-tools list counts). The text is chosen by role: a primary session gets
     `orchestrator.md`; a child's agent name, read from its own argv
     (`gentle-pi-subagent-<agent>-<random>/`), picks `explore`, `verify`, `worker`,
     `fix` or `judge` (both judges share one); any other child, or a name that cannot
     be read, gets `generic.md`; a `review-*` agent gets nothing. A missing or
     heading-less file falls back to `generic.md`, and a missing generic means no
-    section. Only the orchestrator and explore texts name the native operations; the
-    other roles name the MCP tool in full, and only the orchestrator text also points
+    section. Every text names the MCP tool in full and none names a native tool or an operation, says
+    what it is for, how to query it (names, not sentences) and that the source it returns is already
+    read, and none calls the other tools "still available"; only the orchestrator text also points
     that tool at another checkout through `projectPath` (a sibling worktree or another
     git project) before it delegates an explorer there; no text mentions `init`, `sync` or an
     index fallback, because no agent prepares the index: the package does
@@ -515,15 +523,18 @@ invariant 32). The one name it keeps from before is its store directory, spelled
 
 19. **CodeGraph runs only with its CLI, in the background, and writes one config
     entry.** `lib/codegraph-session.js` is the single wiring point (the extension
-    calls `registerCodegraph(pi)` once) and registers nothing when the `codegraph`
-    CLI is not installed; the probe runs once per process, so installing it needs a
-    restart. With the CLI: (a) a primary session ensures, once per process,
+    calls `registerCodegraph(pi)` once, with the module Off too) and registers nothing
+    but the `tools.json` check when the `codegraph` CLI is not installed or `Codegraph+`
+    is Off; the probe runs once per process, so installing it needs a restart. With the CLI: (a) a primary session ensures, once per process,
     `mcpServers.codegraph` of `<agent dir>/mcp.json` (`command: "codegraph"`,
     `args: ["serve", "--mcp"]`, `toolExposure.codegraph_explore: "direct"`) — it adds
     the entry or fixes only the fields that differ, keeps every other server and
     field, rewrites only when something changed, atomically and with the file's
     permission bits, and leaves an invalid file untouched. It is the only writer of
-    the user's configuration, and `tools/` never touches a real agent directory.
+    the user's MCP configuration; the only writer of the agents' `tools.json` is
+    `lib/codegraph-agent-tools.js`, which adds or removes the one name `mcp__codegraph` in the four
+    CodeGraph agents through the same atomic writer. `tools/` never touches a real agent
+    directory or config home: the shared fixture points both at scratch directories.
     (b) Session start (not `/reload`, not a subagent child, except a child in its own
     linked worktree) creates or syncs the session's index and warms its daemon; a
     linked worktree without an index is seeded from the main checkout's and never

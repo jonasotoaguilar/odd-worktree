@@ -329,7 +329,7 @@ test('the work a synchronous handler starts still runs after it has answered the
 // session's tools come from `before_agent_start` (the only source), the checkouts from one cached fake
 // git toplevel, and the texts are the approved ones, written out here.
 
-const NATIVE_REMINDER = 'Follow the CodeGraph rule: run `codegraph` `query` or `explore` first.';
+const NATIVE_REMINDER = 'Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first.';
 const MCP_REMINDER = 'Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first.';
 const anotherReminder = (root) => `This call went to ${root}, another checkout. Follow the CodeGraph rule: call \`mcp__codegraph__codegraph_explore\` with \`projectPath\` set to ${root} first.`;
 

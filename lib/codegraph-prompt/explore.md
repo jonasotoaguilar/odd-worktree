@@ -1,11 +1,5 @@
 ## CodeGraph
 
-Run a `codegraph` `query` for symbols or `explore` for source plus call paths before you search or read
-code — `fd`, `find`, `rg`, `grep`, `read` or `cat`. Start with `explore`: one call returns the source of
-the relevant symbols and the call paths between them, so it answers where a behaviour lives, who calls it,
-what it calls and what an error passes through, in place of the chain of greps and reads that would. Use
-`query` when you only need to know whether and where a symbol is defined. Follow the call paths it returns
-instead of grepping for callers, and run `explore` again on a symbol it surfaced when the next layer is
-what the question needs, then stop. Read what it points at before you report: the answer says where code
-lives, not what it does. The other tools stay available after the first call, for exact strings and what
-the graph does not index.
+`mcp__codegraph__codegraph_explore` is your first tool, not a fallback: your job is mapping code, and the index answers it in one call. Pass a question or the names you know — symbols, files, the code's own words — and it returns the verbatim, line-numbered source of the relevant code, the call paths between those symbols, what depends on them and the tests that cover them. Call it before you search or read code — `fd`, `find`, `rg`, `grep`, `read` or `cat` — to find where something lives or how it works, who calls it, what it calls, what a change reaches, what an error passes through, or to read a file or symbol you can name: put its name or path in the query.
+
+Names beat sentences: identifiers, file names and the domain's own nouns, without filler. If the answer misses, call again with a name it surfaced, and again on a symbol it surfaced when the next layer is what the question needs, then stop. The source it returns is already read: cite `path:line` from it and do not open or grep those files again. Use `read`, `grep` or `find` for an exact string, for what it does not index (config, docs, prose) or for a file it flags as changed on disk.

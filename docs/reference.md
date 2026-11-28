@@ -2045,9 +2045,19 @@ opens on the host's own card (`default`) until a choice is made.
 
 ## The module switches
 
+<<<<<<< HEAD
 `/gentle:customize` gains a `Tools` page when the required host (`gentle-pi`) is present, with three Off/On lines:
 `Codegraph+` and `Worktrees+` are On by default and `Skills+` is OFF by default. Everything not named
 here (the issues surfaces, `/odd`, `/files`, `/identity`, every card) is transversal and has no switch.
+||||||| parent of 2196bda (feat(codegraph-prompt): one MCP tool, with its use cases and how to query it)
+`/gentle:customize` gains a `Tools` page when `gentle-shell-bridge` is installed, with two Off/On lines.
+Both are On by default, and everything not named here (the issues surfaces, `/odd`, `/files`,
+`/identity`, every card, the skill-read guard) is transversal and has no switch.
+=======
+`/gentle:customize` gains a `Tools` page when `gentle-shell-bridge` is installed, with two Off/On lines.
+Both are Off by default, and everything not named here (the issues surfaces, `/odd`, `/files`,
+`/identity`, every card, the skill-read guard) is transversal and has no switch.
+>>>>>>> 2196bda (feat(codegraph-prompt): one MCP tool, with its use cases and how to query it)
 
 The page sits right after the host's `Sections` page and before `Keymaps`: the provider asks for that
 position with `categoryPlacement: { after: "Sections" }`, because the shell API derives its page list from
@@ -2064,8 +2074,23 @@ The choice is one document in the shell API's own store (`odd-worktree` → `mod
 extension registers. A change is saved at once and says so in one line — `Codegraph+ Off · run /reload
 and start a new session to apply` — because a reload alone is not enough: the session in progress already
 carries the prompt text and the registered guards. Choosing the value a line already has changes nothing
+<<<<<<< HEAD
 and says nothing. A missing, malformed or unreadable document keeps `Codegraph+` and `Worktrees+` On and
 leaves `Skills+` Off: that switch is the one that is opt-in, so unset and OFF are the same answer.
+||||||| parent of 2196bda (feat(codegraph-prompt): one MCP tool, with its use cases and how to query it)
+and says nothing. A missing, malformed or unreadable document keeps both On.
+=======
+and says nothing. A missing, malformed or unreadable document reads both Off, and a value counts as On only
+when it is exactly `true`.
+
+**`Codegraph+` needs the CLI.** Choosing On while no `codegraph` file is on `PATH` (a local walk, never a
+child process, asked at that moment) saves nothing and says one line instead —
+`Codegraph+ needs the codegraph CLI on PATH · install it first`. Choosing On with the CLI there saves the
+value, says the restart line, and wires what the next `/reload` needs: the `codegraph` server in
+`<agent dir>/mcp.json` and the CodeGraph agents in `<config home>/tools.json`
+([the agents' `tools.json`](#the-agents-toolsjson)). Choosing Off takes the agents out of `tools.json` and
+leaves the user's MCP entry alone. `Worktrees+` needs nothing and wires nothing.
+>>>>>>> 2196bda (feat(codegraph-prompt): one MCP tool, with its use cases and how to query it)
 
 ## The OpenCode Go usage source and the peak rows above the editor
 
@@ -2329,14 +2354,20 @@ short hint; it can never land inside or in place of another extension's text.
 
 ## The `## CodeGraph` block in the system prompt
 
-A session that already holds a CodeGraph tool (the native `codegraph` tool or
-`mcp__codegraph__codegraph_explore`) gets a short section on how to use it: call
-the graph before searching or reading code, treat its answer as a map and not as
-proof, and keep the other tools for what it does not index. The orchestrator's text also
-names one literal call (`codegraph` with `operation: "explore"`) and one exemption (an exact
-string or a file path the user gave), and points its look at the ODD's own worktree
-through `projectPath` when the session runs elsewhere; the explorer's text gives its
-second look a stop. Each role gets its
+A session that already holds `mcp__codegraph__codegraph_explore` — the only CodeGraph tool —
+gets a short section on what it is for and how to use it. Every role's text says the same four
+things: call it before searching or reading code; it returns the verbatim, line-numbered source,
+the call paths and the tests that cover it, so that source is already read and is not opened or
+grepped again; query it with names (identifiers, file names, the domain's own nouns) rather than a
+sentence, and call again with a name it surfaced when the first answer missed; and use `read`,
+`grep` or `find` only for an exact string, for what the index does not cover (config, docs) or for a
+file the answer flags as changed on disk. No text calls the other tools "still available", which a
+model reads as permission to skip it. The orchestrator's text names the cases a model can match —
+find where something lives or how it works, change or reuse something in code it has not read, size
+or hand off work, read a file or symbol it can name — puts the call before a delegated lookup,
+keeps one exemption (an exact string or a file path the user gave) and points its look at the ODD's
+own worktree through `projectPath` when the session runs elsewhere; the explorer's text calls the
+tool its first tool, not a fallback, and gives its second look a stop. Each role gets its
 own text, read from `lib/codegraph-prompt/<role>.md`: the primary session the
 orchestrator's, a gentle-shell child (explore, verify, worker, fix, judges) its
 own, chosen from the agent name in the child's own command line, and any other
@@ -2404,16 +2435,10 @@ child. It stays silent, using up no slot, for a checkout this session already ex
 its own `## CodeGraph` text already says the rule. It fires on the first search of the checkout the session is in, while CodeGraph is unused:
 
 ```text
-Follow the CodeGraph rule: run `codegraph` `query` or `explore` first.
-```
-
-for the primary session (the native wording only when it holds the native tool), and
-
-```text
 Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first.
 ```
 
-when it holds only the MCP tool. It fires once per checkout per request, on that checkout's first search while the
+for the primary session, whatever else it holds. It fires once per checkout per request, on that checkout's first search while the
 graph is unused: no later search of the same request repeats it, and using `codegraph` or the MCP tool
 after it changes nothing. Its first-search slot and its "already used" flag are per request: every new
 request re-arms guard 2 with both, while guard 1's slots and the explored checkouts stay per session,
@@ -2478,6 +2503,31 @@ tool to appear. A project-level MCP file is never edited.
 (`~/.codegraph/daemons`), a live one is reused before warming one through `codegraph serve
 --mcp`, and a registered MCP entry is never taken as proof that a daemon is reachable. The
 package never stops a daemon it did not start.
+
+## The agents' `tools.json`
+
+A subagent child reaches an MCP tool only through its server name, so Gentle Shell's per-agent overlay
+`<config home>/tools.json` (`GENTLE_PI_CONFIG_HOME`, else `GENTLE_SHELL_CONFIG_HOME`, else `~/.pi/gentle-ai`)
+has to carry `mcp__codegraph` — never the tool's own name, which Pi drops from a child's tool list without
+a word. While `Codegraph+` is On and the CLI is installed, the four CodeGraph agents (`gentle-ai-explore`,
+`gentle-ai-verify`, `gentle-ai-worker`, `jd-fix-agent`) carry it in their `add` list:
+
+```json
+{ "gentle-ai-explore": { "add": ["mcp__codegraph"] } }
+```
+
+It is the second file this package writes for CodeGraph, and it only adds or removes that one name. Every
+other agent, tool name, `remove` list and key stays, the file's indentation and permission bits stay, a file
+that is already right is not rewritten, a missing file is created while `Codegraph+` is On (and never
+created to take something out of), and a file that is not valid JSON is left untouched and reported. An
+agent whose own `remove` list names `mcp__codegraph` keeps that decision. The write is atomic.
+
+It is checked twice. The `Codegraph+` line does it the moment the value is kept (together with the MCP
+entry above). And once per process, in a primary session's first `session_start`, the file is made to follow
+what is true now: `Codegraph+` On **and** the CLI installed adds the entry, anything else takes it out,
+including the older spelling `mcp__codegraph__codegraph_explore`. That check runs with the module Off too,
+because Off is when it has something to take out. It says one line only when it changed something or could
+not read the file, and a reload is needed for the agents to see the change.
 
 ## The CodeGraph card
 

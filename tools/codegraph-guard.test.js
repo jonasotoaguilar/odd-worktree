@@ -11,7 +11,6 @@ const { createCodegraphGuard } = require('../lib/codegraph-guard.js');
 // The approved texts of S1 and S2, written out so a reworded reminder fails here. S3 took the trailing
 // ", if it applies" off both sentences.
 const ANOTHER = (root) => `This call went to ${root}, another checkout. Follow the CodeGraph rule: call \`mcp__codegraph__codegraph_explore\` with \`projectPath\` set to ${root} first.`;
-const NATIVE = 'Follow the CodeGraph rule: run `codegraph` `query` or `explore` first.';
 const MCP = 'Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first.';
 
 const ROOTS = {
@@ -66,21 +65,21 @@ test('a call to another checkout is told to explore it with projectPath, once pe
   assert.equal(await guard.onToolResult(grep('/third'), ctx), ANOTHER('/third'), 'a second checkout gets its own reminder');
 });
 
-test('the primary session is pointed at the native operations when it holds the native tool', async () => {
+test('the primary session is pointed at the MCP call, whatever else it holds', async () => {
   const { guard, ctx } = setup();
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE);
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP);
 });
 
-test('a session holding only the MCP tool is pointed at the MCP call instead', async () => {
+test('a session holding only the MCP tool is pointed at the same MCP call', async () => {
   const { guard, ctx } = setup({ tools: ['grep', 'mcp__codegraph__codegraph_explore'] });
   assert.equal(await guard.onToolResult(grep(), ctx), MCP);
 });
 
 test('neither sentence ends in ", if it applies" any more (S3)', async () => {
-  const native = setup();
+  const both = setup();
   const mcp = setup({ tools: ['grep', 'mcp__codegraph__codegraph_explore'] });
-  const texts = [await native.guard.onToolResult(grep(), native.ctx), await mcp.guard.onToolResult(grep(), mcp.ctx)];
-  assert.deepEqual(texts, [NATIVE, MCP]);
+  const texts = [await both.guard.onToolResult(grep(), both.ctx), await mcp.guard.onToolResult(grep(), mcp.ctx)];
+  assert.deepEqual(texts, [MCP, MCP]);
   for (const text of texts) {
     assert.ok(!text.includes('if it applies'), text);
     assert.ok(text.endsWith(' first.'), text);
@@ -146,23 +145,23 @@ test('a read of a config or a doc is not a code read', async () => {
   for (const file of ['src/README.md', 'package.json', 'a.yml', 'a.yaml', 'a.toml', 'notes.txt']) {
     assert.equal(await guard.onToolResult(read(file), ctx), undefined, file);
   }
-  assert.equal(await guard.onToolResult(read('src/a.ts'), ctx), NATIVE);
+  assert.equal(await guard.onToolResult(read('src/a.ts'), ctx), MCP);
 });
 
 test('a path with no git checkout triggers nothing, and uses up no slot', async () => {
   const { guard, ctx } = setup();
   assert.equal(await guard.onToolResult(read('/tmp/a.ts'), ctx), undefined);
-  assert.equal(await guard.onToolResult(read('src/a.ts'), ctx), NATIVE, 'the own checkout was still unreminded');
+  assert.equal(await guard.onToolResult(read('src/a.ts'), ctx), MCP, 'the own checkout was still unreminded');
 });
 
 // ---- guard 2's key is the session's own checkout (S7) ----
 
 test('guard 2 reminds on the first search of a checkout, and a warp to another checkout re-arms it', async () => {
   const { guard, ctx } = setup();
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE);
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP);
   assert.equal(await guard.onToolResult(grep(), ctx), undefined);
   const warped = { cwd: '/third' };
-  assert.equal(await guard.onToolResult(read('/third/a.ts'), warped), NATIVE, 'the new checkout has not been reminded');
+  assert.equal(await guard.onToolResult(read('/third/a.ts'), warped), MCP, 'the new checkout has not been reminded');
 });
 
 // ---- guard 2 reminds once per checkout per request (S3, S7) ----
@@ -185,18 +184,18 @@ test('one reminder per request, whatever the number of searches after it (S3, S7
   for (const count of [8, 9, 17]) texts.push(...await row(guard, ctx, count));
   const reminded = texts.map((text, index) => (text === undefined ? undefined : index + 1)).filter((at) => at !== undefined);
   assert.deepEqual(reminded, [1], 'only the first search of the checkout is reminded, never the 8th, 9th or 17th after it');
-  assert.deepEqual(texts.filter((text) => text !== undefined), [NATIVE]);
+  assert.deepEqual(texts.filter((text) => text !== undefined), [MCP]);
 });
 
 test('a CodeGraph use neither earns a reminder nor re-arms the one already given (S3)', async () => {
   const forUse = setup();
-  assert.equal(await forUse.guard.onToolResult(grep(), forUse.ctx), NATIVE, 'the first reminder');
+  assert.equal(await forUse.guard.onToolResult(grep(), forUse.ctx), MCP, 'the first reminder');
   assert.deepEqual(await row(forUse.guard, forUse.ctx, 4), silent(4));
   assert.equal(await forUse.guard.onToolResult(use('codegraph'), forUse.ctx), undefined, 'a use is no search call');
   assert.deepEqual(await row(forUse.guard, forUse.ctx, 9), silent(9), 'the checkout already had its one reminder');
 
   const forExplore = setup();
-  assert.equal(await forExplore.guard.onToolResult(grep(), forExplore.ctx), NATIVE);
+  assert.equal(await forExplore.guard.onToolResult(grep(), forExplore.ctx), MCP);
   await forExplore.guard.onToolResult(explore('/repo'), forExplore.ctx);
   assert.deepEqual(await row(forExplore.guard, forExplore.ctx, 17), silent(17), 'the MCP explore call re-arms nothing either');
 });
@@ -204,9 +203,9 @@ test('a CodeGraph use neither earns a reminder nor re-arms the one already given
 test('each checkout hears its own one reminder in a request (S3)', async () => {
   const { guard, ctx } = setup();
   const warped = { cwd: '/third' };
-  assert.equal(await guard.onToolResult(read('src/a.ts'), ctx), NATIVE, 'the /repo checkout reminds on its first search');
+  assert.equal(await guard.onToolResult(read('src/a.ts'), ctx), MCP, 'the /repo checkout reminds on its first search');
   assert.deepEqual(await row(guard, ctx, 17), silent(17), 'and never again in this request');
-  assert.equal(await guard.onToolResult(read('/third/a.ts'), warped), NATIVE, 'a warp to /third has its own reminder');
+  assert.equal(await guard.onToolResult(read('/third/a.ts'), warped), MCP, 'a warp to /third has its own reminder');
   assert.deepEqual(await row(guard, warped, 17), silent(17), 'once, and then never again either');
   assert.deepEqual(await row(guard, ctx, 17), silent(17), 'and /repo stays silent');
 });
@@ -218,10 +217,10 @@ test('each checkout hears its own one reminder in a request (S3)', async () => {
 
 test('a new request reminds its first search again (S7)', async () => {
   const { guard, ctx } = setup();
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'the first search of the request reminds');
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP, 'the first search of the request reminds');
   assert.deepEqual(await row(guard, ctx, 17), silent(17), 'and no later search of it does');
   guard.onNewRequest();
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'the next request is reminded on its first search');
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP, 'the next request is reminded on its first search');
   assert.deepEqual(await row(guard, ctx, 17), silent(17), 'it hears it once too');
 });
 
@@ -230,7 +229,7 @@ test('a CodeGraph use in the previous request does not silence the first search 
   await guard.onToolResult(use('codegraph'), ctx);
   assert.equal(await guard.onToolResult(grep(), ctx), undefined, 'the graph was already used in this request');
   guard.onNewRequest();
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'a new request starts with the graph unused');
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP, 'a new request starts with the graph unused');
 });
 
 test('a new request keeps guard 1 once per other checkout across requests (S7)', async () => {
@@ -271,7 +270,7 @@ test('a session that used CodeGraph before its first search is not reminded on t
   await guard.onToolResult(use('codegraph'), ctx);
   assert.equal(await guard.onToolResult(grep(), ctx), undefined, 'the graph was already used');
   guard.onCompacted();
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'the first-search reminder was never consumed');
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP, 'the first-search reminder was never consumed');
 });
 
 test('a call that failed earns no reminder and spends no slot', async () => {
@@ -279,33 +278,33 @@ test('a call that failed earns no reminder and spends no slot', async () => {
   const failed = (event) => ({ ...event, isError: true });
   assert.equal(await guard.onToolResult(failed(grep()), ctx), undefined, 'a failed grep gave the model nothing to read');
   assert.equal(await guard.onToolResult(failed(read('/other/a.ts')), ctx), undefined, 'nor did a failed read of another checkout');
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'the slot it would have used is still free');
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP, 'the slot it would have used is still free');
   assert.equal(await guard.onToolResult(read('/other/a.ts'), ctx), ANOTHER('/other'));
 });
 
 test('a failed CodeGraph call is no use of it either', async () => {
   const { guard, ctx } = setup();
   await guard.onToolResult({ toolName: 'codegraph', input: { operation: 'query' }, isError: true, content: [] }, ctx);
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE, 'a call that failed proved nothing');
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP, 'a call that failed proved nothing');
 });
 
 // ---- reset (S7) ----
 
 test('a compaction forgets both guards', async () => {
   const { guard, ctx } = setup();
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE);
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP);
   assert.equal(await guard.onToolResult(read('/other/a.ts'), ctx), ANOTHER('/other'));
   guard.onCompacted();
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE);
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP);
   assert.equal(await guard.onToolResult(read('/other/a.ts'), ctx), ANOTHER('/other'));
 });
 
 test('a new session in the same process forgets both guards too', async () => {
   const { guard, ctx } = setup();
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE);
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP);
   assert.equal(await guard.onToolResult(read('/other/a.ts'), ctx), ANOTHER('/other'));
   guard.onNewSession();
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE);
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP);
   assert.equal(await guard.onToolResult(read('/other/a.ts'), ctx), ANOTHER('/other'));
 });
 
@@ -317,7 +316,7 @@ test('a compaction forgets what the session already explored and used', async ()
   assert.equal(await guard.onToolResult(grep(), ctx), undefined);
   guard.onCompacted();
   assert.equal(await guard.onToolResult(read('/other/a.ts'), ctx), ANOTHER('/other'));
-  assert.equal(await guard.onToolResult(grep(), ctx), NATIVE);
+  assert.equal(await guard.onToolResult(grep(), ctx), MCP);
 });
 
 // ---- robustness (S8) ----

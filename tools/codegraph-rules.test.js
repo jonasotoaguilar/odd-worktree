@@ -120,6 +120,7 @@ describe('each role scopes the index to its own job', () => {
   test('worker uses the index for what the edit must keep working, and never widens its scope', () => {
     const text = prose('worker');
     assert.match(text, /what the edit has to keep working/, text);
+    assert.match(text, /what depends on the files in your allowed edit surfaces/, text);
     assert.match(text, /find the implementation you should reuse instead of writing a second one/, text);
     assert.match(text, /query the old name to find what still points at it/, text);
     

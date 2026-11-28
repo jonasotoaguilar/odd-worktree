@@ -56,7 +56,7 @@ describe('the seven texts on disk', () => {
       const text = prose(variant);
       assert.match(text, /Name the symbols or files when you know them; a plain question works when you do not/, variant);
       assert.match(text, /already read: do not read them again/, `${variant} says the blocks need no second read`);
-      assert.match(text, /Read the files it only names, or flags as changed on disk/, `${variant} reads the files the answer only names, and the ones it flags`);
+      assert.match(text, /Read the files it only names, and any file whose code it leaves out/, `${variant} reads the files the answer only names, and any it omits`);
     }
   });
 
@@ -146,10 +146,9 @@ describe('each role scopes the index to its own job', () => {
     assert.match(text, /never widens the patch: stay within the authorized batch and its allowed edit surfaces/, text);
   });
 
-  test('judges sweep with the index in initial discovery and leave it aside in scoped re-judgment', () => {
+  test('judges sweep the initial review tree and leave the tool aside in scoped re-judgment', () => {
     const text = prose('judge');
-    assert.match(text, /Call it during initial discovery/, text);
-    assert.match(text, /when this checkout is the supplied `initial_review_tree`/, text);
+    assert.match(text, /Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` in the supplied `initial_review_tree`/, text);
     assert.match(text, /The answer is a map, never proof/, text);
     assert.match(text, /confirm every finding in the supplied source at the exact location you cite/, text);
     assert.match(text, /report a relationship you have not read as unverified/, text);

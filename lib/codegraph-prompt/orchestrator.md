@@ -10,4 +10,4 @@ Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` when:
 
 Name the symbols or files when you know them; a plain question works when you do not. Refine a miss with a name the answer surfaced. Read an exact file path, or search an exact string, directly.
 
-The blocks it shows are already read: do not read them again. Read the files it only names, or flags as changed on disk; an `edit` replaces exact text, so the bytes it replaces come from what you have read. A verdict comes from the source and the tests. Set `projectPath` when the code you need is in another worktree or another git project, and never present one workspace's answer as another's.
+The blocks it shows are already read: do not read them again. Read the files it only names, and any file whose code it leaves out; an `edit` replaces exact text, so the bytes it replaces come from what you have read. A verdict comes from the source and the tests. Set `projectPath` when the code you need is in another worktree or another git project, and never present one workspace's answer as another's.

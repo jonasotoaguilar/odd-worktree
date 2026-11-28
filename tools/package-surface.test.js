@@ -147,8 +147,8 @@ describe('registration', () => {
 
   // native-bridge T2/T5 (S2/S4): the shell API is NATIVE — this package's own `lib/shell-api/`,
   // imported by the entry itself — and it is reached ONLY that way: never by the package's name,
-  // so no host has to install `gentle-shell-bridge` for this extension to have the API.
-  test('the bridge is imported from the vendored copy only, and the surface still reaches it through its published object', async () => {
+  // so no host has to install anything for this extension to have the API.
+  test('the shell API is imported from this package only, and the surface still reaches it through its published object', async () => {
     const source = stubbedSource();
     const raw = fs.readFileSync(path.join(ROOT, 'extensions/odd-worktree-tools.ts'), 'utf8');
     assert.ok(raw.includes(BRIDGE_IMPORT), 'the entry imports this package\'s own shell API');

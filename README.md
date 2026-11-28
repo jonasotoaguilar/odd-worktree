@@ -91,8 +91,9 @@ Those pages live in the repository, not in the published tarball.
 The surfaces are still DRAWN by `gentle-pi`, the package registering `/gentle:customize`: without it
 the API arms nothing, and this package says so once, naming `gentle-pi` and the rows, sections and
 designs that are off. If another plugin published an incompatible object on the slot first, the
-package's own surfaces stay unregistered and it says that once too, naming the slot. Nothing else of
-the package is affected in either case, and neither message is silent.
+package registers no surface at all — its commands and tools included — and it says that once too,
+naming the slot and the schema and version it actually holds. Neither message is silent, and in the
+first case everything but the shell surfaces keeps working.
 
 ## Core Workflow
 

@@ -99,13 +99,59 @@ test('only this package: six commands, the slot published, and a third party ext
   assert.equal(answer.disposer, 'function', 'a registration answers with its disposer');
 });
 
-test('an incompatible object on the slot leaves this package\'s surface unregistered', { skip: !pi }, (t) => {
+test('a first-loaded plugin sees the API, adds a section and removes it again', { skip: !pi }, (t) => {
+  const { report } = rpc(t, `
+    import { writeFileSync } from "node:fs";
+
+    export default function (pi) {
+      pi.registerCommand("gentle:customize", { handler() {} });
+      let ready = 0;
+      pi.events.on("gentle-shell-bridge:ready", () => { ready += 1; });
+      pi.on("session_start", () => {
+        const api = globalThis[${slot}];
+        const ids = () =>
+          globalThis[Symbol.for("gentle-shell-bridge.providers")].sections
+            .map((entry) => entry.section.id)
+            .sort();
+        const own = ids();
+        const dispose = api.registerSection({
+          id: "verification.section",
+          title: "Verification",
+          lines: () => ["probe"],
+        });
+        const added = ids();
+        dispose();
+        dispose();
+        writeFileSync(process.env.PROBE_REPORT, JSON.stringify({
+          own, added, after: ids(), ready,
+          identity: [api.schema, api.version, api.VERSION],
+        }));
+      });
+    }`, null, [get]);
+  const saw = report();
+  const own = ['odd-worktree.issues', 'odd-worktree.odd-rail'];
+  assert.deepEqual(saw.own, own, 'this package\'s two sections are there before the probe registers');
+  assert.deepEqual(saw.added, [...own, 'verification.section'], 'a third party adds its own');
+  assert.deepEqual(saw.after, own, 'and its disposer removes exactly that one, twice safely');
+  assert.equal(saw.ready, 1, 'the ready announcement reaches a plugin loaded first');
+  assert.deepEqual(saw.identity, ['gentle-shell-bridge/api', 1, '0.16.2']);
+});
+
+test('an incompatible object on the slot leaves this package\'s surface unregistered and says so once', { skip: !pi }, (t) => {
   const { records } = rpc(t, `
     globalThis[${slot}] = { schema: "other-bridge/api", version: 2 };
-    export default function () {}
+    export default function (pi) {
+      pi.registerCommand("gentle:customize", { handler() {} });
+    }
   `, null, [get]);
   const names = records.find((x) => x.id === '1').data.commands.map((c) => c.name);
   for (const name of ['warp', 'odd', 'files', 'identity', 'issues', 'prs']) {
     assert.equal(names.includes(name), false, `/${name} is not registered`);
   }
+  const warnings = records.filter((x) => x.method === 'notify' && x.notifyType === 'warning');
+  const foreign = warnings.filter((x) => x.message.startsWith('odd-worktree:'));
+  assert.equal(foreign.length, 1, 'one notice, in this package\'s own words');
+  assert.match(foreign[0].message, /other-bridge\/api/, 'it names the schema the slot really holds');
+  assert.match(foreign[0].message, /"2"/, 'and its version');
+  assert.match(foreign[0].message, /sidebar sections/, 'and what is off');
 });

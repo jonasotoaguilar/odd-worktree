@@ -53,6 +53,8 @@ Verify (independent `gentle-ai-verify`, Risk item 5): S1-S3 pass; S4 flagged the
 - **T6** (S4, L3) — docs rewritten from odd-worktree's perspective: `docs/shell-api/*`, README, reference, invariants
   (1/3/8/32), mental model, code map, AGENTS.md; CI/`package.json` script `test:shell-api`.
 
+Verify 2 (independent `gentle-ai-verify` on the rework): S1-S3 and L2/L3-flatten met; corrections applied — the foreign-slot notice now names the schema and version the slot actually holds, the docs no longer claim "nothing else is affected" for that case nor "once per process" for an absence episode, the shell-api README's store call, the stale report wording in contract.md, and the remaining "vendored" comments in tests. Two durable real-host probes added to `tools/shell-api-rpc.test.js` (third-party section add/dispose, foreign-slot notice). Native review of the rework refused: `lens_context_budget_exceeded` (the candidate, 54k lines of moved modules plus the rework, exceeds the reviewer budget) — it must be reviewed as a chained sequence of smaller commits.
+
 ## Log
 
 - **L1** — "ya no quiero depender de /home/jona/dev/projects/gentle-shell-bridge para este plugin asi que lo que

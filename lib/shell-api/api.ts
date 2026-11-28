@@ -262,15 +262,26 @@ function readyState(): ReadyState {
   );
 }
 
+/** The schema and version an incompatible object actually carries, for the notice. */
+function foreignShape(): { schema: string; version: string } {
+  const existing = apiHost()[BRIDGE_API_KEY];
+  const read = (value: unknown): string =>
+    typeof value === "string" || typeof value === "number" ? String(value) : "none";
+  const object = typeof existing === "object" && existing !== null ? (existing as Record<string, unknown>) : {};
+  return { schema: read(object.schema), version: read(object.version) };
+}
+
 /** One clear notice per process, no matter how many copies ask. */
 function warnSkewOnce(): void {
   const state = warnedState();
   if (state.skew) return;
   state.skew = true;
+  const found = foreignShape();
   recordNotice(
-    `odd-worktree: another plugin already published an incompatible \`${API_SCHEMA}\` object on ` +
-      `${String(BRIDGE_API_KEY)}, so odd-worktree's sidebar sections, Customize rows and card ` +
-      "designs are off. The slot is left exactly as it is and treated as absent; this notice is " +
+    `odd-worktree: another plugin already published an incompatible object on ` +
+      `${String(BRIDGE_API_KEY)} — schema "${found.schema}", version "${found.version}" — so ` +
+      "odd-worktree's sidebar sections, the Customize rows, the card designs and its other " +
+      "surfaces stay off. The slot is left exactly as it is and treated as absent; this notice is " +
       "recorded once per process.",
     "warning",
   );

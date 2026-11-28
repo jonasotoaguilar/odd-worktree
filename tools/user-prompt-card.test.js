@@ -831,7 +831,7 @@ test('S7: factory load does not arm a host import before session_start', async (
 });
 
 test('S7 (T2): with no bridge on the slot nothing is registered, and a silent publication never arms an install', async () => {
-  // The gate observer is gone (native-bridge T2): the vendored bridge publishes at module load, the
+  // The gate observer is gone (native-bridge T2): the shell API publishes at module load, the
   // factory reads the slot ONCE, and a load that found it empty keeps no observer to be woken by.
   // What S7 still guarantees is the other half: a load that DID find the bridge owns the shutdown
   // that unwraps the card, which is what the first test above proves.

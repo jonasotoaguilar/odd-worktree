@@ -39,7 +39,7 @@ own rows, never the menu.
 | Transcript transforms | A pass over the rows gentle-shell produced for a finished message | `registerTransform(transform)` |
 | Tool card designs | A design for one tool name, behind the package's single `pi.registerToolRenderer` resolver, so two plugins never stack wrappers on one tool | `registerToolDesign(design)` |
 | Message card designs | A design for one Pi custom message type, with the host's own rows in and your rows out | `registerMessageDesign(design)` |
-| Store | A namespaced JSON document per plugin id under `<config home>/gentle-shell-bridge`, kept apart from the host's files | `createStore({ pluginId })` |
+| Store | A namespaced JSON document per plugin id under `<config home>/gentle-shell-bridge`, kept apart from the host's files | `createStore(pluginId)` |
 | Repaint | One differential frame after a write, instead of waiting for the next one | `requestRepaint()` (§9) |
 
 ## Details

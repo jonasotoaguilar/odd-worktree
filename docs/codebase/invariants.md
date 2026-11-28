@@ -35,8 +35,8 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
 3. **The shipped surface is exactly six commands, two tools, TWO sidebar
    sections and two tool designs.** `/warp`, `/odd`,
    `/files`, `/identity`, `/issues`, `/prs` — six, with no diagnostics command among
-   them: the two things the API can tell a user are the notices of invariant 32, and
-   nothing else; `worktree_create`, `worktree_list`; the one fourth kind of
+   them: what the API reports to a user are the notices of invariant 32 and the ones
+   its own surfaces raise, and nothing else; `worktree_create`, `worktree_list`; the one fourth kind of
    surface, a sidebar section — and there are TWO of them, each neither a command nor a
    tool and each registering no name the host or the agent can call: the issues rail
    (`lib/issues-section.js`, id `odd-worktree.issues`, headed `GITHUB`, `rowLabel`
@@ -115,10 +115,10 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
    exist, the slot is published at module load, and the package is reached by
    RELATIVE import, never by the package name and never through a runtime
    dependency. An INCOMPATIBLE object on the slot — another plugin published
-   first — leaves this package's surface unregistered: no section, no
-   design, no row, no second attempt. The package says so ONCE in its own words,
-   naming the slot and the surfaces it turned off; nothing else of the package is
-   affected. What the host still supplies is
+   first — leaves this package's whole surface unregistered: no command, no
+   tool, no section, no design, no row, no second attempt. The package says so ONCE
+   in its own words, naming the slot, the schema and version it actually holds, and
+   the surfaces it turned off. What the host still supplies is
    `gentle-pi`, the package registering `/gentle:customize`: rows and the rail arm only
    when the context has a UI AND that host is present, and without it nothing
    arms and the package says so once, naming `gentle-pi` and the surfaces that are
@@ -1006,8 +1006,9 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     anything here looks for its object. There is NO external dependency and NO import
     by package name anywhere: the root manifest names no `dependencies` at all. An
     INCOMPATIBLE object already on the slot (another plugin published first) leaves
-    this package's surface UNREGISTERED — no section, no design, no row, no second
-    attempt — and the package says so ONCE in its own words, naming the slot and the
+    this package's whole surface UNREGISTERED — no command, no tool, no section, no
+    design, no row, no second attempt — and the package says so ONCE in its own
+    words, naming the slot, the schema and version it actually holds, and the
     surfaces that are off. Its surfaces still arm only for a host that has
     `gentle-pi`, the package registering `/gentle:customize`: without it nothing arms
     and the package says so once, naming `gentle-pi` and what is off. Neither notice
@@ -1017,4 +1018,6 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     and 24.x, while its core never runs in the plain-JS suite at all (the fixture
     stubs the one import). A standalone `gentle-shell-bridge` installed beside this
     package is simply unnecessary: both copies share every piece of global state
-    ("first wins"), so its presence changes nothing.
+    ("first wins"), so this package's own surfaces are unaffected — and the older
+    package's extra command name is the one visible difference, which is why
+    uninstalling it is the recommendation and not a requirement.

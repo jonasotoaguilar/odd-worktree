@@ -69,7 +69,7 @@ interface RowProvider {
   resolves for its own files (default `~/.pi/gentle-ai`, `GENTLE_PI_CONFIG_HOME` override —
   `lib/gentle-shell-bundled.ts:231-239`), so a plugin can place per-user state without
   re-deriving the path.
-- `id` is the handle used by ordering, replacement and the diagnostics report. Two
+- `id` is the handle used by ordering, replacement and the API's own record. Two
   providers may share an `id` only by replacing each other; two providers with different
   `id`s but the same `category` + `setting` conflict (see §6).
 
@@ -208,7 +208,7 @@ A hidden row is still a row the provider returned: the bridge neither evaluates 
 `choice.setting` still counts towards the duplicate check of §6 and its `label` still has to pass
 the row-name rule of §4. A row hidden by a throw leaves no trace in the BRIDGE's channels either —
 `visible` is not wrapped the way a button `action` is, so a failure inside it reaches neither the
-notice buffer of §8 nor the `Last failures` block; what the host does with that throw is the host's
+notice buffer of §8 nor the API's failure record; what the host does with that throw is the host's
 business, as §7 records.
 
 The fail-closed sentence is the row contract's, and the only evaluator of it in this repository is the
@@ -371,7 +371,7 @@ effects below. Read this section as "how do I find out what happened".
 | Their absence, with the rest of the menu or rail intact | the registration was refused, the row or label was dropped, or the host built no slot for it — each has its own reason in §2, §4 and §11 |
 | The plugin's INTEGRATIONS row (below) | one row per plugin, `ready` or `degraded`; the only per-plugin signal the host draws |
 | `requestRepaint()`'s return | the repaint it requested, or `unavailable` with the reason |
-| A notice in the TUI | something the whole process has to know, once: this package's own two notices (invariant 32) and anything a plugin records with `ui.notify` |
+| A notice in the TUI | what the API buffered for the user — this package's own two notices (invariant 32), a refused registration's reason, a row action's or a card style's failure — plus anything a plugin calls `ui.notify` for itself, which the API neither buffers nor deduplicates |
 
 A menu that opened without your rows is one of three things: the API is armed but the host's menu was
 not captured, your row did not match the shape the host renders, or your provider threw. A section
@@ -432,7 +432,7 @@ is read by the plugin author, not by the user reading the footer.
 
 The INTEGRATIONS row is for the plugin author; the user is told about a failure through Pi's own UI,
 never through the terminal. The API writes nothing to stdout or stderr (`lib/shell-api/notices.ts:1-19`), and every
-message it produces out of band is recorded with `recordNotice(message, level = "warning")`
+message it records for the user goes through `recordNotice(message, level = "warning")`
 (`lib/shell-api/notices.ts:77-92`) and delivered as `ui.notify(message, level)` by `flushNotices`
 (`lib/shell-api/notices.ts:102-120`).
 
@@ -1831,8 +1831,8 @@ one. A sole SCOPED claim has no earlier shape, so its row adds its claim detail 
 coarse `selection` reads `native` — without arguments no scoped claim is a candidate. That coarse
 answer stays `native` even when a matching CALL resolves `not-covered`: the
 `selection` asks for the tool without arguments, and a resolve with a call's arguments asks for that
-call, so the two answers are computed separately. A `scope` conflict or a scope's failure prints like
-any other.
+call, so the two answers are computed separately. A `scope` conflict or a scope's failure is
+recorded like any other refusal, for the API's own record and the tests — nothing prints it.
 
 ### When the bridge is not first in the chain (S10)
 

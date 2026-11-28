@@ -1748,7 +1748,7 @@ test('S18 (T2): with no bridge and no events, NOTHING registers, nothing is said
 });
 
 // RE-SCOPED (was "with no bridge but events, the ready announcement is subscribed
-// once and registers nothing yet"). The hold is gone: the vendored bridge publishes its
+// once and registers nothing yet"). The hold is gone: the shell API publishes its
 // object at module load, the factory reads the slot ONCE, and a publication that lands
 // afterwards is not a wake-up path any more — the next load is.
 test('S2/S18 (T2): with no bridge but events, nothing is subscribed and nothing registers', async () => {

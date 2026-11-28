@@ -97,9 +97,8 @@ describe('Worktrees+', () => {
     assert.equal(off.commands.has('warp'), false);
     assert.equal(off.messageRenderers.has('worktree-warp'), false);
     assert.doesNotMatch(await promptOf(off, []), /## ODD worktrees/);
-    // the naming handler, the bash guard, the write guard, the skill-read bash guard and the
-    // whole-read rule go: every ``tool_call`` observation of the worktree half
-    assert.equal(toolCallHandlers(on) - toolCallHandlers(off), 5);
+    // Worktrees+ gates the two worktree guards and the two read rules.
+    assert.equal(toolCallHandlers(on) - toolCallHandlers(off), 4);
     // The CodeGraph wiring adds ONE `tool_call` observation of its own, and only where its CLI is
     // installed — so a host without it leaves zero, and neither answer is this half's.
     assert.ok(toolCallHandlers(off) <= 1, `at most the CodeGraph observation is left, got ${toolCallHandlers(off)}`);

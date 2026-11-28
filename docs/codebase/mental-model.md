@@ -154,7 +154,7 @@ for each is in [`invariants.md`](invariants.md).
 | [27](invariants.md) | A forced refresh happens only after a mutating `bash`, behind its cap. |
 | [28](invariants.md) | The `gh`-absent and non-repository states are settled, so nothing retries them. |
 | [29](invariants.md) | The user prompt card draws the host's class, gated by `Card activity`, and never touches its text. |
-| [30](invariants.md) | A session is named after the ODD it writes, and a name it cannot prove it wrote is never touched. |
+| [30](invariants.md) | ODD activity does not set the session name. |
 | [31](invariants.md) | The ODD panel folds by default, counts what it lists, and lines a document up under its group's name. |
 | [32](invariants.md) | The shell API is native: `lib/shell-api/` is this package's own code at the same slot and store, loaded first by the entry, with no external dependency, no import by package name and no copy rule. |
 

@@ -960,28 +960,9 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     one instance, the byte-for-byte native answers, the accent cells in both styles,
     the zone markers and the wrap-once/uninstall-by-reference claims.
 
-30. **A session is named after the ODD it writes, and a name it cannot prove it
-    wrote is never touched.** `lib/session-auto-name.js` derives the label from the
-    document's own name — `odd/tasks/prompt-card-fix.md` is `Prompt card fix`, with
-    `-`, `_` and the `/` of a nested feature read as word breaks, the first letter
-    capitalized and the rest left exactly as the document named it — on every
-    `write`/`edit` landing on an `odd/tasks/*.md` document, from the primary checkout
-    and from a worktree alike, and never on a `read` or on any other path. The prose
-    INSIDE the document is not a source: a heading is its author's sentence, not the
-    ODD's identity, and a document that does not exist yet names the session the same.
-    The branch is not part of the name, so two checkouts of one ODD carry one label.
-    Ownership is what keeps the guarantee: the plugin writes only an empty name or one
-    it can prove it produced — the label it just derived, the label of an ODD this
-    session already wrote (the durable `odd-worktree.odd-touch` record, which is why a
-    resume keeps working), or the two shapes earlier versions wrote (`<slug>` and
-    `<slug> @ <branch>`). Anything else was typed by a human and is untouchable,
-    including by the `gentle_odd_phase` re-apply, which invents nothing for a session
-    that never wrote an ODD.
-    `tools/session-auto-name.test.js` pins the label shape, the re-name on every write,
-    the ownership cases and the resume path; `tools/session-auto-name-wiring.test.js`
-    pins that the primary checkout names too, and that a write into a registered
-    worktree names from the principal checkout — the naming base is the DOCUMENT's own
-    checkout, never the one the call started in.
+30. **ODD activity does not set the session name.** Task writes and edits are
+    recorded for the ODD rail only; session naming belongs to the host's session
+    identity tool. `tools/session-name-ownership.test.js` pins this boundary.
 
 31. **The ODD panel folds by default, counts what it lists, and lines a document up
     under its group's name.** `lib/odd-view.js` keeps the OPENED checkouts in one

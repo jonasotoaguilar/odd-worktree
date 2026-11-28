@@ -17,8 +17,8 @@
 //   `involves:@me -author:@me` in one request), feeds a process cache and leaves
 //   every failure to the section's own read state; a row whose issue has a pull
 //   request wears that pull request's NUMBER behind the glyph the human asked
-//   for — `\ue726 #69` (S7/T5) — in the bridge's
-//   right-hand `meta` column — painted `muted` by the bridge itself, which is
+//   for — `\ue726 #69` (S7/T5) — in the shell API's
+//   right-hand `meta` column — painted `muted` by the shell API itself, which is
 //   the gray the user asked for — and one without a pull request carries no
 //   `meta`;
 // - a failed refresh over an on-screen list keeps every row and reports
@@ -53,7 +53,7 @@
 //   four arguments it always had; DEFAULT_ROW_LABEL is `github` (S4),
 // - the three states are rows (`loading…`, `no open issues`, ONE error row),
 //   never a throw;
-// - the extension reaches the rail ONLY through the bridge API's published object
+// - the extension reaches the rail ONLY through the shell API API's published object
 //   (read from its Symbol slot; the runtime itself is this package's own
 //   `lib/shell-api/`): a compatible object registers one section, an absent or
 //   incompatible one registers nothing and says nothing;
@@ -71,7 +71,7 @@
 //
 // Every child process is injected: `gh` goes through lib/gh-issues.js
 // `setGhRunner`, git through its `setGitRunner`, and the checkouts live under
-// os.tmpdir() and are removed in `after()`. The bridge slot is process-wide, so
+// os.tmpdir() and are removed in `after()`. The shell API slot is process-wide, so
 // it is always deleted again.
 
 const { test, after, afterEach, beforeEach } = require('node:test');
@@ -81,18 +81,18 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { LIB_DIR, loadExtension, stubbedSource, installDefaultBridge } = require('./fixtures/load-extension.js');
+const { LIB_DIR, loadExtension, stubbedSource, installDefaultShellApi } = require('./fixtures/load-extension.js');
 const { pathToFileURL } = require('node:url');
 const { createIssuesSection } = require('../lib/issues-section.js');
 
-const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+const SHELL_SLOT = Symbol.for('odd-worktree/shell-api/v1');
 // The old "one warning per process" slot. Nothing sets it any more (T2 removed the hint),
 // and the tests assert it stays untouched — a stale delete here would hide a regression.
 const WARNED_SLOT = Symbol.for('odd-worktree/issues-sidebar/install-warned');
 const IDENTITY = 'github.com/myfork/project';
 
 // The harness may ITSELF run inside an agent child (`GENTLE_PI_AGENTS_CHILD=1`),
-// which is exactly the signal the missing-bridge warning respects, so these tests
+// which is exactly the signal the missing-shell API warning respects, so these tests
 // own it: cleared for the file, restored once at the end.
 const savedChildEnv = process.env.GENTLE_PI_AGENTS_CHILD;
 delete process.env.GENTLE_PI_AGENTS_CHILD;
@@ -125,7 +125,7 @@ const realDateNow = Date.now;
 Date.now = () => realDateNow() + suiteClockSkewMs;
 
 afterEach(() => {
-  delete globalThis[BRIDGE_SLOT];
+  delete globalThis[SHELL_SLOT];
   delete globalThis[WARNED_SLOT];
   suiteClockSkewMs += 10 * 60 * 1000;
   if (ghIssues) {
@@ -314,7 +314,7 @@ test('S4: a read that reached its fetch bound writes the overflow count with a +
 });
 
 // T9 amended (S8): the mark is the pull request's NUMBER, not a glyph, and the
-// bridge paints the right-hand `meta` column in its own `muted` role — that is
+// shell API paints the right-hand `meta` column in its own `muted` role — that is
 // the gray the user asked for, segment by segment. The row's `tone` stays
 // `text`, so nothing paints the whole row gray to gray one mark.
 test('S8 (T9): an issue whose pull request is #69 carries `#69`, one without a number carries no meta', async () => {
@@ -339,7 +339,7 @@ test('S8 (T9): an issue whose pull request is #69 carries `#69`, one without a n
   assert.equal(rows[0].meta, '\ue726 #69', 'the row whose issue has a pull request carries its number');
   assert.equal('meta' in rows[1], false, 'the row without one carries no meta at all');
   assert.deepEqual(rows.map((row) => row.tone), ['text', 'text'],
-    'the marker never turns the row gray: the bridge paints only the meta column muted');
+    'the marker never turns the row gray: the shell API paints only the meta column muted');
   assert.deepEqual(Object.keys(rows[0]).sort(), ['label', 'meta', 'onClick', 'tone'],
     'the marker is the row\'s only extra field');
 
@@ -1462,22 +1462,22 @@ test('S4 (T4): the pull-request read follows the frame TTL, the floor and the dr
 });
 
 // ---------------------------------------------------------------------------
-// T2: the bridge wiring in extensions/odd-worktree-tools.ts.
+// T2: the shell API wiring in extensions/odd-worktree-tools.ts.
 // ---------------------------------------------------------------------------
 
-function installBridge() {
+function installShellApi() {
   const registered = [];
   const repaints = [];
   // T18 (S11): every section registration's own disposer is observable, so a
   // replacement can be asserted to UNREGISTER the binding it replaces before the
   // new section is registered (the order the tear-down contract names).
   const released = [];
-  globalThis[BRIDGE_SLOT] = {
-    schema: 'gentle-shell-bridge/api',
+  globalThis[SHELL_SLOT] = {
+    schema: 'odd-worktree/shell-api',
     version: 1,
     registerRows: () => {},
     registerSection: (section) => {
-      // T5 of odd-rail-section: the bridge now carries TWO sidebar sections — this
+      // T5 of odd-rail-section: the shell API now carries TWO sidebar sections — this
       // package's `GITHUB` one and its `ODD` one — so a double that recorded every
       // registration would answer "two sections" to a suite that asserts exactly one
       // and would hand back the ODD rail wherever it reads the recorded section.
@@ -1711,8 +1711,8 @@ async function awaitIssuesGateSettled(cwd) {
   }
 }
 
-test('S2: a published bridge receives exactly one section with the decided identity', async () => {
-  const { registered } = installBridge();
+test('S2: a published shell API receives exactly one section with the decided identity', async () => {
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   assert.equal(registered.length, 1, 'exactly one section is registered');
   const section = registered[0];
@@ -1722,23 +1722,23 @@ test('S2: a published bridge receives exactly one section with the decided ident
   // for `github`, because the section now carries pull requests beside them.
   assert.equal(section.rowLabel, 'github');
   assert.equal(section.defaultVisible, true);
-  // gentle-shell-bridge 0.13.0: the card is placed at the end of the rail, stated
-  // rather than left to the bridge's default.
+  // shell API 0.13.0: the card is placed at the end of the rail, stated
+  // rather than left to the shell API's default.
   assert.equal(section.placement, 'end');
   assert.equal(typeof section.lines, 'function');
   assert.equal(typeof section.meta, 'function');
   assert.equal(loaded.commands.has('issues'), true, 'every other surface still registers');
 });
 
-// RE-SCOPED (was "with no bridge and no events, nothing registers and nothing
+// RE-SCOPED (was "with no shell API and no events, nothing registers and nothing
 // throws", which asserted that `/issues` and both worktree tools still registered
-// without a bridge — the old policy, where only the bridge surfaces waited).
+// without a shell API — the old policy, where only the shell API surfaces waited).
 // S18 (T2): the shell API is NATIVE (this package's `lib/shell-api/`), so the only case that
 // still ships nothing is an ABSENT or INCOMPATIBLE slot — and that case says nothing
 // either: no observer, no install hint, no warn slot.
-test('S18 (T2): with no bridge and no events, NOTHING registers, nothing is said and nothing throws', async () => {
-  delete globalThis[BRIDGE_SLOT];
-  const loaded = await loadExtension({}, { bridge: false });
+test('S18 (T2): with no shell API and no events, NOTHING registers, nothing is said and nothing throws', async () => {
+  delete globalThis[SHELL_SLOT];
+  const loaded = await loadExtension({}, { shellApi: false });
   assert.deepEqual([...loaded.commands.keys()], [], 'no command at all');
   assert.deepEqual([...loaded.tools.keys()], [], 'no tool at all');
   assert.deepEqual([...loaded.messageRenderers.keys()], [], 'no message renderer');
@@ -1747,12 +1747,12 @@ test('S18 (T2): with no bridge and no events, NOTHING registers, nothing is said
     'and no hook at all: the missing-plugin observer the gate needed is gone');
 });
 
-// RE-SCOPED (was "with no bridge but events, the ready announcement is subscribed
+// RE-SCOPED (was "with no shell API but events, the ready announcement is subscribed
 // once and registers nothing yet"). The hold is gone: the shell API publishes its
 // object at module load, the factory reads the slot ONCE, and a publication that lands
 // afterwards is not a wake-up path any more — the next load is.
-test('S2/S18 (T2): with no bridge but events, nothing is subscribed and nothing registers', async () => {
-  delete globalThis[BRIDGE_SLOT];
+test('S2/S18 (T2): with no shell API but events, nothing is subscribed and nothing registers', async () => {
+  delete globalThis[SHELL_SLOT];
   const subscriptions = [];
   const loaded = await loadExtension({
     events: {
@@ -1761,12 +1761,12 @@ test('S2/S18 (T2): with no bridge but events, nothing is subscribed and nothing 
         return () => {};
       },
     },
-  }, { bridge: false });
+  }, { shellApi: false });
   assert.deepEqual(subscriptions, [], 'no ready announcement is listened to any more');
   assert.deepEqual([...loaded.commands.keys()], [], 'nothing registered');
 
-  // The bridge publishes afterwards: this load already read the slot and is done.
-  installBridge();
+  // The shell API publishes afterwards: this load already read the slot and is done.
+  installShellApi();
   assert.deepEqual([...loaded.commands.keys()], [], 'a late publication registers nothing here');
   assert.deepEqual(subscriptions, [], 'and still nothing listens');
 });
@@ -1776,7 +1776,7 @@ test('S2/S18 (T2): with no bridge but events, nothing is subscribed and nothing 
 // by number, ordered by `updatedAt` descending, under the bare merged count.
 test("S6/S7 (T8): session_start reads the checkout's mine AND assigned issues, merged under a bare count", async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub({
@@ -1823,7 +1823,7 @@ test("S6/S7 (T8): session_start reads the checkout's mine AND assigned issues, m
 // the overflow row's `N+` says the real total is larger than the merged rows.
 test('S7 (T8): a truncated mine bucket alone still writes the overflow count with a +', async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub({
@@ -1853,7 +1853,7 @@ test('S7 (T8): a truncated mine bucket alone still writes the overflow count wit
 
 test('S4: nine assigned issues paint seven rows plus an overflow row that dispatches /issues once', async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const sent = [];
   const loaded = await loadExtension({
     sendUserMessage: (text, opts) => { sent.push({ text, opts }); },
@@ -1894,7 +1894,7 @@ test('S4: nine assigned issues paint seven rows plus an overflow row that dispat
 
 test("S6: a failed scope resolution is one error row and reads no gh", async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub();
@@ -1933,7 +1933,7 @@ test("S6: a failed scope resolution is one error row and reads no gh", async () 
 // knows where they are. The command notices keep their own, fuller sentence.
 test('S12 (T11): a session outside a repository paints one short dim line, and the command keeps its wording', async () => {
   const notGit = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-not-git-')));
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const notices = [];
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
@@ -1978,7 +1978,7 @@ for (const [stderr, label, tone] of [
 ]) {
   test(`S12 (T11) parity: gh's ${JSON.stringify(stderr.split('\n')[0])} paints ${tone}`, async () => {
     const checkout = makeCheckout([]);
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const calls = [];
@@ -2009,7 +2009,7 @@ for (const [stderr, label, tone] of [
 // registered. Every other surface the package contributes is still there.
 test('S13 (T11): without the gh CLI the GITHUB section is never added to the rail', async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   // The decision is the real probe over PATH — no seam, because registration reads
   // it before any module instance a test could patch exists.
   const loaded = await loadExtension({}, { gh: false });
@@ -2042,7 +2042,7 @@ test("S6: a session starting in another checkout drops the previous checkout's a
     ['origin', 'git@github.com:myfork/project-b.git'],
     ['upstream', 'git@github.com:original/project-b.git'],
   ]);
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
 
@@ -2083,10 +2083,10 @@ test("S6: a session starting in another checkout drops the previous checkout's a
   // exactly that reason.
   section.lines(ctxA);
 
-  // The bridge's repaint is where the rail's next frame is observable, so what
+  // The shell API's repaint is where the rail's next frame is observable, so what
   // it records is what the rail would have painted.
   const painted = [];
-  globalThis[BRIDGE_SLOT].requestRepaint = () => {
+  globalThis[SHELL_SLOT].requestRepaint = () => {
     painted.push(section.lines(ctxB).map((row) => row.label));
   };
 
@@ -2145,7 +2145,7 @@ test("S6: a session starting in another checkout drops the previous checkout's a
 
 test('S8 (T9): the ONE combined read supplies both the rows and the pull-request number each marker draws', async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const calls = [];
@@ -2219,7 +2219,7 @@ test('S8 (T9): the ONE combined read supplies both the rows and the pull-request
 // ready. A failed combined read is the section's own read failure (S5/T10).
 test('S4 (T9): a row without a cross-referenced pull request carries no marker and the section stays ready', async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub({
@@ -2250,7 +2250,7 @@ test('S4 (T9): a row without a cross-referenced pull request carries no marker a
 // `lib/shell-api/`, imported by the entry), so there is nothing to install and nobody to warn: no
 // announcement window, no per-process warn slot and no `session_start` observer. What
 // this block proves instead is the SILENCE — an absent slot says nothing, a published
-// bridge registers and says nothing, and a child session says nothing.
+// shell API registers and says nothing, and a child session says nothing.
 // ---------------------------------------------------------------------------
 
 function warningTexts(notices) {
@@ -2259,11 +2259,11 @@ function warningTexts(notices) {
 
 // The section's own read still has to answer: these tests fire a real `session_start`,
 // so no child may ever reach the real `gh`.
-async function bridgeWarnHarness({ events } = {}) {
+async function shellApiWarnHarness({ events } = {}) {
   const checkout = makeCheckout();
-  // S18 (T14/T2): the shared fixture publishes a default bridge, and this harness is
+  // S18 (T14/T2): the shared fixture publishes a default shell API, and this harness is
   // about the ABSENT one, so it opts out: the slot is exactly what the test left.
-  const loaded = await loadExtension(events ? { events } : {}, { bridge: false });
+  const loaded = await loadExtension(events ? { events } : {}, { shellApi: false });
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub({
     issues: [{ number: 11, title: 'Assigned one', state: 'OPEN', updatedAt: '2024-05-01T00:00:00Z' }],
@@ -2274,12 +2274,12 @@ async function bridgeWarnHarness({ events } = {}) {
   return { loaded, checkout, notices, ctx };
 }
 
-// RE-SCOPED (was "with no bridge and no bus, ONE warning names the install command").
+// RE-SCOPED (was "with no shell API and no bus, ONE warning names the install command").
 // The hint, its announce window, its process-wide warn slot and the observer that used
 // to deliver it are removed; an absent slot is simply silent.
 test('S2 (S18/T2): an absent slot says nothing, and the install hint, its window and its warn slot are gone', async () => {
-  delete globalThis[BRIDGE_SLOT];
-  const { loaded, notices, ctx } = await bridgeWarnHarness();
+  delete globalThis[SHELL_SLOT];
+  const { loaded, notices, ctx } = await shellApiWarnHarness();
 
   await fireSessionStart(loaded.hooks, ctx);
   assert.deepEqual(loaded.hooks, [], 'no observer is registered to warn from');
@@ -2288,7 +2288,7 @@ test('S2 (S18/T2): an absent slot says nothing, and the install hint, its window
 
   // A reloaded extension (a NEW module instance, exactly like `/reload`) says nothing
   // either, and nothing was deferred: no timer is left to fire later.
-  const reloaded = await bridgeWarnHarness();
+  const reloaded = await shellApiWarnHarness();
   await fireSessionStart(reloaded.loaded.hooks, reloaded.ctx);
   await new Promise((resolve) => setTimeout(resolve, 250));
   assert.deepEqual(warningTexts(reloaded.notices), [], 'a reload is silent too');
@@ -2304,17 +2304,17 @@ test('S2 (S18/T2): an absent slot says nothing, and the install hint, its window
   ]) {
     assert.equal(source.includes(gone), false, `${gone} is gone from the entry`);
   }
-  assert.equal(source.includes('pi install npm:gentle-shell-bridge'), false,
+  assert.equal(source.includes('pi install '), false,
     'no install command is ever printed');
 });
 
-// RE-SCOPED (was "with a bus, a silent window warns once, and a late bridge cancels
+// RE-SCOPED (was "with a bus, a silent window warns once, and a late shell API cancels
 // it"). There is no window to wait for and no ready-announcement hold: an absent slot
 // subscribes to nothing and warns nothing.
 test('S2 (S18/T2): with a bus, an absent slot subscribes to nothing and warns nothing', async () => {
-  delete globalThis[BRIDGE_SLOT];
+  delete globalThis[SHELL_SLOT];
   const subscriptions = [];
-  const silent = await bridgeWarnHarness({
+  const silent = await shellApiWarnHarness({
     events: { on: (event, handler) => { subscriptions.push({ event, handler }); return () => {}; } },
   });
   await fireSessionStart(silent.loaded.hooks, silent.ctx);
@@ -2324,20 +2324,20 @@ test('S2 (S18/T2): with a bus, an absent slot subscribes to nothing and warns no
   assert.equal(globalThis[WARNED_SLOT], undefined, 'no warn slot is set');
 });
 
-test('S2 (T11/T2): a published bridge and a child session are never warned about', async () => {
-  // The bridge is on the slot: nothing is missing, so nothing is said.
-  const published = installBridge();
-  const withBridge = await bridgeWarnHarness();
-  await fireSessionStart(withBridge.loaded.hooks, withBridge.ctx);
+test('S2 (T11/T2): a published shell API and a child session are never warned about', async () => {
+  // The shell API is on the slot: nothing is missing, so nothing is said.
+  const published = installShellApi();
+  const withShellApi = await shellApiWarnHarness();
+  await fireSessionStart(withShellApi.loaded.hooks, withShellApi.ctx);
   assert.equal(published.registered.length, 1, 'the section still registers');
-  assert.deepEqual(warningTexts(withBridge.notices), [], 'an installed bridge is not a missing one');
+  assert.deepEqual(warningTexts(withShellApi.notices), [], 'an installed shell API is not a missing one');
   await new Promise((resolve) => setTimeout(resolve, 250));
-  assert.deepEqual(warningTexts(withBridge.notices), []);
+  assert.deepEqual(warningTexts(withShellApi.notices), []);
 
   // A child session never speaks for the human: the prompt block's own child
   // signal is the test, and nothing here says anything at all.
-  delete globalThis[BRIDGE_SLOT];
-  const child = await bridgeWarnHarness();
+  delete globalThis[SHELL_SLOT];
+  const child = await shellApiWarnHarness();
   const saved = process.env.GENTLE_PI_AGENTS_CHILD;
   process.env.GENTLE_PI_AGENTS_CHILD = '1';
   try {
@@ -2365,7 +2365,7 @@ test('S4 (T4/T12): a single-remote checkout lists its issues, and a row click op
   // ONE remote: `checkoutRepoScope()` answers `identity: null`, so the identity
   // the read (and, before T12, the opener) uses is the one gh itself resolves.
   const checkout = makeCheckout([['origin', 'git@github.com:myfork/project.git']]);
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const sent = [];
   const loaded = await loadExtension({
     sendUserMessage: (text, opts) => { sent.push({ text, opts }); },
@@ -2413,7 +2413,7 @@ test('S4 (T4/T12): a single-remote checkout lists its issues, and a row click op
 // snapshot field alone.
 test('S9 (T10): a host that cannot dispatch leaves a visible transcript entry, never silence', async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub({
@@ -2454,7 +2454,7 @@ test('S9 (T10): a host that cannot dispatch leaves a visible transcript entry, n
 
 test('S1/S6: a single-remote checkout reads only the assigned issues with the identity gh resolves', async () => {
   const checkout = makeCheckout([['origin', 'git@github.com:myfork/project.git']]);
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub({
@@ -2484,7 +2484,7 @@ test('S1/S6: a single-remote checkout reads only the assigned issues with the id
 
 // ---------------------------------------------------------------------------
 // T7 (S3 amended): the activity floor in the extension. A frame only exists
-// when the host has a reason to produce one (the bridge ships no timer), so the
+// when the host has a reason to produce one (the shell API ships no timer), so the
 // 60 s TTL on a drawn frame never fires in a session that is merely in use: a
 // live session showed `no open issues` for minutes while three issues existed,
 // and corrected itself only when the human sent a message. The session's own
@@ -2493,7 +2493,7 @@ test('S1/S6: a single-remote checkout reads only the assigned issues with the id
 
 test("S3: the activity after a reload reads the session's own checkout", async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub({
@@ -2533,7 +2533,7 @@ test("S3: the activity after a reload reads the session's own checkout", async (
 
 test('S3: session_shutdown drops the ended rows and clears the session context', async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   // Two different answers, so what a frame paints tells the test WHICH context
@@ -2667,7 +2667,7 @@ test('S9 (T10): a retained row dispatches its number, and the panel proves its o
     ['origin', 'git@github.com:myfork/project-b.git'],
     ['upstream', 'git@github.com:original/project-b.git'],
   ]);
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const sent = [];
   const loaded = await loadExtension({
     sendUserMessage: (text, opts) => { sent.push({ text, opts }); },
@@ -2741,9 +2741,9 @@ test('S9 (T10): a retained row dispatches its number, and the panel proves its o
 // defers, and it is where the click's whole behaviour is observable without a
 // host. It loads the extension the way the host does, with a stub `pi`.
 async function loadSeam(pi = {}) {
-  // S18 (T14): this file's own loader needs the bridge its host would have, or the
+  // S18 (T14): this file's own loader needs the shell API its host would have, or the
   // extension registers nothing and there is no session at all to reach a notice.
-  installDefaultBridge();
+  installDefaultShellApi();
   process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
   const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-seam-')));
   const copy = path.join(dir, 'odd-worktree-tools.mjs');
@@ -2832,7 +2832,7 @@ test('S9 (T10): with no entry seam, the refusal reaches the host notice seam', a
 
 test('S6: a read in flight at session_shutdown never repaints the rail', async () => {
   const checkout = makeCheckout();
-  const { registered, repaints } = installBridge();
+  const { registered, repaints } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
 
@@ -3146,7 +3146,7 @@ test('S3 (T13): a hidden section makes no gh call, and the drawn window gates th
   Date.now = () => realNow() + offset;
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const gh = sectionGithub({
@@ -3206,7 +3206,7 @@ test('S3 (T13): a hidden section makes no gh call, and the drawn window gates th
 
 test('S3 (T13): a session that shut down reads nothing on a later activity', async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub({
@@ -3272,7 +3272,7 @@ test('S10 (T8): a drawn section reads on the extension\'s own 20 s timer, and ac
   };
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const gh = sectionGithub({
@@ -3329,9 +3329,9 @@ test('S10 (T8): a drawn section reads on the extension\'s own 20 s timer, and ac
   }
 });
 
-// T18 (S11, PR #89 review): the extension stored the bridge's unregister and the
+// T18 (S11, PR #89 review): the extension stored the shell API's unregister and the
 // section's handle but ran neither, so a section that was REPLACED — a republished
-// bridge, a second mount — kept its 20 s floor timer alive for the rest of its
+// shell API, a second mount — kept its 20 s floor timer alive for the rest of its
 // drawn window. A replaced section must be torn down before the replacement is
 // registered, and must read nothing afterwards: that duplicate `gh` traffic is
 // exactly what this feature exists to remove.
@@ -3342,7 +3342,7 @@ test('S11 (T18): a re-mount tears the replaced section down, so it reads nothing
   Date.now = () => realNow() + offset;
   try {
     const checkout = makeCheckout();
-    const firstBridge = installBridge();
+    const firstShellApi = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const gh = sectionGithub({
@@ -3353,15 +3353,15 @@ test('S11 (T18): a re-mount tears the replaced section down, so it reads nothing
 
     await fireSessionStart(loaded.hooks, ctx);
     await awaitIssuesGateSettled(checkout);
-    assert.equal(firstBridge.registered.length, 1, 'the first bridge holds the first section');
-    const replaced = firstBridge.registered[0];
+    assert.equal(firstShellApi.registered.length, 1, 'the first shell API holds the first section');
+    const replaced = firstShellApi.registered[0];
     await waitForRows(replaced, ctx);
     assert.equal(graphqlCalls(gh.calls).length, 1, 'the first section read once');
     assert.equal(floor.armed.length, 1, 'and armed its own floor timer');
 
-    // A republished bridge is a NEW published object, so the rail binds again on
+    // A republished shell API is a NEW published object, so the rail binds again on
     // the next session boundary — while the replaced section is still live.
-    const republished = installBridge();
+    const republished = installShellApi();
     await fireSessionStart(loaded.hooks, ctx);
     await awaitIssuesGateSettled(checkout);
 
@@ -3378,8 +3378,8 @@ test('S11 (T18): a re-mount tears the replaced section down, so it reads nothing
 
     // The replacement was registered, and the binding it replaced was unregistered
     // FIRST — the tear-down order the contract names.
-    assert.equal(republished.registered.length, 1, 'the new bridge holds the replacement section');
-    assert.deepEqual(firstBridge.released, [replaced], 'the replaced binding was unregistered first');
+    assert.equal(republished.registered.length, 1, 'the new shell API holds the replacement section');
+    assert.deepEqual(firstShellApi.released, [replaced], 'the replaced binding was unregistered first');
   } finally {
     Date.now = realNow;
     floor.restore();
@@ -3396,7 +3396,7 @@ test('S11 (T18): a shut-down session leaves no floor timer behind', async () => 
   Date.now = () => realNow() + offset;
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const gh = sectionGithub({
@@ -3486,7 +3486,7 @@ test('S10 (T8): one floor window is ONE read, however many frames, activity even
   Date.now = () => realNow() + offset;
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const gh = sectionGithub({
@@ -3546,7 +3546,7 @@ test('S10 (T9): a mutating bash result forces one read, capped to one per 5 s', 
   Date.now = () => realNow() + offset;
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const gh = sectionGithub({
@@ -3608,7 +3608,7 @@ test('S10 (T9): a mutating bash named under `tool`/`args` forces the same read',
   Date.now = () => realNow();
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const gh = sectionGithub({
@@ -3636,7 +3636,7 @@ test('S11 (T9): a hidden section forces no read, and a mutating result after shu
   Date.now = () => realNow() + offset;
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const gh = sectionGithub({
@@ -3683,7 +3683,7 @@ test('S9 (T14): the first refresh reads 100 per bucket, the next reads 20 and me
   Date.now = () => realNow() + offset;
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const calls = [];
@@ -3774,7 +3774,7 @@ test('S10 (T8): the dispatched session gate never inflates the rail read\'s chil
   Date.now = () => realNow() + offset;
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const calls = [];
@@ -3833,7 +3833,7 @@ test('S9 (T14): an issue that left the assigned set makes the next refresh a ful
   Date.now = () => realNow() + offset;
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const calls = [];
@@ -3904,7 +3904,7 @@ test('S9 (T14): a failed read keeps the cache and the section stale, so the next
   Date.now = () => realNow() + offset;
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const calls = [];
@@ -3979,7 +3979,7 @@ test('S9 (T14): a failed read keeps the cache and the section stale, so the next
 // re-read. Before T3 the shutdown cleared them and this test asserted a full read.
 test('S4 (T3): the cache survives a session_shutdown/start pair, so the next read is a delta', async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const calls = [];
@@ -4038,7 +4038,7 @@ test('S3 (T15): a failed refresh starts the activity floor, so the same instant 
   Date.now = () => realNow() + offset;
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const calls = [];
@@ -4091,7 +4091,7 @@ test('S3 (T15): after a failed refresh the frame TTL is measured from the attemp
   Date.now = () => realNow() + offset;
   try {
     const checkout = makeCheckout();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const loaded = await loadExtension({});
     ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
     const calls = [];
@@ -4167,7 +4167,7 @@ test('S3 (T15): a refresh queued before invalidate() or dispose() never reads', 
 
 test('S3 (T15): a refresh queued before session_shutdown reads nothing and repaints nothing', async () => {
   const checkout = makeCheckout();
-  const { registered, repaints } = installBridge();
+  const { registered, repaints } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub({
@@ -4191,7 +4191,7 @@ test('S3 (T15): a refresh queued before session_shutdown reads nothing and repai
 
 test('S9 (T15): a read in flight at session_shutdown never repopulates the cache', async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
 
@@ -4257,7 +4257,7 @@ test('S6/S9 (T16): a checkout switch cuts the previous read out of the cache', a
   // the case where a stale answer can seed the repository the session moved to.
   const firstCheckout = makeCheckout();
   const secondCheckout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
 
@@ -4367,7 +4367,7 @@ test('S9 (T10): the click path holds no proof a session move could outlive', asy
 // the "no frequent checks" the user asked to stop.
 test('S3 (T2): a session outside a repository paints the dim row and spawns no gh child', async () => {
   const outside = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-outside-')));
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
   const gh = sectionGithub();
@@ -4400,7 +4400,7 @@ test('S4 (T3): a warm identity survives a process restart, so its first read is 
 
     // One process: load the extension, draw the rail, shut the session down.
     const runProcess = async () => {
-      const { registered } = installBridge();
+      const { registered } = installShellApi();
       const loaded = await loadExtension({});
       ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
       const gh = sectionGithub({ issues: [row] });
@@ -4458,7 +4458,7 @@ test('S4 (T3): a stored entry past its full TTL, or inconsistent, is still read 
     });
 
     const readQuery = async () => {
-      const { registered } = installBridge();
+      const { registered } = installShellApi();
       const loaded = await loadExtension({});
       ghIssues = require(path.join(LIB_DIR, 'gh-issues.js'));
       const gh = sectionGithub({ issues: [row] });
@@ -4493,7 +4493,7 @@ test('S4 (T3): a held save defers no read, and the newest entry waits behind it 
   let offset = 0;
   Date.now = () => realNow() + offset;
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   // The extension's OWN disk half, held: nothing is written until the test says so.
   // The module instance is required AFTER the load (the load purges the lib cache
@@ -4565,7 +4565,7 @@ test('S4 (T3): a held save defers no read, and the newest entry waits behind it 
 
 test('S4 (T3): a save that REJECTS never escapes as an unhandled rejection and never blocks the rail', async () => {
   const checkout = makeCheckout();
-  const { registered } = installBridge();
+  const { registered } = installShellApi();
   const loaded = await loadExtension({});
   // The extension's OWN disk half, refusing every write.
   const store = require(path.join(LIB_DIR, 'issues-cache-store.js'));

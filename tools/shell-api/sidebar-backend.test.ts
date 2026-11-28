@@ -112,7 +112,7 @@ test.beforeEach(() => {
   setRailContributor(undefined);
 });
 
-test("a footer the host registers after the bridge armed is captured", () => {
+test("a footer the host registers after the shell API armed is captured", () => {
   fakeState(); // the host created its rail state at startup, with no footer part yet
   const result = install();
 

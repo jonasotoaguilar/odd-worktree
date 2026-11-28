@@ -1,8 +1,8 @@
 /**
- * Card styles (S1–S4, S12): the bridge's selection, and the facts a repaint depends on.
+ * Card styles (S1–S4, S12): the shell API's selection, and the facts a repaint depends on.
  *
  * This module buys nothing from the host and asks it for nothing. A registered style is chrome the
- * bridge paints over the frames gentle-shell already drew, which only works if two things are
+ * shell API paints over the frames gentle-shell already drew, which only works if two things are
  * PROVEN rather than assumed: the path from the `tui` this package captures to the component that
  * renders the conversation, and the exact grammar of the lines a `float` card is drawn with. Both
  * follow, with citations. The fixtures that pin them live in `test/fake-transcript.ts`, and
@@ -14,7 +14,7 @@
  * factory `ctx.ui.setWidget(key, (tui, theme) => Component)`. This package already captures it
  * (`./extension.ts:108-109`, `docs/contract.md` §9).
  *
- * From there, three candidates, in the order this bridge trusts them. All of them end at the same
+ * From there, three candidates, in the order this shell API trusts them. All of them end at the same
  * live object, so the walk can try them in sequence without guessing:
  *
  * a. **`tui.layoutRoot` → its layout entries → the primary `ScrollView` → its child.** Pi mounts
@@ -98,7 +98,7 @@
  *
  * ## 4. The selection
  *
- * `native` by default, keyed by the bridge's own plugin id (`bridge-card-style`), never the host's
+ * `native` by default, keyed by the shell API's own plugin id (`bridge-card-style`), never the host's
  * `visual-customization.json`. The stored value is a style id, and it resolves to three answers —
  * `native`, the live `style`, or `missing` when the style it names was disposed — without ever
  * throwing, because that answer is what the transformer degrades from (S12).
@@ -110,22 +110,22 @@ import { createStore } from "./store.ts";
 import type { CardStyleSelection } from "./types.ts";
 
 /**
- * The bridge's own plugin id for the selection: one namespaced file, never the host's
+ * The shell API's own plugin id for the selection: one namespaced file, never the host's
  * `visual-customization.json` (whose key list is closed, see `./visibility.ts` for the same
  * reasoning about sections).
  */
-export const CARD_STYLE_STORE_ID = "bridge-card-style";
+export const LEGACY_CARD_STYLE_STORE_ID = "bridge-card-style";
 
 /** The one key in that file. */
 export const CARD_STYLE_STORE_KEY = "cardStyle";
 
 /**
- * The persisted selection: a style id, or `native` for "the bridge does not touch the
+ * The persisted selection: a style id, or `native` for "the shell API does not touch the
  * conversation". Anything unreadable or not a string falls back to `native` — a hand-edited file
  * can never select a style the user did not choose, and `native` is always safe.
  */
 export function getCardStyleSelection(): string {
-  const stored = createStore(CARD_STYLE_STORE_ID).get<unknown>(CARD_STYLE_STORE_KEY, CARD_STYLE_NATIVE);
+  const stored = createStore(LEGACY_CARD_STYLE_STORE_ID).get<unknown>(CARD_STYLE_STORE_KEY, CARD_STYLE_NATIVE);
   return typeof stored === "string" && stored.trim() !== "" ? stored : CARD_STYLE_NATIVE;
 }
 
@@ -134,7 +134,7 @@ export function getCardStyleSelection(): string {
  * re-reads `current()` when it does, so the bullet cannot land on a value that was never written.
  */
 export function setCardStyleSelection(id: string): void {
-  createStore(CARD_STYLE_STORE_ID).set(CARD_STYLE_STORE_KEY, id);
+  createStore(LEGACY_CARD_STYLE_STORE_ID).set(CARD_STYLE_STORE_KEY, id);
 }
 
 /**

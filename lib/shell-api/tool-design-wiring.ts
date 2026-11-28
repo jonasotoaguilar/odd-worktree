@@ -1,11 +1,11 @@
 /**
  * The ONE `pi.registerToolRenderer` integration (S4, S5, T8): chosen per tool, composed with the host.
  *
- * ## Why the bridge owns it
+ * ## Why the shell API owns it
  *
  * Pi composes every extension's `ToolRendererResolver` (`dist/core/extensions/runner.js:550-553`), so
  * a resolver that returns `next()` adds nothing and a resolver that REPLACES the renderers takes the
- * host's card away from every other extension. The bridge therefore registers exactly one resolver.
+ * host's card away from every other extension. The shell API therefore registers exactly one resolver.
  *
  * ## The rule: wrap every tool that HAS a design, decide on every render pass (S2)
  *
@@ -42,7 +42,7 @@
  *
  * A design's `ctx.theme` is the theme the host handed that renderer: `renderCall(args, theme, ctx)`
  * has it second, `renderResult(result, options, theme, ctx)` third
- * (`dist/core/extensions/types.d.ts:538-545`). It is passed through untouched; the bridge never reads
+ * (`dist/core/extensions/types.d.ts:538-545`). It is passed through untouched; the shell API never reads
  * a colour from it.
  *
  * ## Every absence is a reported outcome
@@ -75,7 +75,7 @@ import { resolveCardStyleSelection } from "./card-styles.ts";
 import type { CardStyleSelection, ToolDesignContext, ToolDesignRender } from "./types.ts";
 
 /**
- * The renderers Pi hands a resolver, described structurally: the bridge reads `renderCall` and
+ * The renderers Pi hands a resolver, described structurally: the shell API reads `renderCall` and
  * `renderResult` and preserves every other member, so a host that grows a new one keeps it.
  */
 export interface ToolRenderersLike {
@@ -108,7 +108,7 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * The resolver the bridge registers. Returns `next()`'s renderers themselves only when the tool has
+ * The resolver the shell API registers. Returns `next()`'s renderers themselves only when the tool has
  * no design at all; otherwise a wrapper that reads the selection on every render pass, so a design
  * selected after a card was drawn repaints that card (S2).
  */
@@ -178,7 +178,7 @@ function snapshotRender(context: unknown): ToolDesignRender | undefined {
  * is wrapped exactly once no matter which path reached it first.
  */
 export const TOOL_RENDERERS_WRAPPED: unique symbol = Symbol.for(
-  "gentle-shell-bridge.tool-designs.renderers-wrapped.v1",
+  "odd-worktree.tool-designs.renderers-wrapped.v1",
 );
 
 /**
@@ -243,7 +243,7 @@ function wrapRenderer(
   return function (this: unknown, ...args: Record<string, unknown>[]): Record<string, unknown> {
     const component = original.apply(this, args);
     // The theme is the host's own opaque object at the documented index of this renderer's arguments
-    // (`renderCall`: second, `renderResult`: third); the bridge only forwards it.
+    // (`renderCall`: second, `renderResult`: third); the shell API only forwards it.
     return wrapComponent(component, tool, args[themeIndex], args[contextIndex], origin, part);
   };
 }
@@ -265,7 +265,7 @@ function wrapComponent(
 ): Record<string, unknown> {
   if (!isRecord(component) || typeof component.render !== "function") return component;
   // SAFETY: a record whose own `render` is callable is exactly the Pi component contract
-  // (`render(width): string[]`, plus optional members). The bridge replaces nothing on the host's
+  // (`render(width): string[]`, plus optional members). The shell API replaces nothing on the host's
   // object; it only calls `render`/`invalidate`/`handleMouse` and reads two booleans.
   const child = component as unknown as Renderable;
   const hostRender = child.render;
@@ -278,7 +278,7 @@ function wrapComponent(
     render(width: number): string[] {
       const lines = hostRender.call(child, width);
       // A host that answers something other than rows keeps its own answer; the design has nothing
-      // to rewrite and the bridge invents nothing.
+      // to rewrite and the shell API invents nothing.
       if (!Array.isArray(lines)) return lines as string[];
       // SAFETY: `Array.isArray` just proved this is the host's own `string[]`; `applyToolDesign` only
       // reads it (through a copy) and answers with strings, or `undefined` for "draw the host's".
@@ -363,7 +363,7 @@ interface ResolverState {
 }
 
 /** Stable process-global slot: a second loaded copy of this package must register nothing. */
-const RESOLVER_KEY = Symbol.for("gentle-shell-bridge.tool-designs.resolver.v1");
+const RESOLVER_KEY = Symbol.for("odd-worktree.tool-designs.resolver.v1");
 
 function resolverHost(): Record<symbol, ResolverState | undefined> {
   // SAFETY: only `resolverState()` writes this key, and it re-checks the list before trusting a

@@ -1,19 +1,19 @@
 /**
- * S21/T40–T41: hover reaches the bridge's own rail rows.
+ * S21/T40–T41: hover reaches the shell API's own rail rows.
  *
  * The fake now models the host's part-level mouse dispatch as it really is. The `footer` part is a
  * `NativePointerRegion` (`extensions/gentle-shell.ts:2766`) whose `onHover` answers EVERY `move`
  * inside the part's frame (`lib/native-pointer-region.ts:80-88`,
  * `extensions/gentle-shell.ts:2732-2741`): it claims the host's shared pointer slot
  * (`SidebarState.hover`, `lib/shell-sidebar.ts:31,72-78`) for a row it owns and clears it otherwise,
- * returning `{ handled: true }` either way. A move over a row the bridge appended is therefore
- * consumed by the host's region and never reaches the bridge's wrapper, which is why these tests
+ * returning `{ handled: true }` either way. A move over a row the shell API appended is therefore
+ * consumed by the host's region and never reaches the shell API's wrapper, which is why these tests
  * failed before the fix: the wrapper consulted the host first and only asked the contributor when
  * the host declined, and the host never declines a move.
  *
  * Every dispatch below is the event the layout really hands a part — `y` in the PART's frame, `width`
  * the frame it rendered (`lib/shell-sidebar-layout.ts:245-259`) — so the offset arithmetic is the
- * bridge's real code, not a test-only shortcut.
+ * shell API's real code, not a test-only shortcut.
  */
 
 import assert from "node:assert/strict";
@@ -190,7 +190,7 @@ test("a move over an inner CLICKABLE row paints it, and never runs its action", 
   assert.ok(!(rowOf("play") ?? "").includes(HOVER_SGR), "the row is painted idle again");
 });
 
-test("the host's own row keeps the pointer: the bridge never steals it", () => {
+test("the host's own row keeps the pointer: the shell API never steals it", () => {
   setSectionTheme(fakeTheme());
   registerSection(
     section("music", {
@@ -208,8 +208,8 @@ test("the host's own row keeps the pointer: the bridge never steals it", () => {
     { handled: true, render: true },
     "the host's region answered, exactly as it does for its own cards",
   );
-  assert.equal(renders, 0, "no bridge frame is asked for");
-  assert.equal(getSectionHoverReport().mechanism, "not used", "the bridge never claimed the pointer");
+  assert.equal(renders, 0, "no shell API frame is asked for");
+  assert.equal(getSectionHoverReport().mechanism, "not used", "the shell API never claimed the pointer");
   assert.ok(fakeState().hover !== undefined, "the host's own claim holds the slot");
   assert.ok(!(rowOf("MUSIC") ?? "").includes(HOVER_SGR), "and none of our rows is painted");
   assert.ok(!(rowOf("play") ?? "").includes(HOVER_SGR));

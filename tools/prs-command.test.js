@@ -39,7 +39,7 @@ const { pathToFileURL } = require('node:url');
 
 const { LIB_DIR, stubbedSource, withGhPath } = require('./fixtures/load-extension.js');
 
-const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+const SHELL_SLOT = Symbol.for('odd-worktree/shell-api/v1');
 const realSetTimeout = setTimeout;
 
 const stubTui = {
@@ -68,7 +68,7 @@ function track(dir) {
 }
 
 afterEach(() => {
-  delete globalThis[BRIDGE_SLOT];
+  delete globalThis[SHELL_SLOT];
   if (ghIssues) {
     ghIssues.setGhRunner(null);
     ghIssues.setGitRunner(null);
@@ -128,12 +128,12 @@ async function loadExtension(pi, options = {}) {
   });
 }
 
-// `onRepaint` observes the bridge's own repaint request: S4 (D9) needs to see
+// `onRepaint` observes the shell API's own repaint request: S4 (D9) needs to see
 // that a settled rail read ASKS for the frame the new count is painted by.
-function installBridge(onRepaint = null) {
+function installShellApi(onRepaint = null) {
   const registered = [];
-  globalThis[BRIDGE_SLOT] = {
-    schema: 'gentle-shell-bridge/api',
+  globalThis[SHELL_SLOT] = {
+    schema: 'odd-worktree/shell-api',
     version: 1,
     registerRows: () => {},
     registerSection: (section) => { registered.push(section); return () => {}; },
@@ -591,14 +591,14 @@ async function drawSection(section, ctx) {
 
 describe('/prs registration and gate (S1)', () => {
   test('without the gh CLI neither /issues nor /prs is registered', async () => {
-    installBridge();
+    installShellApi();
     const loaded = await loadExtension({}, { gh: false });
     assert.equal(loaded.commands.has('issues'), false, 'the issues reader is withheld');
     assert.equal(loaded.commands.has('prs'), false, 'the pull-request reader is withheld');
   });
 
   test('with the CLI present both commands exist (PRESERVE)', async () => {
-    installBridge();
+    installShellApi();
     const loaded = await loadExtension({}, { gh: true });
     assert.equal(loaded.commands.has('issues'), true);
     assert.equal(loaded.commands.has('prs'), true);
@@ -606,7 +606,7 @@ describe('/prs registration and gate (S1)', () => {
   });
 
   test('an unauthenticated gh refuses /prs with the prs sentence and mounts nothing', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot({ gate: false });
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -626,7 +626,7 @@ describe('/prs registration and gate (S1)', () => {
 
 describe('/prs overlay and reads (S1, S3)', () => {
   test('opens full screen on the three scoped buckets, leaving all lazy', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -653,9 +653,9 @@ describe('/prs overlay and reads (S1, S3)', () => {
   });
 
   test('S8/T22: the rail cache seeds the first frame, so /prs opens as fast as /issues', async () => {
-    // T2 (native-bridge): the slot is read ONCE, in the factory, so the bridge a test measures is
+    // T2 (native-shell API): the slot is read ONCE, in the factory, so the shell API a test measures is
     // published BEFORE the load — a publication after it is not a wake-up path any more.
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const b = await boot({ railMine: [{ number: 69, title: 'mine sixty-nine' }], railReview: [{ number: 70, title: 'review seventy' }] });
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -680,7 +680,7 @@ describe('/prs overlay and reads (S1, S3)', () => {
   });
 
   test('the lazy all bucket reads the repository connection', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -695,7 +695,7 @@ describe('/prs overlay and reads (S1, S3)', () => {
   });
 
   test('the detail asks for the authoritative metadata under the pinned identity', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -714,7 +714,7 @@ describe('/prs overlay and reads (S1, S3)', () => {
   });
 
   test('T20: the linked-issues candidate seam asks the pinned repository\'s open issues', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -737,7 +737,7 @@ describe('/prs overlay and reads (S1, S3)', () => {
   });
 
   test('the o opener runs gh pr view <n> --web -R <pinned>', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -770,7 +770,7 @@ describe('/prs overlay and reads (S1, S3)', () => {
 
 describe('S7: enter inserts the item into the chat input', () => {
   test('the PR panel inserts "PR #N" and closes, sending nothing', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -791,7 +791,7 @@ describe('S7: enter inserts the item into the chat input', () => {
   });
 
   test('the issues panel inserts "ISSUE #N" and closes, sending nothing', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -810,7 +810,7 @@ describe('S7: enter inserts the item into the chat input', () => {
   });
 
   test('a host with no paste seam gets one honest line and the panel still closes', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -834,7 +834,7 @@ describe('S7: enter inserts the item into the chat input', () => {
 
 describe('S6: linked numbers open the other panel without stacking', () => {
   test('a linked issue in the PR panel closes it and dispatches /issues N', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -851,7 +851,7 @@ describe('S6: linked numbers open the other panel without stacking', () => {
   });
 
   test('a linked PR in the issues panel closes it and dispatches /prs N', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -867,7 +867,7 @@ describe('S6: linked numbers open the other panel without stacking', () => {
   });
 
   test('a linked click while that other panel is already opening changes nothing', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
     await warmGate(b.loaded);
     const root = makeCheckout();
@@ -876,7 +876,7 @@ describe('S6: linked numbers open the other panel without stacking', () => {
     const mount = await mountCommand(b.loaded, 'prs', '', ctx, { capture });
     // The rail's own click holds the /issues guard: this click must leave the
     // panel exactly as it is instead of closing onto a dispatch that is dropped.
-    const section = installBridge().registered;
+    const section = installShellApi().registered;
     capture.options.actions.openLinked({ kind: 'issue', number: 63 });
     assert.equal(mount.doneCount, 1);
     assert.deepEqual(b.sent.map((entry) => entry.text), ['/issues 63']);
@@ -890,11 +890,11 @@ describe('S6: linked numbers open the other panel without stacking', () => {
 
 describe('S4/S5: the one section counts and routes pull requests', () => {
   test('the header paints N issues · M pr from the one section', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot({
       issueRows: [{ number: 1, title: 'One', pullRequest: 69 }, { number: 2, title: 'Two' }],
     });
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const root = makeCheckout();
     await warmGate(b.loaded);
     const ctx = sessionCtx(root);
@@ -910,11 +910,11 @@ describe('S4/S5: the one section counts and routes pull requests', () => {
   });
 
   test('a row whose issue links a PR opens the PR panel with the review bucket hint', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot({
       issueRows: [{ number: 1, title: 'One', pullRequest: 69 }],
     });
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const root = makeCheckout();
     await warmGate(b.loaded);
     const ctx = sessionCtx(root);
@@ -941,9 +941,9 @@ describe('S4/S5: the one section counts and routes pull requests', () => {
   });
 
   test('a row without a linked PR keeps the /issues call (PRESERVE)', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot({ issueRows: [{ number: 1, title: 'One' }] });
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const root = makeCheckout();
     await warmGate(b.loaded);
     const ctx = sessionCtx(root);
@@ -956,9 +956,9 @@ describe('S4/S5: the one section counts and routes pull requests', () => {
   });
 
   test('the loader persists the rail read and paints it back when the live read fails', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const root = makeCheckout();
     await warmGate(b.loaded);
     const ctx = sessionCtx(root);
@@ -992,9 +992,9 @@ describe('S4/S5: the one section counts and routes pull requests', () => {
   });
 
   test('a mutation made in the panel invalidates the count and re-reads the rail', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const root = makeCheckout();
     await warmGate(b.loaded);
     const ctx = sessionCtx(root);
@@ -1019,9 +1019,9 @@ describe('S4/S5: the one section counts and routes pull requests', () => {
 // ---------------------------------------------------------------------------
 
 describe('S5: the session-start preload is dispatched, never awaited', () => {
-  // The section is created only once the bridge exists, so the spy below can wrap
+  // The section is created only once the shell API exists, so the spy below can wrap
   // its `refreshIfStale` before the extension builds it: the surface is registered
-  // by the first `session_start`, after the bridge is published late.
+  // by the first `session_start`, after the shell API is published late.
   function spySectionFactory(mod) {
     const holder = { calls: 0 };
     const lib = mod.libModule('issues-section.js');
@@ -1040,13 +1040,13 @@ describe('S5: the session-start preload is dispatched, never awaited', () => {
   }
 
   async function gatedBoot() {
-    // T2 (native-bridge): the bridge is published BEFORE the load, because the slot is read once,
+    // T2 (native-shell API): the shell API is published BEFORE the load, because the slot is read once,
     // in the factory — a surface that arrives later does not exist.
-    installBridge();
+    installShellApi();
     const b = await boot();
-    // A REPUBLISHED bridge is a NEW binding: the section the spy can see is the one the first
+    // A REPUBLISHED shell API is a NEW binding: the section the spy can see is the one the first
     // `session_start` mounts on it, exactly as a shutdown-and-remount does.
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const spy = spySectionFactory(b.loaded.mod);
     // The first start binds the republished section; it exists from here on.
     await fireSessionStart(b.loaded.hooks, sessionCtx(track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-prs-gate-')))));
@@ -1101,10 +1101,10 @@ describe('S5: the session-start preload is dispatched, never awaited', () => {
 
 describe('T8b: the exact count, the cold-start paint and the /prs refusal', () => {
   test('S4 (D8): the header counts each bucket\'s total, not only the rows it carried', async () => {
-    installBridge();
+    installShellApi();
     const first = Array.from({ length: 50 }, (_, index) => ({ number: index + 1, linkedIssues: [] }));
     const b = await boot({ railMine: first, railMineTotal: 51, railReview: [] });
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const root = makeCheckout();
     await warmGate(b.loaded);
     const ctx = sessionCtx(root);
@@ -1117,7 +1117,7 @@ describe('T8b: the exact count, the cold-start paint and the /prs refusal', () =
   });
 
   test('S4/S5 (D9): a cold start paints the stored count at once, and the live read still replaces it', async () => {
-    installBridge();
+    installShellApi();
     // The entry a previous process left behind: ONE pull request, stored under the
     // identity this checkout proves.
     const docPath = path.join(process.env.XDG_CACHE_HOME, 'odd-worktree', 'prs-rail.json');
@@ -1133,7 +1133,7 @@ describe('T8b: the exact count, the cold-start paint and the /prs refusal', () =
       }],
     }));
     const b = await boot({ railMine: [{ number: 71 }], railReview: [{ number: 72 }] });
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const root = makeCheckout();
     await warmGate(b.loaded);
     const ctx = sessionCtx(root);
@@ -1158,7 +1158,7 @@ describe('T8b: the exact count, the cold-start paint and the /prs refusal', () =
     assert.equal(section.meta(ctx), '2 issues · 2 pr', 'the live answer replaces the stored one');  });
 
   test('S4/S5 (D9): a mutation\'s invalidation is never painted back from the store', async () => {
-    installBridge();
+    installShellApi();
     const docPath = path.join(process.env.XDG_CACHE_HOME, 'odd-worktree', 'prs-rail.json');
     fs.mkdirSync(path.dirname(docPath), { recursive: true });
     fs.writeFileSync(docPath, JSON.stringify({
@@ -1172,7 +1172,7 @@ describe('T8b: the exact count, the cold-start paint and the /prs refusal', () =
       }],
     }));
     const b = await boot({ railMine: [{ number: 71 }], railReview: [{ number: 72 }] });
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const root = makeCheckout();
     await warmGate(b.loaded);
     const ctx = sessionCtx(root);
@@ -1200,9 +1200,9 @@ describe('T8b: the exact count, the cold-start paint and the /prs refusal', () =
   });
 
   test('S2 (D10): the remote-moved refusal of a /prs action names /prs', async () => {
-    installBridge();
+    installShellApi();
     const b = await boot();
-    installBridge();
+    installShellApi();
     const root = makeCheckout();
     await warmGate(b.loaded);
     const ctx = sessionCtx(root);
@@ -1231,7 +1231,7 @@ describe('T8b: the exact count, the cold-start paint and the /prs refusal', () =
 // T10b (S4): D9 and D15, at the wiring level.
 //
 // D9 — the rail's pull-request read is a SECOND state of the one section, so its
-// settlement must ask the bridge to repaint exactly like the issues read does;
+// settlement must ask the shell API to repaint exactly like the issues read does;
 // without it the header keeps the old `pr` count until an unrelated frame.
 //
 // D15 — the store keeps each bucket's TOTAL beside its rows, so a restart paints
@@ -1242,11 +1242,11 @@ describe('T8b: the exact count, the cold-start paint and the /prs refusal', () =
 describe('T10b: the rail read repaints the header and its totals survive a restart', () => {
   const fiftyRows = () => Array.from({ length: 50 }, (_, index) => ({ number: index + 1, linkedIssues: [] }));
 
-  test('S4 (D9): the settled rail read asks the bridge to repaint the header it changed', async () => {
-    installBridge();
+  test('S4 (D9): the settled rail read asks the shell API to repaint the header it changed', async () => {
+    installShellApi();
     const b = await boot({ railMine: [{ number: 69 }], railReview: [{ number: 70 }] });
     let repaints = 0;
-    const { registered } = installBridge(() => { repaints += 1; });
+    const { registered } = installShellApi(() => { repaints += 1; });
     const root = makeCheckout();
     await warmGate(b.loaded);
     const ctx = sessionCtx(root);
@@ -1266,14 +1266,14 @@ describe('T10b: the rail read repaints the header and its totals survive a resta
     release();
     await waitFor(() => section.meta(ctx) === '2 issues · 2 pr');
     assert.ok(repaints > settled,
-      'the settled rail read asked the bridge for the frame the new count is painted by');
+      'the settled rail read asked the shell API for the frame the new count is painted by');
   });
 
   test('S4 (D15): the loader writes each bucket total beside its rows', async () => {
-    installBridge();
+    installShellApi();
     const rows = fiftyRows();
     const b = await boot({ railMine: rows, railMineTotal: 52, railReview: [] });
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const root = makeCheckout();
     await warmGate(b.loaded);
     const ctx = sessionCtx(root);
@@ -1294,7 +1294,7 @@ describe('T10b: the rail read repaints the header and its totals survive a resta
   });
 
   test('S4 (D15): a cold start paints the stored total, so 50 rows with a total of 52 is 52 pr', async () => {
-    installBridge();
+    installShellApi();
     // The entry a previous process left behind: 50 rows and the total they came
     // with, under the identity this checkout proves.
     const rows = fiftyRows();
@@ -1311,7 +1311,7 @@ describe('T10b: the rail read repaints the header and its totals survive a resta
       }],
     }));
     const b = await boot({ railMine: rows, railMineTotal: 52, railReview: [] });
-    const { registered } = installBridge();
+    const { registered } = installShellApi();
     const root = makeCheckout();
     await warmGate(b.loaded);
     const ctx = sessionCtx(root);

@@ -2,7 +2,7 @@
  * The in-TUI diagnostics channel.
  *
  * Pi renders every diagnostic inside its own report; text written to stdout/stderr at load time
- * appears in the terminal around Pi's startup, outside the TUI that owns the screen. So the bridge
+ * appears in the terminal around Pi's startup, outside the TUI that owns the screen. So the shell API
  * never writes to the console: a message produced before a context exists is buffered here and
  * flushed ONCE through `ctx.ui.notify`, and the diagnostics record keeps reporting it afterwards.
  *
@@ -14,12 +14,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { BRIDGE_API_KEY, resetBridgeApiForTests } from "../../lib/shell-api/api.ts";
+import { SHELL_API_KEY, resetShellApiForTests } from "../../lib/shell-api/api.ts";
 import { resetBusForTests } from "../../lib/shell-api/bus.ts";
 import { resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
-import gentleShellBridge, {
-  type BridgeExtensionApi,
-  type BridgeSessionHandler,
+import gentleShellShellApi, {
+  type ShellExtensionApi,
+  type ShellSessionHandler,
 } from "../../lib/shell-api/extension.ts";
 import { resetHookStateForTests } from "../../lib/shell-api/hook.ts";
 import {
@@ -79,9 +79,9 @@ const recordingUi = (): { ui: RecordingUi; calls: Array<[string, string | undefi
   };
 };
 
-const entryHandlers = (): BridgeSessionHandler[] => {
-  const handlers: BridgeSessionHandler[] = [];
-  const pi: BridgeExtensionApi = {
+const entryHandlers = (): ShellSessionHandler[] => {
+  const handlers: ShellSessionHandler[] = [];
+  const pi: ShellExtensionApi = {
     // `gentle-pi` is loaded, so the runtime gate is open and the buffered notice is flushed.
     getCommands: () => [{ name: "gentle:customize" }],
     on(_event, handler) {
@@ -89,12 +89,12 @@ const entryHandlers = (): BridgeSessionHandler[] => {
     },
     registerCommand() {},
   };
-  gentleShellBridge(pi);
+  gentleShellShellApi(pi);
   return handlers;
 };
 
 test.beforeEach(() => {
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetNoticesForTests();
   resetBusForTests();
   resetSidebar();
@@ -232,9 +232,9 @@ test("a notify that throws leaves the message pending instead of losing it", () 
 // ---------------------------------------------------------------------------------------------
 
 test("loading a copy of the handshake with an incompatible slot writes nothing to the console", async () => {
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetNoticesForTests();
-  hostSlot()[BRIDGE_API_KEY] = { schema: "someone-else/api", version: 9 };
+  hostSlot()[SHELL_API_KEY] = { schema: "someone-else/api", version: 9 };
 
   const captured = captureConsole();
   try {

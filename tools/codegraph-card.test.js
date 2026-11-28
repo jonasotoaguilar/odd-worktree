@@ -18,7 +18,7 @@ const { join } = require('node:path');
 const { after, before, test } = require('node:test');
 const { pathToFileURL } = require('node:url');
 
-const { LIB_DIR, defaultBridge, stubbedSource } = require('./fixtures/load-extension.js');
+const { LIB_DIR, defaultShellApi, stubbedSource } = require('./fixtures/load-extension.js');
 
 const {
   CARD_CONTENT,
@@ -191,18 +191,18 @@ function withContent(content, run) {
   }
 }
 
-// ---- the switch: the bridge's `Card activity` line (S11) ----
+// ---- the switch: the shell API's `Card activity` line (S11) ----
 
-// S11 (modular-tools): the card is a DESIGN, so it paints only while the bridge's `Card activity` line
+// S11 (modular-tools): the card is a DESIGN, so it paints only while the shell API's `Card activity` line
 // answers with this package's activity design. The slot is published here exactly as the host
 // publishes it; `selection` is an answer or a function of the tool being drawn, and `asked`
 // collects every question.
-const BRIDGE_API_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+const SHELL_API_SLOT = Symbol.for('odd-worktree/shell-api/v1');
 const ACTIVITY_DESIGN_ID = 'odd-worktree.bash-activity';
 
-function publishBridge(selection, asked = []) {
-  globalThis[BRIDGE_API_SLOT] = {
-    schema: 'gentle-shell-bridge/api',
+function publishShellApi(selection, asked = []) {
+  globalThis[SHELL_API_SLOT] = {
+    schema: 'odd-worktree/shell-api',
     version: 1,
     VERSION: '0.12.1',
     resolveToolDesignSelection(tool) {
@@ -215,9 +215,9 @@ function publishBridge(selection, asked = []) {
 
 /** Every tool the card paints wears the activity design: the switch is ON. */
 const ACTIVITY_ON = (tool) => (isCodeGraphCardTool(tool) || tool === 'bash' ? { kind: 'design', design: { id: ACTIVITY_DESIGN_ID } } : { kind: 'not-covered', id: ACTIVITY_DESIGN_ID });
-publishBridge(ACTIVITY_ON);
+publishShellApi(ACTIVITY_ON);
 after(() => {
-  delete globalThis[BRIDGE_API_SLOT];
+  delete globalThis[SHELL_API_SLOT];
 });
 
 /** A host that draws CodeGraph rows itself: the chain's renderers, captured when the card was built. */
@@ -231,12 +231,12 @@ const HOST_CODEGRAPH = {
 //
 // Pi resolves a tool's renderers ONCE, when it mounts the card
 // (`interactive-mode.js` hands the resolved definition to `ToolExecutionComponent`), and
-// never asks again. The bridge's `Card activity` line is therefore read INSIDE the
+// never asks again. The shell API's `Card activity` line is therefore read INSIDE the
 // component's build, which the host does run on every frame: the cases below mount one
 // card, flip the line, and repaint that same component.
 
 test('the line is read on every paint: a mounted card hands the row back to the chain and takes it again', () => {
-  publishBridge(ACTIVITY_ON);
+  publishShellApi(ACTIVITY_ON);
   const resolver = cardFor({ cwd: '/work/repo' });
   const slot = renderersFor(resolver, CODEGRAPH_TOOL, HOST_CODEGRAPH);
   const args = { operation: 'explore', query: 'auth login' };
@@ -248,11 +248,11 @@ test('the line is read on every paint: a mounted card hands the row back to the 
   assert.ok(on.call.length > 0, 'the card is drawn while the line says activity');
   assert.ok(on.result.length > 0, 'and its result half too');
   // The line is turned off, and the SAME mounted components are repainted.
-  publishBridge({ kind: 'native' });
+  publishShellApi({ kind: 'native' });
   assert.deepEqual(call.render(60), [`host call 60`.padEnd(60, ' ')], 'off, the chain\'s own renderer draws the row it captured at build time');
   assert.deepEqual(result.render(60), [`host result 60`.padEnd(60, ' ')], 'the result half too');
   // And back on, from the same two components.
-  publishBridge(ACTIVITY_ON);
+  publishShellApi(ACTIVITY_ON);
   assert.deepEqual(call.render(60), on.call, 'flipped back on, the card is drawn again, unchanged');
   assert.deepEqual(result.render(60), on.result, 'the result half too');
 });
@@ -268,21 +268,21 @@ test('the line is read on every paint for all three surfaces and a bash call tha
   ];
   const flips = [];
   for (const [tool, args, label] of surfaces) {
-    publishBridge(ACTIVITY_ON);
+    publishShellApi(ACTIVITY_ON);
     const resolver = cardFor({ cwd: '/work/repo' });
     const slot = renderersFor(resolver, tool, HOST_CODEGRAPH);
     const context = { args, isPartial: false };
     const call = slot.renderCall(args, hostTheme, context);
     const on = call.render(60);
     assert.ok(on.length > 0 && !on.join('\n').includes('host call'), `${label}: the card is drawn while the line says activity`);
-    publishBridge({ kind: 'native' });
+    publishShellApi({ kind: 'native' });
     assert.deepEqual(call.render(60), [`host call 60`.padEnd(60, ' ')], `${label}: flipped off, the chain's own rows are drawn`);
-    publishBridge(ACTIVITY_ON);
+    publishShellApi(ACTIVITY_ON);
     assert.deepEqual(call.render(60), on, `${label}: flipped back on, the card is drawn again, unchanged`);
     flips.push(label);
   }
   assert.equal(flips.length, 4, 'four surfaces, four mounted repaints, each in both directions');
-  publishBridge(ACTIVITY_ON);
+  publishShellApi(ACTIVITY_ON);
 });
 
 test('a captured renderer that throws falls back to the host\'s own drawing', () => {
@@ -297,7 +297,7 @@ test('a captured renderer that throws falls back to the host\'s own drawing', ()
       throw new Error('host renderer exploded');
     },
   };
-  publishBridge({ kind: 'native' });
+  publishShellApi({ kind: 'native' });
   try {
     const resolver = cardFor({ cwd: '/work/repo' });
     const call = renderersFor(resolver, CODEGRAPH_TOOL, throwing).renderCall({ operation: 'status' }, hostTheme, { isPartial: false }).render(120);
@@ -306,7 +306,7 @@ test('a captured renderer that throws falls back to the host\'s own drawing', ()
     // which is the baseline's two rows.
     assert.deepEqual(call, [`${title} <muted>operation="status"</muted>`.padEnd(120, ' ')]);
   } finally {
-    publishBridge(ACTIVITY_ON);
+    publishShellApi(ACTIVITY_ON);
   }
 });
 
@@ -314,7 +314,7 @@ test('ordinary bash keeps the same clickable child while activity is off', () =>
   // The verifier's own dispatch check, kept here so a future wrapper cannot silently swallow a
   // click: with the line off the host mounts the child's component ITSELF, and its mouse handler
   // is the one that runs.
-  publishBridge({ kind: 'native' });
+  publishShellApi({ kind: 'native' });
   try {
     let clicks = 0;
     const child = {
@@ -330,14 +330,14 @@ test('ordinary bash keeps the same clickable child while activity is off', () =>
     assert.deepEqual(mounted.handleMouse({ type: 'click', button: 'left' }), { handled: true });
     assert.equal(clicks, 1);
   } finally {
-    publishBridge(ACTIVITY_ON);
+    publishShellApi(ACTIVITY_ON);
   }
 });
 
 test('with the line off a bash row is handed back untouched, never wrapped', () => {
   // A bash call's own component is what the host mounts, so its rows, its mouse handling and
   // every other behaviour stay exactly as Pi resolved them: off, this card adds no wrapper.
-  publishBridge({ kind: 'native' });
+  publishShellApi({ kind: 'native' });
   try {
     const chain = {
       renderShell: 'self',
@@ -348,7 +348,7 @@ test('with the line off a bash row is handed back untouched, never wrapped', () 
       assert.equal(cardFor({ cwd: '/work/repo' })('bash', () => chain), chain, command);
     }
   } finally {
-    publishBridge(ACTIVITY_ON);
+    publishShellApi(ACTIVITY_ON);
   }
   // While the line says activity the card is the one answering, so a flip can repaint it.
   const chain = { renderShell: 'self', renderCall: () => ({ render: () => [], invalidate() {} }), renderResult: () => ({ render: () => [], invalidate() {} }) };
@@ -360,7 +360,7 @@ test('a PARTIAL result draws the rows every later paint draws, on the FIRST pain
   // renders the pass. A mark made while painting lands after the call already drew, so the first
   // partial paint carries one row too many (the verifier measured 5/4 neon, 8/7 float). The card
   // marks during construction, like the baseline: the first paint is the one every paint repeats.
-  publishBridge(ACTIVITY_ON);
+  publishShellApi(ACTIVITY_ON);
   const resolver = cardFor({ cwd: '/work/repo' });
   const args = { operation: 'explore', query: 'auth login' };
   const text = textResult('found it');
@@ -381,7 +381,7 @@ test('a PARTIAL result draws the rows every later paint draws, on the FIRST pain
 });
 
 test('with the line off and no renderer in the chain, the rows are the host\'s own fallback, byte for byte', () => {
-  publishBridge({ kind: 'native' });
+  publishShellApi({ kind: 'native' });
   try {
     const resolver = cardFor({ cwd: '/work/repo' });
     const args = { query: 'auth login' };
@@ -405,7 +405,7 @@ test('with the line off and no renderer in the chain, the rows are the host\'s o
     // A result that states nothing draws no row at all, exactly as the host's own fallback.
     assert.deepEqual(native.renderResult(textResult(''), { isPartial: false }, hostTheme, { args: { operation: 'status' } }).render(60), []);
   } finally {
-    publishBridge(ACTIVITY_ON);
+    publishShellApi(ACTIVITY_ON);
   }
 });
 
@@ -1155,7 +1155,7 @@ test('an unreadable call or output draws nothing instead of throwing', () => {
   assert.deepEqual(codegraphShape('read', { command: 'codegraph init' }), undefined);
 });
 
-// ---- S11: the switch is the bridge's `Card activity` line ----
+// ---- S11: the switch is the shell API's `Card activity` line ----
 //
 // The card paints a CALL; it does not run CodeGraph. So no module switch decides it: the line
 // the activity design owns does, asked on every paint. `activity` selected claims it, and every
@@ -1163,7 +1163,7 @@ test('an unreadable call or output draws nothing instead of throwing', () => {
 // throws, or no reader at all — hands the chain's own rows back without asking one slot.
 
 test('S11: `activity` selected claims the CodeGraph tools and a bash call that runs the program', () => {
-  publishBridge(ACTIVITY_ON);
+  publishShellApi(ACTIVITY_ON);
   const resolver = cardFor();
   for (const tool of [CODEGRAPH_TOOL, CODEGRAPH_MCP_TOOL]) {
     const slot = resolver(tool, () => HOST_BASH);
@@ -1195,7 +1195,7 @@ test('S11: `native`, `not-covered`, `missing`, another design and a throwing rea
   const call = (slot) => slot.renderCall({ operation: 'explore' }, plainTheme, { isPartial: false }).render(40);
   const result = (slot) => slot.renderResult(textResult('output'), { isPartial: false }, plainTheme, { args: { operation: 'explore' } }).render(40);
   for (const answer of answers) {
-    publishBridge(() => answer);
+    publishShellApi(() => answer);
     const resolver = cardFor();
     for (const tool of [CODEGRAPH_TOOL, CODEGRAPH_MCP_TOOL, 'bash']) {
       // The card is claimed — Pi resolves it once and would never ask again — and every
@@ -1206,18 +1206,18 @@ test('S11: `native`, `not-covered`, `missing`, another design and a throwing rea
       assert.deepEqual(result(slot), ['host result 40'], `${tool} under ${JSON.stringify(answer)}`);
     }
   }
-  publishBridge(() => { throw new Error('bridge exploded'); });
+  publishShellApi(() => { throw new Error('shell API exploded'); });
   assert.deepEqual(call(cardFor()(CODEGRAPH_TOOL, () => chain)), ['host call 40'], 'a throwing reader is a no');
-  publishBridge(ACTIVITY_ON);
+  publishShellApi(ACTIVITY_ON);
 });
 
 test('S11: with no reader at all the chain\'s rows are drawn, and a host without the hook registers nothing', () => {
   const silent = (slot) => slot.renderCall({ operation: 'explore' }, plainTheme, { isPartial: false }).render(40);
-  globalThis[BRIDGE_API_SLOT] = { schema: 'gentle-shell-bridge/api', version: 1 };
-  assert.deepEqual(silent(cardFor()(CODEGRAPH_TOOL, () => HOST_BASH)), [], 'an older bridge has no switch to follow, so the host draws its own rows');
-  delete globalThis[BRIDGE_API_SLOT];
-  assert.deepEqual(silent(cardFor()(CODEGRAPH_TOOL, () => HOST_BASH)), [], 'no bridge, no switch, so the host still draws its own rows');
-  publishBridge(ACTIVITY_ON);
+  globalThis[SHELL_API_SLOT] = { schema: 'odd-worktree/shell-api', version: 1 };
+  assert.deepEqual(silent(cardFor()(CODEGRAPH_TOOL, () => HOST_BASH)), [], 'an older shell API has no switch to follow, so the host draws its own rows');
+  delete globalThis[SHELL_API_SLOT];
+  assert.deepEqual(silent(cardFor()(CODEGRAPH_TOOL, () => HOST_BASH)), [], 'no shell API, no switch, so the host still draws its own rows');
+  publishShellApi(ACTIVITY_ON);
   const { registerCodegraphCard } = require('../lib/codegraph-card.js');
   assert.deepEqual(registerCodegraphCard({}, {}), { registered: false, resolver: undefined }, 'no host hook, no registration');
 });
@@ -1288,17 +1288,17 @@ async function loadComposedExtension() {
       registerToolRenderer: (resolver) => resolvers.push(resolver),
     };
     await withCodegraphCli(() => {
-      // S18 (T14): the extension registers nothing without gentle-shell-bridge, so
-      // this file's own host publishes the shared fixture's bridge before the factory
-      // runs. This load's bridge also answers the `Card activity` reader with the activity
+      // S18 (T14): the extension registers nothing without the shell API, so
+      // this file's own host publishes the shared fixture's shell API before the factory
+      // runs. This load's shell API also answers the `Card activity` reader with the activity
       // design (S11), which is the switch the CodeGraph card follows.
-      const previous = globalThis[BRIDGE_API_SLOT];
-      globalThis[BRIDGE_API_SLOT] = { ...defaultBridge().api, resolveToolDesignSelection: ACTIVITY_ON };
+      const previous = globalThis[SHELL_API_SLOT];
+      globalThis[SHELL_API_SLOT] = { ...defaultShellApi().api, resolveToolDesignSelection: ACTIVITY_ON };
       try {
         mod.default(host);
       } finally {
-        if (previous === undefined) delete globalThis[BRIDGE_API_SLOT];
-        else globalThis[BRIDGE_API_SLOT] = previous;
+        if (previous === undefined) delete globalThis[SHELL_API_SLOT];
+        else globalThis[SHELL_API_SLOT] = previous;
       }
     });
     // The cards measure text through the extension's own injected seam, so the test
@@ -1345,7 +1345,7 @@ test('the extension registers the CodeGraph card through the host hook', () => {
 });
 
 test('a bash call that runs no CodeGraph is drawn exactly as the host draws it', () => {
-  // The activity heading is applied by the bridge's design (lib/bash-design.js), never by a
+  // The activity heading is applied by the shell API's design (lib/bash-design.js), never by a
   // resolver of this package: the chain hands this row to the host's own renderers.
   const drawn = drawThrough(composed.resolvers, 'pnpm test', 'Tests 12 passed');
   const host = drawThrough([], 'pnpm test', 'Tests 12 passed');

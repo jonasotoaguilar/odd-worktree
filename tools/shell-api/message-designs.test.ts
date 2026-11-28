@@ -17,7 +17,7 @@ import {
   MESSAGE_DESIGN_DEFAULT_LABEL,
   MESSAGE_DESIGN_LINE_STORE_KEY,
   MESSAGE_DESIGN_NATIVE,
-  MESSAGE_DESIGN_STORE_ID,
+  LEGACY_MESSAGE_DESIGN_STORE_ID,
   MESSAGE_DESIGN_STORE_KEY,
   getMessageDesignConflicts,
   getMessageDesignFailures,
@@ -76,9 +76,9 @@ const design = (extra: Partial<MessageDesignRegistration> = {}): MessageDesignRe
   ...extra,
 });
 
-/** The stored document, read back the way the bridge itself writes it. */
+/** The stored document, read back the way the shell API itself writes it. */
 const storedDocument = (): Record<string, unknown> =>
-  createStore(MESSAGE_DESIGN_STORE_ID).get<Record<string, unknown>>(MESSAGE_DESIGN_STORE_KEY, {});
+  createStore(LEGACY_MESSAGE_DESIGN_STORE_ID).get<Record<string, unknown>>(MESSAGE_DESIGN_STORE_KEY, {});
 
 // ---------------------------------------------------------------------------------------------
 // What a registration accepts and refuses
@@ -154,7 +154,7 @@ test("S1: an id, a label and an apply are validated the way every other surface 
   assert.throws(
     () => registerMessageDesign(design({ label: MESSAGE_DESIGN_DEFAULT_LABEL })),
     /reserved/u,
-    "`default` is the bridge's own value",
+    "`default` is the shell API's own value",
   );
   assert.throws(
     () => registerMessageDesign(design({ label: MESSAGE_DESIGN_NATIVE })),
@@ -271,7 +271,7 @@ test("S1: a grouped line's value covers only the types its own design lists", ()
   );
 });
 
-test("S1: the selection persists in the bridge's own file, and an unused line map is never written", () => {
+test("S1: the selection persists in the shell API's own file, and an unused line map is never written", () => {
   setMessageDesignSelection(BUDGET_TYPE, "loon.budget");
   assert.deepEqual(storedDocument(), { [BUDGET_TYPE]: "loon.budget" });
 
@@ -298,7 +298,7 @@ test("S4: one resolve is ONE store read, and it never throws", () => {
   assert.equal(getMessageDesignSelectionReads(), 1, "one logical read, not one per candidate");
 
   // A stored value that is not a string is a hand edit, never a crash.
-  createStore(MESSAGE_DESIGN_STORE_ID).set(MESSAGE_DESIGN_STORE_KEY, { [BUDGET_TYPE]: 42 });
+  createStore(LEGACY_MESSAGE_DESIGN_STORE_ID).set(MESSAGE_DESIGN_STORE_KEY, { [BUDGET_TYPE]: 42 });
   assert.deepEqual(resolveMessageDesignSelection(BUDGET_TYPE), { kind: "native" });
   assert.deepEqual(resolveMessageDesignSelection("never-seen"), { kind: "native" });
 });

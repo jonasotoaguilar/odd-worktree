@@ -8,11 +8,11 @@
  * - `requestRepaint()` — a PLUGIN's value. Its wrapper reads the value on every render pass, so the
  *   drawn card changes without any cache being dropped; measuring the old invalidate + force on a
  *   real transcript is why: 753 ms vs 21 ms at 600 children (S13/T23).
- * - `requestSurfaceRepaint()` — a BRIDGE-owned row (the restored example `plain`, a section toggle).
+ * - `requestSurfaceRepaint()` — a SHELL-API-owned row (the restored example `plain`, a section toggle).
  *   T4 also dropped every mounted component's frame cache (`tui.invalidate()`) and forced the frame
  *   (`requestRender(true)`); S19/T35 measured that on real pi components at 50/200/600 children and
  *   proved the rows are byte-identical without either, on the conversation, on a rail host panel and
- *   on a bridge section hidden/collapsed/expanded. 600 children: 697/306/99 ms with them, 420/16/3
+ *   on a shell API section hidden/collapsed/expanded. 600 children: 697/306/99 ms with them, 420/16/3
  *   ms without. `test/surface-repaint-cost.test.ts` bounds the work.
  *
  * Everything asserted here is the order and the arguments the host actually observes, plus the
@@ -22,7 +22,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { bridgeApi } from "../../lib/shell-api/api.ts";
+import { shellApi } from "../../lib/shell-api/api.ts";
 import {
   HOST_SIDEBAR_CACHE,
   getRepaintDiagnostics,
@@ -39,7 +39,7 @@ interface HostCall {
 
 /**
  * The `tui` a host hands the widget factory, as far as a repaint reads it: `invalidate()` and
- * `requestRender(force?)`, recorded in the order the bridge calls them.
+ * `requestRender(force?)`, recorded in the order the shell API calls them.
  */
 function recordingTui(options: { invalidate?: "present" | "absent" | "throws" } = {}): {
   calls: HostCall[];
@@ -104,7 +104,7 @@ test("T23: requestRepaint asks for ONE differential frame and drops no cache", (
   assert.equal(terminal[HOST_SIDEBAR_CACHE]?.revision, 1, "invalidateSidebar(tui)'s one step");
 });
 
-test("T36: the bridge-owned path is one differential frame plus the sidebar revision", () => {
+test("T36: the shell API-owned path is one differential frame plus the sidebar revision", () => {
   const tui = recordingTui();
   setRepaintHost(tui.host);
 
@@ -186,11 +186,11 @@ test("T4: a captured object with no requestRender() is reported as unavailable",
   );
 });
 
-test("T4: the published bridge API carries requestRepaint for a plugin that never imports this package", () => {
+test("T4: the published shell API API carries requestRepaint for a plugin that never imports this package", () => {
   const tui = recordingTui();
   setRepaintHost(tui.host);
 
-  const api = bridgeApi();
+  const api = shellApi();
   assert.equal(typeof api?.requestRepaint, "function", "the plugin-facing slot publishes it");
   api?.requestRepaint?.();
 

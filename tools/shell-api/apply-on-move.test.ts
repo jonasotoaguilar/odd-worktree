@@ -1,7 +1,7 @@
 /**
  * Move the cursor, press Enter to apply (A1–A4, L4).
  *
- * The user's report: a line the bridge added changes its value the moment ←/→ touches it — the `›`
+ * The user's report: a line the shell API added changes its value the moment ←/→ touches it — the `›`
  * cursor and "Enter applies" never appear — while the host's own `Stats` line moves the cursor and
  * applies on Enter. The host's rule is PER ROW, not per line, so the fix is a row field:
  *
@@ -11,7 +11,7 @@
  * - `:590-592` marks the focused non-current value with `›`, and `:35-38,751` prints
  *   `←/→ choose · Enter apply` for a focused line whose row defers.
  *
- * `KeyDriver` below is that rule, modelled once and driven over the REAL rows the bridge emits —
+ * `KeyDriver` below is that rule, modelled once and driven over the REAL rows the shell API emits —
  * the `Sections` toggle, the card-style values in both modes (mixed with the host's own), and a
  * plugin provider's own rows (a fixture with the shape the worked example used to demonstrate).
  * It counts the actions it runs, so "a move applies
@@ -24,8 +24,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { BRIDGE_API_KEY, publishBridgeApi, resetBridgeApiForTests } from "../../lib/shell-api/api.ts";
-import { armBridge } from "../../lib/shell-api/arm.ts";
+import { SHELL_API_KEY, publishShellApi, resetShellApiForTests } from "../../lib/shell-api/api.ts";
+import { armShellApi } from "../../lib/shell-api/arm.ts";
 import {
   registerCardStyle,
   registerRows,
@@ -78,7 +78,7 @@ interface KeyDriver {
 
 /**
  * The host's keyboard rule over whatever rows are live right now, taken row by row from
- * `lib/visual-customize-view.ts` — including the per-row deferral the bridge rows now carry.
+ * `lib/visual-customize-view.ts` — including the per-row deferral the shell API rows now carry.
  */
 function keyDriver(rowsNow: () => FakeRow[]): KeyDriver {
   const rows = (): FakeRow[] => rowsNow().filter(isVisible);
@@ -167,8 +167,8 @@ test.after(() => {
 
 test.beforeEach(() => {
   rmSync(join(configHome, "gentle-shell-bridge"), { recursive: true, force: true });
-  delete (globalThis as unknown as Record<symbol, unknown>)[BRIDGE_API_KEY];
-  resetBridgeApiForTests();
+  delete (globalThis as unknown as Record<symbol, unknown>)[SHELL_API_KEY];
+  resetShellApiForTests();
   resetBusForTests();
   resetSectionsForTests();
   resetCardStylesForTests();
@@ -233,14 +233,14 @@ const storedSections = (): unknown => {
 };
 
 // ---------------------------------------------------------------------------------------------
-// The bridge's own `Sections` toggle
+// The shell API's own `Sections` toggle
 // ---------------------------------------------------------------------------------------------
 
 test("the Sections toggle moves with ←/→ and applies only on Enter (A1, A4)", async () => {
   registerSection(section("loon.music", { title: "MUSIC" }));
   installSectionRows();
   const host = createFakeHost();
-  armBridge(host.ui);
+  armShellApi(host.ui);
   host.buildMenu();
 
   const keys = keyDriver(host.liveRows);
@@ -277,13 +277,13 @@ test("the Sections toggle moves with ←/→ and applies only on Enter (A1, A4)"
 
 test("a registered card style defers to Enter on the fallback line (A1)", async () => {
   const host = createFakeHost();
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(style("loon.cute", { label: "cute" }));
   host.buildMenu();
 
   const keys = keyDriver(host.liveRows);
-  keys.focus("Bridge card style");
+  keys.focus("API card style");
 
   await keys.arrow(1);
 
@@ -291,7 +291,7 @@ test("a registered card style defers to Enter on the fallback line (A1)", async 
   assert.equal(keys.actions(), 0, "moving applied nothing");
   assert.equal(getCardStyleSelection(), "native", "the stored selection is untouched");
   assert.equal(getRepaintDiagnostics().lastTrigger, undefined, "and no surface was repainted");
-  assert.equal(keys.line(), "Bridge card style ● native  › cute");
+  assert.equal(keys.line(), "API card style ● native  › cute");
 
   await keys.enter();
 
@@ -303,19 +303,19 @@ test("a registered card style defers to Enter on the fallback line (A1)", async 
 
 test("the fallback line's native value defers too (A1)", async () => {
   const host = createFakeHost();
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(style("loon.cute", { label: "cute" }));
   host.buildMenu();
 
   const keys = keyDriver(host.liveRows);
-  keys.focus("Bridge card style");
+  keys.focus("API card style");
   await keys.arrow(1);
   await keys.enter(); // select cute first, so native is no longer current
   assert.equal(getCardStyleSelection(), "loon.cute");
   const before = keys.actions();
 
-  keys.focus("Bridge card style");
+  keys.focus("API card style");
   await keys.arrow(-1);
 
   assert.equal(keys.focused().choice?.value, "native", "the cursor moved back to native");
@@ -327,50 +327,50 @@ test("the fallback line's native value defers too (A1)", async () => {
   assert.equal(getCardStyleSelection(), "native");
 });
 
-test("on the host's line the host's values keep their own field and the bridge's value defers (A3)", async () => {
+test("on the host's line the host's values keep their own field and the shell API's value defers (A3)", async () => {
   const hostActions: string[] = [];
   const host = createFakeHost({ rows: rowsWithHostLine(hostActions) });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(style("loon.cute", { label: "cute" }));
   host.buildMenu();
 
   const live = host.liveRows();
   const hostRows = live.filter((row) => row.choice?.setting === HOST_CARD_STYLE_SETTING);
-  assert.equal(hostRows.length, 3, "neon, float and the spliced bridge value on ONE line");
+  assert.equal(hostRows.length, 3, "neon, float and the spliced shell API value on ONE line");
   assert.equal(hostRows[0]?.choice?.applyOnMove, undefined, "the host's neon row is the host's");
   assert.equal(hostRows[1]?.choice?.applyOnMove, undefined, "and so is float");
-  assert.equal(hostRows[2]?.choice?.applyOnMove, false, "the bridge's value defers to Enter");
+  assert.equal(hostRows[2]?.choice?.applyOnMove, false, "the shell API's value defers to Enter");
 
   const keys = keyDriver(host.liveRows);
   keys.focus(HOST_CARD_STYLE_SETTING);
 
-  // The host's own value applies on the move, exactly as before: the bridge did not rewrite it.
+  // The host's own value applies on the move, exactly as before: the shell API did not rewrite it.
   await keys.arrow(-1);
   assert.deepEqual(hostActions, ["neon"], "the host's own action ran on the move");
   keys.focus(HOST_CARD_STYLE_SETTING);
 
-  // The bridge's value on the SAME line only takes focus.
+  // The shell API's value on the SAME line only takes focus.
   await keys.arrow(1);
   await keys.arrow(1);
-  assert.equal(keys.focused().choice?.value, "cute", "the cursor reached the bridge value");
+  assert.equal(keys.focused().choice?.value, "cute", "the cursor reached the shell API value");
   assert.equal(getCardStyleSelection(), "native", "moving onto it applied nothing");
   assert.deepEqual(hostActions, ["neon"], "and ran no host action either");
 
   await keys.enter();
-  assert.equal(getCardStyleSelection(), "loon.cute", "Enter applied the bridge value");
+  assert.equal(getCardStyleSelection(), "loon.cute", "Enter applied the shell API value");
 });
 
 // ---------------------------------------------------------------------------------------------
 // A plugin's own provider rows (a fixture, not the worked example)
 // ---------------------------------------------------------------------------------------------
 //
-// The example contributes a tool DESIGN now, and the bridge owns the design line: its rows are not a
+// The example contributes a tool DESIGN now, and the shell API owns the design line: its rows are not a
 // provider's, so the provider path is driven by a fixture with the same shape and the same rules.
 // Nothing here is specific to bash; the values are just two choices on one line.
 
 test("a plugin's provider rows move without applying and apply on Enter (A1, A2)", async () => {
-  publishBridgeApi();
+  publishShellApi();
   let stored = "native";
   const values = ["native", "bash heading"];
   registerRows({
@@ -467,7 +467,7 @@ test("the build defers every provider choice on a copy, never mutating the provi
   assert.equal(built[1], alreadyDeferring, "an authored false already conforms: no copy is needed");
   assert.equal(explicitImmediate.choice?.applyOnMove, true, "an authored true is not mutated either");
   assert.equal(built[2]?.choice?.applyOnMove, false, "but the emitted copy defers");
-  // A row without a choice is a BUTTON row (S16). The bridge hands the host a copy so it can contain
+  // A row without a choice is a BUTTON row (S16). The shell API hands the host a copy so it can contain
   // a failing `action`; nothing else about it changes and the provider's object is never mutated.
   assert.notEqual(built[3], plain, "a button row is a copy, so its action can be contained (S16)");
   assert.equal(built[3]?.label, plain.label, "its label is carried as the same reference");
@@ -479,7 +479,7 @@ test("the build defers every provider choice on a copy, never mutating the provi
 test("a placed provider's rows defer to Enter, and the host's Card style pair is never split", async () => {
   const hostActions: string[] = [];
   const host = createFakeHost({ rows: rowsWithHostLine(hostActions) });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(style("loon.cute", { label: "cute" }));
   registerRows({
@@ -508,16 +508,16 @@ test("a placed provider's rows defer to Enter, and the host's Card style pair is
   const styleIndices = live
     .map((row, index) => (row.choice?.setting === HOST_CARD_STYLE_SETTING ? index : -1))
     .filter((index) => index !== -1);
-  assert.equal(styleRows.length, 3, "the host's neon/float pair still holds the bridge's value");
+  assert.equal(styleRows.length, 3, "the host's neon/float pair still holds the shell API's value");
   assert.deepEqual(
     styleIndices,
     [styleIndices[0], (styleIndices[0] ?? 0) + 1, (styleIndices[0] ?? 0) + 2],
-    "the pair plus the bridge value stay one consecutive line",
+    "the pair plus the shell API value stay one consecutive line",
   );
   assert.deepEqual(
     styleRows.map((row) => row.choice?.value),
     ["neon", "float", "cute"],
-    "and the bridge's value still lands inside its pair",
+    "and the shell API's value still lands inside its pair",
   );
 
   const keys = keyDriver(host.liveRows);

@@ -14,7 +14,7 @@
  * by a copy that predates it, so a provider list already in flight is kept. The same holds for
  * `cardStyles` and `transforms`.
  *
- * The key is the bridge's own; it is NOT the hook registry key
+ * The key is the shell API's own; it is NOT the hook registry key
  * `Symbol.for("gentle-pi.customize-row-providers")`, which belongs to the host (S4/T5), and it
  * is not the host's rail key `Symbol.for("gentle-pi.experimental-sidebar.state")`.
  *
@@ -44,8 +44,8 @@ import type {
 /** Re-exported here because a placement decision is the bus's: see `resolveSectionPlacements`. */
 export { RAIL_PARTS };
 
-/** Stable process-global slot for the bridge's registration lists. */
-const BUS_KEY = Symbol.for("gentle-shell-bridge.providers");
+/** Stable process-global slot for the shell API's registration lists. */
+const BUS_KEY = Symbol.for("odd-worktree.providers");
 
 interface BusEntry {
   provider: RowProvider;
@@ -72,9 +72,9 @@ interface BusState {
   cardStyles: CardStyleEntry[];
   /** Transcript transforms in registration order; ordering happens in `snapshotTransforms`. */
   transforms: TransformEntry[];
-  /** Sections that asked for a `placement` the bridge cannot honour; one per live `id`. */
+  /** Sections that asked for a `placement` the shell API cannot honour; one per live `id`. */
   placementRejections: SectionPlacementRejection[];
-  /** Row providers that asked for a `placement` the bridge cannot honour; one per live `id`. */
+  /** Row providers that asked for a `placement` the shell API cannot honour; one per live `id`. */
   rowPlacementRejections: RowPlacementRejection[];
   /** The ACTUAL landing each row provider got in the last menu build (S5). */
   rowPlacementLandings: RowPlacementLandingRecord[];
@@ -155,17 +155,17 @@ export function registerRows(provider: RowProvider): () => void {
  * Register one of THIS package's own providers: the same store, the same attribution, without the
  * reservation check below. Internal — `src/index.ts` does not export it, so a plugin cannot reach it.
  */
-export function registerBridgeRows(provider: RowProvider): () => void {
+export function registerShellApiRows(provider: RowProvider): () => void {
   return attributeRegistration("rows", provider, undefined, () => registerRowsStored(provider));
 }
 
 /**
- * The provider ids this package owns. They are the bridge's own plumbing — its effect is the tables
+ * The provider ids this package owns. They are the shell API's own plumbing — its effect is the tables
  * in the diagnostics record, and the report filters those exact objects out of `providers`.
  *
  * A plugin that registers one of them is refused, for two reasons that both cost the user something
- * real. The bus answers an id first-come, so a plugin taking `bridge.message-designs` before the
- * bridge does either keeps the bridge's line off the menu until it lets go, or is silently replaced
+ * real. The bus answers an id first-come, so a plugin taking `shell-api.message-designs` before the
+ * shell API does either keeps the shell API's line off the menu until it lets go, or is silently replaced
  * by it — and a plugin that takes the id and gives it back AFTER a design registered leaves the line
  * uninstalled for the rest of the process. Refusing the id at the door is the only answer that cannot
  * strand a switch.
@@ -174,17 +174,17 @@ const RESERVED_ROW_PROVIDER_IDS: ReadonlySet<string> = new Set([
   // The literals of `SECTION_ROWS_PROVIDER_ID`, `CARD_STYLE_ROWS_PROVIDER_ID`,
   // `TOOL_DESIGN_ROWS_PROVIDER_ID` and `MESSAGE_DESIGN_ROWS_PROVIDER_ID`. Spelled here because those
   // modules import THIS one, so importing their constants would close a cycle.
-  "bridge.sections",
-  "bridge.card-styles",
-  "bridge.tool-designs",
-  "bridge.message-designs",
+  "shell-api.sections",
+  "shell-api.card-styles",
+  "shell-api.tool-designs",
+  "shell-api.message-designs",
 ]);
 
 function assertProviderIdIsFree(provider: RowProvider): void {
   if (!RESERVED_ROW_PROVIDER_IDS.has(provider.id)) return;
   throw new Error(
-    `gentle-shell-bridge: cannot register row provider ${JSON.stringify(provider.id)}: that id ` +
-      "belongs to the bridge's own line, so a plugin using it would take that line off the menu or " +
+    `odd-worktree: cannot register row provider ${JSON.stringify(provider.id)}: that id ` +
+      "belongs to the shell API's own line, so a plugin using it would take that line off the menu or " +
       "be silently replaced by it. Register your rows under an id of your own, e.g. " +
       '"loon.rows".',
   );
@@ -207,7 +207,7 @@ function assertRowProviderCategory(provider: RowProvider): void {
   const reserved = reservedCategory(provider.category);
   if (reserved === undefined) return;
   throw new Error(
-    `gentle-shell-bridge: cannot register row provider ${JSON.stringify(provider.id)}: its ` +
+    `odd-worktree: cannot register row provider ${JSON.stringify(provider.id)}: its ` +
       `category ${JSON.stringify(String(provider.category))} is the reserved category ` +
       `${JSON.stringify(reserved)}. ${reserved} ${RESERVED_CATEGORY_RULE}. Place the rows in one of ` +
       `the host's other categories, e.g. "Cards".`,
@@ -216,7 +216,7 @@ function assertRowProviderCategory(provider: RowProvider): void {
 
 function registerRowsStored(provider: RowProvider): () => void {
   assertRowProviderCategory(provider);
-  // A row `placement` the bridge cannot honour is reported and IGNORED, never thrown: refusing the
+  // A row `placement` the shell API cannot honour is reported and IGNORED, never thrown: refusing the
   // whole provider over it would cost the user its rows. It lands at the end, which is the
   // historical default (S5).
   const placementFault = rowPlacementProblem(provider.placement);
@@ -298,8 +298,8 @@ export interface RowPlacementResolution {
 }
 
 /**
- * A row `placement` the bridge cannot honour, kept verbatim so the author can find it (S5). The
- * provider still registers — a field the bridge can ignore must never cost the whole block — and
+ * A row `placement` the shell API cannot honour, kept verbatim so the author can find it (S5). The
+ * provider still registers — a field the shell API can ignore must never cost the whole block — and
  * it is placed at the end, which is what the diagnostics record says next to this record.
  */
 export interface RowPlacementRejection {
@@ -328,7 +328,7 @@ const ROW_PLACEMENT_RULE =
   'placement must be "start", "end", or { after: "<row provider id>" }';
 
 /**
- * What is wrong with one row `placement`, or `undefined` when the bridge can honour it.
+ * What is wrong with one row `placement`, or `undefined` when the shell API can honour it.
  *
  * Checked in a fixed order — the shape, then the `after` string, then its own shape — so the
  * reported reason is deterministic instead of depending on how a bad value was built. One rule for
@@ -673,7 +673,7 @@ export function assertRegistrationId(kind: string, id: unknown): asserts id is s
   const problem = registrationIdProblem(id);
   if (problem === undefined) return;
   throw new Error(
-    `gentle-shell-bridge: invalid ${kind} id ${JSON.stringify(id)}: ${problem}. ` +
+    `odd-worktree: invalid ${kind} id ${JSON.stringify(id)}: ${problem}. ` +
       `A ${kind} id must be a non-empty string that can be used as a plain object key.`,
   );
 }
@@ -690,9 +690,9 @@ function assertRowLabel(kind: string, id: string, rowLabel: unknown): void {
   if (rowLabel === undefined) return;
   if (typeof rowLabel !== "string" || rowLabel.trim() === "") {
     throw new Error(
-      `gentle-shell-bridge: invalid ${kind} rowLabel for ${JSON.stringify(id)}: it must be a ` +
+      `odd-worktree: invalid ${kind} rowLabel for ${JSON.stringify(id)}: it must be a ` +
         "non-empty string. It is the text a user reads in the menu; the id stays internal. Omit it " +
-        "to let the bridge derive a label from the visible text instead.",
+        "to let the shell API derive a label from the visible text instead.",
     );
   }
 }
@@ -712,7 +712,7 @@ function registerSectionStored(section: SidebarSection): () => void {
   }
   // The name in force now conforms, so a record left by the name it replaced is no longer true.
   clearRowNameRejections("section", section.id);
-  // A `placement` the bridge cannot honour is reported and IGNORED, never thrown: it names where the
+  // A `placement` the shell API cannot honour is reported and IGNORED, never thrown: it names where the
   // card goes, and refusing the whole section over it would cost the user their card. It lands at the
   // end, which is the historical default (S5).
   const placementFault = placementProblem(section.placement);
@@ -755,8 +755,8 @@ export interface SectionPlacementResolution {
 }
 
 /**
- * A `placement` the bridge cannot honour, kept verbatim so the author can find it (S5). The section
- * still registers — a field the bridge can ignore must never cost the whole card — and it is placed
+ * A `placement` the shell API cannot honour, kept verbatim so the author can find it (S5). The section
+ * still registers — a field the shell API can ignore must never cost the whole card — and it is placed
  * at the end, which is what the diagnostics record says next to this record.
  */
 export interface SectionPlacementRejection {
@@ -772,7 +772,7 @@ const PLACEMENT_RULE =
   'placement must be "start", "end", or { after: "<section id or native rail part>" }';
 
 /**
- * What is wrong with one `placement`, or `undefined` when the bridge can honour it.
+ * What is wrong with one `placement`, or `undefined` when the shell API can honour it.
  *
  * Checked in a fixed order — the shape, then the `after` string, then its own shape — so the
  * reported reason is deterministic instead of depending on how a bad value was built. One rule for
@@ -1149,14 +1149,14 @@ function sortableCardStyleOrder(style: CardStyleRegistration): number | undefine
 function assertCardFrame(id: string, frame: unknown): void {
   if (frame === null || typeof frame !== "object" || Array.isArray(frame)) {
     throw new Error(
-      `gentle-shell-bridge: invalid card style ${JSON.stringify(id)}: frame must be an object ` +
+      `odd-worktree: invalid card style ${JSON.stringify(id)}: frame must be an object ` +
         "with top, line and bottom functions.",
     );
   }
   for (const member of ["top", "line", "bottom"] as const) {
     if (typeof (frame as Record<string, unknown>)[member] !== "function") {
       throw new Error(
-        `gentle-shell-bridge: invalid card style ${JSON.stringify(id)}: frame.${member} must be a ` +
+        `odd-worktree: invalid card style ${JSON.stringify(id)}: frame.${member} must be a ` +
           "function. A style draws chrome and nothing else (S2).",
       );
     }
@@ -1166,7 +1166,7 @@ function assertCardFrame(id: string, frame: unknown): void {
 function assertCardStyleLabel(id: string, label: unknown): void {
   if (typeof label !== "string" || label.trim() === "") {
     throw new Error(
-      `gentle-shell-bridge: invalid card style ${JSON.stringify(id)}: label must be a non-empty ` +
+      `odd-worktree: invalid card style ${JSON.stringify(id)}: label must be a non-empty ` +
         "string. It is the text the user reads on the Card style line, so keep it short.",
     );
   }
@@ -1183,7 +1183,7 @@ function assertCardStyleLabel(id: string, label: unknown): void {
 function assertCardStyleLabelIsDistinct(style: CardStyleRegistration): void {
   if ((HOST_CARD_STYLE_VALUES as readonly string[]).includes(style.label)) {
     throw new Error(
-      `gentle-shell-bridge: invalid card style label ${JSON.stringify(style.label)} for ` +
+      `odd-worktree: invalid card style label ${JSON.stringify(style.label)} for ` +
         `${JSON.stringify(style.id)}: it is one of the host's own values ` +
         `(${HOST_CARD_STYLE_VALUES.join(", ")}), so the Card style line would show it twice. ` +
         "Pick a distinct label.",
@@ -1194,7 +1194,7 @@ function assertCardStyleLabelIsDistinct(style: CardStyleRegistration): void {
   );
   if (clash !== undefined) {
     throw new Error(
-      `gentle-shell-bridge: invalid card style label ${JSON.stringify(style.label)} for ` +
+      `odd-worktree: invalid card style label ${JSON.stringify(style.label)} for ` +
         `${JSON.stringify(style.id)}: it is already used by ${JSON.stringify(clash.id)}. Two values ` +
         "reading the same cannot be told apart on the Card style line. Pick a distinct label.",
     );
@@ -1226,8 +1226,8 @@ function registerCardStyleStored(style: CardStyleRegistration): () => void {
   assertRegistrationId("card style", style.id);
   if (RESERVED_CARD_STYLE_IDS.has(style.id)) {
     throw new Error(
-      `gentle-shell-bridge: invalid card style id ${JSON.stringify(style.id)}: it is already a ` +
-        "value of the Card style line (the host's own neon/float, or the bridge's native), so the " +
+      `odd-worktree: invalid card style id ${JSON.stringify(style.id)}: it is already a ` +
+        "value of the Card style line (the host's own neon/float, or the shell API's native), so the " +
         "line would show the same value twice. Pick an id of your own, e.g. \"loon.cute\".",
     );
   }
@@ -1307,8 +1307,8 @@ function sortableTransformOrder(transform: TranscriptTransform): number | undefi
 function assertTransformFunction(id: string, transform: unknown): void {
   if (typeof transform !== "function") {
     throw new Error(
-      `gentle-shell-bridge: invalid transform ${JSON.stringify(id)}: transform must be a function `
-        + `of (lines, ctx) that returns the lines to draw. A transform rewrites rows; the bridge `
+      `odd-worktree: invalid transform ${JSON.stringify(id)}: transform must be a function `
+        + `of (lines, ctx) that returns the lines to draw. A transform rewrites rows; the shell API `
         + `clips them, isolates its throw and records it in the diagnostics record (S1).`,
     );
   }

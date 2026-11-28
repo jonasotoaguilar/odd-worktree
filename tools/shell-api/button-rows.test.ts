@@ -5,19 +5,19 @@
  * `action(inline)` required, and Enter/Space runs `action` (`:575-577`) exactly as it does for the
  * host's own `Profiles` and `Reset` rows (`extensions/gentle-shell.ts:3541,3550`). So a row with
  * `category`, `label`, `action` and NO `choice` is the second supported kind, and this suite pins
- * everything about it through the real entry (`publishBridgeApi().registerRows`) and the real
+ * everything about it through the real entry (`publishShellApi().registerRows`) and the real
  * capture path:
  *
  * - it is accepted, reaches the host's array with its category untouched, and renders as its own
  *   row — never a value of another row's setting;
  * - `preview`, `keyhint`, `visible` and a function-valued `label` are reference-identical, so the
- *   bridge passes them through instead of re-deriving them;
- * - its label is the WHOLE visible text of the row, so the bridge's plain-word row-name rule applies
+ *   shell API passes them through instead of re-deriving them;
+ * - its label is the WHOLE visible text of the row, so the shell API's plain-word row-name rule applies
  *   to it exactly as it applies to a toggle's label: a mark, or more than three words, is refused
  *   and reported verbatim, and the row is absent rather than rewritten;
  * - `confirmOnEnter` never touches it: no `choice` appears, no `applyOnMove` is injected, and the
  *   provider's own object is not mutated;
- * - a throwing (or rejecting) `action` is contained by the bridge and reported ONCE through the
+ * - a throwing (or rejecting) `action` is contained by the shell API and reported ONCE through the
  *   notice channel that the diagnostics record lists, so the menu and every other row stay usable;
  * - a provider may mix toggles and buttons in one category, and the order it gave is kept.
  */
@@ -28,8 +28,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { publishBridgeApi, resetBridgeApiForTests } from "../../lib/shell-api/api.ts";
-import { armBridge } from "../../lib/shell-api/arm.ts";
+import { publishShellApi, resetShellApiForTests } from "../../lib/shell-api/api.ts";
+import { armShellApi } from "../../lib/shell-api/arm.ts";
 import {
   registerRows,
   resetBusForTests,
@@ -88,7 +88,7 @@ test.after(() => {
 
 test.beforeEach(() => {
   rmSync(join(configHome, "gentle-shell-bridge"), { recursive: true, force: true });
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetBusForTests();
   resetSectionsForTests();
   resetCardStylesForTests();
@@ -104,7 +104,7 @@ test.beforeEach(() => {
 
 const menuHost = (): FakeHost => {
   const host = createFakeHost();
-  armBridge(host.ui);
+  armShellApi(host.ui);
   return host;
 };
 
@@ -123,7 +123,7 @@ const toggles = (setting: string, label: string, values: [string, string]): Cust
 
 test("a button row is accepted in an existing category and Enter runs its action once", async () => {
   const calls: string[] = [];
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.buttons",
     category: "Cards",
     rows: () => [
@@ -152,7 +152,7 @@ test("a button row is accepted in an existing category and Enter runs its action
 });
 
 test("a button row in a new category keeps that category untouched", () => {
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.buttons",
     category: "Loon",
     rows: () => [{ label: "Loon refresh", action: () => {} }],
@@ -167,7 +167,7 @@ test("a button row in a new category keeps that category untouched", () => {
     host.liveRows().some((candidate) => candidate.category === "Loon"),
     "the row is in the array the host derives its categories from (visual-customize-view.ts:387)",
   );
-  // Fixed by S18: the bridge appends the providers' rows BEFORE the view's constructor runs
+  // Fixed by S18: the shell API appends the providers' rows BEFORE the view's constructor runs
   // `options.rows.map(...)` (`visual-customize-view.ts:387`), so the page the row names exists to be
   // selected. A late push — after the factory returned — could only join a page the list already
   // held, which is why a brand-new category was invisible before (E8).
@@ -187,7 +187,7 @@ test("preview, keyhint, visible and a function label pass through untouched", ()
   const visible = () => true;
   const label = () => "Loon refresh";
   const action = () => {};
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.buttons",
     category: "Cards",
     rows: () => [{ category: "Cards", label, preview, keyhint: "Enter refresh · Esc close", visible, action }],
@@ -203,7 +203,7 @@ test("preview, keyhint, visible and a function label pass through untouched", ()
   assert.equal(row.visible, visible, "visible is the provider's function");
   assert.deepEqual(row.preview?.(), { title: "Loon · refresh", sample: "redraws the rail" });
   assert.equal(row.visible?.(), true);
-  assert.notEqual(row.action, action, "the action is the ONE thing the bridge wraps (see below)");
+  assert.notEqual(row.action, action, "the action is the ONE thing the shell API wraps (see below)");
   assert.deepEqual(
     Object.keys(row).sort(),
     ["action", "category", "keyhint", "label", "preview", "visible"],
@@ -216,7 +216,7 @@ test("preview, keyhint, visible and a function label pass through untouched", ()
 // ---------------------------------------------------------------------------------------------
 
 test("a button label with a structural mark is refused and reported, and its siblings stay", () => {
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.buttons",
     category: "Cards",
     rows: () => [
@@ -280,7 +280,7 @@ test("a button row keeps no choice and no applyOnMove, and the provider's object
     choice: { setting: "Loon rendering", value: "on", current: () => true },
     action: () => {},
   };
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.buttons",
     category: "Cards",
     rows: () => [providerRow, toggleRow],
@@ -292,7 +292,7 @@ test("a button row keeps no choice and no applyOnMove, and the provider's object
   assert.deepEqual(
     Object.keys(providerRow).sort(),
     ["action", "category", "label"],
-    "the bridge never writes to the row the provider keeps",
+    "the shell API never writes to the row the provider keeps",
   );
   const row = liveRow(host, "Loon refresh");
   assert.equal("choice" in row, false);
@@ -309,12 +309,12 @@ test("a button row keeps no choice and no applyOnMove, and the provider's object
 // ---------------------------------------------------------------------------------------------
 
 const failureNotice = (label: string, message: string): string =>
-  `gentle-shell-bridge: the button row ${JSON.stringify(label)} from "loon.buttons" failed: ` +
+  `odd-worktree: the button row ${JSON.stringify(label)} from "loon.buttons" failed: ` +
   `${message}. The menu stays open; fix the row's action.`;
 
 test("a synchronously throwing action is contained and reported once", async () => {
   const ran: string[] = [];
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.buttons",
     category: "Cards",
     rows: () => [
@@ -337,7 +337,7 @@ test("a synchronously throwing action is contained and reported once", async () 
   await host.press("Loon explode");
   await host.press("Loon explode");
 
-  assert.deepEqual(ran, ["explode", "explode"], "the row ran; the throw did not escape the bridge");
+  assert.deepEqual(ran, ["explode", "explode"], "the row ran; the throw did not escape the shell API");
   assert.deepEqual(
     snapshotNotices().entries.map((entry) => `${entry.level}: ${entry.message}`),
     [`error: ${failureNotice("Loon explode", "row action exploded")}`],
@@ -351,7 +351,7 @@ test("a synchronously throwing action is contained and reported once", async () 
 });
 
 test("a rejecting action is contained and reported once", async () => {
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.buttons",
     category: "Cards",
     rows: () => [
@@ -383,7 +383,7 @@ test("a rejecting action is contained and reported once", async () => {
 // ---------------------------------------------------------------------------------------------
 
 test("toggles and buttons in one category keep the provider's order", () => {
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.buttons",
     category: "Cards",
     rows: () => [
@@ -409,7 +409,7 @@ test("toggles and buttons in one category keep the provider's order", () => {
 });
 
 test("a placed block keeps its toggle pair and its button together, before the host rows", () => {
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.block",
     category: "Cards",
     placement: "start",

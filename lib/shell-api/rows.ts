@@ -3,7 +3,7 @@
  * identically whichever interception is active.
  *
  * The builder is pure with respect to the bus: it takes an ordered provider snapshot, calls each
- * provider's `rows(ctx)` once, and isolates failures. It caches nothing — the bridge never holds
+ * provider's `rows(ctx)` once, and isolates failures. It caches nothing — the shell API never holds
  * row values (docs/state.md).
  */
 
@@ -45,7 +45,7 @@ export interface RowBuildRecord {
   rows: CustomizeRow[];
 }
 
-const ROWS_STATE = Symbol.for("gentle-shell-bridge.rows.state.v1");
+const ROWS_STATE = Symbol.for("odd-worktree.rows.state.v1");
 
 /** The host's category for a row that names none (`lib/visual-customize-view.ts:387`). */
 const HOST_DEFAULT_CATEGORY = "Settings";
@@ -146,7 +146,7 @@ function acceptsRowName(providerId: string, row: CustomizeRow): boolean {
  * `Reset`/`Profiles` shape, and the host runs it on Enter/Space. This host catches a throw and
  * reports it (`lib/visual-customize-view.ts:224-234`), but a host that does not — or an action that
  * only returns a rejected promise nobody awaits — would put a plugin's failure in Pi's render loop.
- * So the bridge catches it, reports it ONCE through the notice channel the diagnostics record lists
+ * So the shell API catches it, reports it ONCE through the notice channel the diagnostics record lists
  * (`./notices.ts` records an identical message+level once, so pressing the row again does not
  * repeat it) and returns normally: the menu and every other row stay usable.
  *
@@ -166,7 +166,7 @@ function containButtonAction(providerId: string, row: CustomizeRow): CustomizeRo
         await action(inline);
       } catch (error) {
         recordNotice(
-          `gentle-shell-bridge: ${where} from ${JSON.stringify(providerId)} failed: ` +
+          `odd-worktree: ${where} from ${JSON.stringify(providerId)} failed: ` +
             `${errorMessage(error)}. The menu stays open; fix the row's action.`,
           "error",
         );
@@ -176,11 +176,11 @@ function containButtonAction(providerId: string, row: CustomizeRow): CustomizeRo
 }
 
 /**
- * Apply the bridge's ONE behaviour to a row that carries a choice (A1–A3): ←/→ moves the cursor,
+ * Apply the shell API's ONE behaviour to a row that carries a choice (A1–A3): ←/→ moves the cursor,
  * Enter applies. The host decides per row (`lib/visual-customize-view.ts:565` applies on the move only
  * while `choice.applyOnMove !== false`), so a provider row that omits the field — every row before
  * this rule — would change its value the moment the user steps onto it, with no `›` cursor and no
- * "Enter applies". The bridge owns the menu integration, so it normalises rather than trusting the
+ * "Enter applies". The shell API owns the menu integration, so it normalises rather than trusting the
  * author: one behaviour for every row it contributes, including a provider's explicit `true`.
  *
  * The provider's row and `choice` are never mutated: the change is a shallow copy, every other field
@@ -203,7 +203,7 @@ function confirmOnEnter(row: CustomizeRow): CustomizeRow {
  *
  * A row whose line name or label breaks the row-name shape is dropped as it is staged (N8): it is
  * absent from the array the host receives AND from the build record the diagnostics record reads, so it is
- * not part of the effective set. The rejection is recorded verbatim for the report; the bridge never
+ * not part of the effective set. The rejection is recorded verbatim for the report; the shell API never
  * rewrites a name it was given.
  *
  * A row that asks for a RESERVED category is dropped the same way (S15): `Keymaps` is the host's own

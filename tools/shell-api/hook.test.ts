@@ -182,7 +182,7 @@ test("the registry is marked so a second package copy does not push a second pro
   setHook(registry);
   installHookBackend();
 
-  const armed = Symbol.for("gentle-shell-bridge.hook.armed.v1");
+  const armed = Symbol.for("odd-worktree.hook.armed.v1");
   assert.equal(Object.hasOwn(registry, armed), true, "the registry carries the armed marker");
   assert.equal(
     Object.prototype.propertyIsEnumerable.call(registry, armed),

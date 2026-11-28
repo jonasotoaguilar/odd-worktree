@@ -1,9 +1,9 @@
 /**
  * End to end over the public surface (S8, S11, S12): a plugin's whole world.
  *
- * Nothing here imports a backend. Styles are registered through `bridgeApi().registerCardStyle`,
+ * Nothing here imports a backend. Styles are registered through `shellApi().registerCardStyle`,
  * the host's menu is the fake host the earlier suites use, the "conversation" is the fake transcript
- * the T1 fixtures pin, and the only bridge internals read are teardown seams plus the diagnostics
+ * the T1 fixtures pin, and the only shell API internals read are teardown seams plus the diagnostics
  * the diagnostics record itself prints — the same shape `tools/shell-api/e2e.test.ts` uses for rows and sections.
  *
  * What a plugin cannot see, and therefore what this suite proves by construction: the splice into the
@@ -19,16 +19,16 @@ import test from "node:test";
 
 // The public surface, exactly as a plugin reaches it.
 import {
-  bridgeApi,
+  shellApi,
   registerRows,
   resolveCardStyleSelection,
-  type BridgeApi,
+  type ShellApi,
   type CardStyleRegistration,
   type RowProvider,
 } from "../../lib/shell-api/index.ts";
-import gentleShellBridge, {
-  type BridgeExtensionApi,
-  type BridgeSessionHandler,
+import gentleShellShellApi, {
+  type ShellExtensionApi,
+  type ShellSessionHandler,
 } from "../../lib/shell-api/extension.ts";
 
 // Teardown-only seams; the API-surface test proves they are not public.
@@ -59,7 +59,7 @@ import { resetStoreStateForTests } from "../../lib/shell-api/store.ts";
 import { createFakeHost, type FakeHost, type FakeRow } from "./fake-host.ts";
 import { READ_CARD, createFakeTranscriptTui, type FakeTui } from "./fake-transcript.ts";
 
-const FALLBACK_SETTING = "Bridge card style";
+const FALLBACK_SETTING = "API card style";
 const HOST_SETTING = "Card style";
 
 let configHome: string;
@@ -106,20 +106,20 @@ test.beforeEach(() => {
 // ---------------------------------------------------------------------------------------------
 
 interface Entry {
-  sessionHandlers: BridgeSessionHandler[];
+  sessionHandlers: ShellSessionHandler[];
 }
 
 /** Load the real entry against a recording API, as Pi would. */
 const loadEntry = (): Entry => {
-  const sessionHandlers: BridgeSessionHandler[] = [];
-  const pi: BridgeExtensionApi = {
+  const sessionHandlers: ShellSessionHandler[] = [];
+  const pi: ShellExtensionApi = {
     // `gentle-pi` is present, so `session_start` arms every surface (S9/T12).
     getCommands: () => [{ name: "gentle:customize" }],
     on(_event, handler) {
       sessionHandlers.push(handler);
     },
   };
-  gentleShellBridge(pi);
+  gentleShellShellApi(pi);
   return { sessionHandlers };
 };
 
@@ -219,9 +219,9 @@ function startWorld(options: { rows?: FakeRow[]; tui?: FakeTui } = {}): World {
   return { host, tui, entry, notices, hostLines: () => cached ?? [] };
 }
 
-const api = (): BridgeApi => {
-  const published = bridgeApi();
-  assert.ok(published !== undefined, "the bridge is loaded, so its API object is present");
+const api = (): ShellApi => {
+  const published = shellApi();
+  assert.ok(published !== undefined, "the shell API is loaded, so its API object is present");
   return published;
 };
 
@@ -256,7 +256,7 @@ test("three plugins, three styles: the host's line shows all of them, once", () 
   assert.equal(
     settingLine(world.host.toggleLines(), FALLBACK_SETTING),
     undefined,
-    "one line: the bridge never contributes a second one while the host's is reachable",
+    "one line: the shell API never contributes a second one while the host's is reachable",
   );
   for (const dispose of dismiss) dispose();
 });
@@ -407,7 +407,7 @@ test("disposing the selected style degrades to native, is reported, and the row 
 });
 
 // ---------------------------------------------------------------------------------------------
-// 5b. A host without its own line gets the bridge's fallback line
+// 5b. A host without its own line gets the shell API's fallback line
 // ---------------------------------------------------------------------------------------------
 
 test("a host without its own Card style line gets the fallback line, and it selects styles", async () => {
@@ -423,7 +423,7 @@ test("a host without its own Card style line gets the fallback line, and it sele
 
   assert.equal(
     settingLine(world.host.toggleLines(), FALLBACK_SETTING),
-    "Bridge card style ● native ○ mono",
+    "API card style ● native ○ mono",
     "one line, native by default plus every registered style",
   );
   assert.equal(settingLine(world.host.toggleLines(), HOST_SETTING), undefined);
@@ -464,7 +464,7 @@ test("two session_start events never double-wrap the conversation", () => {
 test("a tui without a conversation is reported, and rows and sections still work", () => {
   const notices: string[] = [];
   const host = createFakeHost();
-  // Pi-shaped, but its document has no third child: the shape the bridge refuses to guess about.
+  // Pi-shaped, but its document has no third child: the shape the shell API refuses to guess about.
   const brokenTui = { terminal: {}, children: [{ children: [{ render: () => [] }, { render: () => [] }] }] };
   const ui = combinedUi(host, brokenTui, notices);
   const entry = loadEntry();

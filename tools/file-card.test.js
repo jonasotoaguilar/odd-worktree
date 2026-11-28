@@ -11,7 +11,7 @@
 // The text seam and the themes are the fakes `tools/bash-card.test.js` uses: this
 // package has no node_modules, so width measurement, truncation and wrapping are
 // injected, and colour only ever arrives as `theme.fg(role, text)`. The one switch is
-// the bridge's published reader (`api.resolveToolDesignSelection`), a process-wide slot
+// the shell API's published reader (`api.resolveToolDesignSelection`), a process-wide slot
 // this file publishes and withdraws; the content level is the shell's own slot.
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
@@ -25,7 +25,7 @@ const {
   fileResultRows,
 } = require('../lib/file-card.js');
 const { createFileCardResolver, registerFileCard } = require('../lib/file-card-resolver.js');
-// The design this package registers on the bridge's `Card activity` line: the card's one
+// The design this package registers on the shell API's `Card activity` line: the card's one
 // switch is that line's answer for the tool being drawn, so the card is only painted
 // for a tool the line actually covers.
 const { toolsActivityDesign } = require('../lib/bash-design.js');
@@ -94,38 +94,38 @@ const bandTheme = {
   bg: (_role, value) => `\x1b[48;5;240m${value}\x1b[49m`,
 };
 
-// The two slots the shell publishes, and the bridge's own published object.
-const BRIDGE_API_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+// The two slots the shell publishes, and the shell API's own published object.
+const SHELL_API_SLOT = Symbol.for('odd-worktree/shell-api/v1');
 
 beforeEach(() => {
   globalThis[CARD_STYLE_SLOT] = CARD_STYLE.NEON;
   delete globalThis[CARD_CONTENT_SLOT];
-  delete globalThis[BRIDGE_API_SLOT];
+  delete globalThis[SHELL_API_SLOT];
 });
 
 afterEach(() => {
-  delete globalThis[BRIDGE_API_SLOT];
+  delete globalThis[SHELL_API_SLOT];
 });
 
 after(() => {
   delete globalThis[CARD_STYLE_SLOT];
   delete globalThis[CARD_CONTENT_SLOT];
-  delete globalThis[BRIDGE_API_SLOT];
+  delete globalThis[SHELL_API_SLOT];
 });
 
-// ---- the bridge's one switch (S1/S7) ----
+// ---- the shell API's one switch (S1/S7) ----
 
 const ACTIVITY = Object.freeze({ kind: 'design', design: { id: 'odd-worktree.bash-activity' } });
 const NATIVE = Object.freeze({ kind: 'native' });
 
 /**
- * A published bridge object, exactly as the host hands it over: identity, major version,
+ * A published shell API object, exactly as the host hands it over: identity, major version,
  * its release, and the ONE optional reader this card asks. `selection` is an answer or a
  * function of the tool being drawn; `asked` collects every question.
  */
-function publishedBridge(selection, asked) {
+function publishedShellApi(selection, asked) {
   return {
-    schema: 'gentle-shell-bridge/api',
+    schema: 'odd-worktree/shell-api',
     version: 1,
     VERSION: '0.7.0',
     registerToolDesign: () => () => {},
@@ -136,10 +136,10 @@ function publishedBridge(selection, asked) {
   };
 }
 
-/** Publish a bridge on the slot the host publishes it on, and hand it back. */
-function publishBridge(selection, asked) {
-  const api = publishedBridge(selection, asked);
-  globalThis[BRIDGE_API_SLOT] = api;
+/** Publish a shell API on the slot the host publishes it on, and hand it back. */
+function publishShellApi(selection, asked) {
+  const api = publishedShellApi(selection, asked);
+  globalThis[SHELL_API_SLOT] = api;
   return api;
 }
 
@@ -458,16 +458,16 @@ test('every tool this card does not own is handed back exactly as the chain reso
   assert.deepEqual([...FILE_TOOLS].sort(), ['edit', 'read', 'write']);
 });
 
-// ---- S1/S7: one switch, asked of the bridge on every paint ----
+// ---- S1/S7: one switch, asked of the shell API on every paint ----
 
-test('the bridge\'s answer decides, and asking it per paint repaints a drawn row', () => {
+test('the shell API\'s answer decides, and asking it per paint repaints a drawn row', () => {
   const resolver = fileResolver();
   const asked = [];
   const call = resolver('read', () => HOST).renderCall({ path: SKILL }, plainTheme, { isPartial: false });
 
-  // A bridge that names another value (the reserved `default`, a design of the line that
+  // A shell API that names another value (the reserved `default`, a design of the line that
   // has left it, or one that does not cover this tool) means the host's own card.
-  publishBridge(NATIVE, asked);
+  publishShellApi(NATIVE, asked);
   assert.deepEqual(forwardedText(call.render(60)), ['host read call'], 'native: the chain draws the row');
   assert.deepEqual(asked, ['read'], 'the question names the tool being painted');
 
@@ -478,7 +478,7 @@ test('the bridge\'s answer decides, and asking it per paint repaints a drawn row
   assert.deepEqual(asked, ['read', 'read'], 'one question per paint, never cached');
 
   function genActivity() {
-    globalThis[BRIDGE_API_SLOT] = publishedBridge(ACTIVITY, asked);
+    globalThis[SHELL_API_SLOT] = publishedShellApi(ACTIVITY, asked);
   }
 });
 
@@ -491,7 +491,7 @@ test('every answer that is not this package\'s activity design is the host\'s ow
     ['another design', { kind: 'design', design: { id: 'someone-else.bash-design' } }],
   ];
   for (const [label, answer] of cases) {
-    publishBridge(answer);
+    publishShellApi(answer);
     assert.deepEqual(
       forwardedText(resolver('read', () => HOST).renderCall({ path: ODD }, plainTheme, { isPartial: false }).render(60)),
       ['host read call'],
@@ -508,7 +508,7 @@ test('every answer that is not this package\'s activity design is the host\'s ow
 test('the question is asked per painted tool: one tool can be carded while another is not', () => {
   const resolver = fileResolver();
   const asked = [];
-  publishBridge((tool) => (tool === 'read' ? ACTIVITY : NATIVE), asked);
+  publishShellApi((tool) => (tool === 'read' ? ACTIVITY : NATIVE), asked);
   assert.match(
     unpaint(resolver('read', () => HOST).renderCall({ path: SKILL }, plainTheme, { isPartial: false }).render(60)[0]),
     /▤ skill/u,
@@ -522,23 +522,23 @@ test('the question is asked per painted tool: one tool can be carded while anoth
   assert.deepEqual(asked, ['read', 'write'], 'each paint asked about the tool it draws');
 });
 
-test('no bridge and a bridge older than the reader both paint the card, never hide it', () => {
+test('no shell API and a shell API older than the reader both paint the card, never hide it', () => {
   // The resolver-absence case this feature pins: a host whose published object has no
-  // `resolveToolDesignSelection` (gentle-shell-bridge before 0.7.0), and no bridge at
+  // `resolveToolDesignSelection` (the shell API before 0.7.0), and no shell API at
   // all. Neither may hide the card, because neither can answer the question.
   const resolver = fileResolver();
-  delete globalThis[BRIDGE_API_SLOT];
+  delete globalThis[SHELL_API_SLOT];
   assert.match(
     unpaint(resolver('read', () => HOST).renderCall({ path: SKILL }, plainTheme, { isPartial: false }).render(60)[0]),
     /▤ skill/u,
-    'no bridge: the card paints, exactly as before the switch was joined',
+    'no shell API: the card paints, exactly as before the switch was joined',
   );
 
-  globalThis[BRIDGE_API_SLOT] = { schema: 'gentle-shell-bridge/api', version: 1, VERSION: '0.6.0', registerToolDesign: () => () => {} };
+  globalThis[SHELL_API_SLOT] = { schema: 'odd-worktree/shell-api', version: 1, VERSION: '0.6.0', registerToolDesign: () => () => {} };
   assert.match(
     unpaint(resolver('read', () => HOST).renderCall({ path: ODD }, plainTheme, { isPartial: false }).render(60)[0]),
     /📑 odd/u,
-    'an older bridge: the card still paints',
+    'an older shell API: the card still paints',
   );
   assert.match(
     unpaint(resolver('read', () => HOST).renderResult(textResult('# Design'), { isPartial: false }, plainTheme, { args: { path: ODD } }).render(60)[0]),
@@ -547,30 +547,30 @@ test('no bridge and a bridge older than the reader both paint the card, never hi
   );
 });
 
-test('a foreign, hostile or unreadable bridge never hides the card', () => {
+test('a foreign, hostile or unreadable shell API never hides the card', () => {
   const resolver = fileResolver();
   const draw = () => unpaint(resolver('read', () => HOST).renderCall({ path: ODD }, plainTheme, { isPartial: false }).render(60)[0]);
 
   // Another library on the same slot: its gate fails, and this package still paints.
-  globalThis[BRIDGE_API_SLOT] = { schema: 'someone-else/api', version: 1, resolveToolDesignSelection: () => NATIVE };
-  assert.match(draw(), /📑 odd/u, 'a foreign object on the slot is no bridge');
+  globalThis[SHELL_API_SLOT] = { schema: 'someone-else/api', version: 1, resolveToolDesignSelection: () => NATIVE };
+  assert.match(draw(), /📑 odd/u, 'a foreign object on the slot is no shell API');
 
-  // A reader that throws breaks the bridge's own contract; the card stays visible.
-  globalThis[BRIDGE_API_SLOT] = { ...publishedBridge(NATIVE), resolveToolDesignSelection: () => { throw new Error('boom'); } };
+  // A reader that throws breaks the shell API's own contract; the card stays visible.
+  globalThis[SHELL_API_SLOT] = { ...publishedShellApi(NATIVE), resolveToolDesignSelection: () => { throw new Error('boom'); } };
   assert.match(draw(), /📑 odd/u, 'a reader that throws never hides a row');
 
   // An answer in a shape this build does not know is unreadable, not a refusal.
-  globalThis[BRIDGE_API_SLOT] = publishedBridge({ kind: 'future-kind' });
+  globalThis[SHELL_API_SLOT] = publishedShellApi({ kind: 'future-kind' });
   assert.match(draw(), /📑 odd/u, 'an unknown kind keeps the card');
 });
 
 test('S1: a write is covered by the Card activity line, so its file card paints and `default` restores the host row', () => {
-  // A bridge answers from the design's own `tools` list, exactly as it resolves
+  // A shell API answers from the design's own `tools` list, exactly as it resolves
   // coverage: a tool the line does not name is `not-covered`, which is the host's own
   // card. `write` is declared on that line so the file card can be asked about it.
   const design = toolsActivityDesign();
   const asked = [];
-  publishBridge((tool) => (design.tools.includes(tool) ? { kind: 'design', design } : { kind: 'not-covered' }), asked);
+  publishShellApi((tool) => (design.tools.includes(tool) ? { kind: 'design', design } : { kind: 'not-covered' }), asked);
   const resolver = fileResolver();
   for (const tool of ['read', 'write']) {
     assert.equal(design.tools.includes(tool), true, `${tool} is covered by the Card activity line`);
@@ -584,8 +584,8 @@ test('S1: a write is covered by the Card activity line, so its file card paints 
   assert.match(unpaint(edit), /📑 odd/u, 'an edit of an ODD artifact is this card\'s row now');
   assert.deepEqual(asked, ['read', 'write', 'edit'], 'each paint asked about the tool it draws');
 
-  // `default` is the bridge's `native`: the host draws every row again.
-  publishBridge(NATIVE);
+  // `default` is the shell API's `native`: the host draws every row again.
+  publishShellApi(NATIVE);
   assert.deepEqual(
     forwardedText(resolver('write', () => HOST).renderCall({ path: ODD, content: '# x\n' }, plainTheme, { isPartial: false }).render(60)),
     ['host read call'],
@@ -596,13 +596,13 @@ test('S1: a write is covered by the Card activity line, so its file card paints 
 // ---- S3/S4/S8: the scoped claim, and the call's arguments that make it answer ----
 
 /**
- * The bridge's own resolution (gentle-shell-bridge 0.9.0), reduced to what this design declares: a
+ * The shell API's own resolution (shell API 0.9.0), reduced to what this design declares: a
  * tool no line names is `not-covered`; a scope that declines the call, and a call that arrives with
  * no arguments at all, are `native`; everything else is the design.
  */
-function scopedBridge(design, asked) {
+function scopedShellApi(design, asked) {
   return {
-    schema: 'gentle-shell-bridge/api',
+    schema: 'odd-worktree/shell-api',
     version: 1,
     VERSION: '0.9.0',
     registerToolDesign: () => () => {},
@@ -619,12 +619,12 @@ function scopedBridge(design, asked) {
 }
 
 function publishScoped(design, asked) {
-  const api = scopedBridge(design, asked);
-  globalThis[BRIDGE_API_SLOT] = api;
+  const api = scopedShellApi(design, asked);
+  globalThis[SHELL_API_SLOT] = api;
   return api;
 }
 
-test('S4: the gate asks the bridge with the call\'s own arguments', () => {
+test('S4: the gate asks the shell API with the call\'s own arguments', () => {
   const asked = [];
   publishScoped(toolsActivityDesign(), asked);
   const resolver = fileResolver();
@@ -679,7 +679,7 @@ test('S8: read keeps the claim it had, so its card is the scoped line\'s own row
     };
   };
   const scoped = toolsActivityDesign();
-  // The registration an older bridge takes, and the one this card has always been painted by.
+  // The registration an older shell API takes, and the one this card has always been painted by.
   const legacy = toolsActivityDesign({ scopes: false });
   assert.equal(Object.hasOwn(scoped.scopes, 'read'), false, 'read is claimed for every call, never scoped');
   assert.deepEqual(draw(scoped), draw(legacy), 'the same call and result rows, byte for byte');
@@ -850,12 +850,12 @@ test('a chain row that cannot be drawn adds nothing and never throws', () => {
   assert.match(unpaint(bare[1]), /^ host read call +$/u, 'a theme without bg keeps the box\'s padding');
 });
 
-test('a row the bridge\'s answer withholds is the same boxed row as a path with no identity', () => {
+test('a row the shell API\'s answer withholds is the same boxed row as a path with no identity', () => {
   const resolver = fileResolver();
   const plain = boxTheme();
   const withheld = boxTheme();
   const plainRows = resolver('read', () => HOST).renderCall({ path: 'src/app.js' }, plain, { isPartial: false }).render(40);
-  publishBridge(NATIVE);
+  publishShellApi(NATIVE);
   const withheldRows = resolver('read', () => HOST).renderCall({ path: ODD }, withheld, { isPartial: false }).render(40);
   assert.deepEqual(withheldRows, plainRows, 'both are the host\'s own boxed row');
   assert.deepEqual(withheld.roles, plain.roles);

@@ -51,8 +51,7 @@ gentle-shell install npm:pi-odd-worktree
 
 From a local clone, `pi install .` installs the working copy, and `gentle-shell install .` does the same from inside a Gentle Shell session.
 
-The standalone `gentle-shell-bridge` is no longer needed: this package publishes the same global
-API state, and an older copy left installed shares it ("first wins") instead of conflicting with it.
+The shell API ships inside this package, so no second package is needed.
 
 ### Expected result
 
@@ -73,10 +72,10 @@ describe gates that exist in the code, not a choice you make at install time.
 A plugin reaches gentle-shell through this package alone. Read the slot:
 
 ```ts
-const api = globalThis[Symbol.for("gentle-shell-bridge/api/v1")];
+const api = globalThis[Symbol.for("odd-worktree/shell-api/v1")];
 ```
 
-Its identity is `schema: "gentle-shell-bridge/api"`, `version: 1` and `VERSION` `0.16.2`, and it
+Its identity is `schema: "odd-worktree/shell-api"`, `version: 1` and `VERSION` `0.16.2`, and it
 offers settings rows and pages, sidebar sections, card styles, transcript transforms, per-tool and
 per-message card designs, a repaint request and a small namespaced store. The contract is
 [`docs/shell-api/contract.md`](https://github.com/jonasotoaguilar/odd-worktree/blob/main/docs/shell-api/contract.md),

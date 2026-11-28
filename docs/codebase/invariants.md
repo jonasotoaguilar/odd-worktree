@@ -3,7 +3,7 @@
 The question this page answers: which rules must every change preserve, and what does each one refuse?
 
 Where a rule below says "the API", it means the shell API this package owns (`lib/shell-api/`,
-invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on purpose.
+invariant 32). The one name it keeps from before is its store directory, spelled as it was so saved choices still load.
 
 1. **One extension entry point.** `package.json` `pi.extensions` is exactly
    `["./extensions/odd-worktree-tools.ts"]`, and `extensions/` holds no other
@@ -48,7 +48,7 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
    of `Worktrees+`); the two designs
    (`lib/bash-design.js`, `lib/diff-design.js`) on the two lines the shell API owns, one
    `Card activity` line over `bash`, `read`, `write`, `edit` and the three
-   read-only shell tools `grep`, `find`, `ls` (the single `tool: "bash"` design on a bridge older
+   read-only shell tools `grep`, `find`, `ls` (the single `tool: "bash"` design on a shell API older
    than 0.6.0) and one `Card diff` line over `write` and `edit`, the first claiming `write` and
    `edit` through a scope limited to skill and ODD paths so the file card's question is
    answered per call and the second claiming every other call of those two, which is
@@ -107,8 +107,8 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
    **The shell API is native, and the sections reach the host only through it.** Both
    the issues rail and the ODD rail are published through the shell API's
    sidebar-section API alone: the object read from its
-   `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
-   gate, or the one `gentle-shell-bridge:ready` announcement when an API
+   `Symbol.for("odd-worktree/shell-api/v1")` slot after its schema and version
+   gate, or the one `odd-worktree:shell-ready` announcement when an API
    publishes later. That API SHIPS IN THIS PACKAGE — this package's own code at
    `lib/shell-api/`, imported by the entry as `../lib/shell-api/extension.ts`
    (invariant 32) — so no host installs anything for this package's surface to
@@ -171,15 +171,15 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
    later (one `Card activity` row), gaining `edit`, and the scope on `write` and `edit` limited to skill
    and ODD paths, from `0.9.0` on — six tools there, seven here — and the single `tool: "bash"` design on anything older (one
    `Card bash` row) or on a release it cannot read — never a grouped registration an older
-   bridge would refuse. A second design (`lib/diff-design.js`, id `odd-worktree.diff`, label
+   shell API would refuse. A second design (`lib/diff-design.js`, id `odd-worktree.diff`, label
    `color`) registers on its own `Card diff` line over `write` and `edit`, on `0.9.0` and later
-   only, and draws nothing for a skill or an ODD path because those rows are the file card's. The bridge owns Pi's one tool-renderer resolver, builds the host's
+   only, and draws nothing for a skill or an ODD path because those rows are the file card's. The shell API owns Pi's one tool-renderer resolver, builds the host's
    own card, reads the line it is painting (`default` | `activity`, or `default` | `color` on
    `diff`, stored as `native` | the design id) on
    every render pass and persists each choice in its own store. This package writes exactly three
    things to that store. The first is the first-run `activity` seed: `seedBashDesignSelection` selects `activity`
    once, for `bash`, only when the API holds no `bash` choice, and it does so BEFORE the
-   registration, because a `0.6.0` bridge carries that choice over to its line's value at
+   registration, because a `0.6.0` shell API carries that choice over to its line's value at
    registration time; it records `bashActivitySeeded` in its own `odd-worktree` store so a
    later `native` is never undone. The second is the one-time line-key carry-over, which moves a
    value stored at `selections.$lines.tools` — the line's row was `Card tools` before the rename —
@@ -522,7 +522,7 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     `lib/bash-design.js` changes nothing but a heading row: it executes, spawns,
     guards, intercepts and shadows nothing, and the destructive evidence of
     `lib/bash-destructive.js` is presentation: no permission, guard or execution
-    decision may read it. A bridge that hands over the call's arguments makes them
+    decision may read it. A shell API that hands over the call's arguments makes them
     the evidence; without them the heading is the only evidence and a call is named
     only when the heading provably shows the WHOLE text — no `…` abbreviation, no
     `… +N lines` fold, no continuation row, nothing after it but the host's fill and
@@ -713,7 +713,7 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     it.** The card is painted while — and only while — the API's published
     reader answers that this package's activity design draws the tool being
     painted. That reader is `api.resolveToolDesignSelection(tool)`, reached from
-    the `Symbol.for("gentle-shell-bridge/api/v1")` slot after its schema and version
+    the `Symbol.for("odd-worktree/shell-api/v1")` slot after its schema and version
     gate (`lib/file-card-resolver.js:51`, `:160`) and never imported, and the
     answer that paints is `{ kind: "design", design }` with
     `design.id === "odd-worktree.bash-activity"` (the id at
@@ -722,7 +722,7 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     its key hint included. The question is asked per painted tool, on every frame,
     never cached, which is what repaints a card already on screen after a
     mid-session switch. It fails OPEN: the reader is an
-    OPTIONAL member of the published object, so a bridge older than 0.7.0 — or none
+    OPTIONAL member of the published object, so a shell API older than 0.7.0 — or none
     at all — cannot answer and an answer this build cannot read is unreadable, and
     in both cases the card paints exactly as it did before it joined that line: an
     unavailable gate never hides a row, and nothing here throws. The answer, the
@@ -936,7 +936,7 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     lists is unchanged by it. The gate is `Card activity` answering this package's
     `activity` design, asked INSIDE the patched `render` on every paint and never cached, which
     is what repaints a prompt already on screen: any other answer — `default`
-    (stored `native`), another design, an absent or throwing bridge, a width below
+    (stored `native`), another design, an absent or throwing shell API, a width below
     six columns, a component whose Markdown shape is not Pi's — hands the host's own
     rows back BYTE FOR BYTE, fail CLOSED, unlike the file cards' pre-switch answer.
     Pi's OSC 133 prompt-zone markers are re-emitted once on the card's first and last
@@ -1003,10 +1003,10 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     is `lib/shell-api/index.ts`, its Pi-side factory `lib/shell-api/extension.ts`).
     What never changes is the COMPATIBILITY SURFACE, because third-party plugins and
     users' saved choices depend on it: the slot
-    `Symbol.for("gentle-shell-bridge/api/v1")` publishing a frozen object at module
-    load (schema `gentle-shell-bridge/api`, version 1, `VERSION` 0.16.2, twelve
-    members), every `Symbol.for("gentle-shell-bridge…")` key, the
-    `gentle-shell-bridge:ready` event, `bridgeApi()`/`onBridgeApi`, and the
+    `Symbol.for("odd-worktree/shell-api/v1")` publishing a frozen object at module
+    load (schema `odd-worktree/shell-api`, version 1, `VERSION` 0.16.2, twelve
+    members), every `Symbol.for("odd-worktree…")` key, the
+    `odd-worktree:shell-ready` event, `shellApi()`/`onShellApi`, and the
     `<config home>/gentle-shell-bridge` store directory — all exactly as they were, so
     a plugin that reads the slot keeps working through this package alone and a user
     keeps every saved choice. The entry loads it FIRST —
@@ -1030,19 +1030,17 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     `tools/shell-api/*.test.ts` and `tools/shell-api/*.test.mjs`, run by
     `npm run test:shell-api` on Node >= 22.18 (the suite is TypeScript) in CI on 22.x
     and 24.x, while its core never runs in the plain-JS suite at all (the fixture
-    stubs the one import). A standalone `gentle-shell-bridge` installed beside this
-    package is simply unnecessary: both copies share the global state ("first wins"),
-    so this package's own surfaces are unaffected, and what differs is visible but
-    small — the older package's extra `/bridge-status` command, and which copy's words
-    a shared notice such as the missing-`gentle-pi` warning uses (whoever runs it
-    first). Uninstalling it is the recommendation and not a requirement. That
+    stubs the one import). A second copy of this API loaded in the same process
+    shares the global state ("first wins"), so this package's own surfaces are unaffected;
+    the only visible difference is which copy's words a shared notice such as the
+    missing-`gentle-pi` warning uses (whoever runs it first). That
     harmlessness is a property of the shared state, so the SHAPE of every
     `Symbol.for` slot is frozen too, not only its key — including the values cached in
     it. An older copy re-validates a slot by a field and overwrites it when the field
     is missing, so a field nothing here reads any more (`adoptedMessages` in the
     message-design adoption state, `owner` in the tool-design index and its
     `TOOL_DESIGN_INDEX_SHAPE` stamp) stays, and the plugin-line attribution kind
-    stays `bridge`, because an older copy writes and reads it.
+    stays `shell API`, because an older copy writes and reads it.
     `tools/shell-api/message-design-adoption.test.ts` and
     `tools/shell-api/compatibility-regression.test.mjs` pin the adoption slot, the
     attribution kind and a foreign object that throws when described.

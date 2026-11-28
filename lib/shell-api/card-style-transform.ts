@@ -4,7 +4,7 @@
  *
  * ## What it is given, and what it may change
  *
- * The host renders one component and gets `string[]` back; the bridge wraps that call, so this
+ * The host renders one component and gets `string[]` back; the shell API wraps that call, so this
  * module takes the rows the host produced plus the width it rendered at, and returns rows. Only two
  * things are ever rewritten: the rows of a card detected by the grammar below. Every other row is
  * carried through as the SAME string (S3.4), and when there is nothing to do — `native`, no
@@ -27,7 +27,7 @@
  * so detection is positional, never lexical: padding row, header row, then either one more
  * padding row (an empty-body card — exactly three rows) or a separator, body rows and a closer.
  * `neon` starts at column 0 with `╭`, `│` or `╰`, so it never matches `isFloatRow` and is left
- * alone: the bridge must not repaint a card that did not use the float frame.
+ * alone: the shell API must not repaint a card that did not use the float frame.
  *
  * ### The three ambiguities this pass has to choose between, spelled out
  *
@@ -112,8 +112,8 @@ interface TransformState {
   lastOutcomes: Partial<Record<PaintSurface, CardStyleFrameOutcome>>;
 }
 
-/** Process-global, like every other piece of bridge state (`./bus.ts` explains why). */
-const TRANSFORM_STATE = Symbol.for("gentle-shell-bridge.card-style-transform.state.v1");
+/** Process-global, like every other piece of shell API state (`./bus.ts` explains why). */
+const TRANSFORM_STATE = Symbol.for("odd-worktree.card-style-transform.state.v1");
 
 function transformHost(): Record<symbol, TransformState | undefined> {
   // SAFETY: only `transformState()` writes this key, and it re-checks the shape it finds.

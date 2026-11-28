@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { BRIDGE_API_KEY, publishBridgeApi, resetBridgeApiForTests } from "../../lib/shell-api/api.ts";
+import { SHELL_API_KEY, publishShellApi, resetShellApiForTests } from "../../lib/shell-api/api.ts";
 import {
   registerTransform,
   resetBusForTests,
@@ -28,7 +28,7 @@ const withId = (id: string, order?: number): TranscriptTransform => ({
 const ids = (): string[] => snapshotTransforms().map((transform) => transform.id);
 
 test.beforeEach(() => {
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetBusForTests();
   resetTransformsForTests();
 });
@@ -184,7 +184,7 @@ test("two module copies in one process share one transform list", async () => {
 test("the transform list lives on the process-global bus slot, not on module scope", () => {
   registerTransform(withId("a"));
   const slot = (globalThis as unknown as Record<symbol, unknown>)[
-    Symbol.for("gentle-shell-bridge.providers")
+    Symbol.for("odd-worktree.providers")
   ];
 
   assert.ok(typeof slot === "object" && slot !== null);
@@ -201,12 +201,12 @@ test("the transform list lives on the process-global bus slot, not on module sco
 // ---------------------------------------------------------------------------------------------
 
 test("the published API object carries registerTransform, and it is the working function", () => {
-  const api = publishBridgeApi();
+  const api = publishShellApi();
   const register = api.registerTransform;
 
   assert.equal(typeof register, "function", "S1: the transform surface is on the object");
   assert.ok(
-    (globalThis as unknown as Record<symbol, unknown>)[BRIDGE_API_KEY] === api,
+    (globalThis as unknown as Record<symbol, unknown>)[SHELL_API_KEY] === api,
     "and the slot holds that object",
   );
 

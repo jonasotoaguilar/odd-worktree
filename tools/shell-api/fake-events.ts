@@ -5,7 +5,7 @@
  * handler)` returns an unsubscribe function, and `emit(channel, data)` calls every handler. The
  * real handler wrapper is `async`, so a handler's *synchronous* work has completed by the time
  * `emit` returns — this fake delivers synchronously for the same reason, which is what lets a
- * bridge that publishes later register its plugin's surfaces during the emit.
+ * shell API that publishes later register its plugin's surfaces during the emit.
  *
  * It counts listeners so a test can prove a plugin that found the API at load leaves nothing
  * behind, and records every emit so "exactly once per process" is observable.

@@ -24,7 +24,7 @@ const { test, describe, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { BRIDGE_IMPORT, BRIDGE_SLOT, BRIDGE_STUB, LIB_DIR, defaultBridge, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
+const { SHELL_API_IMPORT, SHELL_SLOT, SHELL_API_STUB, LIB_DIR, defaultShellApi, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -42,7 +42,7 @@ describe('manifest', () => {
     assert.equal(PKG.name, 'pi-odd-worktree');
     assert.ok(PKG.keywords.includes('pi-package'), 'keywords name the pi-package kind');
     assert.deepEqual(PKG.pi.extensions, ['./extensions/odd-worktree-tools.ts']);
-    // native-bridge T5 (invariant 8): the shell API is this package's own code under `lib/`, so
+    // native-shell API T5 (invariant 8): the shell API is this package's own code under `lib/`, so
     // there is no nested package and no negation: the list is the plain four entries again.
     assert.deepEqual(PKG.files, ['extensions', 'lib', 'tools', 'README.md'],
       'files ships extensions, lib, tools and README.md');
@@ -50,14 +50,14 @@ describe('manifest', () => {
     assert.equal(PKG.peerDependencies['@earendil-works/pi-tui'], '*');
     assert.ok(!('dependencies' in PKG), 'no runtime dependencies are installed');
     assert.equal(/herdr/i.test(JSON.stringify(PKG)), false, 'the manifest claims no integration the package does not have');
-    // native-bridge T5: `test` is the plain-JS gate it always was, and the shell API's TypeScript
+    // native-shell API T5: `test` is the plain-JS gate it always was, and the shell API's TypeScript
     // suite is its own script — the same two globs CI runs.
     assert.equal(PKG.scripts.test, 'node --test tools/*.test.js', 'the plain-JS gate is unchanged');
     assert.equal(PKG.scripts['test:shell-api'], 'node --test tools/shell-api/*.test.ts tools/shell-api/*.test.mjs',
       'the shell API suite has its own script');
   });
 
-  // native-bridge T5 (invariant 1): there is ONE package manifest. The shell API is code inside
+  // native-shell API T5 (invariant 1): there is ONE package manifest. The shell API is code inside
   // this package — no `package.json` of its own — so its sources, its suite and its docs are
   // shipped only through the root `files` list.
   test('the shell API is code in this package, never a nested package (invariant 1)', () => {
@@ -87,10 +87,10 @@ describe('manifest', () => {
     // S1,S3): the per-tab cache is still gone, but the `gh` client, the
     // formatter and the issues view `/issues` mounts are shipped, so their
     // presence is asserted rather than forbidden. The bash drawing is the
-    // classifier and the one design registered on the bridge. The file cards add
+    // classifier and the one design registered on the shell API. The file cards add
     // their own four modules — a classifier, the card, its resolver and the document
     // body Pi's Markdown draws — and own no preference at all (S1): they are gated by
-    // the bridge's `Card activity` line, which is the bridge's, not ours. The user
+    // the shell API's `Card activity` line, which is the shell API's, not ours. The user
     // prompt card is the one module that wraps a host class, and it adds no row, no
     // command and no design of its own.
     for (const kept of ['gh-issues.js', 'issue-preview.js', 'issues-view.js', 'gh-prs.js', 'pr-preview.js', 'prs-view.js', 'prs-rail-store.js', 'issues-section.js', 'warp-selector-view.js', 'odd-view.js', 'worktree-git.js', 'worktree-registry.js', 'worktree-session-guard.js', 'skill-read-guard.js', 'bash-activity.js', 'bash-inline-script.js', 'bash-design.js', 'bash-frame.js', 'diff-design.js', 'skill-odd-card.js', 'file-card.js', 'file-card-resolver.js', 'file-card-markdown.js', 'user-prompt-card.js']) {
@@ -103,28 +103,28 @@ describe('manifest', () => {
 });
 
 describe('registration', () => {
-  // S2/S4 (native-bridge T5): the shipped surface is SIX commands — `/bridge-status` is gone with
+  // S2/S4 (native-shell API T5): the shipped surface is SIX commands — `/status` is gone with
   // `lib/shell-api/status.ts`, and the shell API registers no command of its own. This plain-JS
   // suite cannot import a `.ts` file, so the fixture stubs the shell API import (a no-op factory)
-  // and what it observes here is the six this package registers itself; the `bridgeExtension(pi)`
+  // and what it observes here is the six this package registers itself; the `shellApiExtension(pi)`
   // call is pinned on the stubbed source below.
   test('registers /warp, /odd, /files, /issues, /prs, /identity and the two worktree tools', async () => {
     delete process.env.GENTLE_WORKTREE_THREAD;
     const { commands, tools, messageRenderers } = await loadExtension({});
     const registered = [...commands.keys()].sort();
     assert.deepEqual(registered, ['files', 'identity', 'issues', 'odd', 'prs', 'warp'], 'exactly six commands');
-    assert.equal(stubbedSource().includes('bridgeExtension(pi)'), true, 'and the entry calls that factory plainly');
+    assert.equal(stubbedSource().includes('shellApiExtension(pi)'), true, 'and the entry calls that factory plainly');
     assert.deepEqual([...tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'exactly two agent tools');
     assert.deepEqual([...messageRenderers.keys()], ['worktree-warp']);
   });
 
-  // The bash activity is a design on the bridge's own line, not a preference. The
+  // The bash activity is a design on the shell API's own line, not a preference. The
   // two file-card switches ARE preferences of this package: one strict document in
   // the Pi home for the pair, whose only control is the customize row group
-  // contributed through the bridge API (asserted below), never a command of ours.
+  // contributed through the shell API API (asserted below), never a command of ours.
   test('the bash activity is a design, and this package owns no switch of its own', async () => {
     const source = stubbedSource();
-    assert.ok(source.includes('libRequire("bash-design.js")'), 'the design reaches the bridge through its published API');
+    assert.ok(source.includes('libRequire("bash-design.js")'), 'the design reaches the shell API through its published API');
     assert.equal(source.includes('registerCommand("card:bash"'), false, 'the design has no command name');
     const lib = path.join(ROOT, 'lib');
     for (const gone of ['card-bash-mode.js', 'card-bash-customize.js', 'bash-card.js', 'bash-card-resolver.js']) {
@@ -132,7 +132,7 @@ describe('registration', () => {
     }
 
     // S1: the two file-card switches and their document are gone, and the extension
-    // names neither. The file card is gated by the bridge's own `Card activity` line.
+    // names neither. The file card is gated by the shell API's own `Card activity` line.
     assert.equal(source.includes('registerCardsCustomize'), false, 'no row provider is registered for a switch');
     assert.equal(source.includes('card-files'), false, 'the extension never names their document');
     const modules = fs.readdirSync(lib).filter((entry) => entry.endsWith('.js'));
@@ -145,30 +145,30 @@ describe('registration', () => {
     }
   });
 
-  // native-bridge T2/T5 (S2/S4): the shell API is NATIVE — this package's own `lib/shell-api/`,
+  // native-shell API T2/T5 (S2/S4): the shell API is NATIVE — this package's own `lib/shell-api/`,
   // imported by the entry itself — and it is reached ONLY that way: never by the package's name,
   // so no host has to install anything for this extension to have the API.
   test('the shell API is imported from this package only, and the surface still reaches it through its published object', async () => {
     const source = stubbedSource();
     const raw = fs.readFileSync(path.join(ROOT, 'extensions/odd-worktree-tools.ts'), 'utf8');
-    assert.ok(raw.includes(BRIDGE_IMPORT), 'the entry imports this package\'s own shell API');
-    assert.equal(source.includes(BRIDGE_STUB), true, 'and the plain-JS copy stubs that one import');
-    assert.equal(/from\s+["']gentle-shell-bridge/.test(raw), false, 'no import of the bridge package anywhere');
-    assert.equal(/require\(\s*["']gentle-shell-bridge/.test(raw), false, 'no require of the bridge package anywhere');
+    assert.ok(raw.includes(SHELL_API_IMPORT), 'the entry imports this package\'s own shell API');
+    assert.equal(source.includes(SHELL_API_STUB), true, 'and the plain-JS copy stubs that one import');
+    assert.equal(/from\s+["']pi-odd-worktree/.test(raw), false, 'no import of the shell API package anywhere');
+    assert.equal(/require\(\s*["']pi-odd-worktree/.test(raw), false, 'no require of the shell API package anywhere');
     assert.equal(source.split('api.registerSection(').length - 1, 2, 'exactly two sidebar sections are contributed');
     // T5 (S1): the count alone would drift silently, so the ids are asserted through
-    // the bridge that received them: one `GITHUB` and one `ODD`, and nothing else.
-    const bridge = defaultBridge();
-    const previous = globalThis[BRIDGE_SLOT];
-    globalThis[BRIDGE_SLOT] = bridge.api;
+    // the shell API that received them: one `GITHUB` and one `ODD`, and nothing else.
+    const shellApi = defaultShellApi();
+    const previous = globalThis[SHELL_SLOT];
+    globalThis[SHELL_SLOT] = shellApi.api;
     try {
       await loadExtension({});
-      assert.deepEqual(bridge.sections.map((section) => section.id).sort(),
+      assert.deepEqual(shellApi.sections.map((section) => section.id).sort(),
         ['odd-worktree.issues', 'odd-worktree.odd-rail'],
         'the two sections are the issues rail and the ODD rail');
     } finally {
-      if (previous === undefined) delete globalThis[BRIDGE_SLOT];
-      else globalThis[BRIDGE_SLOT] = previous;
+      if (previous === undefined) delete globalThis[SHELL_SLOT];
+      else globalThis[SHELL_SLOT] = previous;
     }
   });
 
@@ -198,29 +198,29 @@ describe('registration', () => {
     }
   });
 
-  test('both Card rows are registered once each, observed through the bridge\'s own object', async () => {
-    // S2/S6: what a caller observes is the REGISTRATION, not a spelling in the source. A bridge
+  test('both Card rows are registered once each, observed through the shell API\'s own object', async () => {
+    // S2/S6: what a caller observes is the REGISTRATION, not a spelling in the source. A shell API
     // that publishes the release both lines need sees one design per line, each with its own id and
     // label, and nothing else — so a second registration, a renamed id or a third row fails here.
-    const bridge = defaultBridge();
-    bridge.api.VERSION = '0.9.0';
-    const previous = globalThis[BRIDGE_SLOT];
-    globalThis[BRIDGE_SLOT] = bridge.api;
+    const shellApi = defaultShellApi();
+    shellApi.api.VERSION = '0.9.0';
+    const previous = globalThis[SHELL_SLOT];
+    globalThis[SHELL_SLOT] = shellApi.api;
     try {
       await loadExtension({});
       assert.deepEqual(
-        bridge.designs.map((design) => [design.line, design.id, design.label]),
+        shellApi.designs.map((design) => [design.line, design.id, design.label]),
         [['activity', 'odd-worktree.bash-activity', 'activity'], ['diff', 'odd-worktree.diff', 'color']],
         'one design per line, once each',
       );
     } finally {
-      globalThis[BRIDGE_SLOT] = previous;
+      globalThis[SHELL_SLOT] = previous;
     }
   });
 
   test('the file cards register through one hook call and own no preference (T2)', async () => {
     // S1/S7: the card is drawn through the host's `registerToolRenderer`, and the ONE switch
-    // it obeys is the bridge's own line, asked through the published reader on every paint.
+    // it obeys is the shell API's own line, asked through the published reader on every paint.
     // Nothing of ours is registered for it: no command, no tool, no row provider, no store.
     const source = stubbedSource();
     const lines = source.split('\n').map((line) => line.trim());

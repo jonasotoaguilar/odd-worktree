@@ -2,7 +2,7 @@
  * Row naming (N1–N3): a row is a LABEL, not an id.
  *
  * The host prints `choice.setting` as a toggle line's name
- * (`lib/visual-customize-view.ts:583-595`), so a bridge-derived setting that contains an id puts
+ * (`lib/visual-customize-view.ts:583-595`), so a shell API-derived setting that contains an id puts
  * that id in front of the user: `Section: bash-card.status`. These tests pin the replacement rule —
  * lowercase words derived from the visible text, an explicit `rowLabel` winning, the id staying
  * internal, and collisions between two equal labels being disambiguated deterministically and
@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { armBridge } from "../../lib/shell-api/arm.ts";
+import { armShellApi } from "../../lib/shell-api/arm.ts";
 import {
   registerCardStyle,
   registerSection,
@@ -94,11 +94,11 @@ const textOf = (row: CustomizeRow): string => {
   return typeof label === "function" ? label() : (label ?? "");
 };
 
-/** The bridge's own `Sections` provider, then a menu host that captures it. */
+/** The shell API's own `Sections` provider, then a menu host that captures it. */
 const sectionsHost = (): FakeHost => {
   installSectionRows();
   const host = createFakeHost();
-  armBridge(host.ui);
+  armShellApi(host.ui);
   return host;
 };
 
@@ -125,7 +125,7 @@ const rowsWithHostLine = (): CustomizeRow[] => [
 /** The capture backend, then the card-style surface, against a host that already has the line. */
 const cardStyleHost = (): FakeHost => {
   const host = createFakeHost({ rows: rowsWithHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   return host;
 };
@@ -254,8 +254,8 @@ test("an explicit card-style rowLabel wins, and the value keeps the style's own 
   host.buildMenu();
 
   const registered = host.liveRows().filter((row) => row.choice?.setting === HOST_CARD_STYLE_SETTING);
-  const bridgeRow = registered.find((row) => row.choice?.value === "Cute Card");
-  assert.ok(bridgeRow !== undefined);
-  assert.equal(textOf(bridgeRow), "Plain card", "the author's row label is used verbatim");
-  assert.equal(bridgeRow.choice?.value, "Cute Card", "the line's value is still the style's label");
+  const shellApiRow = registered.find((row) => row.choice?.value === "Cute Card");
+  assert.ok(shellApiRow !== undefined);
+  assert.equal(textOf(shellApiRow), "Plain card", "the author's row label is used verbatim");
+  assert.equal(shellApiRow.choice?.value, "Cute Card", "the line's value is still the style's label");
 });

@@ -1,8 +1,8 @@
 /**
- * The card-style registry, its process-global snapshot, and the bridge-owned selection (S1, S2, S12).
+ * The card-style registry, its process-global snapshot, and the shell API-owned selection (S1, S2, S12).
  *
  * A style is a registration like a provider or a section: one id, replace-in-place, an exact
- * disposer, and a fresh ordered snapshot. The selection is the bridge's own state, `native` by
+ * disposer, and a fresh ordered snapshot. The selection is the shell API's own state, `native` by
  * default, and it must be resolvable to "no such style" WITHOUT throwing even after the style that
  * owned it was disposed (S12) — the transformer degrades from that answer, it never guesses.
  */
@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { publishBridgeApi } from "../../lib/shell-api/api.ts";
+import { publishShellApi } from "../../lib/shell-api/api.ts";
 import {
   registerCardStyle,
   resetBusForTests,
@@ -31,7 +31,7 @@ import {
 } from "../../lib/shell-api/bus.ts";
 import { CARD_STYLE_NATIVE } from "../../lib/shell-api/card-style-line.ts";
 import {
-  CARD_STYLE_STORE_ID,
+  LEGACY_CARD_STYLE_STORE_ID,
   getCardStyleSelection,
   resolveCardStyleSelection,
   setCardStyleSelection,
@@ -155,7 +155,7 @@ test("an id that cannot be a plain object key is rejected before anything is sto
   assert.deepEqual(snapshotCardStyles(), [], "a rejected style never half-registers");
 });
 
-test("an id the bridge or the host already owns is rejected", () => {
+test("an id the shell API or the host already owns is rejected", () => {
   for (const id of [CARD_STYLE_NATIVE, "neon", "float"]) {
     assert.throws(() => registerCardStyle(style(id)), /invalid card style id/u, `must reject ${id}`);
   }
@@ -244,7 +244,7 @@ test("two loaded copies of the package share one registry and one order", async 
 });
 
 // ---------------------------------------------------------------------------------------------
-// The bridge-owned selection
+// The shell API-owned selection
 // ---------------------------------------------------------------------------------------------
 
 test("the selection is native before anything is stored", () => {
@@ -252,18 +252,18 @@ test("the selection is native before anything is stored", () => {
   assert.deepEqual(resolveCardStyleSelection(), { kind: "native" });
 });
 
-test("a selection round-trips through the bridge's own file", () => {
+test("a selection round-trips through the shell API's own file", () => {
   registerCardStyle(style("loon.cute"));
 
   setCardStyleSelection("loon.cute");
 
   assert.equal(getCardStyleSelection(), "loon.cute");
-  const file = join(configHome, "gentle-shell-bridge", `${CARD_STYLE_STORE_ID}.json`);
-  assert.ok(existsSync(file), "the bridge owns the file, not the host");
+  const file = join(configHome, "gentle-shell-bridge", `${LEGACY_CARD_STYLE_STORE_ID}.json`);
+  assert.ok(existsSync(file), "the shell API owns the file, not the host");
   const document = JSON.parse(readFileSync(file, "utf8")) as { schemaVersion: number; values: Record<string, unknown> };
   assert.equal(document.schemaVersion, 1);
   assert.equal(document.values.cardStyle, "loon.cute");
-  assert.deepEqual(readdirSync(join(configHome, "gentle-shell-bridge")), [`${CARD_STYLE_STORE_ID}.json`]);
+  assert.deepEqual(readdirSync(join(configHome, "gentle-shell-bridge")), [`${LEGACY_CARD_STYLE_STORE_ID}.json`]);
 });
 
 test("a stored selection resolves to the registered style by identity", () => {
@@ -293,7 +293,7 @@ test("a selection nobody ever registered resolves to missing, not to native", ()
 
 test("a hand-edited file that is not a string falls back to native", () => {
   const directory = join(configHome, "gentle-shell-bridge");
-  const file = join(directory, `${CARD_STYLE_STORE_ID}.json`);
+  const file = join(directory, `${LEGACY_CARD_STYLE_STORE_ID}.json`);
   rmSync(directory, { recursive: true, force: true });
   mkdirSync(directory, { recursive: true });
   writeFileSync(file, JSON.stringify({ schemaVersion: 1, values: { cardStyle: 7 } }), "utf8");
@@ -307,7 +307,7 @@ test("a hand-edited file that is not a string falls back to native", () => {
 // ---------------------------------------------------------------------------------------------
 
 test("registerCardStyle is on the API object plugins receive", () => {
-  const api = publishBridgeApi();
+  const api = publishShellApi();
   const register = api.registerCardStyle;
 
   assert.equal(typeof register, "function", "the member is present, so a plugin may call it");

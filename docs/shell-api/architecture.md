@@ -10,14 +10,14 @@ The contract itself lives in [contract.md](contract.md); the persistence decisio
 
 The surface described here is this package's own shell API (`lib/shell-api/`): odd-worktree publishes it
 at one process-global slot and every one of its own surfaces registers through it. It is not a second
-plugin — the names it publishes keep the `gentle-shell-bridge` spelling only because existing plugins
-and saved choices read them.
+plugin — the one name it keeps from before is its store directory, spelled as it was because saved
+choices live there.
 
 ## 1. Shape
 
 ```text
 plugin A ─┐
-plugin B ─┼─ registerRows(provider) ─→ globalThis[Symbol.for(...)] ─→ bridge
+plugin B ─┼─ registerRows(provider) ─→ globalThis[Symbol.for(...)] ─→ shell API
 plugin C ─┘                                                              │
                                                     one ctx.ui.custom wrapper
                                                                          │
@@ -28,7 +28,7 @@ plugin C ─┘                                                              │
                                                  gentle-shell VisualCustomizeView
 ```
 
-N plugins × M gentle-shell surfaces → N providers, one interception. The bridge is a typed
+N plugins × M gentle-shell surfaces → N providers, one interception. The shell API is a typed
 facade over a process-global bus, never a module-level singleton (see §5).
 
 ## 2. One `ctx.ui` per runner, rebuilt on every bind
@@ -49,7 +49,7 @@ That object is not stable. `setUIContext()` reassigns it
 (`runner.ts:572-575`: `this.uiContext = uiContext ? this.wrapUIPromptContext(uiContext) : noOpUIContext`),
 and `wrapUIPromptContext` returns a **new object literal** each time, with `custom` as an
 own property wrapping `withUIPrompt` (`runner.ts:577-587`). Consequence: a patch does not
-survive a rebind. The bridge therefore arms inside its `session_start` handler, and arming
+survive a rebind. The shell API therefore arms inside its `session_start` handler, and arming
 must be idempotent — a non-enumerable marker installed with `Object.defineProperty` on the
 target object, so a second `session_start`, a `/reload` or a double load never double-wraps.
 
@@ -67,7 +67,7 @@ Promise.resolve(factory(this.ui, theme, this.keybindings, close))
 
 around `interactive-mode.ts:3136`, and forwards `overlay` / `overlayOptions`. Two facts
 follow: factories may return a promise, and the factory receives the theme as its second
-argument — the value the bridge can hand to providers as part of their row-building
+argument — the value the shell API can hand to providers as part of their row-building
 context.
 
 ## 4. Why duck-typing fails: the menu is sealed
@@ -81,7 +81,7 @@ gentle-shell builds its customize view inside the factory and returns something 
   `{ overlay: true, overlayOptions: { anchor: "center", width: "70%", minWidth: 60, maxHeight: "85%" } }`
 
 The view lives only inside those closures. There is no `options.rows` on the returned
-object, at any depth the bridge can see. This is precisely the bug that made a first
+object, at any depth the shell API can see. This is precisely the bug that made a first
 prototype a silent no-op: it inspected the component, found no rows, and did nothing.
 
 ## 5. The one reachable moment
@@ -96,7 +96,7 @@ this.categories = [...new Set(options.rows.map(row => row.category ?? "Settings"
 `lib/visual-customize-view.ts:387`.
 
 That `.map` runs before the factory returns and on the array the renderer will keep using.
-So the bridge temporarily replaces `Array.prototype.map` for the duration of that single
+So the shell API temporarily replaces `Array.prototype.map` for the duration of that single
 call, records the row-like array **by reference** (not a copy), and restores the original
 in a `finally` block. Restoring in `finally` is mandatory: an exception anywhere in the
 factory must not leave the process with a patched `Array.prototype`.
@@ -129,7 +129,7 @@ the target without guessing:
 - A nested session whose factory throws never resolves, so nothing is injected into
   it; the outer session continues and resolves its own array.
 - When one session captures **more than one** row-like array (an incidental
-  row-shaped array before the menu, for example), the bridge does not guess: the
+  row-shaped array before the menu, for example), the shell API does not guess: the
   outcome is `uncaptured (ambiguous)` and nothing is injected.
 
 Arming is idempotent per target *and per function*: the non-enumerable marker holds the
@@ -168,7 +168,7 @@ observes that `map`, provisionally, and the end of the factory decides.
   `row.category ?? "Settings"` for the array's own rows, `"Settings"` for a synthetic row with no
   category and a sentinel page for a synthetic row naming one, and must not throw. The same callback is
   then run over the rows about to be appended, **before** they are pushed, so the host's own `map` can
-  never throw because of a bridge row.
+  never throw because of a shell API row.
 - **The reconciliation.** If the late decision picks the same array, the rows stay and the build reports
   `injected`. If it picks another array, the session proved several (ambiguous), or the factory returned
   a promise, the rows, the `Card style` splice and the marker are removed from the early array and the
@@ -187,15 +187,15 @@ observes that `map`, provisionally, and the end of the factory decides.
   locked or non-configurable index means nothing is written, so a host row is never duplicated and no
   hole appears. An accessor is never a safe target, not even one carrying a setter: a setter is code,
   and one that rejects its assignment would swallow the write after an earlier element had already been
-  changed. Only a writable data descriptor, or an index with no own descriptor yet, passes. When the appended segment was mutated beyond recognition, the bridge also removes
+  changed. Only a writable data descriptor, or an index with no own descriptor yet, passes. When the appended segment was mutated beyond recognition, the shell API also removes
   nothing: that is the documented exception, and the notice reports it rather than guessing. The
   `Card style` values are undone by their own recorded splice, not by a snapshot. A session only ever
   rolls back its own array, so a nested factory's rollback cannot touch the outer menu's rows.
 
 Net guarantee: when the appended identities can be removed as a whole and every range index passes
-preflight, after a factory invocation no array holds bridge rows except the one the late decision
+preflight, after a factory invocation no array holds shell API rows except the one the late decision
 chose. When the segment was mutated beyond recognition or the removal range cannot be handled exactly,
-no rows are removed and the notice reports that outcome; that is the documented exception. Costs, stated: for the duration of the factory an array that satisfies the proof can hold bridge
+no rows are removed and the notice reports that outcome; that is the documented exception. Costs, stated: for the duration of the factory an array that satisfies the proof can hold shell API
 rows, visible only to code running inside that factory; the host's category mapper runs once more per
 row-like `map` call and once per appended row; when a guess is rolled back the providers are built twice
 for that menu build; and the proof is pinned to the host's default `Settings`, so a host that renames it
@@ -204,14 +204,14 @@ segment is removed by identity and reported, not restored from a snapshot; one t
 recognition gets the exception above (Proxy arrays included); a stale `cardStyleRowMode()` after a
 rolled-back guess remains not reviewed.
 
-## 6. Why one bridge beats N wrappers
+## 6. Why one shell API beats N wrappers
 
 Two independent map-swapping wrappers chain badly. Whichever installs its patch last sees
 the factory's `.map` call first and captures the array; the other captures nothing and
 degrades to a warning. The result is that only one plugin's rows apply, non-deterministically
 with load order, and the losing plugin looks broken for reasons it cannot debug.
 
-The bridge installs **one** patch, guarded by a nesting counter (the factory may itself
+The shell API installs **one** patch, guarded by a nesting counter (the factory may itself
 trigger further UI work), and fans the single capture out to every registered provider:
 
 1. snapshot the provider list in subscription order,
@@ -236,7 +236,7 @@ emitted in that tail right after them. The capture path never re-sorts blocks or
 fallbacks: for each actual category it reads the host array's first and last index, computes the
 whole plan against the array as it stands, and
 applies it in one preflighted in-place write, so no index can drift between splices. A rendered
-consecutive `choice.setting` pair — and the bridge's own `Card style` value splice — is therefore
+consecutive `choice.setting` pair — and the shell API's own `Card style` value splice — is therefore
 never split. If the write is refused, nothing is half-applied: every block stays in the pre-feature
 tail position and the record keeps that landing.
 
@@ -253,14 +253,14 @@ The npm package is a typed facade over that process-global bus. Registration, di
 and the capture marker all resolve through the same `Symbol.for` slot, so three providers
 loaded from three copies of the package see one bus.
 
-The bridge's own key is `Symbol.for("gentle-shell-bridge.providers")` for the registration
+The shell API's own key is `Symbol.for("odd-worktree.providers")` for the registration
 list, with sibling slots for backend state and markers (`…capture.state.v1`,
 `…capture.wrapped.v1`, `…capture.injected.v1`, `…hook.state.v1`, `…hook.armed.v1`,
 `…store.state.v1`). The host key `Symbol.for("gentle-pi.customize-row-providers")` is only
-ever **read**: the bridge pushes one fan-out provider into it when a host exposes one, and
+ever **read**: the shell API pushes one fan-out provider into it when a host exposes one, and
 otherwise leaves the slot absent.
 
-## 8. Row grouping semantics the bridge relies on (it does not re-implement them)
+## 8. Row grouping semantics the shell API relies on (it does not re-implement them)
 
 - `lineEntries()` coalesces **consecutive** rows that share `choice.setting`
   (`lib/visual-customize-view.ts:395-401`): same setting, adjacent index, one line. Same
@@ -269,7 +269,7 @@ otherwise leaves the slot absent.
   `●` for current and `○` for the others (`lib/visual-customize-view.ts:583-595`).
 - `choice.hint` feeds the preview headline (`lib/visual-customize-view.ts:745`).
 - `applyOnMove !== false` makes ←/→ apply a choice immediately rather than Enter
-  (`lib/visual-customize-view.ts:565`). The bridge therefore sets `applyOnMove: false` on EVERY row it
+  (`lib/visual-customize-view.ts:565`). The shell API therefore sets `applyOnMove: false` on EVERY row it
   contributes — its own `Sections`/card-style rows in `./sections-rows.ts` and `./card-style-rows.ts`,
   and any provider row, normalised on a copy in `./rows.ts` (`confirmOnEnter`) — so a move only moves
   the `›` cursor and Enter applies. The host's own rows keep their own field, so a line that holds both
@@ -282,14 +282,14 @@ otherwise leaves the slot absent.
   (`lib/visual-customize-view.ts:105`) but at runtime any string is a page, because the view derives
   its page list from the rows (`:387`); full row shape at `:107-128`, inline helpers at `:129-140`.
 
-The bridge's own rows obey the same rule. Its `Sections` and card-style rows put a human label in
+The shell API's own rows obey the same rule. Its `Sections` and card-style rows put a human label in
 `choice.setting` (`music`, `plain`) and in the row's `label` — never a registration id, which would
 read as the old `Section: bash-card.status` (`lib/shell-api/row-labels.ts`). Identity stays in the registry, so
 replacement, disposal and the stored visibility key remain keyed by id while nothing id-shaped is
 rendered. Two sections whose labels would read the same are disambiguated in render order
 (`music`, `music 2`, …) and the record keeps the assignment in force.
 
-The bridge ships no renderer. Every visual behaviour above belongs to gentle-shell, which
+The shell API ships no renderer. Every visual behaviour above belongs to gentle-shell, which
 is why the contract can promise row kinds without promising pixels.
 
 ## 9. Reference implementation
@@ -320,14 +320,14 @@ card: one row per entry, plus the permissions row (`extensions/gentle-shell.ts:3
 so a glyph must live inside the text and colour belongs to the host (`lib/shell-bar.ts:151-155`).
 `undefined` removes a key, which is what `session_shutdown` uses.
 
-Because the host has no notion of "a plugin", the bridge owns exactly one key per plugin
+Because the host has no notion of "a plugin", the shell API owns exactly one key per plugin
 (`lib/shell-api/plugin-lines.ts`). Attribution needs no configuration from the author: every registration in
 `lib/shell-api/bus.ts` goes through `attributeRegistration`, which reads the calling module from the stack
 once per registration (the first frame outside this package's `src/`), walks up from it to the
 nearest `package.json` with a non-empty `name`, and caches BOTH the answer and the plugin identity it
 implies per module. The identity is the package root — so every module in that package is the same
 plugin — or the registering module when no package owns it. Four outcomes: another package (a
-plugin, whose display name is derived from the package name), this package (plumbing — the bridge's
+plugin, whose display name is derived from the package name), this package (plumbing — the shell API's
 own providers and fallbacks never claim a row), no owning package (a single copied file: fail
 closed, no row, reason in the record), and the Pi distribution (below). An optional `name` on
 any registration is the documented way for an unattributable file to name itself; it is validated
@@ -355,7 +355,7 @@ label that broke the shape rule) repaints the same key as `degraded`. `installPl
 A `ctx.ui` without `setStatus` makes the feature a reported no-op: nothing here can throw into a
 plugin's registration path.
 
-What is proven where: the bridge's side is tested against a fake footer (an object with
+What is proven where: the shell API's side is tested against a fake footer (an object with
 `setStatus`), plus real temporary plugin packages for attribution. The host's rendering — sort
 order, shared role, ANSI stripping — is read-only evidence from gentle-shell, not executed here.
 
@@ -363,7 +363,7 @@ order, shared role, ANSI stripping — is read-only evidence from gentle-shell, 
 
 Arming happens once per `ctx.ui` object, from `session_start` in `lib/shell-api/extension.ts`. The
 order is fixed: if `globalThis[Symbol.for("gentle-pi.customize-row-providers")]` exists and
-is usable — a plain array, or an object with a callable `register` — the bridge pushes one
+is usable — a plain array, or an object with a callable `register` — the shell API pushes one
 fan-out provider and patches nothing at all. A present-but-unusable registry — or one that
 does not accept the provider, because `push` did nothing, `register` returned `false`, or
 either threw — is reported as `fallback-capture` and the capture backend is used instead,
@@ -374,8 +374,8 @@ diagnostics stop reporting `hook`.
 
 | Module | Owns |
 | --- | --- |
-| `lib/shell-api/index.ts` | the plugin-facing API: `registerRows`, `registerSection`, `registerCardStyle`, `registerTransform`, `registerToolDesign`, `resolveToolDesignSelection`, `createStore`, `STORE_SCHEMA_VERSION`, `VERSION`, `bridgeApi`, `isBridgeApi`, `onBridgeApi`, `BRIDGE_READY_EVENT`, types; importing it also publishes the handshake through `./api.ts` |
-| `lib/shell-api/api.ts` | the runtime handshake: the one `Symbol.for` slot, the frozen published object, the shape gate, `bridgeApi()`, `onBridgeApi` and the `gentle-shell-bridge:ready` announcement |
+| `lib/shell-api/index.ts` | the plugin-facing API: `registerRows`, `registerSection`, `registerCardStyle`, `registerTransform`, `registerToolDesign`, `resolveToolDesignSelection`, `createStore`, `STORE_SCHEMA_VERSION`, `VERSION`, `shellApi`, `isShellApi`, `onShellApi`, `SHELL_READY_EVENT`, types; importing it also publishes the handshake through `./api.ts` |
+| `lib/shell-api/api.ts` | the runtime handshake: the one `Symbol.for` slot, the frozen published object, the shape gate, `shellApi()`, `onShellApi` and the `odd-worktree:shell-ready` announcement |
 | `lib/shell-api/extension.ts` | the Pi-side entry the package's own extension calls: `session_start` arming (rows + sidebar widget), the `Sections` provider, the notice flush, and the two own-voice notices when `gentle-pi` is missing or the slot is foreign |
 | `lib/shell-api/arm.ts` | backend selection and the arm result |
 | `lib/shell-api/capture.ts` | the single `Array.prototype.map` patch, the captured array, and the provisional placement/rollback |
@@ -385,9 +385,9 @@ diagnostics stop reporting `hook`.
 | `lib/shell-api/row-names.ts` | the enforced row-name shape (one to three plain words, no structural marks) and the rejection records the build keeps |
 | `lib/shell-api/sidebar.ts` | the rail interception: the state symbol, the patched `parts` map, the rail wrapper |
 | `lib/shell-api/sidebar-render.ts` | the section renderer: card rows and groups per frame, clipping, failures |
-| `lib/shell-api/sections-rows.ts` | the bridge's own `Sections` toggle rows |
+| `lib/shell-api/sections-rows.ts` | the shell API's own `Sections` toggle rows |
 | `lib/shell-api/row-labels.ts` | the visible label for those rows: `rowLabel` or a derived one (clamped to the shape), plus the deterministic collision assignment (never an id) |
-| `lib/shell-api/visibility.ts` | bridge-owned section visibility in the namespaced store |
+| `lib/shell-api/visibility.ts` | shell-API-owned section visibility in the namespaced store |
 | `lib/shell-api/store.ts` | `createStore`, the namespaced path and the atomic write |
 | `lib/shell-api/transform-pipeline.ts` | the ordered per-frame transform pass: width clipping, throw isolation and the last frame's outcomes |
 | `lib/shell-api/config.ts`, `lib/shell-api/types.ts` | config-home resolution; the row, provider and context types |
@@ -427,7 +427,7 @@ one interception, one place that reports why nothing appeared.
 - The host has a SECOND fixed order over the same map: the mobile `/gentle:panel` sheet reads
   `parts.get(key).render(inner)` for `todo, jobs, agents, footer` (`SHEET_ORDER`,
   `lib/shell-panel.ts:125-150`). Because the wrapper IS the map's value, the sheet paints the
-  bridge's rows with no extra work and no second interception — pinned by
+  shell API's rows with no extra work and no second interception — pinned by
   `tools/shell-api/section-placement-rail.test.ts`, which renders the map values exactly the way that loop does.
 - A part's cards come from `cardGroups` (`:392-410`) fed into `sectionCardRows` (`:35-44`), which
   is why a wrapped rail can look native: the host draws the frame, we supply rows and ranges.
@@ -491,7 +491,7 @@ it gets the theme from the same place the host does: the second argument of Pi's
 
 The host's two builders are NOT importable — gentle-shell is not a dependency, and Pi loads every
 extension through its own jiti loader with `moduleCache: false`, so `lib/shell-panel.ts` is a
-separate module graph with no published seam. Rather than claim a reach it does not have, the bridge
+separate module graph with no published seam. Rather than claim a reach it does not have, the shell API
 LOOKS for them on every object it is handed — the rail part, the Pi theme, the terminal's sidebar
 state — uses them when they are found, and otherwise draws with the port. `getPanelReport()` keeps what was
 looked for, what was found, and whether a theme had arrived; when the answer is `fallback` it also
@@ -508,13 +508,13 @@ take from a part's rows is whether to paint the rail at all: every rail row must
 (`:410`), and one wider row drops the entire rail and hands the conversation every column. So a
 contributed row that measures wider than the width it was given changes the layout's widths.
 
-That is why the bridge measures with the host's own model. `hostColumns`
+That is why the shell API measures with the host's own model. `hostColumns`
 (`lib/shell-api/card-style-transform.ts`) ports `visibleWidth` (`pi-tui/dist/utils.js:212-268`): ANSI is zero
 columns, a TAB is three (`graphemeWidth`, `:148-155`), and the rest is segmented into grapheme
 clusters charged as a whole (`:255-258`). `lib/shell-api/section-panel.ts` fits, pads and clips with it, and
 `lib/shell-api/sidebar-render.ts` clips an author's plain row with it, so a row fitted to `N` is `N` columns to
 the host — the padded rows the host's own parts return (`renderPanelRow` → `fitPanelLine`,
-`lib/shell-panel.ts:31-40,78-80`) and the bridge's are the same rule, matched rather than chosen.
+`lib/shell-panel.ts:31-40,78-80`) and the shell API's are the same rule, matched rather than chosen.
 `tools/shell-api/rail-width.test.ts` models the rail path and pins both halves; `getSectionFrameWidth()` keeps
 `section width: <N> columns given, widest row <M>` in the record, so the next width bug is a
 number instead of a screenshot.
@@ -529,7 +529,7 @@ rows are drawn uncoloured rather than guessed at, and the report says `theme mis
 
 Clicking is POSITIONAL in this host, not a row field. The layout maps a pointer event into the part's
 frame and calls the part's `handleMouse` with those coordinates (`lib/shell-sidebar-layout.ts:245-259`),
-and the wrapper already receives that call, so the bridge's own rows can answer it. The backend hands
+and the wrapper already receives that call, so the shell API's own rows can answer it. The backend hands
 the contributor ROW RANGES of that frame — `native`, `before` and `after`, each `{ start, end }`,
 recorded by the render that preceded the event — and `lib/shell-api/sidebar-render.ts` matches the event's `y`
 against the block that contains it, then maps it onto the rows it built. Ranges, not one offset:
@@ -562,7 +562,7 @@ is declared as "shared across separately loaded extensions" (`lib/shell-sidebar.
 `lib/shell-api/section-pointer.ts` stores `{ owner, clear }` there with the host's own semantics — the previous
 owner's `clear()` runs when the owner changes, and the host's "pointer left the rail" call
 (`setSidebarHover(tui)` with no owner) clears ours. `NativePointerRegion` itself is not reachable and
-is not needed: the dispatch it adapts is the one the bridge already receives.
+is not needed: the dispatch it adapts is the one the shell API already receives.
 
 **Who sees an event first (S21).** The host's own region answers EVERY move inside its frame with
 `{ handled: true }` — it looks the row up, paints the target and, with no target, clears and still
@@ -583,7 +583,7 @@ so hover cannot be checked there.
 
 ### Repaint and the digest (N13, N14)
 
-A collapse persists to the bridge store and then asks for the frame synchronously, through the same
+A collapse persists to the shell API store and then asks for the frame synchronously, through the same
 two steps the host uses for a part-owner write (`invalidateSidebar` + `requestRender`, `lib/shell-api/repaint.ts`).
 A LIVE field needs nothing but the digest: the memo re-renders a part when its digest changes, so the
 contributed rows' signature (each section's slot and side, bodies, `meta`, collapse flags, the hovered
@@ -665,7 +665,7 @@ installed, configured or imported.
 
 - **No service registry.** Pi's extension API (`docs/extensions.md`) exposes registration calls
   (commands, tools, providers, MCP servers, handlers) but no lookup that returns another
-  extension's live object. There is nothing a plugin could call to ask "is gentle-shell-bridge
+  extension's live object. There is nothing a plugin could call to ask "is the shell API
   loaded?".
 - **`pi.events` is the only sanctioned cross-extension channel** (`docs/extensions.md:1965-1972`,
   "Shared event bus for communication between extensions"), and it is a notification bus:
@@ -683,15 +683,15 @@ installed, configured or imported.
 
 ### The convention this follows
 
-- `pi-lens` mounts its IO bridge at a stable `Symbol.for` key with a version constant, first-wins
+- `pi-lens` mounts its IO shell API at a stable `Symbol.for` key with a version constant, first-wins
   and frozen, and a breaking major takes a **new** symbol key instead of mutating the old slot
-  (`clients/io-bridge-contract.ts:25-32`, `clients/process-bridge.ts:48-81`).
+  (`clients/io-shell API-contract.ts:25-32`, `clients/process-shell API.ts:48-81`).
 - gentle-shell names its shared payloads with a `schema` string and gates on the exact shape
   before using them (`lib/card-content-policy.ts:11,40`, `lib/card-style-policy.ts:29`).
 
-The bridge combines the two. `Symbol.for("gentle-shell-bridge/api/v1")` holds a frozen object
+The shell API combines the two. `Symbol.for("odd-worktree/shell-api/v1")` holds a frozen object
 carrying the schema string, the major version and the three callable members, and the consumer
-checks all of them with `isBridgeApi` (`lib/shell-api/api.ts`). `v1` in the key is the major: `v2` is a new
+checks all of them with `isShellApi` (`lib/shell-api/api.ts`). `v1` in the key is the major: `v2` is a new
 key and `v1` is never mutated.
 
 ### First wins, and the publication announcement
@@ -705,35 +705,35 @@ the same process-global bus (§7).
 ### The load order, as observed rather than assumed
 
 This design first claimed that `session_start` arrives only after every extension module has
-initialized, so a plugin's handler either found the object or knew the bridge was absent
-(`docs/extensions.md:213`). A real TUI disproved it: the record showed a working bridge
+initialized, so a plugin's handler either found the object or knew the shell API was absent
+(`docs/extensions.md:213`). A real TUI disproved it: the record showed a working shell API
 (`backend: capture`, `sidebar: intercepted`, `card style wiring: chat wrapped`) while the worked
 example — a global extension in `~/.pi/agent/extensions` — reported "no compatible
-gentle-shell-bridge is installed". Global extensions load, and receive `session_start`,
+shell API is installed". Global extensions load, and receive `session_start`,
 before a configured package's module publishes. The symbol was read too early, not missing.
 
 So an absent slot at `session_start` means "not yet". Two mechanisms answer that, and they stay
 separate on purpose:
 
-1. **the symbol** remains the only authority for *which* object to use (`isBridgeApi`, first wins);
-2. **`gentle-shell-bridge:ready`** tells the process *when* a publication happened. It is emitted
-   from `announceBridgeReady` at the extension factory — the first moment `pi.events` exists —
+1. **the symbol** remains the only authority for *which* object to use (`isShellApi`, first wins);
+2. **`odd-worktree:shell-ready`** tells the process *when* a publication happened. It is emitted
+   from `announceShellReady` at the extension factory — the first moment `pi.events` exists —
    exactly once per process (a `globalThis` flag like every other piece of process state, §7), and
    never when the slot holds an incompatible payload, because there would be nothing to look at.
 
 A listener never receives the API: it waits for the signal and reads the symbol again, so the gate,
-the first-wins rule and the "absent is absent" rule are unchanged. `onBridgeApi(handler, pi.events)`
+the first-wins rule and the "absent is absent" rule are unchanged. `onShellApi(handler, pi.events)`
 is the helper form — immediate when the object is already published and a subscription when it is
 not, with the subscription detaching itself after one delivery. Registration stays idempotent by
 stable id, so a plugin that registers from `session_start` *and* from the announcement leaves one of
 each surface, and the announcement can arrive before or after the session event without either path
 having to know about the other.
 
-What was rejected: a queue inside the bridge (a plugin's registrations waiting invisibly for a
+What was rejected: a queue inside the shell API (a plugin's registrations waiting invisibly for a
 version that may never load — the previous revision of this file described exactly that and removed
 it), and retrying `session_start` on a timer (no event to hang it on, and the plugin would have to
 keep state it does not need). The announcement is neither: one event, no holding area, and the
-plugin decides what an absent-and-unannounced bridge means for it.
+plugin decides what an absent-and-unannounced shell API means for it.
 
 ### Why a path, and why an environment variable, were rejected
 
@@ -741,16 +741,16 @@ A path is not a contract between two independent projects: it names one checkout
 reaches into another package's files, and breaks silently the day either repository moves. An
 environment variable is the same problem plus a per-user setup step, so the feature stops working
 until someone is told to set it — not "zero extra steps". Both were in the worked example
-(`bridgeCandidates()`, a dynamic `import()`, `GENTLE_SHELL_BRIDGE_MODULE`) and both are gone: the
+(`shellApiCandidates()`, a dynamic `import()`, `GENTLE_SHELL_API_MODULE`) and both are gone: the
 example now inlines the symbol and the gate (`examples/bash-card.ts`) and registers from
 `session_start`.
 
 ### Version skew
 
 An object that fails the gate — another library's payload, another major, a partial object — is
-**absent**, never an error and never half-used: `bridgeApi()` returns `undefined`, the plugin
-decides what to do, the bridge emits one warning per process, and the slot is left for whoever
-wrote it. A newer plugin against an older bridge therefore sees "absent" instead of being
+**absent**, never an error and never half-used: `shellApi()` returns `undefined`, the plugin
+decides what to do, the shell API emits one warning per process, and the slot is left for whoever
+wrote it. A newer plugin against an older shell API therefore sees "absent" instead of being
 deferred silently; that compatibility cliff is intentional.
 
 ## 14. The card-style transform
@@ -758,7 +758,7 @@ deferred silently; that compatibility cliff is intentional.
 The third surface. Rows and sections add something to the menu and the rail; a card style cannot be
 added at all in the way the others can — the host draws the conversation itself, `CARD_STYLE` is a
 two-member union (`lib/shell-card.ts:33-38`) read in eight places, all binary, and
-`cardStyle()` normalizes any unknown value to `float` (`:43-45`). So the bridge does the only thing
+`cardStyle()` normalizes any unknown value to `float` (`:43-45`). So the shell API does the only thing
 the host allows: it lets gentle-shell draw, then repaints the frames the host already produced.
 
 ### Where the conversation component is, and how that was proven
@@ -825,10 +825,10 @@ would let a plugin corrupt a surface it never claimed. Every absence is a report
 
 ### A write repaints its surface
 
-The rail and the conversation both display bridge-owned state: a section's visibility, and the
+The rail and the conversation both display shell-API-owned state: a section's visibility, and the
 card-style selection. Persisting is not painting — gentle-shell re-renders a rail part only when its
 digest changes or its layout revision moves (`lib/shell-sidebar-layout.ts:310-350`), so a
-bridge-owned row used to change the store and leave the screen alone until something else repainted
+shell-API-owned row used to change the store and leave the screen alone until something else repainted
 it. `lib/shell-api/repaint.ts` performs the two steps gentle-shell's own part owners perform
 (`lib/shell-sidebar-layout.ts:105-107`, `extensions/gentle-agents.ts:2147-2148`), synchronously,
 inside the row's `action()`: bump `tui.terminal[CACHE].revision` (the documented
@@ -838,12 +838,12 @@ frame when the write changed nothing. An unavailable path is recorded and report
 
 ### The conflict that cannot be won
 
-A post-processor downstream of this bridge can wrap the chat container's `render` and strip any box
+A post-processor downstream of this shell API can wrap the chat container's `render` and strip any box
 chrome it finds — a class of consumer that re-frames the conversation, and the frame that reaches
 the screen is the last one written. That can erase this frame on exactly the cards it re-frames —
-bash in particular. The bridge cannot prevent that and does not try; it says so in the record:
+bash in particular. The shell API cannot prevent that and does not try; it says so in the record:
 
-> a downstream post-processor can strip or override this frame; the bridge cannot prevent it.
+> a downstream post-processor can strip or override this frame; the shell API cannot prevent it.
 
 Nothing user-visible names such a consumer: this package ships the API to whoever installs it, and no
 package it cannot see is allowed to be a prerequisite for its own record.
@@ -851,11 +851,11 @@ package it cannot see is allowed to be a prerequisite for its own record.
 ### Why not ask gentle-shell to add a style registry
 
 Rejected in [state.md](state.md) (§Alternatives rejected, F/G). The package exists because the host
-does not take every change; a design that waits for one is not a bridge.
+does not take every change; a design that waits for one is not a shell API.
 
 ## 15. The transform pipeline
 
-The fourth surface. §14 explains how the bridge reaches the conversation component; this section
+The fourth surface. §14 explains how the shell API reaches the conversation component; this section
 is what that wrapper does with the rows it intercepts, now that it serves more than one feature.
 
 ### One wrapper, an ordered pipeline inside it
@@ -875,17 +875,17 @@ promise. The wrapper keeps the generation guard and the own-property marker unch
 second `session_start` or a second package copy still resolve to `already-wrapped` instead of
 stacking pipelines.
 
-### Why the loop belongs to the bridge, not to each plugin
+### Why the loop belongs to the shell API, not to each plugin
 
 `pi.registerToolRenderer` resolves when a tool row is BUILT (`docs/extensions.md`, "Custom
 Rendering"), so a rendering choice made through that slot can only reach the next row. Pi exposes no
 API to repaint rows that are already drawn, and the component that renders them is not reachable
-from a row's `action()`. The bridge already wraps that component for card styles, so the transform
+from a row's `action()`. The shell API already wraps that component for card styles, so the transform
 layer is a widening of a proven path rather than a new interception: one loop, one place to clip, one
 place to isolate a throw, and one place the record reads.
 
 A transform draws what the host already drew, so history and new rows are one picture. A tool
-DESIGN (§16) is the other half of the same idea: the bridge owns Pi's one renderer resolver, hands a
+DESIGN (§16) is the other half of the same idea: the shell API owns Pi's one renderer resolver, hands a
 design the rows the host's own card produced, and reads the live selection on every render pass, so
 a design chosen after a card was drawn repaints that card instead of waiting for the next one.
 
@@ -910,11 +910,11 @@ selection read per card per frame — so the bound cannot flake on a busy machin
 changed: the persisted selection is still read per card per frame (3.5 µs, measured) and adoption
 still invalidates each card once when it wraps it.
 
-S19 applied the same measurement to the second path. `requestSurfaceRepaint()` — a bridge-owned row,
-such as a bridge card style or a section toggle — no longer invalidates the tree or forces the frame;
+S19 applied the same measurement to the second path. `requestSurfaceRepaint()` — a shell API-owned row,
+such as a shell API card style or a section toggle — no longer invalidates the tree or forces the frame;
 what the record says about it is unchanged (the cause line never claimed a full repaint). Per-surface
-proof and numbers are in [contract.md](contract.md) §14, "What a bridge-owned switch costs". The reason
-it is safe is the same ordering: a bridge style is applied ABOVE the host's own frame caches, so a cached
+proof and numbers are in [contract.md](contract.md) §14, "What a shell API-owned switch costs". The reason
+it is safe is the same ordering: a shell API style is applied ABOVE the host's own frame caches, so a cached
 host frame is restyled rather than frozen, and the host's rail memo already keys on the section digest.
 
 ### Ordering, isolation and the width
@@ -952,7 +952,7 @@ none at all, loses counts and never a frame. The record keeps the counts on the 
 own line, and is still absent entirely when no transform is registered.
 
 A transform that reads `float` cards and the host's `neon` outline reports those two names (the
-bridge's card-style repaint is `float`-only, so a neon card reaches a transform untouched), so the
+shell API's card-style repaint is `float`-only, so a neon card reaches a transform untouched), so the
 next step after a real-TUI report is data-driven: a `skipped` line with candidates and no
 recognition names a grammar gap, and recognition with `0 rewritten` names a setting.
 
@@ -963,7 +963,7 @@ recognition names a grammar gap, and recognition with `0 rewritten` names a sett
 `pi.registerToolRenderer(resolver)` (`dist/core/extensions/types.d.ts:546`) is the sanctioned way to
 choose how a tool's card is drawn. Resolvers COMPOSE — Pi chains every extension's resolver
 (`dist/core/extensions/runner.js:550-553`) — so two plugins that each called it would each wrap the
-other's component and neither could see the other's choice. The bridge therefore registers exactly
+other's component and neither could see the other's choice. The shell API therefore registers exactly
 ONE resolver while arming (`installToolDesignResolver`, from the same `session_start` that arms the
 rows and the sidebar) and returns `next()`'s renderers untouched for a tool with no design.
 
@@ -1028,7 +1028,7 @@ Pi composes resolvers in extension load order (`runner.js:550-553`); `loader.js:
 so there is no reordering API. A resolver loaded before this package that answers WITHOUT calling
 `next()` — the host's quiet bash resolver while `Card content` is `minimal`
 (`extensions/quiet-tools.ts:910-914`) — hides `toolDesignResolver` completely. The user's install has
-gentle-pi first and this bridge last, which is why a resolver-only design never reached a card
+gentle-pi first and this shell API last, which is why a resolver-only design never reached a card
 (L3/E6).
 
 `lib/shell-api/tool-design-adoption.ts` is the second path. The conversation wrapper from
@@ -1094,7 +1094,7 @@ at all is outside that rule and falls back to its historical per-tool value (`na
 registry). Overlap cannot be proven at registration, so it is ordered and never refused, and a scope
 that throws counts as no match — one recorded failure, never a throw into the frame. `lib/shell-api/tool-design-rows.ts` turns each line into one `Cards` line — the host's own card
 (shown `default`, stored `native`) plus one value per design, in registration order —
-and persists the selection per line in the bridge's own `bridge-tool-designs` store, never in the
+and persists the selection per line in the shell API's own `bridge-tool-designs` store, never in the
 host's config: ungrouped lines keep the historical flat `selections` map, and a grouped line's value
 travels in the same document under the reserved `$lines` key, so one `store.get` per card per frame
 serves both (`lib/shell-api/store.ts` reads the file on every `get`). Migration runs once, at registration: a tool joining a line with no stored value lends it its
@@ -1124,7 +1124,7 @@ the one the previous release printed; a tool whose
 only claim is its own ungrouped `Card <tool>` line carries neither field, exactly as before. The block
 also lists whether the wrapper has mounted a card for it (`wrapper mounted on 2 cards` — the answer to
 "is this card even wrapped?" via the resolver), how many cards the adoption
-pass reached (`adopted 1 card` — the answer when a resolver ahead of the bridge answered first), the
+pass reached (`adopted 1 card` — the answer when a resolver ahead of the shell API answered first), the
 conflicts a replacement, a duplicate label or a second-line ownership produced, and the designs that
 threw. A grouped line also gets a line report: the line, its row name, its tools, and each value with
 the tools it `covers`. `not covered` is a PER-TOOL `selection` reading beside `missing` and `native`,

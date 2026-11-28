@@ -1,7 +1,7 @@
 /**
  * T12/S9 — runtime presence of the REQUIRED host package, `gentle-pi`.
  *
- * The bridge exists to feed gentle-pi's `/gentle:customize` surface, so without gentle-pi it has
+ * The shell API exists to feed gentle-pi's `/gentle:customize` surface, so without gentle-pi it has
  * nothing to feed: no rows, no sections, no card styles, no tool designs, no wrappers. The answer is
  * never read from disk — a path can name one checkout on one machine — and never from
  * `gentle-pi.card-style`, which `setCardStyle` writes lazily (its absence proves nothing).
@@ -70,7 +70,7 @@ export interface GentlePiPresenceRecord {
 }
 
 /** The process-global slot. `v1` is part of the key, like the API, the bus and the notice buffer. */
-const PRESENCE_KEY: symbol = Symbol.for("gentle-shell-bridge/presence/v1");
+const PRESENCE_KEY: symbol = Symbol.for("odd-worktree/presence/v1");
 
 interface PresenceState {
   /** `false` until the first check, which is why the report has no presence line before then. */

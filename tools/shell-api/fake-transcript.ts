@@ -91,7 +91,7 @@ export const READ_CARD: readonly string[] = [
 // - `default` x `float` and `default` x `neon` are reachable and draw the SAME rows: with content
 //   default the host's resolver calls `next()` and nothing on pi's path reads `cardStyle()`. The two
 //   cells therefore share one fixture; that is the finding, not a shortcut.
-// - A style ADDED through `registerCardStyle` is reachable only with `minimal`. The bridge repaints
+// - A style ADDED through `registerCardStyle` is reachable only with `minimal`. The shell API repaints
 //   float frames only (`src/card-style-transform.ts:189-196` requires a ` ▎ ` row, `:320-352`
 //   matches the card), and the native cell has no float grammar at all, so a registered style can
 //   repaint the minimal card and can never repaint the default one.
@@ -261,7 +261,7 @@ export const HOST_READ_CARD: readonly string[] = [
   " \u001b[48;5;236m\u001b[90m▎\u001b[39m\u001b[90m                                                         \u001b[39m\u001b[49m ",
   " \u001b[48;5;236m\u001b[90m▎\u001b[39m\u001b[90m \u001b[39m\u001b[95m≡ read src/api.ts\u001b[39m\u001b[90m                   \u001b[39m \u001b[2mctrl+o to expand\u001b[39m \u001b[90m  \u001b[39m\u001b[49m ",
   " \u001b[48;5;236m\u001b[90m▎\u001b[39m\u001b[90m                                                         \u001b[39m\u001b[49m ",
-  " \u001b[48;5;236m\u001b[90m▎\u001b[39m \u001b[39mexport function bridgeApi() {\u001b[39m                          \u001b[90m \u001b[39m\u001b[49m ",
+  " \u001b[48;5;236m\u001b[90m▎\u001b[39m \u001b[39mexport function shellApi() {\u001b[39m                          \u001b[90m \u001b[39m\u001b[49m ",
   " \u001b[48;5;236m\u001b[90m▎\u001b[39m\u001b[90m                                                         \u001b[39m\u001b[49m ",
 ];
 

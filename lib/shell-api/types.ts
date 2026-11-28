@@ -1,7 +1,7 @@
 /**
  * The public row/provider contract, mirroring `docs/contract.md` §2–§3.
  *
- * The bridge carries rows through unchanged: it never reads, rewrites or interprets a row, so
+ * The shell API carries rows through unchanged: it never reads, rewrites or interprets a row, so
  * every field here is a pass-through of what gentle-shell's renderer already understands
  * (`lib/visual-customize-view.ts:107-140`).
  */
@@ -9,7 +9,7 @@
 /**
  * Context handed to a provider's `rows(ctx)` once per menu build.
  *
- * `theme` is the host's opaque theme object, passed through untouched; the bridge does not
+ * `theme` is the host's opaque theme object, passed through untouched; the shell API does not
  * depend on its shape, so consumers narrow it themselves. `configHome` is the resolved
  * gentle-shell config home (see `./config.ts`), so a plugin can place per-user state without
  * re-deriving the path.
@@ -53,7 +53,7 @@ export interface InlineHelpers {
  * both are first class — neither is an accident of a missing field:
  *
  * - a TOGGLE row carries a `choice`. Consecutive rows sharing `choice.setting` render as one line and
- *   ←/→ moves the cursor; the bridge stages every such row with `applyOnMove: false` so Enter applies;
+ *   ←/→ moves the cursor; the shell API stages every such row with `applyOnMove: false` so Enter applies;
  * - a BUTTON row carries an `action` and NO `choice`. Enter (or Space) runs it — exactly the shape of
  *   the host's own `Reset` and `Profiles` rows (`extensions/gentle-shell.ts:3541,3550`, run at
  *   `lib/visual-customize-view.ts:575-577`). Its whole visible text is its `label`.
@@ -67,9 +67,9 @@ export interface InlineHelpers {
  * name: one to three plain words with no arrow, colon, dot, pipe, slash or bracket (`./row-names.ts`).
  * A label that breaks the shape is refused and reported verbatim, never rewritten.
  *
- * The bridge adds nothing to a button row: no `choice` is invented and no `applyOnMove` is staged
+ * The shell API adds nothing to a button row: no `choice` is invented and no `applyOnMove` is staged
  * (`./rows.ts`). Its one deliberate change is the `action`, which it wraps so a throw or a rejected
- * promise is reported once through the bridge's notice channel and never reaches the menu.
+ * promise is reported once through the shell API's notice channel and never reaches the menu.
  */
 export interface CustomizeRow {
   /**
@@ -91,7 +91,7 @@ export interface CustomizeRow {
    * Runs on Enter/Space. The host requires it on every row (`lib/visual-customize-view.ts:124`); on a
    * button row (no `choice`) it is what makes the row do anything at all.
    *
-   * The bridge hands the host a wrapped copy and never the raw function: a synchronous throw or a
+   * The shell API hands the host a wrapped copy and never the raw function: a synchronous throw or a
    * rejected promise is caught, reported once in the diagnostics record (and by the next `ui.notify`), and
    * swallowed, so neither the menu nor the other rows can be broken by one failing action. The
    * provider's own object is not mutated.
@@ -173,7 +173,7 @@ export type SectionPlacement = "start" | "end" | { after: string };
 /**
  * A plugin's sidebar section: the analogue of `RowProvider` for the rail, mirroring the sidebar
  * spec's S2. The plugin writes content only — it never names a `setting`, a rail key or a card
- * frame; the bridge frames the section, draws the host's header and contributes the section's
+ * frame; the shell API frames the section, draws the host's header and contributes the section's
  * visibility and collapse controls.
  */
 export interface SidebarSection {
@@ -184,7 +184,7 @@ export interface SidebarSection {
   /** Optional display name for the plugin's INTEGRATIONS line; see `RowProvider.name`. */
   name?: string;
   /**
-   * What the `Sections` rows read, e.g. `"music"`. Optional: when absent the bridge derives it from
+   * What the `Sections` rows read, e.g. `"music"`. Optional: when absent the shell API derives it from
    * `title` (lowercase words, no dots, no prefix), and two sections whose labels read the same are
    * disambiguated deterministically and reported by the diagnostics record. The `id` is never shown.
    */
@@ -287,7 +287,7 @@ export interface RowProvider {
 
 /**
  * What a card style's `top` receives: the measured width, plus the pieces of the host's own frame
- * the bridge extracted once, in one place (S2). A style must never try to parse them back out of a
+ * the shell API extracted once, in one place (S2). A style must never try to parse them back out of a
  * line.
  */
 export interface CardFrameTopContext {
@@ -312,7 +312,7 @@ export interface CardFrameBottomContext {
 }
 
 /**
- * The three functions a style draws with, and the whole of what the bridge calls (S2). The bridge
+ * The three functions a style draws with, and the whole of what the shell API calls (S2). The shell API
  * supplies the width and the text; it never asks the style where anything is.
  */
 export interface CardFrame {
@@ -353,7 +353,7 @@ export interface TransformCounts {
  * a child that carries no tool name at all (a banner, a spacer, a host block drawn by its own class).
  *
  * A plugin narrows with these two members and nothing else; no component reference is handed out, so
- * a transform can neither re-render nor mutate the host's tree. The bridge derives one entry per row
+ * a transform can neither re-render nor mutate the host's tree. The shell API derives one entry per row
  * from the layout the host's own render pass published (`mouseLayout`), never by rendering children
  * a second time.
  */
@@ -385,11 +385,11 @@ export interface TransformContext {
    */
   readonly rows?: readonly RowOrigin[];
   /**
-   * Report this frame's counts (F1). The bridge adds the line count and the outcome itself, records
+   * Report this frame's counts (F1). The shell API adds the line count and the outcome itself, records
    * the result in this frame's entry for the diagnostics record, and never lets it reach the frame: a
    * throw, or nonsense, costs the counts and nothing else (F4).
    *
-   * Optional because a published bridge older than the telemetry has no such member: call it behind
+   * Optional because a published shell API older than the telemetry has no such member: call it behind
    * `typeof ctx.report === "function"` and the transform keeps working with either.
    */
   report?(counts: TransformCounts): void;
@@ -403,7 +403,7 @@ export interface TransformContext {
  * choice needs to apply to cards that are ALREADY on screen: a tool renderer resolves once, when a
  * row is built, while the conversation component renders every frame.
  *
- * The bridge clips whatever comes back to `ctx.width`, skips the transform for the frame if it
+ * The shell API clips whatever comes back to `ctx.width`, skips the transform for the frame if it
  * throws, and never lets a transform into Pi's render loop (S3, S4).
  */
 export interface TranscriptTransform {
@@ -425,17 +425,17 @@ export interface TranscriptTransform {
  *
  * `width` is the width the host asked its own component to render at, `tool` is the tool name the
  * design was declared for (never anything the card draws), and `theme` is the opaque theme object the
- * host handed that renderer (`renderCall`'s second argument, `renderResult`'s third). The bridge does
+ * host handed that renderer (`renderCall`'s second argument, `renderResult`'s third). The shell API does
  * not depend on the theme's shape, so a design that wants a colour narrows it itself.
  *
  * `part` says WHICH half of the card this pass is drawing (S12). A card has two components — the call
  * and the result — and the host draws them with the same chrome, so from rows alone the two are
  * indistinguishable: a float result body row that begins with `$ ` (a script echoing commands) sits
- * exactly where a float heading sits. The bridge wraps the two renderers separately and sets `part`
+ * exactly where a float heading sits. The shell API wraps the two renderers separately and sets `part`
  * per renderer, so a design can act on the call alone instead of guessing from drawn text. A design
  * that ignores `part` behaves exactly as it did before the field existed.
  *
- * `cardStyle` is the style the USER has selected right now (S22): `native` when the bridge paints
+ * `cardStyle` is the style the USER has selected right now (S22): `native` when the shell API paints
  * nothing, the live registration when a plugin's style is selected, and `missing` for an id nobody
  * owns any more. It is what lets a design honour `float`/`neon` on a card the host never styles
  * itself — a tool another extension registers, like `bash_background`. Resolved on ACCESS and at
@@ -452,21 +452,21 @@ export interface ToolDesignContext {
   /**
    * What Pi's render context says about THIS tool call, read at this pass: the call's arguments and
    * whether it is running, failed or finished, and how long it took. Optional because a host that
-   * hands no render context (or an older bridge) leaves it out; a design that needs it must work
+   * hands no render context (or an older shell API) leaves it out; a design that needs it must work
    * without it.
    */
   readonly render?: ToolDesignRender;
   /**
-   * The style the user has selected, resolved live on access. Absent on a bridge older than S22, and
+   * The style the user has selected, resolved live on access. Absent on a shell API older than S22, and
    * `missing` for a style that was disposed while it was selected (a `/reload`, a plugin unloaded):
-   * a design must degrade to its own default in both cases, exactly as the bridge itself does.
+   * a design must degrade to its own default in both cases, exactly as the shell API itself does.
    */
   readonly cardStyle?: CardStyleSelection;
 }
 
 /**
  * The fields of the host's render context a design may read, copied by value so a design cannot
- * reach the host's live context. Every field is optional: the bridge forwards only what the host
+ * reach the host's live context. Every field is optional: the shell API forwards only what the host
  * actually provided, with the type it has.
  */
 export interface ToolDesignRender {
@@ -505,7 +505,7 @@ export interface ToolDesignCall {
  * The narrower-than-a-tool claim a line may declare (S7): the calls of its tools this line OWNS.
  *
  * A scope is a PREDICATE, never a declarative path rule: path identity ("under `skills/` or `odd/`")
- * is the consumer's own rule, and this bridge is tool-agnostic by construction. It is the same trust
+ * is the consumer's own rule, and this shell API is tool-agnostic by construction. It is the same trust
  * model `apply` already has — plugin code the host runs, isolated on throw — because a function has
  * no printable form, `description` is required: the menu and the diagnostics record have to explain which
  * calls the line owns.
@@ -513,14 +513,14 @@ export interface ToolDesignCall {
 export interface ToolDesignScope {
   /**
    * One short line a preview and the diagnostics record can show, e.g. `paths under skills/ or odd/`. One
-   * line LITERALLY (S18): the bridge renders it INSIDE an existing row, so a CR or LF would add a row
+   * line LITERALLY (S18): the shell API renders it INSIDE an existing row, so a CR or LF would add a row
    * and the registration is refused whole.
    */
   readonly description: string;
   /**
    * Whether this line owns THIS call, answered SYNCHRONOUSLY with `true` or `false` (S18). A paint
    * cannot await, so any other answer (a Promise, a truthy string, `undefined`) counts as "this line
-   * does not own the call" and is reported in the diagnostics record. Cheap and pure; the bridge isolates a
+   * does not own the call" and is reported in the diagnostics record. Cheap and pure; the shell API isolates a
    * throw.
    */
   matches(call: ToolDesignCall): boolean;
@@ -613,7 +613,7 @@ export interface ToolDesignRegistration {
    */
   readonly scope?: ToolDesignScope;
   /**
-   * The host's rows in, the rows to draw out. The bridge hands a fresh copy, clips nothing and
+   * The host's rows in, the rows to draw out. The shell API hands a fresh copy, clips nothing and
    * isolates a throw: an `apply` that throws (or returns something that is not an array of strings)
    * leaves the host's own card on screen and is reported in the diagnostics record.
    */
@@ -621,13 +621,13 @@ export interface ToolDesignRegistration {
 }
 
 /**
- * A plugin's card style: chrome, never a parser (S1). The bridge owns detection and hands this
+ * A plugin's card style: chrome, never a parser (S1). The shell API owns detection and hands this
  * registration's `frame` the card it found; the style owns only what the card looks like.
  */
 export interface CardStyleRegistration {
   /**
    * Unique and stable: it is the value the user selects and the key for ordering and replacement.
-   * It may not be `native` (the bridge's own pass-through value) nor one of the host's own values,
+   * It may not be `native` (the shell API's own pass-through value) nor one of the host's own values,
    * because the line would then show the same value twice.
    */
   id: string;
@@ -636,7 +636,7 @@ export interface CardStyleRegistration {
   /** The short text shown on the `Card style` line for this value. */
   label: string;
   /**
-   * What this style's row reads in the menu, e.g. `"plain"`. Optional: when absent the bridge
+   * What this style's row reads in the menu, e.g. `"plain"`. Optional: when absent the shell API
    * derives it from `label` (lowercase words, no dots, no prefix). `label` stays the line's value and
    * the `id` stays internal; the row never shows the id.
    */
@@ -654,9 +654,9 @@ export interface CardStyleRegistration {
 /**
  * What the stored card-style selection means right now (S12, S22).
  *
- * `native` is "the bridge paints nothing" and is the default, `style` is the live registration a
+ * `native` is "the shell API paints nothing" and is the default, `style` is the live registration a
  * design should honour, and `missing` is a first-class answer rather than an error: a style that was
- * disposed while it was selected leaves a stored id nobody owns, and the bridge must degrade to
+ * disposed while it was selected leaves a stored id nobody owns, and the shell API must degrade to
  * `native` and say so instead of rendering chrome that no longer exists. Resolving never throws for
  * any stored value, because that answer is what the transformer — and now a tool design — degrades
  * from.
@@ -694,7 +694,7 @@ export interface MessageDesignRender {
  *
  * `render` is NOT optional here: Pi hands a message renderer its `{ expanded, outputPad }` options and
  * the message itself at construction, so there is no "context arrived late" state to model. An older
- * copy of the bridge knows no message designs at all, so a design never meets a context without it.
+ * copy of the shell API knows no message designs at all, so a design never meets a context without it.
  */
 export interface MessageDesignContext {
   readonly width: number;
@@ -753,7 +753,7 @@ export interface MessageDesignFollowAnswer {
  *   `ctx.cardStyle`, and those same rows are what a FAILING design falls back to, so a message the
  *   agent must read is never lost to a broken design.
  *
- * With NO design selected for a type the bridge does nothing at all: it never touches a message no
+ * With NO design selected for a type the shell API does nothing at all: it never touches a message no
  * design claims (S4), so Pi's own output is byte-identical and no pass pays for the surface.
  */
 export interface MessageDesignRegistration {
@@ -794,7 +794,7 @@ export interface MessageDesignRegistration {
   /** Optional literal depiction of the design, drawn in the customize preview. */
   preview?(): RowPreview;
   /**
-   * The rows the bridge hands the design in, and the rows it draws out. A design receives a COPY: one
+   * The rows the shell API hands the design in, and the rows it draws out. A design receives a COPY: one
    * that mutates its input cannot corrupt the rows the host still owns. A throw, or a return value that
    * is not an array of strings, leaves the host's own output on screen and is reported in
    * the diagnostics record.

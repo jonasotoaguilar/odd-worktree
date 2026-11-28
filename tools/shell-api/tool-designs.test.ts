@@ -1,7 +1,7 @@
 /**
  * The per-tool DESIGN bus (S4–S7, T7, T8, T11).
  *
- * ONE `pi.registerToolRenderer` resolver is installed by the bridge, and it fans out to the designs
+ * ONE `pi.registerToolRenderer` resolver is installed by the shell API, and it fans out to the designs
  * plugins registered for a tool name. The resolver runs ONCE per card, at construction, so its
  * wrapper must be the thing that decides: for every tool with at least one registered design it
  * wraps the host's own `renderCall`/`renderResult` components, and on EVERY render pass the wrapper
@@ -21,10 +21,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { armBridge } from "../../lib/shell-api/arm.ts";
-import { bridgeApi } from "../../lib/shell-api/api.ts";
+import { armShellApi } from "../../lib/shell-api/arm.ts";
+import { shellApi } from "../../lib/shell-api/api.ts";
 import { disableCaptureBackend, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
-import gentleShellBridge, { type BridgeExtensionApi } from "../../lib/shell-api/extension.ts";
+import gentleShellShellApi, { type ShellExtensionApi } from "../../lib/shell-api/extension.ts";
 import { resetHookStateForTests } from "../../lib/shell-api/hook.ts";
 import { resetNoticesForTests } from "../../lib/shell-api/notices.ts";
 import { resetPluginLinesForTests } from "../../lib/shell-api/plugin-lines.ts";
@@ -33,7 +33,7 @@ import { resetRowBuildStateForTests } from "../../lib/shell-api/rows.ts";
 import { createStore, resetStoreStateForTests } from "../../lib/shell-api/store.ts";
 import {
   TOOL_DESIGN_NATIVE,
-  TOOL_DESIGN_STORE_ID,
+  LEGACY_TOOL_DESIGN_STORE_ID,
   TOOL_DESIGN_STORE_KEY,
   designsOfTool,
   getToolDesignConflicts,
@@ -313,7 +313,7 @@ test("T7: a malformed registration throws before anything is stored", () => {
 });
 
 test("T7: the published API carries the registration a plugin that never imports the package needs", () => {
-  const api = bridgeApi();
+  const api = shellApi();
   assert.equal(typeof api?.registerToolDesign, "function", "the slot publishes the bus");
   api?.registerToolDesign?.(bashHeadingDesign);
   assert.deepEqual(
@@ -323,7 +323,7 @@ test("T7: the published API carries the registration a plugin that never imports
   );
 });
 
-test("T7: the selection is persisted per TOOL, in the bridge's own store", () => {
+test("T7: the selection is persisted per TOOL, in the shell API's own store", () => {
   registerToolDesign(bashHeadingDesign);
   registerToolDesign(writeBadgeDesign);
 
@@ -336,7 +336,7 @@ test("T7: the selection is persisted per TOOL, in the bridge's own store", () =>
   assert.equal(getToolDesignSelection("edit"), TOOL_DESIGN_NATIVE, "each tool has its own value");
 
   const stored = JSON.parse(
-    readFileSync(join(configHome, "gentle-shell-bridge", `${TOOL_DESIGN_STORE_ID}.json`), "utf8"),
+    readFileSync(join(configHome, "gentle-shell-bridge", `${LEGACY_TOOL_DESIGN_STORE_ID}.json`), "utf8"),
   );
   assert.deepEqual(stored.values.selections, {
     bash: "loon.bash-heading",
@@ -805,11 +805,11 @@ test("T8: an apply that returns nonsense is a failure, never a broken card", () 
 });
 
 // ---------------------------------------------------------------------------------------------
-// T8 — one registration point, at the same moment the bridge arms its other surfaces
+// T8 — one registration point, at the same moment the shell API arms its other surfaces
 // ---------------------------------------------------------------------------------------------
 
 interface FakePi {
-  pi: BridgeExtensionApi;
+  pi: ShellExtensionApi;
   resolvers: unknown[];
   fireSessionStart: () => void;
 }
@@ -817,7 +817,7 @@ interface FakePi {
 function fakePi(): FakePi {
   const resolvers: unknown[] = [];
   let sessionStart: (() => unknown) | undefined;
-  const pi: BridgeExtensionApi = {
+  const pi: ShellExtensionApi = {
     // `gentle-pi` is present, so `session_start` installs the resolver (S9/T12).
     getCommands: () => [{ name: "gentle:customize" }],
     on(event, handler) {
@@ -837,10 +837,10 @@ function fakePi(): FakePi {
   };
 }
 
-test("T8: the bridge registers exactly one resolver, and re-arming registers none", () => {
+test("T8: the shell API registers exactly one resolver, and re-arming registers none", () => {
   const fake = fakePi();
 
-  gentleShellBridge(fake.pi);
+  gentleShellShellApi(fake.pi);
   fake.fireSessionStart();
 
   assert.equal(fake.resolvers.length, 1, "ONE resolution point for the whole package");
@@ -853,7 +853,7 @@ test("T8: the bridge registers exactly one resolver, and re-arming registers non
 
 test("T8: a second loaded copy shares the slot and does not register a second resolver", async () => {
   const fake = fakePi();
-  gentleShellBridge(fake.pi);
+  gentleShellShellApi(fake.pi);
   fake.fireSessionStart();
   assert.equal(fake.resolvers.length, 1);
 
@@ -875,7 +875,7 @@ test("T8: a host without registerToolRenderer is a reported outcome, never a thr
 test("PRESERVE: arming without a UI registers nothing, exactly as before", () => {
   const resolvers: unknown[] = [];
   let sessionStart: ((event: unknown, ctx: unknown) => unknown) | undefined;
-  const pi: BridgeExtensionApi = {
+  const pi: ShellExtensionApi = {
     on(event, handler) {
       if (event === "session_start") sessionStart = handler as (event: unknown, ctx: unknown) => unknown;
     },
@@ -884,16 +884,16 @@ test("PRESERVE: arming without a UI registers nothing, exactly as before", () =>
       resolvers.push(resolver);
     },
   };
-  gentleShellBridge(pi);
+  gentleShellShellApi(pi);
   sessionStart?.({}, { hasUI: false });
 
   assert.deepEqual(resolvers, []);
 });
 
-test("PRESERVE: armBridge still reports its own outcome with designs registered", () => {
+test("PRESERVE: armShellApi still reports its own outcome with designs registered", () => {
   registerToolDesign(bashHeadingDesign);
   const host = createFakeHost();
-  const result = armBridge(host.ui);
+  const result = armShellApi(host.ui);
   assert.notEqual(result.backend, "none", "the design bus never changes the row interception");
 });
 
@@ -912,13 +912,13 @@ const groupedDesign = (overrides: Partial<ToolDesignRegistration> = {}): ToolDes
 });
 
 /**
- * The stored value the diagnostics record and the tests read: the bridge's own file, never the host's config.
+ * The stored value the diagnostics record and the tests read: the shell API's own file, never the host's config.
  * ONE document holds both maps — the tool selections flat, the lines under the reserved key — so a
  * frame reads the file once (S9/D6).
  */
 const readDesignStore = (): { selections?: Record<string, unknown>; lines: Record<string, unknown> } => {
   const values = JSON.parse(
-    readFileSync(join(configHome, "gentle-shell-bridge", `${TOOL_DESIGN_STORE_ID}.json`), "utf8"),
+    readFileSync(join(configHome, "gentle-shell-bridge", `${LEGACY_TOOL_DESIGN_STORE_ID}.json`), "utf8"),
   ).values as Record<string, unknown>;
   const stored = values["selections"];
   const document =
@@ -1490,7 +1490,7 @@ test("S10/S18: a thrown value that cannot be turned into text is REPORTED, never
   assert.doesNotMatch(
     failures[0].message,
     /Cannot convert object to primitive value/u,
-    "the bridge's own crash never becomes part of the report",
+    "the shell API's own crash never becomes part of the report",
   );
 });
 
@@ -1649,8 +1649,8 @@ test("S12: the resolver resolves with the call's args, so the scoped line draws 
 // S18 — the audit's robustness rules: a foreign slot, a one-line description, a boolean answer
 // ---------------------------------------------------------------------------------------------
 
-/** The process-global slot two copies of the bridge share (`src/tool-designs.ts`). */
-const DESIGNS_SLOT = Symbol.for("gentle-shell-bridge.tool-designs.v1");
+/** The process-global slot two copies of the shell API share (`src/tool-designs.ts`). */
+const DESIGNS_SLOT = Symbol.for("odd-worktree.tool-designs.v1");
 
 test("S18: a scope description carrying a line break is refused whole as `scope`", () => {
   for (const description of ["paths under skills/\nand odd/", "paths under skills/\rand odd/"]) {
@@ -1729,7 +1729,7 @@ test("S18: a scope that does not answer with a boolean owns no call, and is reco
 
 test("S18: a scope that returns a REJECTING promise never becomes an unhandled rejection", async () => {
   // A plugin bug must not take the host down: a host that treats an unhandled rejection as fatal would
-  // crash on a paint the bridge already declined. The rejection is swallowed and the failure recorded.
+  // crash on a paint the shell API already declined. The rejection is swallowed and the failure recorded.
   const seen: unknown[] = [];
   const onUnhandled = (reason: unknown) => seen.push(reason);
   process.on("unhandledRejection", onUnhandled);
@@ -1762,7 +1762,7 @@ test("S18: a scope that returns a REJECTING promise never becomes an unhandled r
 
 test("S18: a thenable whose `then` RETURNS a rejecting promise never leaks it", async () => {
   // An `async then` cannot throw to its caller: it REJECTS the promise it returns. Draining the value
-  // the bridge was handed is therefore not enough — the value the `then` CALL returned has to be
+  // the shell API was handed is therefore not enough — the value the `then` CALL returned has to be
   // drained too, or `--unhandled-rejections=strict` takes the host down on a paint already declined.
   const seen: unknown[] = [];
   const onUnhandled = (reason: unknown) => seen.push(reason);
@@ -2082,7 +2082,7 @@ test("S19: `scopes` is validated whole, under kind `scope`, and nothing is store
       "and never joins a line",
     );
   };
-  const store = (): unknown => createStore(TOOL_DESIGN_STORE_ID).get(TOOL_DESIGN_STORE_KEY, {});
+  const store = (): unknown => createStore(LEGACY_TOOL_DESIGN_STORE_ID).get(TOOL_DESIGN_STORE_KEY, {});
   const before = store();
   void stable;
 

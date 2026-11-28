@@ -3,11 +3,16 @@ import { homedir } from "node:os";
 import test from "node:test";
 
 import {
-  getBridgeConfigHome,
+  getShellApiConfigHome,
   getConfigHome,
-  resolveBridgeConfigHome,
+  resolveShellApiConfigHome,
   resolveConfigHome,
+  LEGACY_PERSISTENCE_DIR_NAME,
 } from "../../lib/shell-api/config.ts";
+import { LEGACY_CARD_STYLE_STORE_ID } from "../../lib/shell-api/card-styles.ts";
+import { LEGACY_MESSAGE_DESIGN_STORE_ID } from "../../lib/shell-api/message-designs.ts";
+import { LEGACY_TOOL_DESIGN_STORE_ID } from "../../lib/shell-api/tool-designs.ts";
+import { LEGACY_SECTIONS_STORE_ID } from "../../lib/shell-api/visibility.ts";
 
 const HOME = "/home/tester";
 const CWD = "/work/repo";
@@ -68,26 +73,36 @@ test("redundant separators and dot segments are normalized", () => {
   );
 });
 
-test("the bridge directory is <config home>/gentle-shell-bridge", () => {
-  assert.equal(resolveBridgeConfigHome("/srv/gentle"), "/srv/gentle/gentle-shell-bridge");
+test("the shell API directory is <config home>/gentle-shell-bridge", () => {
+  assert.equal(resolveShellApiConfigHome("/srv/gentle"), "/srv/gentle/gentle-shell-bridge");
   assert.equal(
-    resolveBridgeConfigHome("/srv/gentle/"),
+    resolveShellApiConfigHome("/srv/gentle/"),
     "/srv/gentle/gentle-shell-bridge",
     "a trailing separator must not produce a doubled separator",
   );
 });
 
-test("getConfigHome reads the process environment; getBridgeConfigHome appends the bridge dir", () => {
+test("getConfigHome reads the process environment; getShellApiConfigHome appends the shell API dir", () => {
   const restore = process.env.GENTLE_PI_CONFIG_HOME;
   try {
     process.env.GENTLE_PI_CONFIG_HOME = "/srv/from-env";
     assert.equal(getConfigHome(), "/srv/from-env");
-    assert.equal(getBridgeConfigHome(), "/srv/from-env/gentle-shell-bridge");
+    assert.equal(getShellApiConfigHome(), "/srv/from-env/gentle-shell-bridge");
     delete process.env.GENTLE_PI_CONFIG_HOME;
     assert.equal(getConfigHome(), `${homedir()}/.pi/gentle-ai`);
-    assert.equal(getBridgeConfigHome(), `${homedir()}/.pi/gentle-ai/gentle-shell-bridge`);
+    assert.equal(getShellApiConfigHome(), `${homedir()}/.pi/gentle-ai/gentle-shell-bridge`);
   } finally {
     if (restore === undefined) delete process.env.GENTLE_PI_CONFIG_HOME;
     else process.env.GENTLE_PI_CONFIG_HOME = restore;
   }
+});
+
+// The names below are spelled out on purpose: they are where saved choices already live on disk, so
+// they are written as literals and not read from the constants, which would follow a rename.
+test("the persistence directory and the four store ids keep the names saved choices live under", () => {
+  assert.equal(LEGACY_PERSISTENCE_DIR_NAME, "gentle-shell-bridge");
+  assert.equal(LEGACY_CARD_STYLE_STORE_ID, "bridge-card-style");
+  assert.equal(LEGACY_MESSAGE_DESIGN_STORE_ID, "bridge-message-designs");
+  assert.equal(LEGACY_TOOL_DESIGN_STORE_ID, "bridge-tool-designs");
+  assert.equal(LEGACY_SECTIONS_STORE_ID, "bridge-sections");
 });

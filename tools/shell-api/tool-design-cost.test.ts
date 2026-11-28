@@ -11,7 +11,7 @@
  *   the whole buffer is cleared and rewritten (6.9 MB at 600 children) instead of only the rows that
  *   changed.
  *
- * Neither is needed to change a card that is already drawn: the bridge's wrapper renders the HOST's
+ * Neither is needed to change a card that is already drawn: the shell API's wrapper renders the HOST's
  * component and applies the live selection on top of whatever rows it answered with — including the
  * rows the host's own `ToolCardRows` cache hands back (`cards-bash-v2` `extensions/quiet-tools.ts`
  * 612-624 keys its frame on width + style + running, and the design is NOT in that key). This file
@@ -136,7 +136,7 @@ interface Counters {
   hostCacheHits: number;
   /** The host card rebuilt its rows (width/style/running changed). */
   hostRebuilds: number;
-  /** Cards whose `invalidate()` the bridge called. */
+  /** Cards whose `invalidate()` the shell API called. */
   cardInvalidations: number;
   /** Design applications. */
   designApplies: number;
@@ -456,11 +456,11 @@ test("T23/S13: the prose rows never re-parse for a switch", async () => {
 });
 
 // S19 replaced the PRESERVE test that pinned the heavy path (`tui.invalidate()` + a forced frame) for
-// bridge-owned rows. Measured with real pi components, the rows are byte-identical without them on the
-// conversation, the rail's host panels and the bridge's sections, and the invalidation was the
+// shell-API-owned rows. Measured with real pi components, the rows are byte-identical without them on the
+// conversation, the rail's host panels and the shell API's sections, and the invalidation was the
 // expensive half (697 ms vs 420 ms for `plain`, 99 ms vs 3 ms for a rail section toggle at 600
 // children). test/surface-repaint-cost.test.ts holds the full bound; this pins the same request here.
-test("T36/S19: the bridge-owned surface repaint is one differential frame too", () => {
+test("T36/S19: the shell API-owned surface repaint is one differential frame too", () => {
   const world = transcript({ children: 2, markdown: 1 });
   world.counters.treeInvalidations = 0;
   world.counters.frameRequests.length = 0;

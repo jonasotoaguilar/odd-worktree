@@ -6,7 +6,7 @@
  *
  * `bash` is drawn by gentle-shell's own renderers, so `float`/`neon` reaches it there. A custom message
  * registered with `pi.registerMessageRenderer` is drawn by whoever registered it — or by Pi's default
- * box when nobody did — and neither path knows about the bridge's card styles. A design is the only
+ * box when nobody did — and neither path knows about the shell API's card styles. A design is the only
  * surface from which a plugin can paint one, and this module is its registry.
  *
  * ## One value per line, one line per type
@@ -51,8 +51,8 @@ export const MESSAGE_DESIGN_NATIVE = "native";
 /** What the menu SHOWS for that value, exactly like `Card <line>`'s `default`. */
 export const MESSAGE_DESIGN_DEFAULT_LABEL = "default";
 
-/** The bridge's own store, namespaced: never a plugin's file. */
-export const MESSAGE_DESIGN_STORE_ID = "bridge-message-designs";
+/** The shell API's own store, namespaced: never a plugin's file. */
+export const LEGACY_MESSAGE_DESIGN_STORE_ID = "bridge-message-designs";
 
 /** The one key in it: the per-type selections, with the per-line map under a reserved key beside them. */
 export const MESSAGE_DESIGN_STORE_KEY = "selections";
@@ -117,11 +117,11 @@ interface MessageDesignState {
   failures: MessageDesignFailure[];
   /**
    * How many times the persisted selections were read since the last reset. One read is one logical
-   * read of the bridge's store, which is what a cost test bounds instead of timing (S4).
+   * read of the shell API's store, which is what a cost test bounds instead of timing (S4).
    */
   selectionReads: number;
   /**
-   * The rows line's installer, set by `./message-design-rows.ts` when the bridge arms. It is called
+   * The rows line's installer, set by `./message-design-rows.ts` when the shell API arms. It is called
    * when a design appears, so the line is registered THEN and never before: with no design there is
    * no provider, no row and nothing added to the diagnostics record (S4).
    */
@@ -129,7 +129,7 @@ interface MessageDesignState {
 }
 
 /** Stable process-global slot: a second loaded copy of this package must see the same registry. */
-const DESIGNS_KEY = Symbol.for("gentle-shell-bridge.message-designs.v1");
+const DESIGNS_KEY = Symbol.for("odd-worktree.message-designs.v1");
 
 function designsHost(): Record<symbol, MessageDesignState | undefined> {
   // SAFETY: only `messageDesignState()` writes this key, and it re-checks the shape before trusting a
@@ -154,8 +154,8 @@ function messageDesignState(): MessageDesignState {
 
 /**
  * Let the rows line install itself the moment a design exists (S4), and withdraw that request when
- * the bridge disarms. Passing `undefined` unsubscribes. The installer is the bridge's own, never a
- * plugin's, so it is never attributed and its failures are the bridge's own.
+ * the shell API disarms. Passing `undefined` unsubscribes. The installer is the shell API's own, never a
+ * plugin's, so it is never attributed and its failures are the shell API's own.
  */
 export function setMessageDesignRowsInstaller(installer: (() => void) | undefined): void {
   messageDesignState().rowsInstaller = installer;
@@ -176,7 +176,7 @@ function errorMessage(error: unknown): string {
 
 function invalid(id: unknown, problem: string): Error {
   return new Error(
-    `gentle-shell-bridge: invalid message design ${JSON.stringify(id)}: ${problem}. ` +
+    `odd-worktree: invalid message design ${JSON.stringify(id)}: ${problem}. ` +
       "A message design is declared for ONE custom type (`customType`) or for a line of several " +
       "(`line` + `types`), and carries an `id`, a `label` and an `apply`.",
   );
@@ -207,14 +207,14 @@ const RESERVED_LABELS = new Set([MESSAGE_DESIGN_DEFAULT_LABEL, MESSAGE_DESIGN_NA
 function assertLabel(id: string, label: unknown): void {
   if (typeof label !== "string" || label.trim() === "") {
     throw new Error(
-      `gentle-shell-bridge: invalid message design ${JSON.stringify(id)}: label must be a ` +
+      `odd-worktree: invalid message design ${JSON.stringify(id)}: label must be a ` +
         "non-empty string. It is the value a user reads on the line; the id stays internal.",
     );
   }
   if (RESERVED_LABELS.has(label.trim())) {
     throw new Error(
-      `gentle-shell-bridge: invalid message design ${JSON.stringify(id)}: label ` +
-        `${JSON.stringify(label)} is reserved. "default" is the bridge's own value and "native" is ` +
+      `odd-worktree: invalid message design ${JSON.stringify(id)}: label ` +
+        `${JSON.stringify(label)} is reserved. "default" is the shell API's own value and "native" is ` +
         "its identity; register a label of your own.",
     );
   }
@@ -223,7 +223,7 @@ function assertLabel(id: string, label: unknown): void {
 function assertApply(id: string, apply: unknown): void {
   if (typeof apply !== "function") {
     throw new Error(
-      `gentle-shell-bridge: invalid message design ${JSON.stringify(id)}: apply must be a function ` +
+      `odd-worktree: invalid message design ${JSON.stringify(id)}: apply must be a function ` +
         "`(lines, ctx) => rows`. It is the whole point of the registration.",
     );
   }
@@ -258,7 +258,7 @@ function assertFollow(id: unknown, follow: unknown): void {
 function assertTypes(id: unknown, types: unknown): string[] {
   if (!Array.isArray(types) || types.length === 0) {
     throw new Error(
-      `gentle-shell-bridge: invalid message design ${JSON.stringify(id)}: types must be a non-empty ` +
+      `odd-worktree: invalid message design ${JSON.stringify(id)}: types must be a non-empty ` +
         "array of custom types; a registration that claims no message paints nothing.",
     );
   }
@@ -266,13 +266,13 @@ function assertTypes(id: unknown, types: unknown): string[] {
   for (const type of types) {
     if (typeof type !== "string" || type.trim() === "") {
       throw new Error(
-        `gentle-shell-bridge: invalid message design ${JSON.stringify(id)}: every entry of types ` +
+        `odd-worktree: invalid message design ${JSON.stringify(id)}: every entry of types ` +
           "must be a non-empty custom type string.",
       );
     }
     if (seen.has(type)) {
       throw new Error(
-        `gentle-shell-bridge: invalid message design ${JSON.stringify(id)}: types repeats ` +
+        `odd-worktree: invalid message design ${JSON.stringify(id)}: types repeats ` +
           `${JSON.stringify(type)}. List each type once.`,
       );
     }
@@ -339,7 +339,7 @@ function assertTypesAreFree(
       `${entry.scope === "type" ? "its own line" : `line ${JSON.stringify(entry.line)}`} ` +
       `(${JSON.stringify(entry.design.id)}); a custom type belongs to ONE line.`;
     recordConflict({ customType: shared, id, kind: "type", message });
-    throw new Error(`gentle-shell-bridge: invalid message design ${JSON.stringify(id)}: ${message}`);
+    throw new Error(`odd-worktree: invalid message design ${JSON.stringify(id)}: ${message}`);
   }
 }
 
@@ -374,7 +374,7 @@ function registerStored(design: MessageDesignRegistration): () => void {
   }
 
   // A design now exists, so the `Cards` line that shows it must exist too. Idempotent, and it runs
-  // ONLY here: with no design the bridge registers no provider at all (S4).
+  // ONLY here: with no design the shell API registers no provider at all (S4).
   state.rowsInstaller?.();
 
   let disposed = false;
@@ -507,13 +507,13 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 /**
  * The persisted selections, read live. An unreadable or malformed file reads as empty, so a hand-edited
- * file can never select a design the user did not choose. ONE logical read of the bridge's store per
+ * file can never select a design the user did not choose. ONE logical read of the shell API's store per
  * call, which is what the cost bound counts (S4).
  */
 function readSelections(): SelectionState {
   messageDesignState().selectionReads += 1;
   const stored = asRecord(
-    createStore(MESSAGE_DESIGN_STORE_ID).get<unknown>(MESSAGE_DESIGN_STORE_KEY, {}),
+    createStore(LEGACY_MESSAGE_DESIGN_STORE_ID).get<unknown>(MESSAGE_DESIGN_STORE_KEY, {}),
   );
   const { [MESSAGE_DESIGN_LINE_STORE_KEY]: lines, ...types } = stored;
   return { types, lines: asRecord(lines) };
@@ -525,7 +525,7 @@ function writeSelections(state: SelectionState): void {
   if (Object.keys(state.lines).length > 0) {
     document[MESSAGE_DESIGN_LINE_STORE_KEY] = state.lines;
   }
-  createStore(MESSAGE_DESIGN_STORE_ID).set(MESSAGE_DESIGN_STORE_KEY, document);
+  createStore(LEGACY_MESSAGE_DESIGN_STORE_ID).set(MESSAGE_DESIGN_STORE_KEY, document);
 }
 
 /** A stored value that is not a usable id reads as `native`, never as a design nobody registered. */

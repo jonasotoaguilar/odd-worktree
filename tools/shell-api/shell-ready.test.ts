@@ -4,11 +4,11 @@
  * The old rule — "the symbol's presence at `session_start` is the complete answer" — is wrong for
  * a plugin Pi loads earlier than the package. The example's real TUI report showed it: the global
  * extension's `session_start` handler ran first, found no symbol, and said "not installed" while
- * the bridge went on to publish. So the bridge now tells the process it published, on Pi's own
+ * the shell API went on to publish. So the shell API now tells the process it published, on Pi's own
  * cross-extension bus, exactly once, and only when this copy really owns a compatible slot.
  *
  * These tests pin the event name and payload, the once-per-process rule across package copies, the
- * silence for an incompatible slot, and `onBridgeApi` — the helper that gives an importing plugin
+ * silence for an incompatible slot, and `onShellApi` — the helper that gives an importing plugin
  * both forms: immediate when the API is here, subscribed when it is coming.
  */
 
@@ -21,22 +21,22 @@ import test from "node:test";
 import {
   API_SCHEMA,
   API_VERSION,
-  BRIDGE_API_KEY,
-  BRIDGE_READY_EVENT,
+  SHELL_API_KEY,
+  SHELL_READY_EVENT,
   VERSION,
-  announceBridgeReady,
-  bridgeApi,
-  onBridgeApi,
-  publishBridgeApi,
-  resetBridgeApiForTests,
-  type BridgeApi,
+  announceShellReady,
+  shellApi,
+  onShellApi,
+  publishShellApi,
+  resetShellApiForTests,
+  type ShellApi,
 } from "../../lib/shell-api/api.ts";
 import {
   resetBusForTests,
   resetSectionsForTests,
   snapshotProviders,
 } from "../../lib/shell-api/bus.ts";
-import gentleShellBridge, { type BridgeExtensionApi } from "../../lib/shell-api/extension.ts";
+import gentleShellShellApi, { type ShellExtensionApi } from "../../lib/shell-api/extension.ts";
 import { resetNoticesForTests } from "../../lib/shell-api/notices.ts";
 import { resetStoreStateForTests } from "../../lib/shell-api/store.ts";
 import type { RowProvider } from "../../lib/shell-api/types.ts";
@@ -87,7 +87,7 @@ test.after(() => {
 
 test.beforeEach(() => {
   rmSync(join(configHome, "gentle-shell-bridge"), { recursive: true, force: true });
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetNoticesForTests();
   resetBusForTests();
   resetSectionsForTests();
@@ -98,22 +98,22 @@ test.beforeEach(() => {
 // The event: name, payload, once per process
 // ---------------------------------------------------------------------------------------------
 
-test("the bridge announces itself with the schema, the major and the publishing release", () => {
+test("the shell API announces itself with the schema, the major and the publishing release", () => {
   const bus = createFakeEvents();
-  publishBridgeApi();
+  publishShellApi();
 
-  assert.equal(announceBridgeReady(bus), true);
+  assert.equal(announceShellReady(bus), true);
 
   assert.deepEqual(
     bus.emitted().map((entry) => entry.channel),
-    [BRIDGE_READY_EVENT],
+    [SHELL_READY_EVENT],
     "one event, on the channel plugins listen to",
   );
-  assert.equal(BRIDGE_READY_EVENT, "gentle-shell-bridge:ready", "the name is the contract");
+  assert.equal(SHELL_READY_EVENT, "odd-worktree:shell-ready", "the name is the contract");
 
   const payload = bus.emitted()[0].payload as Record<string, unknown>;
   assert.deepEqual(payload, { schema: API_SCHEMA, version: API_VERSION, VERSION });
-  assert.equal(payload.schema, "gentle-shell-bridge/api");
+  assert.equal(payload.schema, "odd-worktree/shell-api");
   assert.equal(payload.version, 1);
   assert.equal(payload.VERSION, "0.16.2");
   assert.ok(Object.isFrozen(payload), "a listener cannot rewrite the announcement in place");
@@ -121,11 +121,11 @@ test("the bridge announces itself with the schema, the major and the publishing 
 
 test("the announcement happens once per process, however often this copy is asked", () => {
   const bus = createFakeEvents();
-  publishBridgeApi();
+  publishShellApi();
 
-  assert.equal(announceBridgeReady(bus), true);
-  assert.equal(announceBridgeReady(bus), false, "the second ask is not an announcement");
-  assert.equal(announceBridgeReady(bus), false);
+  assert.equal(announceShellReady(bus), true);
+  assert.equal(announceShellReady(bus), false, "the second ask is not an announcement");
+  assert.equal(announceShellReady(bus), false);
 
   assert.equal(bus.emitted().length, 1, "one event for the process, not one per call");
 });
@@ -133,14 +133,14 @@ test("the announcement happens once per process, however often this copy is aske
 test("two loaded copies of the package announce once between them", async () => {
   const first = createFakeEvents();
   const second = createFakeEvents();
-  publishBridgeApi();
+  publishShellApi();
 
   // Pi loads every extension with `moduleCache: false`, so the package really exists twice.
   const copyPath = new URL("../../lib/shell-api/api.ts?second-copy", import.meta.url).href;
   const copy = (await import(copyPath)) as typeof import("../../lib/shell-api/api.ts");
 
-  assert.equal(announceBridgeReady(first), true, "the copy that owns the slot announces");
-  assert.equal(copy.announceBridgeReady(second), false, "and the other one stays quiet");
+  assert.equal(announceShellReady(first), true, "the copy that owns the slot announces");
+  assert.equal(copy.announceShellReady(second), false, "and the other one stays quiet");
   assert.equal(first.emitted().length, 1);
   assert.deepEqual(second.emitted(), [], "no second announcement, on any bus");
 });
@@ -148,22 +148,22 @@ test("two loaded copies of the package announce once between them", async () => 
 test("an incompatible slot is never announced", () => {
   const bus = createFakeEvents();
   const incompatible = { schema: "someone-else/api", version: 1 };
-  hostSlot()[BRIDGE_API_KEY] = incompatible;
+  hostSlot()[SHELL_API_KEY] = incompatible;
 
-  publishBridgeApi();
-  assert.equal(announceBridgeReady(bus), false);
+  publishShellApi();
+  assert.equal(announceShellReady(bus), false);
 
   assert.deepEqual(bus.emitted(), [], "no plugin is told to look at a slot it cannot use");
-  assert.equal(hostSlot()[BRIDGE_API_KEY], incompatible, "and the slot is left exactly as it was");
+  assert.equal(hostSlot()[SHELL_API_KEY], incompatible, "and the slot is left exactly as it was");
 });
 
 test("a Pi without an event bus is skipped silently: the symbol still works", () => {
-  publishBridgeApi();
+  publishShellApi();
   const captured = captureConsole();
   let announced: boolean | undefined;
   try {
     assert.doesNotThrow(() => {
-      announced = announceBridgeReady(undefined);
+      announced = announceShellReady(undefined);
     });
   } finally {
     captured.restore();
@@ -171,24 +171,24 @@ test("a Pi without an event bus is skipped silently: the symbol still works", ()
 
   assert.equal(announced, false);
   assert.deepEqual(captured.writes, [], "nothing lands in the terminal");
-  assert.equal(bridgeApi()?.VERSION, VERSION, "a plugin that reads the symbol is unaffected");
+  assert.equal(shellApi()?.VERSION, VERSION, "a plugin that reads the symbol is unaffected");
 });
 
 // ---------------------------------------------------------------------------------------------
-// onBridgeApi: immediate when it is here, subscribed when it is coming
+// onShellApi: immediate when it is here, subscribed when it is coming
 // ---------------------------------------------------------------------------------------------
 
-const apiHandler = (): { calls: BridgeApi[]; handler: (api: BridgeApi) => void } => {
-  const calls: BridgeApi[] = [];
+const apiHandler = (): { calls: ShellApi[]; handler: (api: ShellApi) => void } => {
+  const calls: ShellApi[] = [];
   return { calls, handler: (api) => calls.push(api) };
 };
 
-test("onBridgeApi calls the handler immediately when the API is already published, without listening", () => {
+test("onShellApi calls the handler immediately when the API is already published, without listening", () => {
   const bus = createFakeEvents();
-  const api = publishBridgeApi();
+  const api = publishShellApi();
   const { calls, handler } = apiHandler();
 
-  const dispose = onBridgeApi(handler, bus);
+  const dispose = onShellApi(handler, bus);
 
   assert.deepEqual(calls, [api], "the plugin is served in the same turn, before any event");
   assert.equal(bus.listenerCount(), 0, "and nothing is left subscribed: no listener leak");
@@ -196,21 +196,21 @@ test("onBridgeApi calls the handler immediately when the API is already publishe
   assert.equal(calls.length, 1, "disposing after the fact cannot call the handler again");
 });
 
-test("onBridgeApi serves a plugin loaded first: one delivery when the announcement arrives", () => {
+test("onShellApi serves a plugin loaded first: one delivery when the announcement arrives", () => {
   const bus = createFakeEvents();
   const { calls, handler } = apiHandler();
 
-  const dispose = onBridgeApi(handler, bus);
+  const dispose = onShellApi(handler, bus);
   assert.deepEqual(calls, [], "absent at subscription time: nothing to hand over yet");
-  assert.equal(bus.listenerCount(BRIDGE_READY_EVENT), 1);
+  assert.equal(bus.listenerCount(SHELL_READY_EVENT), 1);
 
-  const api = publishBridgeApi();
-  assert.equal(announceBridgeReady(bus), true);
+  const api = publishShellApi();
+  assert.equal(announceShellReady(bus), true);
 
   assert.deepEqual(calls, [api], "the announcement delivered the published object, once");
-  assert.equal(bus.listenerCount(BRIDGE_READY_EVENT), 0, "and the subscription cleaned itself up");
+  assert.equal(bus.listenerCount(SHELL_READY_EVENT), 0, "and the subscription cleaned itself up");
 
-  assert.equal(announceBridgeReady(bus), false, "a second announcement is never emitted");
+  assert.equal(announceShellReady(bus), false, "a second announcement is never emitted");
   assert.equal(calls.length, 1, "so the handler cannot run twice for one process");
 
   dispose();
@@ -220,35 +220,35 @@ test("an unsubscribe before the announcement means the handler never runs", () =
   const bus = createFakeEvents();
   const { calls, handler } = apiHandler();
 
-  const dispose = onBridgeApi(handler, bus);
+  const dispose = onShellApi(handler, bus);
   dispose();
 
-  publishBridgeApi();
-  announceBridgeReady(bus);
+  publishShellApi();
+  announceShellReady(bus);
 
   assert.deepEqual(calls, [], "the plugin withdrew its interest and hears nothing");
-  assert.equal(bus.listenerCount(BRIDGE_READY_EVENT), 0);
+  assert.equal(bus.listenerCount(SHELL_READY_EVENT), 0);
 });
 
-test("onBridgeApi without a bus does not pretend to wait: a safe disposer, no call", () => {
+test("onShellApi without a bus does not pretend to wait: a safe disposer, no call", () => {
   const { calls, handler } = apiHandler();
 
-  const dispose = onBridgeApi(handler);
+  const dispose = onShellApi(handler);
 
   assert.deepEqual(calls, []);
   assert.doesNotThrow(() => dispose());
-  assert.equal(bridgeApi(), undefined, "and nothing was published behind its back");
+  assert.equal(shellApi(), undefined, "and nothing was published behind its back");
 });
 
-test("onBridgeApi ignores an announcement that is not backed by a published object", () => {
+test("onShellApi ignores an announcement that is not backed by a published object", () => {
   const bus = createFakeEvents();
   const { calls, handler } = apiHandler();
-  onBridgeApi(handler, bus);
+  onShellApi(handler, bus);
 
-  bus.emit(BRIDGE_READY_EVENT, { schema: "someone-else/api", version: 1 });
+  bus.emit(SHELL_READY_EVENT, { schema: "someone-else/api", version: 1 });
 
   assert.deepEqual(calls, [], "the symbol is the authority, not the payload");
-  assert.equal(bus.listenerCount(BRIDGE_READY_EVENT), 1, "it keeps waiting for the real one");
+  assert.equal(bus.listenerCount(SHELL_READY_EVENT), 1, "it keeps waiting for the real one");
 });
 
 test("a handler that throws cannot break the announcement for the next listener", () => {
@@ -256,12 +256,12 @@ test("a handler that throws cannot break the announcement for the next listener"
   const { calls, handler } = apiHandler();
   const captured = captureConsole();
   try {
-    onBridgeApi(() => {
+    onShellApi(() => {
       throw new Error("plugin exploded");
     }, bus);
-    onBridgeApi(handler, bus);
-    publishBridgeApi();
-    assert.doesNotThrow(() => announceBridgeReady(bus));
+    onShellApi(handler, bus);
+    publishShellApi();
+    assert.doesNotThrow(() => announceShellReady(bus));
   } finally {
     captured.restore();
   }
@@ -274,7 +274,7 @@ test("a handler that throws cannot break the announcement for the next listener"
 // Through the entry: the extension is the only place `pi` exists
 // ---------------------------------------------------------------------------------------------
 
-const bridgePi = (events: FakeEvents | undefined): BridgeExtensionApi => ({
+const shellApiPi = (events: FakeEvents | undefined): ShellExtensionApi => ({
   on() {},
   registerCommand() {},
   ...(events === undefined ? {} : { events }),
@@ -283,12 +283,12 @@ const bridgePi = (events: FakeEvents | undefined): BridgeExtensionApi => ({
 test("the extension entry announces through the Pi it was handed, once", () => {
   const bus = createFakeEvents();
 
-  gentleShellBridge(bridgePi(bus));
-  gentleShellBridge(bridgePi(bus));
+  gentleShellShellApi(shellApiPi(bus));
+  gentleShellShellApi(shellApiPi(bus));
 
   assert.deepEqual(
     bus.emitted().map((entry) => entry.channel),
-    [BRIDGE_READY_EVENT],
+    [SHELL_READY_EVENT],
     "loading the package makes the process hear about it exactly once",
   );
 });
@@ -296,13 +296,13 @@ test("the extension entry announces through the Pi it was handed, once", () => {
 test("the extension entry still publishes when it is handed no event bus", () => {
   const captured = captureConsole();
   try {
-    assert.doesNotThrow(() => gentleShellBridge(bridgePi(undefined)));
+    assert.doesNotThrow(() => gentleShellShellApi(shellApiPi(undefined)));
   } finally {
     captured.restore();
   }
 
   assert.deepEqual(captured.writes, []);
-  const api = bridgeApi();
+  const api = shellApi();
   assert.ok(api !== undefined, "the symbol is the handshake, with or without a bus");
   api.registerRows(provider("after-entry"));
   assert.deepEqual(snapshotProviders().map((registered) => registered.id), ["after-entry"]);

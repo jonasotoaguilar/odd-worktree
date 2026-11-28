@@ -2,7 +2,7 @@
  * The automatic `Sections` toggle rows (S5, S6), against the fake host and the fake sidebar.
  *
  * A plugin never writes a `setting`, a `value`, a `current()`, an `action()` or a `preview()`: the
- * bridge derives all of it from the section registration. These tests pin that surface, the
+ * shell API derives all of it from the section registration. These tests pin that surface, the
  * persistence file, and the one property that makes the toggle useful — hiding takes effect on the
  * sidebar's NEXT FRAME, not only on the next menu open.
  */
@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { armBridge } from "../../lib/shell-api/arm.ts";
+import { armShellApi } from "../../lib/shell-api/arm.ts";
 import { registerSection, resetBusForTests, resetSectionsForTests, snapshotProviders } from "../../lib/shell-api/bus.ts";
 import { disableCaptureBackend, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
 import { resetHookStateForTests } from "../../lib/shell-api/hook.ts";
@@ -84,7 +84,7 @@ const ctx = (): RowContext => ({ theme: undefined, configHome });
 /** The one internal provider, read straight from the bus so a build needs no menu. */
 const rowsNow = (): CustomizeRow[] => {
   const provider = snapshotProviders().find((entry) => entry.id === SECTION_ROWS_PROVIDER_ID);
-  assert.ok(provider !== undefined, "the bridge registers its own Sections provider");
+  assert.ok(provider !== undefined, "the shell API registers its own Sections provider");
   return provider.rows(ctx());
 };
 
@@ -98,7 +98,7 @@ function arm(): FakeHost {
   installSectionRail();
   installSectionRows();
   const host = createFakeHost();
-  armBridge(host.ui);
+  armShellApi(host.ui);
   return host;
 }
 
@@ -139,7 +139,7 @@ test("a section becomes two consecutive Sections rows carrying its title as a la
   assert.ok(host.rendered().includes("music"), "the label is what the row reads as");
 });
 
-test("toggling persists to the bridge store first, then the host repaints", async () => {
+test("toggling persists to the shell API store first, then the host repaints", async () => {
   registerSection(section("loon.music", { title: "MUSIC" }));
   const host = arm();
   host.buildMenu();
@@ -162,7 +162,7 @@ test("toggling persists to the bridge store first, then the host repaints", asyn
 test("both values draw the host's shared Sections preview, never a picture of the card", () => {
   registerSection(section("loon.music", { title: "MUSIC" }));
   // The provider is read directly, so no host rows array was ever captured: the base list is the
-  // host's own empty case and only the bridge's section can be listed.
+  // host's own empty case and only the shell API's section can be listed.
   arm();
 
   const rows = rowsNow();

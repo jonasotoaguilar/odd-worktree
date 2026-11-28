@@ -2,19 +2,19 @@
 // The two advisory message cards: `gentle-pi.exploration-budget` and
 // `gentle-pi.verifier-settle-reminder` are sent by Gentle Shell with no renderer registered
 // for either, so Pi draws its default box and no card style ever reaches them. This package
-// paints them on its own card substrate (`lib/shell-card.js`) through gentle-shell-bridge's
+// paints them on its own card substrate (`lib/shell-card.js`) through the shell API's
 // message-design surface, in whichever style the host has chosen and always in full.
 //
 // Both designs FOLLOW the `Card activity` line this package's tool design is selected on, so the
 // human picks `activity` once and these paint with it — live, per pass, with no switch of their
 // own. Every case below goes through the public surface: `registerMessageCards` (the wire), the
 // designs it registers, and the rows `apply` answers for a width. The text seam and the themes
-// are the fakes `tools/jobs-card.test.js` uses; the bridge is the published object a
+// are the fakes `tools/jobs-card.test.js` uses; the shell API is the published object a
 // process-wide slot holds.
 const assert = require('node:assert/strict');
 const { after, afterEach, beforeEach, test } = require('node:test');
 
-const { MESSAGE_TYPES, bridgeTakesFollows, registerMessageCards } = require('../lib/message-card.js');
+const { MESSAGE_TYPES, shellApiTakesFollows, registerMessageCards } = require('../lib/message-card.js');
 const { BASH_DESIGN_ID, TOOLS_LINE, toolsActivityDesign } = require('../lib/bash-design.js');
 const { CARD_CONTENT, CARD_CONTENT_SLOT } = require('../lib/card-content.js');
 const { CARD_STYLE, CARD_STYLE_SLOT } = require('../lib/card-style.js');
@@ -56,7 +56,7 @@ const taggedTheme = { fg: (role, value) => `<${role}>${value}</${role}>` };
 const bandTheme = { fg: (_role, value) => value, bg: (_role, value) => `\x1b[48;5;240m${value}\x1b[49m` };
 const unpaint = (value) => stripAnsi(value).replace(/<\/?[a-zA-Z][a-zA-Z0-9]*>/g, '');
 
-const BRIDGE_API_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+const SHELL_API_SLOT = Symbol.for('odd-worktree/shell-api/v1');
 const EXPLORATION = 'gentle-pi.exploration-budget';
 const VERIFIER = 'gentle-pi.verifier-settle-reminder';
 const ACTIVITY = 'odd-worktree.bash-activity';
@@ -65,16 +65,16 @@ const OTHER_DESIGN = 'acme.tools';
 beforeEach(() => {
   globalThis[CARD_STYLE_SLOT] = CARD_STYLE.NEON;
   delete globalThis[CARD_CONTENT_SLOT];
-  delete globalThis[BRIDGE_API_SLOT];
+  delete globalThis[SHELL_API_SLOT];
 });
-afterEach(() => { delete globalThis[BRIDGE_API_SLOT]; });
+afterEach(() => { delete globalThis[SHELL_API_SLOT]; });
 after(() => {
   delete globalThis[CARD_STYLE_SLOT];
   delete globalThis[CARD_CONTENT_SLOT];
-  delete globalThis[BRIDGE_API_SLOT];
+  delete globalThis[SHELL_API_SLOT];
 });
 
-/** A follow the bridge validates: `{ line, id }`, both non-empty, never the reserved `native`. */
+/** A follow the shell API validates: `{ line, id }`, both non-empty, never the reserved `native`. */
 const validFollow = (follow) => follow !== null
   && typeof follow === 'object'
   && typeof follow.line === 'string' && follow.line.trim() !== ''
@@ -82,12 +82,12 @@ const validFollow = (follow) => follow !== null
   && follow.id.trim() !== 'native';
 
 /**
- * The published bridge object (gentle-shell-bridge@0.12.0's shape, and the older one it replaced).
+ * The published shell API object (shell API 0.12.0's shape, and the older one it replaced).
  * `validatesFollows` is the 0.12.0 discipline — a registration whose `follows` is malformed is
- * refused whole; without it, the object is a pre-0.12.0 bridge that ignores the unknown field.
+ * refused whole; without it, the object is a pre-0.12.0 shell API that ignores the unknown field.
  * `toolLine` is the `Card activity` line's live value: `undefined` means the line does not exist.
  */
-function publishBridge(options = {}) {
+function publishShellApi(options = {}) {
   const settings = options !== null && typeof options === 'object' ? options : {};
   const state = {
     designs: [],
@@ -99,7 +99,7 @@ function publishBridge(options = {}) {
     version: settings.version,
   };
   const api = {
-    schema: 'gentle-shell-bridge/api',
+    schema: 'odd-worktree/shell-api',
     version: 1,
     registerToolDesign: () => () => {},
     resolveToolDesignSelection: () => ({ kind: 'native' }),
@@ -108,7 +108,7 @@ function publishBridge(options = {}) {
       state.calls.push(list);
       if (settings.validatesFollows === true) {
         for (const design of list) {
-          if (design.follows !== undefined && !validFollow(design.follows)) throw new Error('gentle-shell-bridge: invalid message design: follows must be `{ line, id }`');
+          if (design.follows !== undefined && !validFollow(design.follows)) throw new Error('odd-worktree: invalid message design: follows must be `{ line, id }`');
         }
       }
       const disposers = list.map((design) => {
@@ -122,21 +122,21 @@ function publishBridge(options = {}) {
     },
   };
   if (settings.version !== undefined) api.VERSION = settings.version;
-  globalThis[BRIDGE_API_SLOT] = api;
+  globalThis[SHELL_API_SLOT] = api;
   return state;
 }
 
-/** The module's own report, plus the bridge it registered on. */
+/** The module's own report, plus the shell API it registered on. */
 function registered(options = {}) {
-  const bridge = publishBridge({ version: '0.12.1', toolLine: ACTIVITY, validatesFollows: true, ...options });
+  const shellApi = publishShellApi({ version: '0.12.1', toolLine: ACTIVITY, validatesFollows: true, ...options });
   const outcome = registerMessageCards({ metrics, theme: plainTheme });
-  return { ...outcome, bridge };
+  return { ...outcome, shellApi };
 }
 
 const designFor = (outcome, customType) => outcome.designs.find((design) => design.customType === customType);
 
 /**
- * The bridge's own follow rule (`docs/contract.md` §15, "Following a tool design's switch"): a
+ * The shell API's own follow rule (`docs/contract.md` §15, "Following a tool design's switch"): a
  * design is selected exactly while the tool line it follows answers its id, resolved LIVE, and
  * with no design selected the message keeps the host's own output, byte for byte.
  */
@@ -148,7 +148,7 @@ function selectedDesign(state, customType) {
   return state.toolLine === design.follows.id ? design : undefined;
 }
 
-/** One pass of the message's component, exactly as the bridge runs it. */
+/** One pass of the message's component, exactly as the shell API runs it. */
 function renderMessage(state, customType, lines, width = 70) {
   const design = selectedDesign(state, customType);
   if (design === undefined) return lines;
@@ -156,7 +156,7 @@ function renderMessage(state, customType, lines, width = 70) {
   return design.apply([...lines], { width, customType, theme: plainTheme, render: { expanded: false, outputPad: 1, message: {} } });
 }
 
-/** The plain body the bridge hands a design for a host-less type: `[customType]`, a blank row, the text. */
+/** The plain body the shell API hands a design for a host-less type: `[customType]`, a blank row, the text. */
 const plainBody = (customType, text) => [`[${customType}]`, '', ...text.split('\n')];
 
 /** The rows one design paints for a message, through the context Pi hands a message renderer. */
@@ -197,41 +197,41 @@ const VERIFIER_HEADING = '⚑ Verifier reminder · Risk: item 3';
 test('both alerts register on the message-design surface, one design per custom type', () => {
   const outcome = registered();
   assert.equal(outcome.registered, true);
-  assert.equal(outcome.bridge.calls.length, 1, 'one all-or-nothing registration');
-  assert.equal(outcome.bridge.designs.length, 2);
-  assert.deepEqual(outcome.bridge.designs.map((design) => design.customType), [EXPLORATION, VERIFIER]);
-  for (const design of outcome.bridge.designs) {
+  assert.equal(outcome.shellApi.calls.length, 1, 'one all-or-nothing registration');
+  assert.equal(outcome.shellApi.designs.length, 2);
+  assert.deepEqual(outcome.shellApi.designs.map((design) => design.customType), [EXPLORATION, VERIFIER]);
+  for (const design of outcome.shellApi.designs) {
     assert.equal(design.line, undefined, 'an ungrouped design, not a line');
     assert.equal(design.types, undefined);
     assert.equal(typeof design.id, 'string');
     assert.ok(design.id.length > 0);
     assert.equal(typeof design.label, 'string');
     assert.ok(design.label.length > 0);
-    assert.ok(design.label !== 'default' && design.label !== 'native', 'a reserved label is refused by the bridge');
+    assert.ok(design.label !== 'default' && design.label !== 'native', 'a reserved label is refused by the shell API');
     assert.equal(typeof design.apply, 'function');
   }
-  assert.equal(new Set(outcome.bridge.designs.map((design) => design.id)).size, 2, 'one id per design');
+  assert.equal(new Set(outcome.shellApi.designs.map((design) => design.id)).size, 2, 'one id per design');
   assert.deepEqual([...MESSAGE_TYPES], [EXPLORATION, VERIFIER]);
 });
 
 test('each design FOLLOWS the line and the design id this package already registers its tool design on', () => {
   const outcome = registered();
   const toolDesign = toolsActivityDesign({ scopes: false });
-  for (const design of outcome.bridge.designs) {
+  for (const design of outcome.shellApi.designs) {
     assert.deepEqual(design.follows, { line: TOOLS_LINE, id: BASH_DESIGN_ID }, design.customType);
     assert.equal(design.follows.line, toolDesign.line, 'the follow names the line the bash design registers on');
     assert.equal(design.follows.id, toolDesign.id, 'and the id that line answers with');
   }
   // A card that follows contributes no value of its own: the menu gains no `Message …` row.
-  assert.deepEqual(outcome.bridge.designs.map((design) => design.follows.id), [ACTIVITY, ACTIVITY]);
-  assert.notEqual(outcome.bridge.designs[0].follows, outcome.bridge.designs[1].follows, 'one follow object per design');
+  assert.deepEqual(outcome.shellApi.designs.map((design) => design.follows.id), [ACTIVITY, ACTIVITY]);
+  assert.notEqual(outcome.shellApi.designs[0].follows, outcome.shellApi.designs[1].follows, 'one follow object per design');
 });
 
 test('while Card activity answers activity the message is the card', () => {
   const wire = registered({ toolLine: ACTIVITY });
-  const rows = renderMessage(wire.bridge, EXPLORATION, plainBody(EXPLORATION, STARTED));
+  const rows = renderMessage(wire.shellApi, EXPLORATION, plainBody(EXPLORATION, STARTED));
   assert.equal(unpaint(rows[0]), headOf(EXPLORATION_HEADING, 70));
-  assert.equal(wire.bridge.applies, 1);
+  assert.equal(wire.shellApi.applies, 1);
 });
 
 test('the line answering native, another design or nothing hands the message back byte-identical', () => {
@@ -243,35 +243,35 @@ test('the line answering native, another design or nothing hands the message bac
   ]) {
     const wire = registered({ toolLine });
     assert.equal(wire.registered, true, `${name}: the designs are registered whatever the line says`);
-    assert.equal(wire.bridge.designs.length, 2);
+    assert.equal(wire.shellApi.designs.length, 2);
     for (const [customType, text] of [[EXPLORATION, STARTED], [VERIFIER, VERIFIER_TEXT]]) {
       const input = plainBody(customType, text);
-      const rows = renderMessage(wire.bridge, customType, input);
+      const rows = renderMessage(wire.shellApi, customType, input);
       assert.deepEqual(rows, input, `${name}: ${customType} keeps the host's rows, bytes included`);
-      assert.equal(wire.bridge.applies, 0, `${name}: ${customType} never reaches the card`);
+      assert.equal(wire.shellApi.applies, 0, `${name}: ${customType} never reaches the card`);
     }
   }
 });
 
 test('a live flip repaints the message and turns it off again, with no re-registration', () => {
   const wire = registered({ toolLine: 'native' });
-  assert.equal(wire.registered, true, 'the bridge decides per pass, so the designs are always registered');
+  assert.equal(wire.registered, true, 'the shell API decides per pass, so the designs are always registered');
   const input = plainBody(EXPLORATION, STARTED);
-  assert.deepEqual(renderMessage(wire.bridge, EXPLORATION, input), input, 'off');
-  wire.bridge.toolLine = ACTIVITY;
-  const on = renderMessage(wire.bridge, EXPLORATION, input);
+  assert.deepEqual(renderMessage(wire.shellApi, EXPLORATION, input), input, 'off');
+  wire.shellApi.toolLine = ACTIVITY;
+  const on = renderMessage(wire.shellApi, EXPLORATION, input);
   assert.equal(unpaint(on[0]), headOf(EXPLORATION_HEADING, 70), 'flipped on');
   assert.ok(on.length > 1 + STARTED.split('\n').length - 1, 'the body is there');
-  wire.bridge.toolLine = 'native';
-  assert.deepEqual(renderMessage(wire.bridge, EXPLORATION, input), input, 'flipped off again');
-  wire.bridge.toolLine = ACTIVITY;
-  assert.deepEqual(renderMessage(wire.bridge, EXPLORATION, input), on, 'and back on, unchanged');
-  assert.equal(wire.bridge.calls.length, 1, 'one registration for all of it');
-  assert.ok(wire.bridge.resolutions >= 4, 'the follow was read on every pass');
+  wire.shellApi.toolLine = 'native';
+  assert.deepEqual(renderMessage(wire.shellApi, EXPLORATION, input), input, 'flipped off again');
+  wire.shellApi.toolLine = ACTIVITY;
+  assert.deepEqual(renderMessage(wire.shellApi, EXPLORATION, input), on, 'and back on, unchanged');
+  assert.equal(wire.shellApi.calls.length, 1, 'one registration for all of it');
+  assert.ok(wire.shellApi.resolutions >= 4, 'the follow was read on every pass');
 });
 
 /**
- * One MOUNTED message component: the rows the bridge answers for this message, read again on
+ * One MOUNTED message component: the rows the shell API answers for this message, read again on
  * every paint. Mounted once, like the component Pi builds for a custom message — nothing here
  * is rebuilt between the flips below, which is exactly the claim (S5).
  */
@@ -285,32 +285,32 @@ function mountMessage(state, customType, lines, width = 70) {
 }
 
 test('a mounted message card repaints when Card activity flips, in both directions', () => {
-  // S5: the message designs are FOLLOWED per pass by the bridge, so a mounted message
+  // S5: the message designs are FOLLOWED per pass by the shell API, so a mounted message
   // (Pi builds one per message and never asks its renderer again) repaints when the line
   // moves — the one claim this card has to make good on, and the reason it owns no switch.
   const wire = registered({ toolLine: ACTIVITY });
   const input = plainBody(EXPLORATION, STARTED);
-  const mounted = mountMessage(wire.bridge, EXPLORATION, input);
+  const mounted = mountMessage(wire.shellApi, EXPLORATION, input);
   const on = mounted.render();
   assert.equal(unpaint(on[0]), headOf(EXPLORATION_HEADING, 70), 'the card is drawn while the line says activity');
-  wire.bridge.toolLine = 'native';
+  wire.shellApi.toolLine = 'native';
   assert.deepEqual(mounted.render(), input, 'flipped off, the very same component draws Pi\'s own rows, byte for byte');
-  wire.bridge.toolLine = ACTIVITY;
+  wire.shellApi.toolLine = ACTIVITY;
   assert.deepEqual(mounted.render(), on, 'flipped back on, the card is drawn again, unchanged');
-  assert.equal(wire.bridge.calls.length, 1, 'no re-registration: one design, asked again on every pass');
-  assert.equal(wire.bridge.resolutions, 3, 'the follow was read on each of the three passes');
+  assert.equal(wire.shellApi.calls.length, 1, 'no re-registration: one design, asked again on every pass');
+  assert.equal(wire.shellApi.resolutions, 3, 'the follow was read on each of the three passes');
 });
 
 test('registration needs no store, so no seed is written for a switch that already exists', () => {
   // The fake publishes no `createStore`: a module that seeded anything would have to throw here.
   const outcome = registered();
   assert.equal(outcome.registered, true);
-  assert.equal(globalThis[BRIDGE_API_SLOT].createStore, undefined);
+  assert.equal(globalThis[SHELL_API_SLOT].createStore, undefined);
 });
 
-// ---- the older bridge: never a switch of our own ----
+// ---- the older shell API: never a switch of our own ----
 
-test('a bridge that cannot express the follow gets NO registration, never a Message switch of its own', () => {
+test('a shell API that cannot express the follow gets NO registration, never a Message switch of its own', () => {
   for (const [name, version] of [
     ['the release before it', '0.11.0'],
     ['a much older one', '0.7.0'],
@@ -318,21 +318,21 @@ test('a bridge that cannot express the follow gets NO registration, never a Mess
     ['the cutoff with a prerelease suffix', '0.12.1-rc.1'],
     ['the cutoff with a build suffix', '0.12.1+build.7'],
   ]) {
-    const bridge = publishBridge({ version, toolLine: ACTIVITY, validatesFollows: false });
+    const shellApi = publishShellApi({ version, toolLine: ACTIVITY, validatesFollows: false });
     assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined }, name);
-    assert.equal(bridge.calls.length, 0, `${name}: nothing reached the bridge`);
+    assert.equal(shellApi.calls.length, 0, `${name}: nothing reached the shell API`);
   }
 });
 
 test('a release that cannot be read registers nothing at all: no probe, no api call, no store read', () => {
   for (const [name, version] of [['no release member', undefined], ['a release that cannot be read', 'v0.12'], ['the release before the floor', '0.12.0'], ['a prerelease of the floor', '0.12.1-rc.1'], ['a build suffix on the floor', '0.12.1+build.7'], ['a prerelease above the floor', '0.12.2-rc.1'], ['a build suffix above the floor', '0.12.2+build.7'], ['trailing text after the numbers', '0.12.2garbage'], ['four parts', '1.0.0.0'], ['empty', '']]) {
     for (const validatesFollows of [false, true]) {
-      const bridge = publishBridge({ version, toolLine: ACTIVITY, validatesFollows });
+      const shellApi = publishShellApi({ version, toolLine: ACTIVITY, validatesFollows });
       assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined }, name);
       // The api is never asked: a probe cannot tell a refused follow from an unrelated refusal, and a
-      // bridge that ignores the field would take the real designs as a `Message <type>` switch.
-      assert.equal(bridge.calls.length, 0, `${name}: nothing reaches the bridge`);
-      assert.deepEqual(bridge.designs, [], `${name}: nothing of ours can become a switch`);
+      // shell API that ignores the field would take the real designs as a `Message <type>` switch.
+      assert.equal(shellApi.calls.length, 0, `${name}: nothing reaches the shell API`);
+      assert.deepEqual(shellApi.designs, [], `${name}: nothing of ours can become a switch`);
     }
   }
 });
@@ -351,35 +351,35 @@ test('a width too narrow for one body row hands the rows straight back', () => {
   }
 });
 
-test('a later release registers, and a bridge with no message-design surface registers nothing', () => {
+test('a later release registers, and a shell API with no message-design surface registers nothing', () => {
   for (const version of ['0.12.1', '0.12.2', '0.13.0', '1.0.0']) {
     assert.equal(registered({ version }).registered, true, version);
   }
-  // The capability itself, asked of two bridges: the release string decides, and nothing is asked of
-  // the bridge when it cannot be read as at least 0.12.1 (fail closed, never a probe).
-  assert.equal(bridgeTakesFollows({ VERSION: '0.12.1' }), true);
-  assert.equal(bridgeTakesFollows({ VERSION: '0.12.0' }), false, 'the follow exists there, but a stale message id could veto it');
-  assert.equal(bridgeTakesFollows({ VERSION: '0.11.9' }), false);
-  assert.equal(bridgeTakesFollows({ VERSION: '0.12.1-rc.1' }), false);
-  assert.equal(bridgeTakesFollows({ VERSION: '0.12.2-rc.1' }), false, 'a suffix above the floor is unreadable, not newer');
-  assert.equal(bridgeTakesFollows({ VERSION: '0.12.2garbage' }), false, 'trailing text is unreadable');
-  assert.equal(bridgeTakesFollows({ VERSION: '1.0.0.0' }), false, 'four parts are unreadable');
-  assert.equal(bridgeTakesFollows({ VERSION: '0.12' }), false, 'a two-part release below the floor is still below it');
-  assert.equal(bridgeTakesFollows({}), false, 'an unreadable release is not asked and not used');
-  const bare = publishBridge({ version: '0.12.1' });
-  delete globalThis[BRIDGE_API_SLOT].registerMessageDesign;
+  // The capability itself, asked of two shell APIs: the release string decides, and nothing is asked of
+  // the shell API when it cannot be read as at least 0.12.1 (fail closed, never a probe).
+  assert.equal(shellApiTakesFollows({ VERSION: '0.12.1' }), true);
+  assert.equal(shellApiTakesFollows({ VERSION: '0.12.0' }), false, 'the follow exists there, but a stale message id could veto it');
+  assert.equal(shellApiTakesFollows({ VERSION: '0.11.9' }), false);
+  assert.equal(shellApiTakesFollows({ VERSION: '0.12.1-rc.1' }), false);
+  assert.equal(shellApiTakesFollows({ VERSION: '0.12.2-rc.1' }), false, 'a suffix above the floor is unreadable, not newer');
+  assert.equal(shellApiTakesFollows({ VERSION: '0.12.2garbage' }), false, 'trailing text is unreadable');
+  assert.equal(shellApiTakesFollows({ VERSION: '1.0.0.0' }), false, 'four parts are unreadable');
+  assert.equal(shellApiTakesFollows({ VERSION: '0.12' }), false, 'a two-part release below the floor is still below it');
+  assert.equal(shellApiTakesFollows({}), false, 'an unreadable release is not asked and not used');
+  const bare = publishShellApi({ version: '0.12.1' });
+  delete globalThis[SHELL_API_SLOT].registerMessageDesign;
   assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined });
   assert.equal(bare.calls.length, 0);
-  delete globalThis[BRIDGE_API_SLOT];
-  assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined }, 'no bridge');
+  delete globalThis[SHELL_API_SLOT];
+  assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined }, 'no shell API');
 });
 
 test('a refused registration is a no-registration, never a throw', () => {
-  const bridge = publishBridge({ version: '0.12.1', toolLine: ACTIVITY, validatesFollows: true });
-  const api = globalThis[BRIDGE_API_SLOT];
-  api.registerMessageDesign = () => { bridge.calls.push('refused'); throw new Error('refused'); };
+  const shellApi = publishShellApi({ version: '0.12.1', toolLine: ACTIVITY, validatesFollows: true });
+  const api = globalThis[SHELL_API_SLOT];
+  api.registerMessageDesign = () => { shellApi.calls.push('refused'); throw new Error('refused'); };
   assert.deepEqual(registerMessageCards({ metrics, theme: plainTheme }), { registered: false, designs: [], dispose: undefined });
-  assert.equal(bridge.calls.length, 1);
+  assert.equal(shellApi.calls.length, 1);
 });
 
 // ---- the heading (S5) ----
@@ -409,7 +409,7 @@ test('the marks are this package\'s own: ⌕ for the budget, ⚑ for the reminde
 
 // ---- the body (S2) ----
 
-test('every row of the message is drawn at every content level, and the bridge\'s own decorations are dropped', () => {
+test('every row of the message is drawn at every content level, and the shell API\'s own decorations are dropped', () => {
   const outcome = registered();
   for (const level of [CARD_CONTENT.DEFAULT, CARD_CONTENT.MINIMAL]) {
     globalThis[CARD_CONTENT_SLOT] = level;
@@ -552,10 +552,10 @@ test('every row fits the width the host asked for, at narrow and wide terminals,
 
 const PI_BOX = Object.freeze(['╭ Pi\'s own box ╮', '│ the body │', '╰──────────╯']);
 
-test('a design that cannot measure hands the message back to Pi, because only the bridge knows its box', () => {
+test('a design that cannot measure hands the message back to Pi, because only the shell API knows its box', () => {
   const outcome = registered();
   assert.notEqual(designFor(outcome, EXPLORATION), undefined);
-  // The bridge's own rule (docs/contract.md §15): a throwing design loses only its own output.
+  // The shell API's own rule (docs/contract.md §15): a throwing design loses only its own output.
   const drawThrough = (design) => {
     try {
       return design.apply(plainBody(EXPLORATION, STARTED), { width: 70, customType: EXPLORATION, theme: plainTheme, render: { message: {} } });
@@ -564,7 +564,7 @@ test('a design that cannot measure hands the message back to Pi, because only th
     }
   };
   // Registered WITHOUT a measurement seam: the card cannot measure, so it throws instead of
-  // answering rows wider than the terminal, and the bridge draws Pi's box.
+  // answering rows wider than the terminal, and the shell API draws Pi's box.
   const noSeam = registerMessageCards({ theme: plainTheme });
   assert.equal(noSeam.registered, true, 'a host without a seam still registers the design');
   assert.equal(drawThrough(designFor(noSeam, EXPLORATION)), PI_BOX, 'no metrics seam');

@@ -27,7 +27,7 @@ checkout's files, reading and — role permitting — editing that checkout's Gi
 issues and pull requests, and the drawing of its own cards. `git` is the only external requirement, and the shell API is not one: it is this
 package's OWN code under `lib/shell-api/`
 (invariant 32), imported by the entry as `../lib/shell-api/extension.ts`, so the slot
-`Symbol.for("gentle-shell-bridge/api/v1")`
+`Symbol.for("odd-worktree/shell-api/v1")`
 is published at module load with nothing installed beside this package. Other plugins keep
 using that slot, so they extend gentle-shell through odd-worktree too. That API carries
 three control surfaces: the two

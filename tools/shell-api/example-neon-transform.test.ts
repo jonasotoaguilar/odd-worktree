@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { publishBridgeApi, resetBridgeApiForTests } from "../../lib/shell-api/api.ts";
+import { publishShellApi, resetShellApiForTests } from "../../lib/shell-api/api.ts";
 import {
   resetBusForTests,
   resetCardStylesForTests,
@@ -27,7 +27,7 @@ import {
 import { resetCardStyleTransformForTests } from "../../lib/shell-api/card-style-transform.ts";
 import { disableCardStyleTransform, resetCardStyleWiringForTests } from "../../lib/shell-api/card-style-wiring.ts";
 import { disableCaptureBackend, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
-import gentleShellBridge, { type BridgeExtensionApi } from "../../lib/shell-api/extension.ts";
+import gentleShellShellApi, { type ShellExtensionApi } from "../../lib/shell-api/extension.ts";
 import { resetHookStateForTests } from "../../lib/shell-api/hook.ts";
 import { resetNoticesForTests } from "../../lib/shell-api/notices.ts";
 import { resetPluginLinesForTests } from "../../lib/shell-api/plugin-lines.ts";
@@ -64,7 +64,7 @@ test.after(() => {
 
 test.beforeEach(() => {
   rmSync(join(configHome, "gentle-shell-bridge"), { recursive: true, force: true });
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetBusForTests();
   resetSectionsForTests();
   resetCardStylesForTests();
@@ -93,7 +93,7 @@ interface FakePi {
   on?: (event: string, handler: SessionHandler) => void;
   registerCommand?: () => void;
   registerToolRenderer?: (resolver: unknown) => void;
-  /** Present because the bridge checks the REQUIRED host package at runtime (S9/T12). */
+  /** Present because the shell API checks the REQUIRED host package at runtime (S9/T12). */
   getCommands?: () => Array<{ name: string }>;
 }
 
@@ -165,12 +165,12 @@ interface World {
 }
 
 async function startWorld(tag: string): Promise<World> {
-  publishBridgeApi();
+  publishShellApi();
   const host = createFakeHost();
   const resolvers: unknown[] = [];
   const sessionHandlers: SessionHandler[] = [];
   const pi: FakePi = {
-    // `gentle-pi` is present, so the bridge's `session_start` arms (S9/T12).
+    // `gentle-pi` is present, so the shell API's `session_start` arms (S9/T12).
     getCommands: () => [{ name: "gentle:customize" }],
     on(_event, handler) {
       sessionHandlers.push(handler);
@@ -181,11 +181,11 @@ async function startWorld(tag: string): Promise<World> {
     },
   };
 
-  gentleShellBridge(pi as BridgeExtensionApi);
+  gentleShellShellApi(pi as ShellExtensionApi);
   const dispose = (await loadExample(tag))(pi);
   for (const handler of sessionHandlers) handler({}, { hasUI: true, ui: host.ui });
 
-  assert.equal(resolvers.length, 1, "one resolver, the bridge's");
+  assert.equal(resolvers.length, 1, "one resolver, the shell API's");
   const resolver = resolvers[0] as World["resolver"];
   const rows = (): CustomizeRow[] => buildRows({ theme: undefined, configHome }).rows;
   return {

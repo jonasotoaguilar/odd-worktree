@@ -39,14 +39,15 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        # v6.5.0
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: ${{ matrix.node }}
 
       - name: Run the test suite
         run: node --test tools/*.test.js
 
-      # native-bridge T5: the shell API is this package's own code, so its
+      # native shell API T5: the shell API is this package's own code, so its
       # suite lives with the other tests (`tools/shell-api/`). It is TypeScript,
       # so it needs type stripping, which is on by default from Node 22.18, and
       # it is skipped below that rather than failing on a syntax error.

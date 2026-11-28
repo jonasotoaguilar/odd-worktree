@@ -10,7 +10,7 @@
  * registration point for a custom message's rows, `pi.registerMessageRenderer`'s `customType`) with
  * the same kind of reader for a message, the active card-style selection a design — or a plugin
  * outside one — honours (`resolveCardStyleSelection`), the optional store and the runtime handshake
- * (`bridgeApi`, `onBridgeApi`, the announcement event). A message design rewrites the rows the host's
+ * (`shellApi`, `onShellApi`, the announcement event). A message design rewrites the rows the host's
  * own renderer drew, or owns the box when the type has no renderer at all, and a type nobody claimed
  * is never touched. Backend internals — the capture patch, the hook registry, the arm
  * lifecycle, the rail interception, the section renderer, the card-style line and transformer, the
@@ -20,24 +20,24 @@
  *
  * Importing this module also publishes the runtime handshake (`./api.ts`), the channel a plugin
  * uses when it does not import the package at all. A plugin that does import it calls
- * `bridgeApi()` from its `session_start` handler — the object, or `undefined` when the bridge is
- * not installed — or `onBridgeApi(handler, pi.events)`, which is the same answer plus the
+ * `shellApi()` from its `session_start` handler — the object, or `undefined` when the shell API is
+ * not installed — or `onShellApi(handler, pi.events)`, which is the same answer plus the
  * announcement form: the handler runs immediately when the object is already published, and when
- * it is not, it runs when the bridge announces itself. There is no holding area either way.
+ * it is not, it runs when the shell API announces itself. There is no holding area either way.
  */
 export {
-  BRIDGE_READY_EVENT,
+  SHELL_READY_EVENT,
   VERSION,
-  bridgeApi,
-  isBridgeApi,
-  onBridgeApi,
+  shellApi,
+  isShellApi,
+  onShellApi,
 } from "./api.ts";
 export type {
-  BridgeApi,
-  BridgeApiHandler,
-  BridgeEventBus,
-  BridgeEventUnsubscribe,
-  BridgeReadyPayload,
+  ShellApi,
+  ShellApiHandler,
+  ShellEventBus,
+  ShellEventUnsubscribe,
+  ShellReadyPayload,
 } from "./api.ts";
 export { registerCardStyle, registerRows, registerSection, registerTransform } from "./bus.ts";
 export { registerToolDesign, resolveToolDesignSelection } from "./tool-designs.ts";

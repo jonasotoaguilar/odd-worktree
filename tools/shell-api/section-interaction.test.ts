@@ -144,7 +144,7 @@ test("only a row that carries onClick highlights and answers the pointer", () =>
   // An inert row never highlights and never asks for a frame. The move is still CONSUMED, by the
   // host's own part region: it answers every move inside its frame
   // (`lib/native-pointer-region.ts:80-88`, `extensions/gentle-shell.ts:2732-2741`), so `handled` is
-  // the honest answer even where the bridge has nothing to do.
+  // the honest answer even where the shell API has nothing to do.
   assert.deepEqual(move(inertRow), { handled: true }, "an inert row does not answer a hover");
   assert.equal(renders, 0, "and nothing repaints");
   assert.ok(!(rowOf("inert") ?? "").includes("\u001b[33m"), "an inert row never highlights");
@@ -238,7 +238,7 @@ test("the collapse repaints in the same frame, through the host's own two steps"
   assert.equal(cacheRevision(), before + 1, "and the terminal's sidebar revision moved");
 });
 
-test("the collapsed state survives a reload: it is bridge store state, like visibility", () => {
+test("the collapsed state survives a reload: it is shell API store state, like visibility", () => {
   registerSection(section("music", { title: "MUSIC" }));
   arm();
   renderSidebar();

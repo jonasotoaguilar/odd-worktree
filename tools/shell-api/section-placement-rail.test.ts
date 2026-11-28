@@ -3,7 +3,7 @@
  * (S1–S8).
  *
  * `test/fake-sidebar.ts` owns the rail map and the frame, so these tests drive it exactly the way
- * the layout does: register the native parts, arm the bridge, render, and look at the cards the rail
+ * the layout does: register the native parts, arm the shell API, render, and look at the cards the rail
  * would show. Row ranges are asserted through the pointer path, which is the only consumer of them.
  */
 
@@ -231,7 +231,7 @@ test("a click on a card above the host's rows reaches the section, never the hos
   // Row 1 of the part frame is the body of OUR card, above the host's own rows.
   todo()?.handleMouse?.({ type: "click", button: "left", x: 4, y: 1, width: 40 });
 
-  assert.deepEqual(clicks, ["act"], "the bridge's target answered");
+  assert.deepEqual(clicks, ["act"], "the shell API's target answered");
   assert.deepEqual(hostCalls, [], "and the host was never asked about a row it did not draw");
 
   // An INERT row of ours declines, so the host still runs — on a row it does not own either.

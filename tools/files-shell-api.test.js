@@ -1,7 +1,7 @@
 'use strict';
 // T19 (S36, S41), T2 (S5) and T14 (S18) together: the picker's and the issues
 // panel's keys are bound directly on the host, and the package itself loads only when a
-// compatible bridge object is on the published slot (native since native-bridge T2).
+// compatible shell API object is on the published slot (native since native-shell API T2).
 //
 // What this file proves, all of it through the loaded extension:
 // - `alt+p` is bound with `pi.registerShortcut` at load — FIRST and complete —
@@ -12,7 +12,7 @@
 // - without the `gh` CLI `/issues` never registers, and its key is never bound;
 // - each bound handler is the SAME path its command opens, with the session
 //   context the host hands a shortcut;
-// - a complete bridge is handed NO keymap and NO palette row for `files`, and is
+// - a complete shell API is handed NO keymap and NO palette row for `files`, and is
 //   never asked to resolve a key, while the shortcut is still bound (S36);
 // - a `session_start` never adds those rows and never binds a second key;
 // - a host without `registerShortcut`, a host that throws from it, and a missing
@@ -24,10 +24,10 @@
 //
 // Where the two contracts meet (this is the merge of main's T15 with this
 // branch's S18): the key is bound at load, but it is bound inside the package's
-// single registration episode, so a host with no bridge gets no key because it
+// single registration episode, so a host with no shell API gets no key because it
 // gets no surface at all.
 //
-// The bridge slot is process-wide, so it is restored after every test, and the
+// The shell API slot is process-wide, so it is restored after every test, and the
 // environment this file touches is snapshotted and restored in `after`.
 
 const { test, after, afterEach } = require('node:test');
@@ -38,7 +38,7 @@ const path = require('node:path');
 
 const { loadExtension, withGhPath } = require('./fixtures/load-extension.js');
 
-const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+const SHELL_SLOT = Symbol.for('odd-worktree/shell-api/v1');
 // The one line `/files` answers a host with no overlay: the proof that the bound
 // key reached the command's own path.
 const NO_UI_LINE = 'files: the file picker needs an interactive session with overlay support';
@@ -49,7 +49,7 @@ const noRepositoryLine = (cwd) => `not a git repository: ${cwd}; run 'git init' 
 const savedEnv = { ...process.env };
 const scratch = [];
 after(() => {
-  delete globalThis[BRIDGE_SLOT];
+  delete globalThis[SHELL_SLOT];
   for (const key of Object.keys(process.env)) {
     if (!(key in savedEnv)) delete process.env[key];
   }
@@ -60,27 +60,27 @@ after(() => {
 });
 
 afterEach(() => {
-  delete globalThis[BRIDGE_SLOT];
+  delete globalThis[SHELL_SLOT];
   delete process.env.GENTLE_PI_FILES_KEY;
   delete process.env.GENTLE_PI_ISSUES_KEY;
 });
 
-// A fake bridge on the real slot, complete enough for every surface this package
+// A fake shell API on the real slot, complete enough for every surface this package
 // could possibly contribute to: it records each registration and each
 // resolution, so a `files` row — or even a question about one — is visible.
 //
 // S18 (T14): the gate this package loads behind validates the WHOLE published
 // object (`schema`, `version`, `registerSection`, `registerRows`, `createStore`),
-// so a fake that only carried the picker's two old members would be "no bridge"
+// so a fake that only carried the picker's two old members would be "no shell API"
 // and this suite would test an extension that never loaded. The members no
 // assertion here measures are therefore present but inert; `members` overrides
-// any of them to model a throwing or partial bridge.
-function installBridge({ members = {} } = {}) {
+// any of them to model a throwing or partial shell API.
+function installShellApi({ members = {} } = {}) {
   const keymaps = [];
   const commands = [];
   const resolved = [];
   const api = {
-    schema: 'gentle-shell-bridge/api',
+    schema: 'odd-worktree/shell-api',
     version: 1,
     registerSection: () => () => {},
     registerRows: () => () => {},
@@ -101,7 +101,7 @@ function installBridge({ members = {} } = {}) {
     },
     ...members,
   };
-  globalThis[BRIDGE_SLOT] = api;
+  globalThis[SHELL_SLOT] = api;
   return { api, keymaps, commands, resolved };
 }
 
@@ -162,22 +162,22 @@ function notifyHost() {
 // A plain directory with no repository in it: the picker answers early and the
 // key's only observable effect is the line it reaches.
 function practiceCheckout() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-files-bridge-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-files-shell-api-'));
   scratch.push(dir);
   return fs.realpathSync(dir);
 }
 
-// The `files` rows a fake bridge was handed, if any: the whole claim S36 removes.
+// The `files` rows a fake shell API was handed, if any: the whole claim S36 removes.
 function filesRows(rows) {
   return rows.filter((row) => row && row.id === 'files');
 }
 
 // ---------------------------------------------------------------------------
-// S36/S41: the key is bound directly, no bridge row involved.
+// S36/S41: the key is bound directly, no shell API row involved.
 // ---------------------------------------------------------------------------
 
 test('S41/S5: the shortcuts bind alt+p first and alt+i beside it, and both commands still register', async () => {
-  const bridge = installBridge();
+  const shellApi = installShellApi();
   const host = installHost();
   const loaded = await loadExtension(host.pi);
 
@@ -192,14 +192,14 @@ test('S41/S5: the shortcuts bind alt+p first and alt+i beside it, and both comma
     'each key describes its own surface');
   assert.equal(loaded.commands.has('files'), true, '/files is still registered under its own name');
   assert.equal(loaded.commands.has('issues'), true, 'and /issues is the command behind the second key');
-  assert.deepEqual(bridge.keymaps, [], 'this package contributes no keymap action at all');
-  assert.deepEqual(bridge.commands, [], 'nor any palette row');
-  assert.deepEqual(bridge.resolved, [], 'and the shell is never asked to resolve a key');
-  assert.notEqual(globalThis[BRIDGE_SLOT], undefined, 'the bridge is the host\'s own published object');
+  assert.deepEqual(shellApi.keymaps, [], 'this package contributes no keymap action at all');
+  assert.deepEqual(shellApi.commands, [], 'nor any palette row');
+  assert.deepEqual(shellApi.resolved, [], 'and the shell is never asked to resolve a key');
+  assert.notEqual(globalThis[SHELL_SLOT], undefined, 'the shell API is the host\'s own published object');
 });
 
 test('S41: GENTLE_PI_FILES_KEY overrides the bound key', async () => {
-  installBridge();
+  installShellApi();
   process.env.GENTLE_PI_FILES_KEY = 'ctrl+shift+f';
   const host = installHost();
   await loadExtension(host.pi);
@@ -210,7 +210,7 @@ test('S41: GENTLE_PI_FILES_KEY overrides the bound key', async () => {
 });
 
 test('S41: an empty or blank override falls back to alt+p', async () => {
-  installBridge();
+  installShellApi();
   for (const value of ['', '   ']) {
     process.env.GENTLE_PI_FILES_KEY = value;
     const host = installHost();
@@ -222,7 +222,7 @@ test('S41: an empty or blank override falls back to alt+p', async () => {
 });
 
 test('S36: the bound key runs the SAME path /files opens, with the session context', async () => {
-  installBridge();
+  installShellApi();
   const host = installHost();
   const loaded = await loadExtension(host.pi);
 
@@ -241,7 +241,7 @@ test('S36: the bound key runs the SAME path /files opens, with the session conte
 // ---------------------------------------------------------------------------
 
 test('S5: alt+i binds at load and its handler opens what /issues opens', async () => {
-  installBridge();
+  installShellApi();
   const host = installHost();
   const loaded = await loadExtension(host.pi);
 
@@ -270,7 +270,7 @@ test('S5: alt+i binds at load and its handler opens what /issues opens', async (
 });
 
 test('S5: GENTLE_PI_ISSUES_KEY overrides the issues key and moves no other key', async () => {
-  installBridge();
+  installShellApi();
   process.env.GENTLE_PI_ISSUES_KEY = 'ctrl+shift+i';
   const host = installHost();
   await loadExtension(host.pi);
@@ -281,7 +281,7 @@ test('S5: GENTLE_PI_ISSUES_KEY overrides the issues key and moves no other key',
 });
 
 test('S5: an empty or blank issues override falls back to alt+i', async () => {
-  installBridge();
+  installShellApi();
   for (const value of ['', '   ']) {
     process.env.GENTLE_PI_ISSUES_KEY = value;
     const host = installHost();
@@ -293,7 +293,7 @@ test('S5: an empty or blank issues override falls back to alt+i', async () => {
 });
 
 test('S5: without the gh CLI no issues key is bound, and the picker key still is', async () => {
-  installBridge();
+  installShellApi();
   const host = installHost();
   const loaded = await loadExtension(host.pi, { gh: false });
 
@@ -303,26 +303,26 @@ test('S5: without the gh CLI no issues key is bound, and the picker key still is
 });
 
 // ---------------------------------------------------------------------------
-// S36: a bridge present and complete still gets NO files row, and no resolve.
+// S36: a shell API present and complete still gets NO files row, and no resolve.
 // ---------------------------------------------------------------------------
 
-test('S36: a complete bridge receives no keymap row and no palette row for files', async () => {
-  const bridge = installBridge();
+test('S36: a complete shell API receives no keymap row and no palette row for files', async () => {
+  const shellApi = installShellApi();
   const host = installHost();
   const loaded = await loadExtension(host.pi);
 
-  assert.deepEqual(filesRows(bridge.keymaps), [], 'no registerKeymap call carries the id files');
-  assert.deepEqual(filesRows(bridge.commands), [], 'no registerCommands call carries the id files');
-  assert.deepEqual(bridge.keymaps, [], 'and this package contributes no keymap action at all');
-  assert.deepEqual(bridge.commands, [], 'nor any palette row');
-  assert.deepEqual(bridge.resolved, [], 'the shell is never asked to resolve a key');
+  assert.deepEqual(filesRows(shellApi.keymaps), [], 'no registerKeymap call carries the id files');
+  assert.deepEqual(filesRows(shellApi.commands), [], 'no registerCommands call carries the id files');
+  assert.deepEqual(shellApi.keymaps, [], 'and this package contributes no keymap action at all');
+  assert.deepEqual(shellApi.commands, [], 'nor any palette row');
+  assert.deepEqual(shellApi.resolved, [], 'the shell is never asked to resolve a key');
   assert.deepEqual(host.shortcuts.map((entry) => entry.key), ['alt+p', 'alt+i'], 'the shortcuts are still bound');
   assert.equal(loaded.commands.has('files'), true);
   assert.equal(loaded.commands.has('issues'), true);
 });
 
 // ---------------------------------------------------------------------------
-// S18 (T14) as amended by native-bridge T2/T5: the shell API is NATIVE (this package's
+// S18 (T14) as amended by native-shell API T2/T5: the shell API is NATIVE (this package's
 // own `lib/shell-api/`), so an ABSENT or INCOMPATIBLE slot is the only case left where this
 // package ships nothing. The policy the human chose for that case, "Desactivar todo el
 // plugin", still holds — no command, no tool, no renderer, no card, no rail, no hook, no
@@ -330,8 +330,8 @@ test('S36: a complete bridge receives no keymap row and no palette row for files
 // notice and no observer left to say it with.
 // ---------------------------------------------------------------------------
 
-test('S18/S19 (T2): with no bridge NOTHING registers and NOTHING is said', async () => {
-  delete globalThis[BRIDGE_SLOT];
+test('S18/S19 (T2): with no shell API NOTHING registers and NOTHING is said', async () => {
+  delete globalThis[SHELL_SLOT];
   const savedChild = process.env.GENTLE_PI_AGENTS_CHILD;
   delete process.env.GENTLE_PI_AGENTS_CHILD;
   try {
@@ -345,7 +345,7 @@ test('S18/S19 (T2): with no bridge NOTHING registers and NOTHING is said', async
         return () => {};
       },
     },
-  }, { bridge: false });
+  }, { shellApi: false });
 
   assert.equal(host.shortcuts.length, 0, 'nothing is bound');
   assert.deepEqual([...loaded.commands.keys()], [], 'no command');
@@ -354,7 +354,7 @@ test('S18/S19 (T2): with no bridge NOTHING registers and NOTHING is said', async
   assert.deepEqual([...loaded.entryRenderers.keys()], [], 'no entry renderer');
   assert.deepEqual(loaded.hooks, [],
     'and no hook at all: the missing-plugin observer the gate needed is gone');
-  assert.equal(globalThis[BRIDGE_SLOT], undefined, 'nothing is published by this package');
+  assert.equal(globalThis[SHELL_SLOT], undefined, 'nothing is published by this package');
   assert.deepEqual(subscriptions, [], 'and no ready announcement is listened to either');
 
   // Nothing is ever said: a session start is impossible (no hook was registered) and a
@@ -362,7 +362,7 @@ test('S18/S19 (T2): with no bridge NOTHING registers and NOTHING is said', async
   const sink = notifyHost();
   await fireSessionStart(loaded.hooks, sink.ctx);
   assert.deepEqual(sink.notifications, [], 'no install hint, no warning, no notice');
-  assert.deepEqual([...loaded.commands.keys()], [], 'a session start without a bridge registers no command');
+  assert.deepEqual([...loaded.commands.keys()], [], 'a session start without a shell API registers no command');
   assert.deepEqual([...loaded.tools.keys()], [], 'and no tool');
   assert.equal(host.shortcuts.length, 0, 'and binds nothing');
   } finally {
@@ -371,28 +371,28 @@ test('S18/S19 (T2): with no bridge NOTHING registers and NOTHING is said', async
   }
 });
 
-test('S18/S19: a malformed bridge is no bridge, and a bridge without the picker\'s old rows is still complete', async () => {
-  const wrongSchema = installBridge();
-  wrongSchema.api.schema = 'gentle-shell-bridge/api/v2';
+test('S18/S19: a malformed shell API is no shell API, and a shell API without the picker\'s old rows is still complete', async () => {
+  const wrongSchema = installShellApi();
+  wrongSchema.api.schema = 'odd-worktree/shell-api/v2';
   const schemaHost = installHost();
   await loadExtension(schemaHost.pi);
   assert.deepEqual(wrongSchema.keymaps, [], 'a foreign schema registers nothing');
   assert.deepEqual(wrongSchema.commands, []);
   assert.equal(schemaHost.shortcuts.length, 0, 'and binds no key');
 
-  delete globalThis[BRIDGE_SLOT];
-  const wrongVersion = installBridge();
+  delete globalThis[SHELL_SLOT];
+  const wrongVersion = installShellApi();
   wrongVersion.api.version = 2;
   const versionHost = installHost();
   await loadExtension(versionHost.pi);
   assert.deepEqual(wrongVersion.keymaps, []);
   assert.equal(versionHost.shortcuts.length, 0);
 
-  delete globalThis[BRIDGE_SLOT];
+  delete globalThis[SHELL_SLOT];
   // The picker's two OLD members (`registerKeymap`, `registerCommands`) are no
-  // longer used by any surface, so a bridge without them is still a bridge this
+  // longer used by any surface, so a shell API without them is still a shell API this
   // package loads behind: the surface registers and the key is bound.
-  const partial = installBridge({ members: { registerKeymap: undefined, registerCommands: undefined } });
+  const partial = installShellApi({ members: { registerKeymap: undefined, registerCommands: undefined } });
   const partialHost = installHost();
   const loaded = await loadExtension(partialHost.pi);
   assert.deepEqual(partialHost.shortcuts.map((entry) => entry.key), ['alt+p', 'alt+i'],
@@ -406,13 +406,13 @@ test('S18/S19: a malformed bridge is no bridge, and a bridge without the picker\
 // ---------------------------------------------------------------------------
 
 // RE-SCOPED (was "the ready announcement registers the whole surface, exactly once",
-// which was the deferred gate). The bridge is native and the entry imports it, so its
+// which was the deferred gate). The shell API is native and the entry imports it, so its
 // object is on the slot BEFORE the factory runs and the slot is read ONCE, in the factory:
 // there is no hold, no observer and no announcement subscription left to bring a surface
 // to life. A slot that is empty at factory time therefore stays empty for that load, and
-// the NEXT load (a `/reload` builds a new module instance) is what picks the bridge up.
-test('S18/S19 (T2): a bridge that publishes after the factory is not picked up by that load', async () => {
-  delete globalThis[BRIDGE_SLOT];
+// the NEXT load (a `/reload` builds a new module instance) is what picks the shell API up.
+test('S18/S19 (T2): a shell API that publishes after the factory is not picked up by that load', async () => {
+  delete globalThis[SHELL_SLOT];
   const subscriptions = [];
   const host = installHost();
   const loaded = await loadExtension({
@@ -423,17 +423,17 @@ test('S18/S19 (T2): a bridge that publishes after the factory is not picked up b
         return () => {};
       },
     },
-  }, { bridge: false });
+  }, { shellApi: false });
 
   // Nothing at all while the slot is empty, and nothing listening for a later arrival.
-  assert.deepEqual([...loaded.commands.keys()], [], 'no command before the bridge exists');
+  assert.deepEqual([...loaded.commands.keys()], [], 'no command before the shell API exists');
   assert.deepEqual([...loaded.tools.keys()], [], 'no tool either');
   assert.deepEqual(loaded.hooks, [], 'no hook');
   assert.equal(host.shortcuts.length, 0, 'and no key');
   assert.deepEqual(subscriptions, [], 'and no announcement subscription: the wait is gone');
 
-  // The bridge publishes afterwards: this load has already read the slot and is done.
-  const bridge = installBridge();
+  // The shell API publishes afterwards: this load has already read the slot and is done.
+  const shellApi = installShellApi();
   assert.deepEqual([...loaded.commands.keys()], [], 'a late publication adds no command');
   assert.deepEqual([...loaded.tools.keys()], [], 'no tool');
   assert.deepEqual(loaded.hooks, [], 'no hook');
@@ -453,7 +453,7 @@ test('S18/S19 (T2): a bridge that publishes after the factory is not picked up b
     },
   });
   assert.deepEqual([...reloaded.commands.keys()].sort(), ['files', 'identity', 'issues', 'odd', 'prs', 'warp'],
-    'the six commands arrive with the published bridge');
+    'the six commands arrive with the published shell API');
   assert.deepEqual([...reloaded.tools.keys()].sort(), ['worktree_create', 'worktree_list'], 'the two tools');
   assert.deepEqual([...reloaded.messageRenderers.keys()], ['worktree-warp'], 'the message renderer');
   assert.deepEqual([...reloaded.entryRenderers.keys()].sort(),
@@ -463,11 +463,11 @@ test('S18/S19 (T2): a bridge that publishes after the factory is not picked up b
     assert.equal(hookNames.has(name), true, `the ${name} hooks are registered`);
   }
 
-  // The picker's contribution to the BRIDGE is none at all: the key is bound on the host,
+  // The picker's contribution to the SHELL API is none at all: the key is bound on the host,
   // once, as part of that same registration episode.
-  assert.deepEqual(filesRows(bridge.keymaps), [], 'the bridge is handed no keymap row');
-  assert.deepEqual(filesRows(bridge.commands), [], 'nor a palette row');
-  assert.deepEqual(bridge.resolved, [], 'and is never asked for a key');
+  assert.deepEqual(filesRows(shellApi.keymaps), [], 'the shell API is handed no keymap row');
+  assert.deepEqual(filesRows(shellApi.commands), [], 'nor a palette row');
+  assert.deepEqual(shellApi.resolved, [], 'and is never asked for a key');
   assert.deepEqual(nextHost.shortcuts.map((entry) => entry.key), ['alt+p', 'alt+i'],
     'the episode binds the picker key and the issues key, once each');
 
@@ -480,8 +480,8 @@ test('S18/S19 (T2): a bridge that publishes after the factory is not picked up b
   assert.deepEqual([...reloaded.commands.keys()].sort(), ['files', 'identity', 'issues', 'odd', 'prs', 'warp'],
     'a repeated announcement registers no second command');
   assert.equal(nextHost.shortcuts.length, 2, 'and binds no second key');
-  assert.deepEqual(bridge.keymaps, [], 'and no second keymap action');
-  assert.deepEqual(bridge.commands, [], 'and no second palette row');
+  assert.deepEqual(shellApi.keymaps, [], 'and no second keymap action');
+  assert.deepEqual(shellApi.commands, [], 'and no second palette row');
 });
 
 // ---------------------------------------------------------------------------
@@ -490,7 +490,7 @@ test('S18/S19 (T2): a bridge that publishes after the factory is not picked up b
 
 test('S36: two session starts add no files row and no second key', async () => {
   await stubGh();
-  const bridge = installBridge();
+  const shellApi = installShellApi();
   const host = installHost();
   const loaded = await loadExtension(host.pi);
 
@@ -499,8 +499,8 @@ test('S36: two session starts add no files row and no second key', async () => {
   const ctx = notifyHost().ctx;
   await fireSessionStart(loaded.hooks, ctx);
   await fireSessionStart(loaded.hooks, ctx);
-  assert.deepEqual(filesRows(bridge.keymaps), [], 'a session start contributes nothing');
-  assert.deepEqual(filesRows(bridge.commands), []);
+  assert.deepEqual(filesRows(shellApi.keymaps), [], 'a session start contributes nothing');
+  assert.deepEqual(filesRows(shellApi.commands), []);
   assert.equal(host.shortcuts.length, 2, 'and never stacks a second shortcut');
 
   const sink = notifyHost();
@@ -509,14 +509,14 @@ test('S36: two session starts add no files row and no second key', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// A broken bridge never breaks the extension.
+// A broken shell API never breaks the extension.
 // ---------------------------------------------------------------------------
 
-test('S18/S19: a bridge whose members throw never breaks the extension', async () => {
-  const boom = () => { throw new Error('bridge member exploded'); };
+test('S18/S19: a shell API whose members throw never breaks the extension', async () => {
+  const boom = () => { throw new Error('shell API member exploded'); };
   // The members that ARE used: the rail's section, the `Cards` rows, the design
-  // and the store. The key no longer depends on the bridge at all.
-  const bridge = installBridge({
+  // and the store. The key no longer depends on the shell API at all.
+  const shellApi = installShellApi({
     members: {
       registerSection: boom,
       registerRows: boom,
@@ -530,8 +530,8 @@ test('S18/S19: a bridge whose members throw never breaks the extension', async (
   assert.equal(loaded.commands.has('files'), true, 'the command still registers');
   assert.equal(loaded.tools.has('worktree_list'), true, 'the other surfaces still register');
   assert.equal(host.shortcuts.length, 2, 'and the host bound both keys anyway');
-  assert.deepEqual(bridge.keymaps, [], 'a throwing bridge contributed no row');
-  assert.deepEqual(bridge.commands, []);
+  assert.deepEqual(shellApi.keymaps, [], 'a throwing shell API contributed no row');
+  assert.deepEqual(shellApi.commands, []);
 
   await stubGh();
   await fireSessionStart(loaded.hooks, notifyHost().ctx);
@@ -554,7 +554,7 @@ test('S36/S5: a host with no registerShortcut at all still gets /files and /issu
 });
 
 test('S36/S5: a host that refuses the shortcut says nothing and keeps both commands', async () => {
-  installBridge();
+  installShellApi();
   const attempted = [];
   const loaded = await loadExtension({
     registerShortcut: (key) => {
@@ -572,7 +572,7 @@ test('S36/S5: a host that refuses the shortcut says nothing and keeps both comma
 });
 
 test('S36: a missing command handler makes the bound key inert, never a throw', async () => {
-  installBridge();
+  installShellApi();
   const host = installHost();
   await loadExtension({
     ...host.pi,

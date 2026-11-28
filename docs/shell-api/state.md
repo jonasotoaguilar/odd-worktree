@@ -2,28 +2,28 @@
 
 - **Status:** accepted for the extraction; implemented in `lib/shell-api/store.ts` and exercised by the
   test suite. **Amended** by decision 4: a registered sidebar section's visibility is the first
-  piece of state the bridge itself owns. **Amended** by decision 5: plugins reach the bridge
+  piece of state the shell API itself owns. **Amended** by decision 5: plugins reach the shell API
   through a published, versioned `globalThis` slot instead of a path or an environment variable.
-  **Amended** by decision 6: the selected card style is bridge-owned state, and the conversation
+  **Amended** by decision 6: the selected card style is shell-API-owned state, and the conversation
   frames are repainted opt-in, degrading to native. **Amended** by decision 7: the repaint wrapper
   became a general, ordered transform pipeline, so a plugin's rendering choice reaches cards already
   on screen instead of only the next one. **Amended** by decision 8: a tool design's selection is
-  bridge-owned as well, one value per tool and per line.
+  shell-API-owned as well, one value per tool and per line.
 - **Context:** [contract.md](contract.md), [architecture.md](architecture.md)
 - **Deciders:** package author and gentle-shell maintainers.
 
-This ADR was written for the standalone `gentle-shell-bridge` package. It now describes this package's
-own shell API in `lib/shell-api/`, which odd-worktree publishes at the same slot; "the bridge"
+This ADR was written when the shell API was a standalone package. It now describes this package's
+own shell API in `lib/shell-api/`, which odd-worktree publishes at the same slot; "the shell API"
 below means that surface, and the store directory it names is unchanged.
 
 ## Context
 
-The bridge exists to compose rows from many plugins into one menu. A row's `●` is computed
+The shell API exists to compose rows from many plugins into one menu. A row's `●` is computed
 by `current()`, which the renderer calls at render time (`lib/visual-customize-view.ts:585`),
 and a toggle applies through `action()`, which the view runs on ←/→ or Enter
 (`lib/visual-customize-view.ts:565`) and follows with its own repaint
 (`lib/visual-customize-view.ts:579`). Persistence therefore has to sit behind the row, and
-the question is *who owns it*: the bridge, each plugin, or nobody.
+the question is *who owns it*: the shell API, each plugin, or nobody.
 
 Two practical constraints shape the answer:
 
@@ -32,16 +32,16 @@ Two practical constraints shape the answer:
    per-extension and per-load.
 2. Plugins already have their own config files in gentle-shell, written atomically
    (gentle-shell uses temp-file plus `renameSync`, e.g. `lib/agent-profiles.ts:715`,
-   `lib/animation-policy.ts:47`). A bridge that owns state would need to replicate that
+   `lib/animation-policy.ts:47`). A shell API that owns state would need to replicate that
    discipline for data it does not understand.
 
 ## Decision
 
-**1. The bridge is stateless by default.** It composes rows; it does not own preferences,
+**1. The shell API is stateless by default.** It composes rows; it does not own preferences,
 caches no row values, and has no opinion about a plugin's config format. Diagnostics hold
 runtime facts (registrations, capture outcome, failures), not settings.
 
-**2. The bridge also exposes an optional `createStore(pluginId)`.** A plugin that wants
+**2. The shell API also exposes an optional `createStore(pluginId)`.** A plugin that wants
 zero boilerplate gets:
 
 - path: `<gentle config home>/gentle-shell-bridge/<pluginId>.json` — namespaced by plugin,
@@ -60,13 +60,13 @@ zero boilerplate gets:
 - read/write accessors (`get(key, fallback)`, `set(key, value)`) scoped to that one file.
 
 **3. A plugin may keep using its own file** — gentle-shell plugins do this today, e.g.
-`loon-tui.json`. The bridge never reads or writes a plugin's own file. `createStore` is a
+`loon-tui.json`. The shell API never reads or writes a plugin's own file. `createStore` is a
 convenience for plugins that have no file yet, not a migration target for plugins that do.
 
-**4. One exception, and only one: a sidebar section's visibility is bridge-owned state.**
-`registerSection` makes the bridge create the show/hide toggle, so the value behind that toggle
+**4. One exception, and only one: a sidebar section's visibility is shell-API-owned state.**
+`registerSection` makes the shell API create the show/hide toggle, so the value behind that toggle
 cannot belong to the plugin: there is no plugin row, no plugin-chosen setting name and no plugin
-store in the flow. The bridge persists it in its own namespaced file,
+store in the flow. The shell API persists it in its own namespaced file,
 `<gentle config home>/gentle-shell-bridge/bridge-sections.json`, as
 
 ```json
@@ -78,7 +78,7 @@ one key (`sections`) mapping section id → boolean, defaults taken from the sec
 file under its own `collapsed` key.
 
 A section's `placement` — like its `order` — is NOT stored: it is registration data the plugin
-declares, and the bridge resolves it on every frame against the parts the host paints. Persisting it
+declares, and the shell API resolves it on every frame against the parts the host paints. Persisting it
 would let a file disagree with the plugin that owns the card, and a store cannot know whether an
 anchor is registered in this session.
 
@@ -103,14 +103,14 @@ choice: { setting: "Loon → Banner source", value, current: () => read() === va
 action: () => store.set("bannerSource", value), // persist; repaint follows
 ```
 
-The bridge cannot enforce this. It can only document the rule; a plugin that caches a value
+The shell API cannot enforce this. It can only document the rule; a plugin that caches a value
 at registration produces a stale `●` and the diagnostics command will not detect it.
 
-### Bridge-owned section visibility
+### ShellApi-owned section visibility
 
-This is one of the places the bridge is not stateless — decision 6 (card style) and decision 8
-(tool designs) are the others — and the reason is structural: the bridge
-generates the toggle, so only the bridge can know which value it points at. The plugin still owns
+This is one of the places the shell API is not stateless — decision 6 (card style) and decision 8
+(tool designs) are the others — and the reason is structural: the shell API
+generates the toggle, so only the shell API can know which value it points at. The plugin still owns
 nothing — it never sees this file, never picks a key, and its section appears or disappears from
 the same user gesture as a native one.
 
@@ -119,12 +119,12 @@ the same user gesture as a native one.
   problem, and is rewritten as a valid document by the next toggle — the same rules
   `createStore` already follows for plugin files.
 - A plugin that also keeps its own state is unaffected: this file is keyed by section id and the
-  bridge never reads anything else from it.
-- The cost is honest: the bridge now owns this preference, and one more per surface only it can
-  resolve (decisions 6, 7 and 8). Each is a preference about the bridge's own surface, which is why
+  shell API never reads anything else from it.
+- The cost is honest: the shell API now owns this preference, and one more per surface only it can
+  resolve (decisions 6, 7 and 8). Each is a preference about the shell API's own surface, which is why
   they belong here and not in a plugin's namespace.
 
-### Reads, cost and limits of bridge-owned visibility
+### Reads, cost and limits of shell-API-owned visibility
 
 - Visibility is read once per frame by the renderer and once per `current()` call by the rows, so a
   toggle shows up on the sidebar's next frame (pinned by a test), at the cost of a small file read
@@ -138,33 +138,33 @@ the same user gesture as a native one.
 - Two plugins writing concurrently never touch the same file, so there is no cross-plugin
   write contention and no cross-plugin lock protocol to design.
 - Duplicate work is accepted: N plugins may each implement a small atomic-write helper.
-  The alternative was N plugins contending on one file owned by the bridge.
+  The alternative was N plugins contending on one file owned by the shell API.
 - A malformed store file is kept as a store problem and reads fall back to the
-  plugin's defaults; the bridge does not repair or delete the file, and a later `set` writes
+  plugin's defaults; the shell API does not repair or delete the file, and a later `set` writes
   a valid document. Existing `values` are carried into that write **only** when the file was
   a usable `schemaVersion: 1` document (so a partially written file keeps its other keys).
   For an unknown `schemaVersion` the write stores only the keys the caller set and records
-  the discarded payload as a store problem: the bridge cannot know what a future schema's
+  the discarded payload as a store problem: the shell API cannot know what a future schema's
   payload means, so re-labelling it as schema 1 would be a lie about its format, and
   silently destroying it while pretending it is valid would be worse than reporting it.
   Foreign top-level keys are always dropped. A reported problem stays on record until a
   write resolves it, so reading the repaired file cannot erase it from the record.
-- A plugin that keeps its own file gets no migration help from the bridge — this is the
+- A plugin that keeps its own file gets no migration help from the shell API — this is the
   documented cost of the opt-in helper.
-- The bridge acquires disk-write code it must test, and it does test it (round-trip,
+- The shell API acquires disk-write code it must test, and it does test it (round-trip,
   malformed file, atomicity, path rejection on temporary directories); if `createStore`
   proves to add more risk than boilerplate it removes, it can be dropped without changing
   `registerRows`.
 
 ## Alternatives rejected
 
-**A. Bridge centralises all state in one JSON file.** One file under the gentle config home
+**A. ShellApi centralises all state in one JSON file.** One file under the gentle config home
 holding every plugin's settings. Rejected: a corrupt or truncated file breaks every plugin
 at once, and concurrent writers from independent plugins contend on the same file — the
-exact cross-plugin coupling the bridge exists to remove. It also forces the bridge to
+exact cross-plugin coupling the shell API exists to remove. It also forces the shell API to
 understand, validate and migrate data from plugins it does not control.
 
-**B. Bridge writes nothing and offers no helper.** Maximum separation: composition only.
+**B. ShellApi writes nothing and offers no helper.** Maximum separation: composition only.
 Rejected: every plugin re-implements atomic writes, namespace paths and version fields, and
 there is no shared migration story — a plugin that gets it wrong loses user settings, and
 there is no single place to fix the pattern. The duplication is real and predictable, which
@@ -174,8 +174,8 @@ is why the optional helper wins over pure minimalism.
 per plugin (A's failure mode), keeps a fixable default for the write path (B's gap), and
 leaves existing plugin files untouched.
 
-**D. Rejected: the plugin imports the bridge by path, or the user sets
-`GENTLE_SHELL_BRIDGE_MODULE`.** The worked example used to resolve the package by trying a
+**D. Rejected: the plugin imports the shell API by path, or the user sets
+`GENTLE_SHELL_API_MODULE`.** The worked example used to resolve the package by trying a
 dynamic `import()` of candidate `lib/shell-api/index.ts` paths. Rejected: a path is not a contract between
 two independent projects — it names one checkout on one machine, reaches into another package's
 files, and breaks silently the day either repository moves. An environment variable moves the
@@ -185,18 +185,18 @@ either can hand a plugin an object it cannot use with no way to notice. Removed 
 in `f0f30fe`.
 
 **E. Chosen: publish a frozen, versioned object on `globalThis`; consume it at `session_start`.**
-The bridge publishes `{ schema, version, VERSION, registerRows, registerSection, createStore }` at
-`Symbol.for("gentle-shell-bridge/api/v1")` when its module loads — first-wins, never overwritten,
+The shell API publishes `{ schema, version, VERSION, registerRows, registerSection, createStore }` at
+`Symbol.for("odd-worktree/shell-api/v1")` when its module loads — first-wins, never overwritten,
 never reset. A plugin registers from its own `session_start` handler: Pi completes every extension
 module's async initialization before firing that event (`docs/extensions.md:213`, `:393`, `:512`),
-so the slot either holds the object or the bridge is not installed. (`registerCardStyle` joined the
+so the slot either holds the object or the shell API is not installed. (`registerCardStyle` joined the
 object in 0.2.0 and `registerTransform` in 0.3.0; the gate stays on the three original members, so an
 older object is still a usable
-bridge for rows, sections and the store.) A consumer gates on the schema
-string, `version === 1` and the three callable members; anything else is absent, `bridgeApi()`
-returns `undefined`, and the bridge warns once per process. `bridgeApi()` and `isBridgeApi(value)`
+shell API for rows, sections and the store.) A consumer gates on the schema
+string, `version === 1` and the three callable members; anything else is absent, `shellApi()`
+returns `undefined`, and the shell API warns once per process. `shellApi()` and `isShellApi(value)`
 are the same handshake for a plugin that does import the package, and the exact form is quoted in
-[contract.md](contract.md) §9. It follows the `pi-lens` bridge convention (stable symbol, versioned,
+[contract.md](contract.md) §9. It follows the `pi-lens` shell API convention (stable symbol, versioned,
 first-wins frozen, new major = new key) and gentle-shell's schema-string plus shape gate.
 
 **History: a deferred-registration slot was removed.** An earlier revision of this decision added
@@ -204,30 +204,30 @@ a second `Symbol.for` slot holding initialisation callbacks, run at publish time
 `session_start`. It existed only to let a plugin register at module load — the one moment where
 "not yet" and "never" are indistinguishable — and `session_start` already fires after every module
 has loaded, so that path was redundant. Removing it also removed the only path that could defer a
-plugin silently: a newer plugin against an older bridge now sees "absent", which is the intended
+plugin silently: a newer plugin against an older shell API now sees "absent", which is the intended
 answer.
 
 The cost is real and accepted: every plugin repeats the same handful of lines — a symbol lookup
 and a shape gate — and copies them into its own file, because the whole point is that it cannot
-import the bridge. That boilerplate lasts until Pi ships a real cross-extension registry; on that
+import the shell API. That boilerplate lasts until Pi ships a real cross-extension registry; on that
 day the inline block in each plugin becomes one call and this decision is superseded, not extended.
 
 **F. Rejected: ask gentle-shell for a card-style registry.** A third style could be supported
 properly — `CARD_STYLE` gaining members, the style policy file accepting any registered id, the
 frame functions living in the host — by one upstream change. Rejected: this package exists
 precisely because gentle-shell does not take every change (the sidebar work landed here for the
-same reason). A design that waits for an upstream merge is not a bridge: it makes the feature's
+same reason). A design that waits for an upstream merge is not a shell API: it makes the feature's
 delivery depend on a different project's review queue, and it would fork the moment the host
 declined. `CARD_STYLE` stays a two-member union (`lib/shell-card.ts:33-38`), any unknown stored
 value normalizes to `float` (`:43-45`), and the host keeps its own `Card style` line exactly as it
-built it — the bridge only extends that line and repaints what the host already drew.
+built it — the shell API only extends that line and repaints what the host already drew.
 
-**G. Chosen: repaint the frames, opt-in, and degrade to native.** The bridge takes the `float`
+**G. Chosen: repaint the frames, opt-in, and degrade to native.** The shell API takes the `float`
 frame the host drew and re-renders it with the selected style's three functions, leaving every
 non-card row and every non-float card byte-identical. `native` is the default and the pass-through;
 selecting a host value (`neon`/`float`) is the way back; a style that throws is a pass-through for
 that frame and is reported; a disposed style resolves to `missing`, which behaves as `native`. The
-selection is bridge-owned state in the bridge's own file (`bridge-card-style.json`), not the host's
+selection is shell-API-owned state in the shell API's own file (`bridge-card-style.json`), not the host's
 `card-style.json`, for the same closed-key reason section visibility uses `bridge-sections.json`.
 Costs accepted and recorded: the repaint depends on the host's `float` grammar, and a downstream
 post-processor can override the frame (see [architecture.md](architecture.md) §14).
@@ -238,15 +238,15 @@ feature. A `pi.registerToolRenderer` resolver cannot apply a rendering choice to
 already drawn — it resolves when a row is BUILT — so that hook cannot serve a plugin that wants to
 restyle history. Rather than a second wrapper, the existing one became a pipeline: the card-style
 repaint runs first, then every transform registered with `registerTransform`, in order, each
-receiving the previous output. The bridge keeps what it already owed the frame — clip to the host's
+receiving the previous output. The shell API keeps what it already owed the frame — clip to the host's
 width, isolate a throw to the transform that made it, return the same array when nothing changed —
 and keeps the last frame's outcome per transform in the record. The alternative (a renderer
 resolver plus a transform, one for new rows and one for history) was rejected because it gives one
 plugin two different pictures of the same card, which is the defect the surface exists to remove.
 
-**I. Chosen: tool-design selections are bridge-owned, one value per tool and per line.** A
-`registerToolDesign` choice is made in a menu the bridge built, about a surface the bridge owns, so
-the bridge persists it in its own namespaced file,
+**I. Chosen: tool-design selections are shell-API-owned, one value per tool and per line.** A
+`registerToolDesign` choice is made in a menu the shell API built, about a surface the shell API owns, so
+the shell API persists it in its own namespaced file,
 `<gentle config home>/gentle-shell-bridge/bridge-tool-designs.json`, as
 `{ "schemaVersion": 1, "values": { "selections": { "<tool>": "<id>" } } }`. A design registered as
 part of a LINE keeps its value in the same document under the reserved `$lines` key
@@ -264,7 +264,7 @@ happens at registration, never in the render path.
 - Should `createStore` ship at all in the first release, or follow once a second plugin
   needs it? — **Settled during implementation: it ships.** Deferring would have been
   compatible with this decision; nothing in `registerRows` depends on the store.
-- Whether migrations beyond `schemaVersion: 1` belong in the bridge or in the plugin.
+- Whether migrations beyond `schemaVersion: 1` belong in the shell API or in the plugin.
 - Whether a plugin that keeps its own file should be able to *declare* that path to
   the record for diagnostics only. No read, no write — purely visibility.
 

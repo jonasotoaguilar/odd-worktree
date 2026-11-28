@@ -100,7 +100,7 @@ describe('each role scopes the index to its own job', () => {
 
   test('the orchestrator keeps one exemption and one projectPath rule, and no concrete example', () => {
     const text = prose('orchestrator');
-    assert.match(text, /The one exemption is an exact string or a file path the user already gave you/, text);
+    assert.match(text, /Read an exact file path, or search an exact string, directly/, text);
     assert.match(text, /Read a file before you edit it/, text);
     assert.match(text, /Set `projectPath` when the code you need is in another checkout — an ODD worktree, a sibling worktree, another git project/, text);
     assert.match(text, /never present one workspace's answer as another's/, text);
@@ -161,7 +161,7 @@ describe('each role scopes the index to its own job', () => {
   test('the generic text keeps the same criterion for a role with no text of its own', () => {
     const text = prose('generic');
     assert.match(text, /about to change code you have not read, tracing a flow or an error across files/, text);
-    assert.match(text, /The one exemption is an exact string or a file path you were given/, text);
+    assert.match(text, /Read an exact file path, or search an exact string, directly/, text);
     assert.match(text, /Read a file before you edit it/, text);
   });
 });

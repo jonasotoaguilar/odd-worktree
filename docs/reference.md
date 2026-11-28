@@ -2374,7 +2374,7 @@ works: indexing, sync and init belong to the package and never to the agent.
 
 The tool is support, never authority. The orchestrator names the situations it meets — changing code
 it has not read, tracing a bug or a flow across files, what an edit would reach, sizing or handing
-off — keeps one exemption and points `projectPath` at another checkout. Explore uses it in place of
+off — reads an exact path or searches an exact string directly, and points `projectPath` at another checkout. Explore uses it in place of
 the chain of greps for callers and reads what it points at, because the answer says where code lives,
 not what it does. Verify chooses probes with it, and the probe is what proves. Worker uses it for what
 the edit must keep working. Fix stays inside the finding's reach, in the checkout it is authorized to

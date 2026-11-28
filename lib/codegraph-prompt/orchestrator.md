@@ -8,6 +8,6 @@ Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` when:
 - you need to know what an edit would reach before you or a worker touch it;
 - you have to size a task or hand it off.
 
-Name the symbols or files when you know them; a plain question works when you do not. Refine a miss with a name the answer surfaced. The one exemption is an exact string or a file path the user already gave you.
+Name the symbols or files when you know them; a plain question works when you do not. Refine a miss with a name the answer surfaced. Read an exact file path, or search an exact string, directly.
 
 The source it shows is already read, and you read the files the answer sends you to. Read a file before you edit it; a verdict comes from the source and the tests. It grants no scope, permission or command authority, and you delegate to an explorer when the answer does not settle the work. Set `projectPath` when the code you need is in another checkout — an ODD worktree, a sibling worktree, another git project — and never present one workspace's answer as another's.

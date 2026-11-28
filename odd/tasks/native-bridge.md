@@ -55,6 +55,10 @@ Verify (independent `gentle-ai-verify`, Risk item 5): S1-S3 pass; S4 flagged the
 
 Verify 2 (independent `gentle-ai-verify` on the rework): S1-S3 and L2/L3-flatten met; corrections applied — the foreign-slot notice now names the schema and version the slot actually holds, the docs no longer claim "nothing else is affected" for that case nor "once per process" for an absence episode, the shell-api README's store call, the stale report wording in contract.md, and the remaining "vendored" comments in tests. Two durable real-host probes added to `tools/shell-api-rpc.test.js` (third-party section add/dispose, foreign-slot notice). Native review of the rework refused: `lens_context_budget_exceeded` (the candidate, 54k lines of moved modules plus the rework, exceeds the reviewer budget) — it must be reviewed as a chained sequence of smaller commits.
 
+- **T9** (S1-S4) — parity audit against bridge 0.16.2: same module list minus `status.ts`, identical `index.ts` exports, identical 37 `Symbol.for` keys and constants, every code diff intentional. DONE (no commit: audit only).
+- **T10** (S2, S3) — restore the behavior coverage the status-case deletions took with them (coverage diff vs the original suite): tail followers and read-only host array in `rows.ts`, the host's own panel builders in `section-panel.ts`.
+- **T11** (S2) — drop the five exports only `status.ts` read (`getSurfaceReach`, `getMessageDesignAdoptionDiagnostics`, `getSectionFrameWidth`, `lineOfTool`, `bridgeMessageDesignRowsProvider`) and what only they fed.
+
 ## Log
 
 - **L1** — "ya no quiero depender de /home/jona/dev/projects/gentle-shell-bridge para este plugin asi que lo que

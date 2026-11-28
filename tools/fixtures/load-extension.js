@@ -12,6 +12,10 @@ const { pathToFileURL } = require('node:url');
 // starts, so no suite may reach the developer's real Pi directories: every process that loads this
 // fixture gets scratch ones, removed when it exits. A suite that needs its own sets them itself.
 const scratchPi = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-fixture-pi-'));
+// The automatic index stays off in suites: a scratch checkout is a git repo, and a real `codegraph init` there would spawn
+// the CLI, delay the host's session start and speak into suites that assert silence. The suites that exercise the index
+// pass their own seams (tools/codegraph-index.test.js, tools/codegraph-session.test.js).
+process.env.ODD_WORKTREE_CODEGRAPH_INDEX = '0';
 process.env.PI_CODING_AGENT_DIR = path.join(scratchPi, 'agent');
 process.env.GENTLE_PI_CONFIG_HOME = path.join(scratchPi, 'gentle-ai');
 fs.mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });

@@ -2276,10 +2276,21 @@ reaching them.
 - **They judge the orchestrator, not a subagent child.** Creating a worktree and leaving the default
   branch are the primary session's actions (a child is handed the worktree it works in), so a session
   started as a child (`GENTLE_PI_AGENTS_CHILD=1`) is judged by neither this guard nor the `edit` and
+<<<<<<< HEAD
   `write` guard below. The skill-read guard still applies to every session that has `Skills+` on.
 - `ODD_WORKTREE_GUARD=0` turns the two worktree guards and the skill-read refusal off for the
   process, like `ODD_WORKTREE_PROMPT=0` for the prompt blocks. Neither is a switch you can turn back
   on from the panel: `Skills+` and `Worktrees+` decide first, and this only takes their guards away.
+||||||| parent of 7279844 (feat(codegraph): index any git checkout, not only one with a manifest)
+  `write` guard below. The skill-read guard still applies to every session.
+- `ODD_WORKTREE_GUARD=0` turns them off for the process, like `ODD_WORKTREE_PROMPT=0`
+  for the prompt blocks. No other value does, and nothing else configures them.
+=======
+  `write` guard below. The skill-read guard still applies to every session.
+- `ODD_WORKTREE_GUARD=0` turns them off for the process, like `ODD_WORKTREE_PROMPT=0`
+  for the prompt blocks and `ODD_WORKTREE_CODEGRAPH_INDEX=0` for the automatic index
+  below. No other value does, and nothing else configures them.
+>>>>>>> 7279844 (feat(codegraph): index any git checkout, not only one with a manifest)
 
 ### The `edit` and `write` guard
 
@@ -2499,35 +2510,20 @@ with its permission bits; the formatting is not preserved beyond its indentation
 invalid file is left untouched and reported. After a change Pi must be reloaded for the MCP
 tool to appear. A project-level MCP file is never edited.
 
-**Daemon.** The daemon is resolved per checkout from CodeGraph's own registry
-(`~/.codegraph/daemons`), a live one is reused before warming one through `codegraph serve
---mcp`, and a registered MCP entry is never taken as proof that a daemon is reachable. The
-package never stops a daemon it did not start.
+**Creating or syncing it.** A primary session's first `session_start` (not `/reload`, not a subagent
+child unless that child stands in its own linked worktree) prepares one index for its checkout, off the
+host's path, and a search that arrives while it runs joins it for at most five seconds. The decision is
+by path: an existing `.codegraph` is synced; a linked worktree with no index of its own is seeded from
+the main checkout's database and then synced; any other git checkout with no `.codegraph` is
+initialised with `codegraph init -y`; a directory that is not a git checkout is left alone. A manifest
+is not consulted — CodeGraph reads the code, so a repository of any language gets its index. A
+compaction requests a sync, never an init, and the read-only roles (verify and the judges) never start
+an index write.
 
-## The agents' `tools.json`
-
-A subagent child reaches an MCP tool only through its server name, so Gentle Shell's per-agent overlay
-`<config home>/tools.json` (`GENTLE_PI_CONFIG_HOME`, else `GENTLE_SHELL_CONFIG_HOME`, else `~/.pi/gentle-ai`)
-has to carry `mcp__codegraph` — never the tool's own name, which Pi drops from a child's tool list without
-a word. While `Codegraph+` is On and the CLI is installed, the six CodeGraph agents (`gentle-ai-explore`,
-`gentle-ai-verify`, `gentle-ai-worker`, `jd-fix-agent`, `jd-judge-a`, `jd-judge-b`) carry it in their `add` list:
-
-```json
-{ "gentle-ai-explore": { "add": ["mcp__codegraph"] } }
-```
-
-It is the second file this package writes for CodeGraph, and it only adds or removes that one name. Every
-other agent, tool name, `remove` list and key stays, the file's indentation and permission bits stay, a file
-that is already right is not rewritten, a missing file is created while `Codegraph+` is On (and never
-created to take something out of), and a file that is not valid JSON is left untouched and reported. An
-agent whose own `remove` list names `mcp__codegraph` keeps that decision. The write is atomic.
-
-It is checked twice. The `Codegraph+` line does it the moment the value is kept (together with the MCP
-entry above). And once per process, in a primary session's first `session_start`, the file is made to follow
-what is true now: `Codegraph+` On **and** the CLI installed adds the entry, anything else takes it out,
-including the older spelling `mcp__codegraph__codegraph_explore`. That check runs with the module Off too,
-because Off is when it has something to take out. It says one line only when it changed something or could
-not read the file, and a reload is needed for the agents to see the change.
+A search never waits longer than the join budget, and a queued, coalesced or failed run is never
+reported as synced: the notice says which of those happened. `ODD_WORKTREE_CODEGRAPH_INDEX=0` turns
+the automatic preparation off for the process — the guards, the prompt block and the rest stay on —
+which is what the suite uses so a scratch checkout never spawns the CLI.
 
 ## The CodeGraph card
 

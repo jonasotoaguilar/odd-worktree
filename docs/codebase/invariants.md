@@ -538,7 +538,8 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     (b) Session start (not `/reload`, not a subagent child, except a child in its own
     linked worktree) creates or syncs the session's index and warms its daemon; a
     linked worktree without an index is seeded from the main checkout's and never
-    shares it. (c) A compaction requests one sync, never an init. (d) After a
+    shares it. The decision is by path alone: an existing `.codegraph` is synced, any
+    other git checkout is initialised, and no manifest is consulted. (c) A compaction requests one sync, never an init. (d) After a
     successful native `codegraph init` the package requests one coordinated sync in
     the background and appends NOTHING to the tool result when it completes: the
     tool's own content is the whole answer. Only a sync that did not complete appends

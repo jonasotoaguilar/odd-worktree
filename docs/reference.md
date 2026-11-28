@@ -1251,7 +1251,10 @@ so the pane never looks like a file it is not showing.
 
 **The preview is bounded.** It is one `open`/`read` of at most 64 KiB, at most
 200 lines and at most 400 columns per line, so no file can stall a paint: a file
-the read cut short ends with `… preview truncated.`, and a binary file paints
+whose read hit the byte or the line budget ends with a dim `… preview truncated.`
+and its `line/total` carries a `+`, while a line wider than 400 columns is only
+clipped to fit, keeping its own trailing `…`, and never marks the preview
+truncated — a file read whole reads `5/5`, not `5/5+`. A binary file paints
 `Binary file — preview not available.` instead of its bytes. The pane sits in its
 own rounded box, with the top visible line as `line/total` on that box's top
 border and a dim gutter numbering each line once; a line wider than the pane

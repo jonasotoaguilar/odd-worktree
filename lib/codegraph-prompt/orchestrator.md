@@ -1,6 +1,6 @@
 ## CodeGraph
 
-`mcp__codegraph__codegraph_explore` returns, in one call, the source verbatim with line numbers, what depends on the symbols you name, and the tests that cover them. The blocks it shows count as a Read of those files.
+`mcp__codegraph__codegraph_explore` returns, in one call, the source verbatim with line numbers, what depends on the symbols you name, and the tests that cover them. The blocks it shows count as a Read.
 
 Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` when:
 - you are about to change code you have not read;

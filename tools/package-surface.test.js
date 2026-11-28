@@ -224,8 +224,8 @@ describe('registration', () => {
     const lines = source.split('\n').map((line) => line.trim());
     assert.deepEqual(
       lines.filter((line) => line.includes('registerFileCard(')),
-      ['libRequire("file-card-resolver.js").registerFileCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });'],
-      'the file card is wired through exactly one call',
+      ['libRequire("file-card-resolver.js").registerFileCard(pi, { metrics: () => resolveWorktreeToolCardMetrics(), agent: diffDesignSeamFacade() });'],
+      'the file card is wired through exactly one call, with the one highlighter seam `/files` uses',
     );
     assert.equal(source.includes('registerCardsCustomize'), false, 'and no switch provider is wired at all');
     const { commands, tools } = await loadExtension({});

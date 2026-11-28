@@ -12720,13 +12720,17 @@ function registerOddWorktreeSurfaceEntries(pi) {
   }
   // S1 (T2): the file cards, through the same host hook. A `read`/`edit`/`write` call whose
   // path names a skill or an ODD artifact heads as that file while the shell API's `Card activity`
-  // line answers with this package's activity design; every other call keeps the host's own
-  // boxed row, which the card reproduces because the hook decides per tool name and never
-  // sees the arguments. No preference of ours is registered: the gate is the shell API's own
-  // published reader, asked on every paint. A host without `pi.registerToolRenderer`
-  // registers nothing and keeps drawing them itself.
+  // line answers with this package's activity design. A `read` of any OTHER path is this card's too,
+  // while the shell API's `Card file` line answers with the `color` design — that line does not claim
+  // `read`, it supplies that read's selection, so one read is still drawn once. Every other call
+  // keeps the host's own boxed row, which the card reproduces because the hook decides per tool name
+  // and never sees the arguments. No preference of ours is registered: the gates are the shell API's
+  // own published reader, asked on every paint. `agent` is the same Pi highlighter and language
+  // mapper facade `/files` and the `Card file` pane read, so a read is syntax-highlighted by the very
+  // seam the write pane uses; without it that body is drawn plain, never not at all. A host without
+  // `pi.registerToolRenderer` registers nothing and keeps drawing them itself.
   try {
-    libRequire("file-card-resolver.js").registerFileCard(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
+    libRequire("file-card-resolver.js").registerFileCard(pi, { metrics: () => resolveWorktreeToolCardMetrics(), agent: diffDesignSeamFacade() });
   } catch {
     // The card is cosmetic.
   }

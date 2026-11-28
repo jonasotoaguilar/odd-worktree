@@ -27,8 +27,11 @@ const {
 const { createFileCardResolver, registerFileCard } = require('../lib/file-card-resolver.js');
 // The design this package registers on the shell API's `Card activity` line: the card's one
 // switch is that line's answer for the tool being drawn, so the card is only painted
-// for a tool the line actually covers.
-const { toolsActivityDesign } = require('../lib/bash-design.js');
+// for a tool the line actually covers. Its `apply` is the row pass the shell API runs around
+// every painted call, which is what the one-drawer case composes with the card.
+const { applyBashActivityHeading, toolsActivityDesign } = require('../lib/bash-design.js');
+// The classifier itself, so the two-line fake below resolves exactly as the shell API does.
+const { fileCardIdentity } = require('../lib/skill-odd-card.js');
 const { CARD_CONTENT_SLOT } = require('../lib/card-content.js');
 const { CARD_STYLE, CARD_STYLE_SLOT } = require('../lib/card-style.js');
 
@@ -1514,6 +1517,325 @@ test('registerFileCard wires the Pi host in, and a host without the hook loses n
   const hostile = registerFileCard({ registerToolRenderer: () => { throw new Error('no'); } }, { metrics, theme: plainTheme });
   assert.equal(hostile.registered, false);
   assert.equal(registerFileCard({ registerToolRenderer: () => {} }, {}).registered, false);
+});
+
+// ---- T2 (S1/S2/S3/S4/S6): a READ outside skills and ODD, drawn through the `Card file` line ----
+//
+// The `Card file` line does not claim `read` (`Card activity` holds that tool). It supplies the
+// SELECTION for a read whose path names no skill and no ODD artifact, and the file card asks the
+// shell API's own reader for it on every paint; the design itself is never asked to transform a
+// read, which is what keeps one read drawn exactly once.
+const READ_ARGS = { path: 'src/app.js', offset: 4, limit: 3 };
+
+/**
+ * The shell API's own resolution, reduced to the two lines this package registers: `read` is
+ * `Card activity`'s (unscoped), `write` and `edit` are `Card file`'s (unscoped), with the file card's
+ * scope tried first for a skill or an ODD path. ONE stored value per line, as the shell API keeps it,
+ * so a line's answer for one of its tools is its answer for all of them.
+ */
+function twoLineShellApi(values, asked) {
+  const answer = (line) => (values[line] === 'native' ? NATIVE : { kind: 'design', design: { id: values[line] } });
+  return {
+    schema: 'odd-worktree/shell-api',
+    version: 1,
+    VERSION: '0.9.0',
+    registerToolDesign: () => () => {},
+    resolveToolDesignSelection(tool, args) {
+      if (asked !== undefined) asked.push([tool, args]);
+      const path = args !== null && typeof args === 'object' ? args.path : undefined;
+      if (tool !== 'write' && tool !== 'edit') return answer('activity');
+      return fileCardIdentity(path) === undefined ? answer('file') : answer('activity');
+    },
+  };
+}
+
+const fileDesignOn = () => ({ activity: 'odd-worktree.bash-activity', file: 'odd-worktree.file' });
+
+/**
+ * A theme that paints REAL, zero-width escapes and records every `(role, text)` it was asked for, so a
+ * case can read which role painted what while the measurement seam still sees the host's own widths.
+ */
+function rolesTheme() {
+  const asked = [];
+  return {
+    asked,
+    fg(role, value) {
+      asked.push([role, value]);
+      return value === '' ? '' : `\u001b[36m${value}\u001b[39m`;
+    },
+  };
+}
+
+function publishLines(values, asked) {
+  const api = twoLineShellApi(values, asked);
+  globalThis[SHELL_API_SLOT] = api;
+  return api;
+}
+
+/** The seam `extensions/odd-worktree-tools.ts` hands the card: Pi's highlighter and language mapper. */
+function agentSeam(language = 'javascript') {
+  const asked = [];
+  return {
+    asked,
+    agent: {
+      highlight(code, painted) {
+        asked.push([code, painted]);
+        if (painted === undefined) return undefined;
+        return code.split('\n').map((line) => (line === '' ? '' : `\u001b[36m${line}\u001b[39m`));
+      },
+      languageForPath: () => language,
+    },
+  };
+}
+
+test('S1: a plain read is this card\'s while `Card file` is `color`, headed by the tool and its range', () => {
+  publishLines(fileDesignOn());
+  const resolver = fileResolver();
+  const rows = callRows(resolver, 'read', { path: 'src/app.js', offset: 10, limit: 4 }, plainTheme);
+  assert.equal(rows.length, 1, 'one heading row, the identity heading\'s own layout');
+  const text = unpaint(rows[0]);
+  assert.match(text, /^╭─ ✿ read · src\/app\.js:10-13 /u, `the tool and the range it asked for: ${text}`);
+  assert.equal(/skill|odd/u.test(text), false, `no identity is claimed: ${text}`);
+  assert.equal(text.includes('▤'), false, 'and no identity mark either');
+  assertFramed(rows, 60);
+
+  // A read with no range states none, exactly as an identity read does.
+  assert.match(unpaint(callRow(resolver, 'read', { path: 'src/app.js' }, plainTheme)), /^╭─ ✿ read · src\/app\.js /u);
+
+  // The whole path is stated while collapsed too: there is no identity name to shorten to.
+  const long = 'a/very/deep/folder/that/goes/on/and/on/src/app.js';
+  assert.match(unpaint(callRow(resolver, 'read', { path: long }, plainTheme)), /a\/very\/deep\/folder/u);
+});
+
+test('S3/S6: the read body is the write pane\'s — the `N │` gutter, the host\'s highlight, an ellipsis clip', () => {
+  publishLines(fileDesignOn());
+  const { agent, asked } = agentSeam();
+  const resolver = fileResolver({ agent });
+  const args = { path: 'src/app.js', offset: 4, limit: 3 };
+  const source = ['const a = 1;', 'const b = 2;', 'y'.repeat(80)].join('\n');
+  const rows = resultRows(resolver, 'read', args, textResult(source), { expanded: true, isPartial: false }, plainTheme, 40);
+  const body = rows.slice(0, -1).map(bodyText);
+  // `offset` IS the first line the call asked for — the same reading the heading states as `:4-6` —
+  // so the body numbers 4, 5, 6, behind the SAME gutter the write pane draws.
+  assert.deepEqual(body.slice(0, 2), [' 4 │ const a = 1;', ' 5 │ const b = 2;'], `the gutter of the pane: ${JSON.stringify(body)}`);
+  assert.match(body[2], /^ 6 │ y+\.\.\.|^ 6 │ y+…$/u, `a long line is clipped with an ellipsis: ${body[2]}`);
+  assert.equal(body[2].endsWith('…'), true, 'the clip is the pane\'s own `…`');
+  assert.equal(asked.length > 0, true, 'the host\'s highlighter was asked');
+  assert.equal(asked[0][1], 'javascript', 'with the language the path names');
+  assert.equal(rows.slice(0, -1).join('\n').includes('\u001b[36mconst a = 1;\u001b[39m'), true, 'and its paint is placed, not repainted');
+  for (const row of rows) assert.equal(metrics.visibleWidth(row), 40, `"${row}" overflows the width the host asked for`);
+  assert.match(unpaint(rows.at(-1)), /^╰/u, 'the card closes itself');
+
+  // The shell's other style draws the same card in its own chrome: the rail, the same gutter.
+  globalThis[CARD_STYLE_SLOT] = CARD_STYLE.FLOAT;
+  try {
+    const floated = resultRows(resolver, 'read', args, textResult(source), { expanded: true, isPartial: false }, bandTheme, 40);
+    assert.match(unpaint(floated[1]), /^ ▎ + 4 │ const a = 1;/u, `the float rail in front of the same gutter: ${unpaint(floated[1])}`);
+    for (const row of floated) assert.equal(metrics.visibleWidth(row), 40, `"${row}" overflows the float width`);
+  } finally {
+    globalThis[CARD_STYLE_SLOT] = CARD_STYLE.NEON;
+  }
+
+  // Collapsed, the pane keeps the budget the card has always had for a read: three rows.
+  const collapsed = resultRows(resolver, 'read', args, textResult(source), { isPartial: false }, plainTheme, 40);
+  assert.equal(collapsed.length, PREVIEW_ROWS + 1, 'three preview rows and the closing rule');
+  assert.deepEqual(collapsed.slice(0, -1).map(bodyText), body.slice(0, PREVIEW_ROWS), 'and they are the pane\'s first rows');
+
+  // `minimal` withholds the body, exactly as it does for every other read.
+  globalThis[CARD_CONTENT_SLOT] = 'minimal';
+  try {
+    const minimal = resultRows(resolver, 'read', args, textResult(source), { isPartial: false }, plainTheme, 40);
+    assert.equal(minimal.length, 1, 'the closing rule alone');
+    assert.match(unpaint(minimal[0]), /^╰/u);
+  } finally {
+    delete globalThis[CARD_CONTENT_SLOT];
+  }
+});
+
+test('S3: outside skills and ODD a Markdown file is just a language, never a document', () => {
+  publishLines(fileDesignOn());
+  // A renderer that would be ASKED if a Markdown document were drawn at all.
+  let consulted = 0;
+  class CountingMarkdown {
+    constructor() { consulted += 1; }
+    render() { return ['a Markdown row no read should ever draw']; }
+    invalidate() {}
+  }
+  const theme = rolesTheme();
+  const resolver = fileResolver({ markdownClass: CountingMarkdown });
+  const rows = resultRows(resolver, 'read', { path: 'docs/notes.md' }, textResult('# Design\n\n- one'), { expanded: true, isPartial: false }, theme, 60);
+  assert.equal(consulted, 0, 'no Markdown renderer is opened for a plain read');
+  assert.deepEqual(
+    rows.slice(0, -1).map((row) => unpaint(row).replace(/^│ /u, '').replace(/ +│$/u, '').trimEnd()),
+    [' 1 │ # Design', ' 2 │', ' 3 │ - one'],
+    'the file\'s own lines, behind the pane\'s gutter',
+  );
+  // The card's frame wears the title role; the BODY wears the pane's own roles and no Markdown one.
+  assert.deepEqual([...new Set(theme.asked.map(([role]) => role))].sort(), ['dim', 'mdHeading', 'muted', 'text'], 'the pane\'s roles and the card frame, and no Markdown element');
+});
+
+test('S6: a seam that cannot highlight draws the same pane in plain text, and never throws', () => {
+  publishLines(fileDesignOn());
+  const cases = [
+    ['no seam', undefined],
+    ['a seam that throws', { highlight: () => { throw new Error('no grammar'); }, languageForPath: () => { throw new Error('no path'); } }],
+    ['a seam of the wrong shape', { highlight: 'nope', languageForPath: 42 }],
+    ['a paint that changes the text', { highlight: () => ['something else'], languageForPath: () => 'javascript' }],
+  ];
+  for (const [label, agent] of cases) {
+    const theme = rolesTheme();
+    let rows;
+    assert.doesNotThrow(() => {
+      rows = resultRows(fileResolver({ agent }), 'read', { path: 'src/app.js' }, textResult('const a = 1;'), { isPartial: false }, theme, 60);
+    }, label);
+    assert.deepEqual(
+      rows.slice(0, -1).map((row) => unpaint(row).replace(/^│ /u, '').replace(/ +│$/u, '')),
+      [' 1 │ const a = 1;'],
+      `${label}: the pane\'s gutter, in plain text`,
+    );
+    assert.deepEqual(theme.asked.filter(([role]) => role === 'text'), [['text', 'const a = 1;']], `${label}: the code in the body role`);
+  }
+});
+
+test('S2: any other answer to the `Card file` line leaves a plain read exactly the host\'s rows', () => {
+  const draw = () => {
+    const resolver = fileResolver();
+    return {
+      call: resolver('read', () => HOST).renderCall(READ_ARGS, plainTheme, { isPartial: false }).render(60),
+      result: resolver('read', () => HOST).renderResult(textResult('const a = 1;'), { isPartial: false }, plainTheme, { args: READ_ARGS }).render(60),
+    };
+  };
+  // No shell API at all: the row is the one Pi draws, box and padding included.
+  delete globalThis[SHELL_API_SLOT];
+  const baseline = draw();
+  assert.deepEqual(forwardedText(baseline.call), ['host read call'], 'the chain\'s own call');
+  assert.deepEqual(forwardedText(baseline.result), ['host read result'], 'and its own result');
+  const cases = [
+    ['native', { activity: 'odd-worktree.bash-activity', file: 'native' }],
+    ['missing', { activity: 'odd-worktree.bash-activity', file: 'gone.design' }],
+    ['another design', { activity: 'odd-worktree.bash-activity', file: 'someone-else.file' }],
+  ];
+  for (const [label, values] of cases) {
+    publishLines(values);
+    assert.deepEqual(draw(), baseline, `${label}: the host\'s rows, byte for byte`);
+  }
+  // A reader that throws, and a shell API older than the reader: neither may draw a card nobody
+  // switched on, and neither may throw.
+  globalThis[SHELL_API_SLOT] = { ...twoLineShellApi(fileDesignOn()), resolveToolDesignSelection: () => { throw new Error('boom'); } };
+  assert.deepEqual(draw(), baseline, 'a reader that throws keeps the host row');
+  globalThis[SHELL_API_SLOT] = { schema: 'odd-worktree/shell-api', version: 1, VERSION: '0.6.0' };
+  assert.deepEqual(draw(), baseline, 'a shell API with no reader keeps the host row');
+  globalThis[SHELL_API_SLOT] = { schema: 'someone-else/api', version: 1, resolveToolDesignSelection: () => ({ kind: 'design', design: { id: 'odd-worktree.file' } }) };
+  assert.deepEqual(draw(), baseline, 'a foreign object on the slot is no shell API');
+});
+
+test('S2: the forwarded plain read is the very array the chain drew', () => {
+  publishLines({ activity: 'odd-worktree.bash-activity', file: 'native' });
+  const hostRows = Object.freeze(['host self row']);
+  const SELF = {
+    renderShell: 'self',
+    renderCall: () => ({ render: () => hostRows, invalidate() {} }),
+    renderResult: () => ({ render: () => hostRows, invalidate() {} }),
+  };
+  const resolver = fileResolver();
+  assert.equal(
+    resolver('read', () => SELF).renderCall(READ_ARGS, plainTheme, { isPartial: false }).render(60),
+    hostRows,
+    'a renderer that frames itself is handed back as the same array',
+  );
+  assert.equal(
+    resolver('read', () => SELF).renderResult(textResult('code'), { isPartial: false }, plainTheme, { args: READ_ARGS }).render(60),
+    hostRows,
+  );
+});
+
+test('S2: a skill or an ODD read is unchanged in both selection states', () => {
+  // `Card file` owns no identity read: with the activity line on, the file card draws the identity
+  // exactly as it always did; with it on `default`, the host's rows come back unchanged.
+  publishLines({ activity: 'odd-worktree.bash-activity', file: 'gray' });
+  const resolver = fileResolver();
+  const drawn = {
+    call: callRows(resolver, 'read', { path: ODD }, plainTheme).map(unpaint),
+    result: resultRows(resolver, 'read', { path: ODD }, textResult('# Design'), { isPartial: false }, plainTheme),
+  };
+  assert.match(drawn.call[0], /📑 odd/u, 'the identity card, as before');
+  publishLines(fileDesignOn());
+  assert.deepEqual(
+    {
+      call: callRows(resolver, 'read', { path: ODD }, plainTheme).map(unpaint),
+      result: resultRows(resolver, 'read', { path: ODD }, textResult('# Design'), { isPartial: false }, plainTheme),
+    },
+    drawn,
+    'the file line\'s value changes nothing for an identity read',
+  );
+  publishLines({ activity: 'native', file: 'odd-worktree.file' });
+  assert.deepEqual(forwardedText(callRows(resolver, 'read', { path: ODD }, plainTheme)), ['host read call'], 'and the activity line still owns it');
+  const body = resultRows(resolver, 'read', { path: SKILL }, textResult('# Design'), { isPartial: false }, plainTheme);
+  assert.deepEqual(forwardedText(body), ['host read result'], 'the result half too');
+
+  // The identity heading is still the classifier's, never the generic one.
+  assert.equal(fileCardHeading('read', { path: ODD }, false).identity, 'odd');
+  assert.equal(fileCardHeading('read', { path: 'src/app.js' }, false), undefined, 'a plain read has no identity heading');
+});
+
+test('S1: a write and an edit of a plain path are still the chain\'s rows, whichever line is on', () => {
+  const draw = () => {
+    const resolver = fileResolver();
+    const args = { path: 'src/app.js', content: 'const a = 1;' };
+    return {
+      write: resolver('write', () => HOST).renderCall(args, plainTheme, { isPartial: false }).render(60),
+      edit: resolver('edit', () => HOST_EDIT).renderCall({ path: 'src/app.js', oldText: 'a', newText: 'b' }, plainTheme, { isPartial: false }).render(60),
+    };
+  };
+  publishLines({ activity: 'odd-worktree.bash-activity', file: 'native' });
+  const baseline = draw();
+  publishLines(fileDesignOn());
+  assert.deepEqual(draw(), baseline, 'the file card draws a plain write or edit never');
+});
+
+test('S1/S2: with both lines on, each read is drawn exactly ONCE', () => {
+  // The composition this case models: the FILE CARD is the inner renderer — it wraps the host's own
+  // rows — and the shell API's design wrapper is the OUTER one, running the line's design over
+  // whatever the inner chain drew (`Card activity` → `odd-worktree.bash-activity` for `read`).
+  // The other load order holds for the same reason: `Card file` does NOT claim `read`, so no design
+  // of this package is ever asked to transform one — the activity design answers a read unchanged
+  // (and its own scope keeps skill and ODD paths out of every design but this card's).
+  publishLines(fileDesignOn());
+  const resolver = fileResolver();
+  const wrapped = (rows, part, args) => applyBashActivityHeading(rows, {
+    tool: 'read',
+    part,
+    width: 60,
+    theme: plainTheme,
+    render: { args, expanded: false, isPartial: false },
+  });
+
+  // A skill's read: one heading, one body, whatever the outer wrapper does to it.
+  const skillArgs = { path: ODD };
+  const skillCall = callRows(resolver, 'read', skillArgs, plainTheme);
+  const skillResult = resultRows(resolver, 'read', skillArgs, textResult('# Design'), { isPartial: false }, plainTheme);
+  assert.deepEqual(wrapped(skillCall, 'call', skillArgs), skillCall, 'the activity design adds no heading of its own');
+  assert.deepEqual(wrapped(skillResult, 'result', skillArgs), skillResult, 'and no body of its own');
+  assert.equal(skillCall.filter((row) => /📑 odd/u.test(unpaint(row))).length, 1, 'one heading, never two');
+  assert.equal(skillResult.filter((row) => /^│ /u.test(unpaint(row))).length, 1, 'one body row, never two');
+
+  // A plain read: one heading and one gutter column, drawn by the file card alone.
+  const plainArgs = { path: 'src/app.js', offset: 1, limit: 2 };
+  const plainCall = callRows(resolver, 'read', plainArgs, plainTheme);
+  const plainResult = resultRows(resolver, 'read', plainArgs, textResult('const a = 1;\nconst b = 2;'), { isPartial: false }, plainTheme);
+  assert.deepEqual(wrapped(plainCall, 'call', plainArgs), plainCall, 'the activity design leaves a plain read alone');
+  assert.deepEqual(wrapped(plainResult, 'result', plainArgs), plainResult);
+  assert.equal(plainCall.filter((row) => /✿ read/u.test(unpaint(row))).length, 1, 'one heading, never two');
+  const gutters = plainResult.filter((row) => /^│ +\d+ │ /u.test(unpaint(row)));
+  assert.equal(gutters.length, 2, 'one gutter per line, and only the card\'s own');
+  assert.equal(plainResult.filter((row) => /^│ /u.test(unpaint(row))).length, 2, 'no row is drawn twice');
+
+  // And the gate itself is asked once per paint, with the call's own arguments.
+  const asked = [];
+  publishLines(fileDesignOn(), asked);
+  callRows(resolver, 'read', plainArgs, plainTheme);
+  resultRows(resolver, 'read', plainArgs, textResult('const a = 1;'), { isPartial: false }, plainTheme);
+  assert.deepEqual(asked.map(([tool]) => tool), ['write', 'write'], 'the line\'s own tool is asked for its value');
 });
 
 // ---- purity ----

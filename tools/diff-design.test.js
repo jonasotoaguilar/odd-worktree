@@ -99,6 +99,19 @@ describe('the Card file line (S2/S5)', () => {
     assert.equal(typeof design.preview, 'function');
   });
 
+  test('it does not claim `read`, and a read comes back unchanged (T2/S2)', () => {
+    const design = diffColorDesign(seamFor().seam);
+    assert.equal(design.tools.includes('read'), false, '`read` belongs to the file card, never to this line');
+    // The file card supplies a plain read's selection from this line; the line itself never paints
+    // one, whatever the shell API hands it — that is what keeps a read drawn exactly once.
+    const rows = ['╭─ ✿ read · src/app.js:5-6 ──────────╮', '│  5 │ const a = 1;                  │', '╰───────────────────────────────────╯'];
+    for (const part of ['call', 'result']) {
+      const out = design.apply(rows, { tool: 'read', part, width: WIDTH, theme, render: { args: { path: 'src/app.js', offset: 4, limit: 2 } } });
+      assert.deepEqual(out, rows, `${part}: the rows it was handed`);
+      assert.notEqual(out, rows, `${part}: a fresh array, never the caller's`);
+    }
+  });
+
   test('the row the shell API builds is `Card file`, and the preview is titled after it', () => {
     const design = diffColorDesign(seamFor().seam);
     // The shell API derives the row from the line key itself (`Card <line>`); this pins the name

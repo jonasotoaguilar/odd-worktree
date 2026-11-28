@@ -1632,9 +1632,11 @@ host would have drawn it: inside the host's box — `Box(outputPad, 1, bgFn)`,
 one below the result, in `toolPendingBg` while the call streams, `toolErrorBg`
 once its result failed and `toolSuccessBg` otherwise — for a row of a renderer
 whose own shell is the default (`read`, `write`), and untouched, with no box, no
-padding and no background, for one that frames itself (Pi's `edit`). A path that
-names neither identity is that same forwarded row, so an ordinary file call looks
-exactly as it did before the card existed.
+padding and no background, for one that frames itself (Pi's `edit`). A `write` or an
+`edit` whose path names neither identity is that same forwarded row, and so is a `read`
+while `Card file` answers anything but `color`, so an ordinary file call looks exactly as it
+did before the card existed. A `read` while `Card file` IS `color` is the one exception, and it
+is drawn as [a read outside skills and ODD](#a-read-outside-skills-and-odd) further down.
 
 ## The jobs card
 
@@ -1937,6 +1939,9 @@ The host's folded budget and its `… +N lines` fold row are kept, and `ctx.rend
 shows all of it. A host whose rows carry no frame gets the whole pane on the call half, with
 the host's own hint row kept after the fold row — and never a hint the host did not draw. An
 error result, and a body the host draws empty, stay the host's rows.
+* A `read` of a path that is NOT a skill and NOT an ODD artifact is drawn by the FILE CARD, never
+by this design: the design does not claim `read` at all (`Card activity` holds that tool), it
+supplies that read's SELECTION. See [the plain read](#a-read-outside-skills-and-odd) below.
 * An `edit` is drawn from the diff the host already carries, like `git diff` in the theme's own
 roles: a row the call DELETED is painted whole in `toolDiffRemoved` and a row it ADDED whole in
 `toolDiffAdded` — marker, line number, divider and code — so a changed row carries no syntax colour
@@ -1967,6 +1972,39 @@ halves and for both tools: those rows belong to the file card, and the `Card act
 exactly those calls through its scope, so the specific claim wins and the two designs can never
 paint the same call. Choosing `default` keeps the host's own card for both tools and leaves
 every other surface exactly as it was.
+
+### A read outside skills and ODD
+
+A `read` whose path names neither a skill nor an ODD artifact is drawn by the FILE CARD
+(`lib/file-card.js`), in the same layout as the other two: the `N │ code` gutter with the rule in
+`dim`, the code in the theme's syntax roles, and a long line cut with `…`. It is built from the
+rows the tool READ, with the very builders the `write` pane uses (`contentLines`, `codeRow`,
+`highlightLines`, `languageOf` in `lib/diff-design.js`), so the three tools cannot drift apart.
+
+* **Who draws it.** `Card file` — this line — supplies the SELECTION; the design claims no `read`
+at all. The card asks the shell API's own reader on every paint and draws only while the answer
+names this package's design (`odd-worktree.file`): `default`, another design, a value naming a
+design that is gone, no shell API, a shell API older than the reader, a foreign object on the slot
+and a reader that throws all leave Pi's own rows exactly as they were. That is also what keeps one
+read drawn ONCE: `Card activity`'s design answers a read unchanged, and this line never paints one.
+* **The heading** is the tool and the line range the call asked for
+(`✿ read · src/app.js:10-13` for `offset: 10, limit: 4`), in the card's own cell layout, with no
+`▤ skill`, no `📑 odd` and no mark claiming one — the path is stated whole, collapsed or expanded,
+because there is no identity name to shorten to. The range is the one an identity read states
+(`fileCardLineRange`), so a malformed one names nothing.
+* **The body** is source code, numbered from `offset + 1` (the lines the call skipped are not the
+first line it read), or from line 1 when the call asked for no offset. Collapsed it is the first
+THREE rows — the card's own read budget, not the write pane's ten — and `ctrl+o` draws the whole
+file; `minimal` withholds the body exactly as it does for every other read. The columns are
+measured and clipped as plain text and painted afterwards (invariant 17), so an ellipsis never
+cuts through an escape.
+* **The language is the path's, never a document.** `agent.getLanguageFromPath(path)` decides and
+`agent.highlightCode(code, language)` paints; that is the same `/files` seam, handed to the card at
+registration. A `.md` file outside `skills/` and `odd/` is therefore just a language like any
+other — no Markdown renderer is opened for it, and no Markdown element is drawn. With no seam, or
+one that throws, or a paint that does not hand back the very text it was given, the same pane is
+drawn in the theme's `text` role: plain, never absent. A width too narrow to hold the gutter
+falls back to the card's wrapped plain body instead of a broken layout.
 
 The line needs shell API `0.9.0`, the release that introduced the per-`(line, tool)`
 claim: on an older shell API, or one whose release string cannot be read, NOTHING is registered

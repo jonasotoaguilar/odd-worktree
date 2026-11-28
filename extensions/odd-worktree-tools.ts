@@ -7013,9 +7013,50 @@ function oddReloadSuperseded() {
 // S21 (T4): the listing that ranks ONE checkout's own documents belongs to main's
 // group — the list the panel actually draws. Without this the ranked answer and
 // `r` would refresh a listing nobody sees.
+//
+// odd-dedupe T3 (S3): that listing is a FRESH read of main's checkout, so it can
+// name a document the grouped model no longer holds — a worktree's newer copy won
+// the election and main's own copy was dropped. The merge therefore never copies the
+// listing in: it walks the rank in order and keeps, for each ranked NAME main's group
+// still holds, the group's OWN elected document (its `docPath` and `mtimeMs` are the
+// model's), carrying the ranked entry's `order` when it has one; a ranked name main's
+// group no longer holds is skipped, so the election is never undone; and an elected
+// document the ranking did not name is appended in group order, so a listing that is
+// short never hides a row. A group that is not main is returned untouched.
 function oddGroupsWithRankedMain(groups, docs) {
   if (!Array.isArray(groups) || !Array.isArray(docs)) return groups;
-  return groups.map((group) => (group && group.isMain === true ? { ...group, docs: docs.slice() } : group));
+  return groups.map((group) => (group && group.isMain === true
+    ? { ...group, docs: oddElectedMainDocs(group, docs) }
+    : group));
+}
+
+// T3's merge: main's group's own elected copies, in the rank. Only the ORDER and
+// each ranked name's `order` come from the listing; what is drawn is the model's
+// document, so a row the election dropped can never re-enter here.
+function oddElectedMainDocs(group, ranked) {
+  const kept = Array.isArray(group.docs) ? group.docs : [];
+  const byName = new Map();
+  for (const doc of kept) {
+    if (!doc || typeof doc !== "object") continue;
+    if (typeof doc.name !== "string" || doc.name.length === 0) continue;
+    if (!byName.has(doc.name)) byName.set(doc.name, doc);
+  }
+  const merged = [];
+  const placed = new Set();
+  for (const entry of ranked) {
+    const name = entry && typeof entry.name === "string" ? entry.name : "";
+    const doc = name.length === 0 ? undefined : byName.get(name);
+    if (doc === undefined || placed.has(doc)) continue;
+    placed.add(doc);
+    const order = entry.order;
+    merged.push(typeof order === "number" && Number.isFinite(order) ? { ...doc, order } : doc);
+  }
+  for (const doc of kept) {
+    if (placed.has(doc)) continue;
+    placed.add(doc);
+    merged.push(doc);
+  }
+  return merged;
 }
 
 // S10/S12 (T10): MAIN's own checkout, read off the group that says it is main. The

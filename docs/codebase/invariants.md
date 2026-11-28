@@ -919,10 +919,19 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     clock captured once at its first paint, else no subtitle at all — and the body
     Pi's own Markdown clone with the
     user-message background dropped and its painted rows placed, never repainted).
+    The ONE stated exception to "never touching the host's text": the ` ❯ ` mark an
+    extension markdown transformer prepends to a user message (pi-pretty's
+    ` ❯ ${markdown}`) is dropped, because the card's Markdown clone wraps the host's
+    composed `transform` and consumes exactly ONE leading ` ❯ ` from its answer — the
+    component's own `text` is never rewritten, a person who typed `❯` at the start of
+    their own prompt keeps their own character (their run arrives after the
+    decoration), and a prompt no transformer decorated is drawn byte for byte as
+    before, so the body re-wraps at the frame's full inner width instead of hanging
+    below a mark nothing indents.
     A successful install asks the API for ONE `requestRepaint` (a differential
     frame) so a transcript restored before the deferred host import resolves comes
     back as cards instead of waiting for unrelated input; a refused install, a
-    closed session and a bridge without that member request nothing.
+    closed session and an API without that member request nothing.
     It adds NO row, command, setting or design of its own, so the surface invariant 3
     lists is unchanged by it. The gate is `Card activity` answering this package's
     `activity` design, asked INSIDE the patched `render` on every paint and never cached, which

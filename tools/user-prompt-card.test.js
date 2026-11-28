@@ -169,8 +169,13 @@ class StubMarkdown {
     if (this.text === 'THROW') throw new Error('the renderer blew up');
     if (this.text === 'NOT_ROWS') return 'not rows';
     if (this.text === 'EMPTY_BODY') return [];
+    // Pi's Markdown hands the host's composed `transform` the WHOLE text and the content width
+    // before it parses anything (`markdown.js`: `this.options.transform?.(this.text, contentWidth)`),
+    // so a stub that ignored it could never show what an extension transformer does to a prompt.
+    const contentWidth = Math.max(1, width - this.paddingX * 2);
+    const transformed = this.options?.transform?.(String(this.text), contentWidth) ?? this.text;
     // Rows the renderer already painted: the card must PLACE them, never repaint them.
-    const lines = String(this.text).split('\n').map((line) => `\x1b[${this.code}m${line}\x1b[39m`);
+    const lines = String(transformed).split('\n').map((line) => `\x1b[${this.code}m${line}\x1b[39m`);
     // Pi's Markdown pads its content with `paddingY` blank rows above and below
     // (`emptyLines.concat(contentLines, emptyLines)`), and the stub models that: a clone that
     // keeps the host's padding costs the terminal two rows per prompt.
@@ -523,6 +528,72 @@ test('the body rows are the child\'s own Markdown rebuilt with no background and
   assert.equal(clone.options, original.options, 'the host\'s own options, so markers and transformers keep working');
   assert.equal(clone.defaultTextStyle.bgColor, undefined, 'the user message background is dropped');
   assert.equal(typeof clone.defaultTextStyle.color, 'function', 'the text colour is the body\'s own paint');
+});
+
+// ---- prompt-card-mark: the ❯ an extension transformer prepends - ` ❯ ` in pi-pretty ----
+
+/**
+ * pi-pretty's own markdown transformer, as the host composes it: the user's markdown comes back
+ * prefixed with ` ❯ ` and an empty prompt is left alone (`dist/index.js`: `" ❯ " + markdown`).
+ */
+const prettyTransform = (markdown) => (markdown.trim() === '' ? markdown : ` ❯ ${markdown}`);
+
+/** A prompt whose Markdown carries the host's composed `transform`, exactly as Pi wires it. */
+function decoratedPrompt(text = PROMPT) {
+  return new UserMessageComponent(text, {
+    markdownOptions: { preserveOrderedListMarkers: true, preserveBackslashEscapes: true, transform: prettyTransform },
+  });
+}
+
+test('the ❯ an extension transformer prepends is dropped, and the body starts at the frame padding', () => {
+  publishBridge(ACTIVITY_ANSWER);
+  install();
+  const rows = decoratedPrompt().render(60);
+  assert.equal(rows.some((row) => unpaint(row).includes('❯')), false, 'no row carries the decoration');
+  const body = rows.filter((row) => row.includes('explain the card'));
+  assert.equal(body.length, 1, 'the first line is one body row');
+  assert.ok(unpaint(body[0]).startsWith('│ explain the card'), `the message starts at the frame padding: ${unpaint(body[0])}`);
+  assert.ok(rows.some((row) => unpaint(row).includes('and keep `this` visible')), 'every line of the prompt is still drawn');
+  for (const row of rows) assert.equal(chars(row).length, 60, `"${unpaint(row)}" is 60 wide`);
+});
+
+test('a prompt with no transformer is drawn byte for byte as before', () => {
+  publishBridge(ACTIVITY_ANSWER);
+  install();
+  const component = promptComponent();
+  component.timestamp = '2026-01-02T09:07:00Z';
+  const clock = localClock(new Date(component.timestamp));
+  // The rows this card drew BEFORE the decoration was removed, pinned: no transformer, no
+  // decoration, so the body, the frame and the prompt-zone markers are untouched to the byte.
+  const pinned = [
+    OSC133_ZONE_START + `╭─ ✿ You · ${clock} ${'─'.repeat(42)}╮`,
+    `│ \x1b[${MARKDOWN_CODE}mexplain the card\x1b[39m${' '.repeat(40)} │`,
+    `│ \x1b[${MARKDOWN_CODE}mand keep \`this\` visible\x1b[39m${' '.repeat(33)} │`,
+    OSC133_ZONE_CLOSE + `╰${'─'.repeat(58)}╯`,
+  ];
+  assert.deepEqual(component.render(60), pinned);
+});
+
+test('a prompt that starts with ❯ keeps exactly one ❯: only the decoration is consumed', () => {
+  publishBridge(ACTIVITY_ANSWER);
+  install();
+  const rows = decoratedPrompt('❯ my own mark\nsecond line').render(60).map(unpaint);
+  const body = rows.filter((row) => row.includes('my own mark'));
+  assert.equal(body.length, 1, 'the user\'s line is one body row');
+  assert.ok(body[0].startsWith('│ ❯ my own mark'), `the user\'s own mark stays at the frame padding: ${body[0]}`);
+  assert.equal(body[0].split('❯').length - 1, 1, 'exactly one ❯: the decoration, never the user\'s own');
+});
+
+test('the body re-wraps at the full inner width: the decoration costs no columns', () => {
+  publishBridge(ACTIVITY_ANSWER);
+  install();
+  // Exactly the inner width of a 60-column card (`cardInnerWidth(60)`): one body row undecorated,
+  // and one row plus a mark-only row when the three decoration columns still eat the line.
+  const line = 'x'.repeat(56);
+  const rows = decoratedPrompt(line).render(60);
+  assert.equal(rows.length, 3, 'the frame and ONE body row: the 56 columns fit');
+  assert.ok(rows[1].includes(line), 'the whole line is on its one row, with no three-column slack');
+  assert.equal(chars(rows[1]).length, 60, 'and the row still fills the frame');
 });
 
 test('a steady frame rebuilds nothing, and a width change or a style flip redraws', () => {

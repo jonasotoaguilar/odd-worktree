@@ -61,7 +61,7 @@ describe('the seven texts on disk', () => {
 
   test('every text names the search it replaces', () => {
     for (const variant of rules.VARIANTS) {
-      assert.match(prose(variant), /`grep`, `rg`, `fd`, `find`, `read` or `cat`|during initial discovery/, variant);
+      assert.match(prose(variant), /`grep`, `rg`, `fd`, `find`, `read` or `cat`|`grep`, `find` or `read`/, variant);
     }
   });
 

@@ -584,42 +584,32 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     this same line, never a module switch;
     this package registers no other tool-renderer resolver for `bash`.
 
-21. **The two CodeGraph reminders advise, never block, add no surface, and belong to the primary session.**
+21. **The CodeGraph reminder advises, never blocks, adds no surface, and belongs to the primary session.**
     `lib/codegraph-guard.js` decides, and `lib/codegraph-session.js` appends its
     sentence as ONE extra text part to the result of that finished tool call — never
     a separate message, never a block, and the result (its own parts and its
     structured content) is kept whole. No tool, command, card or notification is
     added, and nothing runs in the foreground beyond one bounded, cached git read.
-    Both are gated like the prompt section: only with the `codegraph` CLI installed
+    It is gated like the prompt section: only with the `codegraph` CLI installed
     (invariant 19's registration) and only when the session holds a CodeGraph tool,
     which the wiring records from `before_agent_start`'s
-    `systemPromptOptions.selectedTools` — no other source. They cite the CodeGraph
-    rule, so `ODD_WORKTREE_PROMPT=0` silences them together with it.
+    `systemPromptOptions.selectedTools` — no other source. It cites the CodeGraph
+    rule, so `ODD_WORKTREE_PROMPT=0` silences it together with the rule text.
 
-    **Guard 1** is the primary session's alone and fires once per other checkout per
-    session: `This call went to <path>, another checkout. Follow the CodeGraph rule:
-    call mcp__codegraph__codegraph_explore with projectPath set to <path> first.` —
-    with `mcp__codegraph__codegraph_explore` and `projectPath` in backticks and
-    `<path>` the checkout's real git toplevel. It stays silent, using up no slot, for
-    a checkout this session already explored with that tool's `projectPath` since the
-    last compaction.
-    **Guard 2** is the primary session's alone: a child lives a message or two and its own
-    `## CodeGraph` text already states the rule, so it hears no reminder at all.
-    It fires once per checkout per request, on the first search of the session's own
-    checkout while CodeGraph is unused in that request (keyed by the checkout, so a
-    `/warp` re-arms it); no later search of the same request repeats it, and a use of
-    `codegraph` or the MCP tool after it changes nothing.
-    Its first-search slot and its `used` flag are per request: every
-    new request (`before_agent_start`) forgets them, while guard 1's slots and the
-    explored checkouts stay per session, and a compaction or a new session forgets
-    everything. The primary session gets `Follow the CodeGraph rule: run codegraph query
-    or explore first.` (`codegraph`, `query` and `explore` in backticks; with only the MCP
-    tool, `Follow the CodeGraph rule: call mcp__codegraph__codegraph_explore first.`).
-    It is advice: it never blocks.
+    **The one reminder is about another checkout**, fired once per other checkout
+    per session and never in a subagent child: `This call went to <path>, another
+    checkout. Follow the CodeGraph rule: call mcp__codegraph__codegraph_explore with
+    projectPath set to <path> first.` — with `mcp__codegraph__codegraph_explore`
+    and `projectPath` in backticks and `<path>` the checkout's real git toplevel. It
+    stays silent, using up no slot, for a checkout this session already explored
+    with that tool's `projectPath` since the last compaction. Reaching CodeGraph
+    first inside the session's OWN checkout is the prompt section's job: the
+    `## CodeGraph` text of every role says which tool answers what, so no
+    after-the-fact reminder states that rule a second time.
 
     **A call that failed is no subject at all**: the model got no result to read, so
     no reminder rides an error result, no once-per-key slot is spent, and a failed
-    `codegraph` or explore call is no use of the graph either.
+    explore call records no explored checkout.
     **What counts as a call** is `grep`, `find`, `ls`, `read` and `bash`: `read` only
     for code, never for the `.md`/`.json`/`.yml`/`.yaml`/`.toml`/`.txt` the rule
     exempts, and `bash` only when a segment runs `grep`, `rg`, `find`, `fd`, `ls`,
@@ -631,9 +621,9 @@ invariant 32). The one name it keeps from before is its store directory, spelled
     and cached), from a tool's path or from a `cd` target or absolute path argument
     of a shell command; a path outside every checkout and a command that only
     mentions one (`git -C`, `curl`, `echo`) triggers nothing. A compaction forgets
-    both guards and what the session used, and so does a new session in the same
-    process (`session_start` new, resume or fork; not `/reload`). The reminder is
-    advice, so no test may assert it blocks, refuses or notifies.
+    the reminded checkouts and the explored ones, and so does a new session in the
+    same process (`session_start` new, resume or fork; not `/reload`). The reminder
+    is advice, so no test may assert it blocks, refuses or notifies.
 
 22. **The tool guards read text and paths, fail open and add no surface.** The
     extension's `tool_call` handlers decide three things — two in

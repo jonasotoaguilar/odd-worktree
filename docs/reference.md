@@ -2439,19 +2439,9 @@ fires for the same project's other worktree and for another repository alike, an
 child. It stays silent, using up no slot, for a checkout this session already explored with
 `projectPath` since the last compaction.
 
-**Guard 2, the session's own checkout.** The primary session alone: a child lives a message or two and
-its own `## CodeGraph` text already says the rule. It fires on the first search of the checkout the session is in, while CodeGraph is unused:
-
-```text
-Follow the CodeGraph rule: call `mcp__codegraph__codegraph_explore` first.
-```
-
-for the primary session, whatever else it holds. It fires once per checkout per request, on that checkout's first search while the
-graph is unused: no later search of the same request repeats it, and using `codegraph` or the MCP tool
-after it changes nothing. Its first-search slot and its "already used" flag are per request: every new
-request re-arms guard 2 with both, while guard 1's slots and the explored checkouts stay per session,
-and a compaction or a new session still forgets everything. The reminder is keyed by the checkout, so a
-`/warp` re-arms it, and it stays silent while CodeGraph has been used in that request.
+Reaching CodeGraph first inside the session's own checkout is the `## CodeGraph` section's job, not a
+reminder's: every role's text names the tool, what it returns and when to call it, so nothing repeats that
+rule after the fact. A compaction or a new session forgets the reminded and explored checkouts.
 
 **What is "another checkout".** A different git toplevel (`git -C <dir> rev-parse --show-toplevel`),
 read once per directory and cached for the session. It comes from a tool's own path, or from a `cd`

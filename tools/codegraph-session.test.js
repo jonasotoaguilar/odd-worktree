@@ -355,16 +355,6 @@ const readEvent = (path, extra = {}) => ({
   ...extra,
 });
 
-test('a code read in the session checkout gets one reminder part appended, and the result stays whole', async () => {
-  const { run } = setup({ toplevel: checkoutMap() });
-  await run('before_agent_start', SESSION_TOOLS);
-  const patch = await run('tool_result', readEvent('src/a.ts', { structuredContent: { output: 'source' } }));
-  assert.equal(patch.content.length, 2, 'one extra part, no new message');
-  assert.deepEqual(patch.content[0], { type: 'text', text: 'source' }, 'the tool result keeps its own words first');
-  assert.deepEqual(patch.content[1], { type: 'text', text: NATIVE_REMINDER });
-  assert.deepEqual(patch.structuredContent, { output: 'source' }, 'the structured content of the result is kept');
-});
-
 test('a child is not reminded', async () => {
   const { run } = setup({
     toplevel: checkoutMap(),
@@ -373,68 +363,6 @@ test('a child is not reminded', async () => {
   });
   await run('before_agent_start', { systemPromptOptions: { selectedTools: [] } });
   assert.equal(await run('tool_result', readEvent('src/a.ts')), undefined);
-});
-
-test('ODD_WORKTREE_PROMPT=0 silences the reminders too, because they cite the rule that variable suppresses', async () => {
-  const { run } = setup({ toplevel: checkoutMap(), env: { ODD_WORKTREE_PROMPT: '0' } });
-  await run('before_agent_start', SESSION_TOOLS);
-  assert.equal(await run('tool_result', readEvent('src/a.ts')), undefined, 'no reminder without the CodeGraph section');
-  const { run: runOn } = setup({ toplevel: checkoutMap(), env: { ODD_WORKTREE_PROMPT: '1' } });
-  await runOn('before_agent_start', SESSION_TOOLS);
-  assert.ok(await runOn('tool_result', readEvent('src/a.ts')), 'any other value keeps them on');
-});
-
-test('the session tools are recorded from before_agent_start: without them nothing is appended', async () => {
-  const { run } = setup({ toplevel: checkoutMap() });
-  assert.equal(await run('tool_result', readEvent('src/a.ts')), undefined, 'no CodeGraph tool seen yet');
-  await run('before_agent_start', { systemPromptOptions: { selectedTools: ['read', 'grep'] } });
-  assert.equal(await run('tool_result', readEvent('src/a.ts')), undefined, 'a session without a CodeGraph tool is not advised');
-  await run('before_agent_start', SESSION_TOOLS);
-  assert.ok(await run('tool_result', readEvent('src/a.ts')), 'the tool gate opens with the selected tools');
-});
-
-test('a call into another checkout names its real root, once, and the session checkout is reminded separately', async () => {
-  const { run } = setup({ toplevel: checkoutMap() });
-  await run('before_agent_start', SESSION_TOOLS);
-  const other = await run('tool_result', readEvent('/work/other/src/a.ts'));
-  assert.equal(other.content[1].text, anotherReminder('/work/other'));
-  assert.equal(await run('tool_result', readEvent('/work/other/b.ts')), undefined, 'once per checkout');
-  const own = await run('tool_result', readEvent('src/a.ts'));
-  assert.equal(own.content[1].text, NATIVE_REMINDER, 'the session checkout has its own guard');
-});
-
-test('a compaction re-arms the reminder', async () => {
-  const { run } = setup({ toplevel: checkoutMap() });
-  await run('before_agent_start', SESSION_TOOLS);
-  assert.ok(await run('tool_result', readEvent('src/a.ts')));
-  assert.equal(await run('tool_result', readEvent('src/a.ts')), undefined);
-  await run('session_compact', {});
-  assert.ok(await run('tool_result', readEvent('src/a.ts')), 'a compacted session hears it again');
-});
-
-test('a new session start re-arms it, and a /reload is not a new session', async () => {
-  const { run } = setup({ toplevel: checkoutMap() });
-  await run('before_agent_start', SESSION_TOOLS);
-  assert.ok(await run('tool_result', readEvent('src/a.ts')));
-  await run('session_start', { reason: 'reload' });
-  assert.equal(await run('tool_result', readEvent('src/a.ts')), undefined, 'a reload keeps the session');
-  await run('session_start', { reason: 'new' });
-  assert.ok(await run('tool_result', readEvent('src/a.ts')), 'a new session forgets it');
-});
-
-test('a new request re-arms the one reminder of the checkout (S3, S7)', async () => {
-  const { run } = setup({ toplevel: checkoutMap() });
-  await run('before_agent_start', SESSION_TOOLS);
-  const texts = [];
-  for (let call = 0; call < 17; call += 1) {
-    const patch = await run('tool_result', readEvent('src/a.ts'));
-    texts.push(patch === undefined ? undefined : patch.content[1].text);
-  }
-  assert.deepEqual(texts.filter((text) => text !== undefined), [NATIVE_REMINDER], '17 searches of one request hear it once');
-  assert.equal(texts[0], NATIVE_REMINDER, 'and on the first of them, not at 8, 9 or 17');
-  await run('before_agent_start', SESSION_TOOLS);
-  const next = await run('tool_result', readEvent('src/a.ts'));
-  assert.equal(next.content[1].text, NATIVE_REMINDER, 'the first search of the next request hears it again');
 });
 
 test('a worker child and a review agent are told nothing', async () => {
@@ -464,67 +392,6 @@ test('a git read that throws never fails the tool result', async () => {
   await assert.doesNotReject(async () => {
     assert.equal(await run('tool_result', readEvent('src/a.ts')), undefined);
   });
-});
-
-test('the guard is one injected collaborator, driven by the host events', async () => {
-  const seen = { tools: [], results: [], compacted: 0, sessions: 0, requests: 0 };
-  const { run } = setup({
-    impl: {
-      createCodegraphGuard: (options) => {
-        seen.options = options;
-        return {
-          observeTools: (tools) => seen.tools.push(tools),
-          onToolResult: async (event) => {
-            seen.results.push(event.toolName);
-            return 'REMINDER';
-          },
-          onCompacted: () => {
-            seen.compacted += 1;
-          },
-          onNewSession: () => {
-            seen.sessions += 1;
-          },
-          onNewRequest: () => {
-            seen.requests += 1;
-          },
-        };
-      },
-    },
-  });
-  await run('session_start', { reason: 'startup' });
-  await run('before_agent_start', SESSION_TOOLS);
-  await run('session_compact', {});
-  await run('session_start', { reason: 'new' });
-  const patch = await run('tool_result', { toolName: 'grep', input: { pattern: 'x' }, isError: false, content: [] });
-  assert.deepEqual(seen.tools, [SESSION_TOOLS.systemPromptOptions.selectedTools]);
-  assert.equal(seen.compacted, 1);
-  assert.equal(seen.sessions, 2, 'the startup and the new session both reset');
-  assert.equal(seen.requests, 1, 'one new request, no more');
-  assert.deepEqual(seen.results, ['grep']);
-  assert.deepEqual(patch.content, [{ type: 'text', text: 'REMINDER' }], 'the reminder rides the result as one more part');
-});
-
-test('S7: every new request re-arms guard 2, and a finished call does not', async () => {
-  let requests = 0;
-  const { run } = setup({
-    impl: {
-      createCodegraphGuard: () => ({
-        observeTools: () => {},
-        onToolResult: async () => undefined,
-        onCompacted: () => {},
-        onNewSession: () => {},
-        onNewRequest: () => {
-          requests += 1;
-        },
-      }),
-    },
-  });
-  await run('tool_result', { toolName: 'grep', input: { pattern: 'x' }, isError: false, content: [] });
-  assert.equal(requests, 0, 'a finished tool call is no new request');
-  await run('before_agent_start', SESSION_TOOLS);
-  assert.equal(requests, 1, 'the prompt of a new request re-arms it');
-  await run('before_agent_start', SESSION_TOOLS);
-  assert.equal(requests, 2, 'each new request, not each session');
 });
 
 // ---- S2: the bounded join on the pre-execution hook (T6) ----

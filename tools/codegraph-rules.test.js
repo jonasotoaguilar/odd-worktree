@@ -54,7 +54,7 @@ describe('the seven texts on disk', () => {
     for (const variant of rules.VARIANTS) {
       const text = prose(variant);
       assert.match(text, /Name the symbols or files when you know them; a plain question works when you do not/, variant);
-      assert.match(text, /Its blocks count as a Read of those files/, `${variant} says the blocks count as read`);
+      assert.match(text, /The blocks it shows count as a Read of those files/, `${variant} says the blocks it shows count as read`);
       
     }
   });
@@ -99,7 +99,7 @@ describe('each role scopes the index to its own job', () => {
     assert.match(text, /Read an exact file path, or search an exact string, directly/, text);
     assert.match(text, /set `projectPath` for another worktree or another git project, and say which checkout you used/, text);
     assert.match(text, /The answer belongs to the checkout it came from/, text);
-    assert.match(text, /Refine a miss with a name the answer surfaced/, text);
+    assert.match(text, /The code it returns is the code nearest your query: when that is not what you meant, ask again with a name the answer surfaced/, text);
     assert.doesNotMatch(file('orchestrator'), /^\|/m);
     assert.doesNotMatch(text, /colou?r|"add an option|"use the/i, 'a rule states the situation, never one example of it');
     assert.doesNotMatch(text, /authori[sz]ation|ask first/i);

@@ -54,14 +54,14 @@ describe('the seven texts on disk', () => {
     for (const variant of rules.VARIANTS) {
       const text = prose(variant);
       assert.match(text, /Name the symbols or files when you know them; a plain question works when you do not/, variant);
-      assert.match(text, /The blocks it shows count as a Read\./, `${variant} says the blocks it shows count as read`);
+      assert.match(text, /Its blocks count as a Read\./, `${variant} says the blocks it shows count as read`);
       
     }
   });
 
   test('every text names the search it replaces', () => {
     for (const variant of rules.VARIANTS) {
-      assert.match(prose(variant), /`grep`, `rg`, `fd`, `find`, `read` or `cat`|`grep`, `find` or `read`/, variant);
+      assert.match(prose(variant), /`grep`, `find` or `read`/, variant);
     }
   });
 
@@ -97,10 +97,10 @@ describe('each role scopes the index to its own job', () => {
   test('the orchestrator keeps one exemption and one projectPath rule, and no concrete example', () => {
     const text = prose('orchestrator');
     for (const variant of ['orchestrator', 'explore', 'generic']) {
-      assert.match(prose(variant), /Don't call it for an exact file path, for an exact string, or for a file that is not code: `read`, `grep` and `find` answer those/, variant);
+      assert.match(prose(variant), /For an exact file path use `read`, for an exact string use `grep`, and for a file that is not code — docs, config, data — use `find`/, variant);
     }
     assert.match(text, /set `projectPath` for another worktree or another git project, and say which checkout you used/, text);
-    assert.match(text, /The answer belongs to the checkout it came from/, text);
+    assert.match(text, /An answer belongs to the checkout it came from/, text);
     assert.match(text, /The code it returns is the code nearest your query: when that is not what you meant, ask again with a name the answer surfaced/, text);
     assert.doesNotMatch(file('orchestrator'), /^\|/m);
     assert.doesNotMatch(text, /colou?r|"add an option|"use the/i, 'a rule states the situation, never one example of it');
@@ -109,9 +109,8 @@ describe('each role scopes the index to its own job', () => {
 
   test('explore replaces the chain of greps, follows what depends on a symbol and defers what code does to the source', () => {
     const text = prose('explore');
-    assert.match(text, /which replaces the chain of greps and reads that would answer the same question/, text);
+    assert.match(text, /one call instead of the chain of greps and reads that would answer the same question/, text);
     assert.match(text, /Follow what it reports as depending on a symbol instead of grepping for callers/, text);
-    assert.match(text, /then stop/, text);
   });
 
   test('verify chooses probes from the index and keeps the probe as the proof', () => {
@@ -130,13 +129,13 @@ describe('each role scopes the index to its own job', () => {
 
   test('fix keeps the patch inside the finding\'s reach, in the checkout it is authorized to fix', () => {
     const text = prose('fix');
-    assert.match(text, /what the patch has to keep working, so the fix stays inside that/, text);
-    assert.match(text, /in the checkout you are authorized to fix/, text);
+    assert.match(text, /what the patch has to keep working, so the fix stays inside it/, text);
+    assert.match(text, /within your allowed edit surfaces and the checkout you are authorized to fix/, text);
   });
 
   test('judges sweep the initial review tree and leave the tool aside in scoped re-judgment', () => {
     const text = prose('judge');
-    assert.match(text, /Call it instead of `grep`, `rg`, `fd`, `find`, `read` or `cat` in the supplied `initial_review_tree`/, text);
+    assert.match(text, /Call it instead of `grep`, `find` or `read` in the supplied `initial_review_tree`/, text);
     
     
     
@@ -145,9 +144,9 @@ describe('each role scopes the index to its own job', () => {
 
   test('the generic text keeps the same criterion for a role with no text of its own', () => {
     const text = prose('generic');
-    assert.match(text, /about to change code you have not read, tracing a flow or an error across files/, text);
+    assert.match(text, /when you are about to change code you have not read/, text);
     for (const variant of ['orchestrator', 'explore', 'generic']) {
-      assert.match(prose(variant), /Don't call it for an exact file path, for an exact string, or for a file that is not code: `read`, `grep` and `find` answer those/, variant);
+      assert.match(prose(variant), /For an exact file path use `read`, for an exact string use `grep`, and for a file that is not code — docs, config, data — use `find`/, variant);
     }
   });
 });

@@ -1,7 +1,7 @@
 'use strict';
 // The jobs card: `bash_background`, `monitor`, `job_stop` and `job_list` are registered by
 // Gentle Shell with no renderer of their own, so Pi draws its plain default box and the
-// conversation's card style never reaches them. While the bridge's `Card activity` line answers
+// conversation's card style never reaches them. While the shell API's `Card activity` line answers
 // `activity` for the tool being drawn, this package draws them on its own card substrate
 // (`lib/shell-card.js`), in whichever style the shell has chosen. Any other answer — and the
 // absence of an answer — draws what Pi draws for a tool with no renderer, inside the card that
@@ -15,7 +15,7 @@
 //
 // Every case goes through the public surface: the resolver, the slots it returns and the
 // rows a component draws for a width. The text seam and the themes are the fakes
-// `tools/file-card.test.js` uses; the bridge is the published object a process-wide slot holds.
+// `tools/file-card.test.js` uses; the shell API is the published object a process-wide slot holds.
 //
 // The rows the card hands back while the line says anything else are compared byte for byte
 // with Pi's own drawing, reproduced here from the host's source (`tool-execution.js`,
@@ -66,24 +66,24 @@ const taggedTheme = { fg: (role, value) => `<${role}>${value}</${role}>` };
 const bandTheme = { fg: (_role, value) => value, bg: (_role, value) => `\x1b[48;5;240m${value}\x1b[49m` };
 const unpaint = (value) => stripAnsi(value).replace(/<\/?[a-zA-Z][a-zA-Z0-9]*>/g, '');
 
-const BRIDGE_API_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+const SHELL_API_SLOT = Symbol.for('odd-worktree/shell-api/v1');
 const ACTIVITY = Object.freeze({ kind: 'design', design: { id: 'odd-worktree.bash-activity' } });
 
 beforeEach(() => {
   globalThis[CARD_STYLE_SLOT] = CARD_STYLE.NEON;
   delete globalThis[CARD_CONTENT_SLOT];
-  delete globalThis[BRIDGE_API_SLOT];
+  delete globalThis[SHELL_API_SLOT];
 });
-afterEach(() => { delete globalThis[BRIDGE_API_SLOT]; });
+afterEach(() => { delete globalThis[SHELL_API_SLOT]; });
 after(() => {
   delete globalThis[CARD_STYLE_SLOT];
   delete globalThis[CARD_CONTENT_SLOT];
-  delete globalThis[BRIDGE_API_SLOT];
+  delete globalThis[SHELL_API_SLOT];
 });
 
-function publishBridge(selection, asked) {
+function publishShellApi(selection, asked) {
   const api = {
-    schema: 'gentle-shell-bridge/api',
+    schema: 'odd-worktree/shell-api',
     version: 1,
     VERSION: '0.10.0',
     registerToolDesign: () => () => {},
@@ -93,7 +93,7 @@ function publishBridge(selection, asked) {
       return selection;
     },
   };
-  globalThis[BRIDGE_API_SLOT] = api;
+  globalThis[SHELL_API_SLOT] = api;
   return api;
 }
 
@@ -212,8 +212,8 @@ function piSettledRows(tool, args, text, context, width) {
 
 test('every answer but activity draws what Pi draws for a tool with no renderer, byte for byte', () => {
   const answers = [
-    ['no bridge published', undefined],
-    ['the bridge\'s native answer', { kind: 'native' }],
+    ['no shell API published', undefined],
+    ['the shell API\'s native answer', { kind: 'native' }],
     ['a tool the line does not cover', { kind: 'not-covered' }],
     ['a design that has left the line', { kind: 'missing' }],
     ['another plugin\'s design', { kind: 'design', design: { id: 'acme.tools' } }],
@@ -221,7 +221,7 @@ test('every answer but activity draws what Pi draws for a tool with no renderer,
   ];
   const args = { command: COMMAND, label: LABEL };
   for (const [name, answer] of answers) {
-    if (answer !== undefined) publishBridge(answer);
+    if (answer !== undefined) publishShellApi(answer);
     for (const tool of JOB_TOOLS) {
       const callArgs = tool === 'job_stop' ? { job_id: 'job-2' } : tool === 'job_list' ? {} : args;
       const resolver = jobsResolver();
@@ -231,16 +231,16 @@ test('every answer but activity draws what Pi draws for a tool with no renderer,
         .render(70);
       assert.deepEqual([...call, ...result], piSettledRows(tool, callArgs, STARTED, settled, 70), `${name}: ${tool}`);
     }
-    delete globalThis[BRIDGE_API_SLOT];
+    delete globalThis[SHELL_API_SLOT];
   }
-  // A bridge too old to carry the reader, and one whose reader throws, are no answer either.
-  globalThis[BRIDGE_API_SLOT] = { schema: 'gentle-shell-bridge/api', version: 1, VERSION: '0.6.0', registerToolDesign: () => () => {} };
+  // A shell API too old to carry the reader, and one whose reader throws, are no answer either.
+  globalThis[SHELL_API_SLOT] = { schema: 'odd-worktree/shell-api', version: 1, VERSION: '0.6.0', registerToolDesign: () => () => {} };
   assert.deepEqual(
     [...callRows(jobsResolver(), 'bash_background', args, hostTheme, 70, settled), ...resultRows(jobsResolver(), 'bash_background', args, STARTED, settled, hostTheme, 70, settled)],
     piSettledRows('bash_background', args, STARTED, settled, 70),
-    'a bridge older than the reader',
+    'a shell API older than the reader',
   );
-  publishBridge(() => { throw new Error('boom'); });
+  publishShellApi(() => { throw new Error('boom'); });
   assert.deepEqual(
     [...callRows(jobsResolver(), 'bash_background', args, hostTheme, 70, settled), ...resultRows(jobsResolver(), 'bash_background', args, STARTED, settled, hostTheme, 70, settled)],
     piSettledRows('bash_background', args, STARTED, settled, 70),
@@ -249,7 +249,7 @@ test('every answer but activity draws what Pi draws for a tool with no renderer,
 });
 
 test('a call still running keeps the host\'s box closed below it, because no result follows yet', () => {
-  publishBridge({ kind: 'native' });
+  publishShellApi({ kind: 'native' });
   const args = { command: COMMAND };
   const running = callRows(jobsResolver(), 'bash_background', args, hostTheme, 60, { isPartial: true, outputPad: 1 });
   assert.deepEqual(running, piBox([piCallText('bash_background', args, false)], 60, { isPartial: true, outputPad: 1 }));
@@ -257,7 +257,7 @@ test('a call still running keeps the host\'s box closed below it, because no res
 });
 
 test('a result that states nothing leaves the host\'s box closed, with no row of its own', () => {
-  publishBridge({ kind: 'native' });
+  publishShellApi({ kind: 'native' });
   const args = { job_id: 'job-2' };
   const resolver = jobsResolver();
   const call = callRows(resolver, 'job_stop', args, hostTheme, 50, settled);
@@ -280,7 +280,7 @@ function piPass(resolver, tool, args, text, context, width) {
 }
 
 test('a PARTIAL result closes the host\'s box once, exactly as the host draws it', () => {
-  publishBridge({ kind: 'native' });
+  publishShellApi({ kind: 'native' });
   const partial = { isPartial: true, expanded: false, outputPad: 2, keyHint };
   const args = { command: 'tail -f app.log', label: 'app log' };
   const resolver = jobsResolver();
@@ -290,7 +290,7 @@ test('a PARTIAL result closes the host\'s box once, exactly as the host draws it
 });
 
 test('the host\'s own reader sanitizes a result, byte for byte', () => {
-  publishBridge({ kind: 'native' });
+  publishShellApi({ kind: 'native' });
   // A CSI colour, a BEL, the interlinear annotations the host strips, a CR and a DEL — which
   // the host's own list does NOT remove (`sanitizeBinaryOutput`).
   const raw = 'first \u001B[31mred\u001B[0m\uFFFB row\u0007\r\nsecond\u007F row';
@@ -304,7 +304,7 @@ test('the host\'s own reader sanitizes a result, byte for byte', () => {
 
 test('the four job tools are always the card\'s, and the line is read on every paint, never at build time', () => {
   const asked = [];
-  publishBridge(ACTIVITY, asked);
+  publishShellApi(ACTIVITY, asked);
   const resolver = jobsResolver();
   const slots_ = JOB_TOOLS.map((tool) => slots(resolver, tool));
   assert.deepEqual(asked, [], 'building the card asks nothing: Pi would never ask again');
@@ -327,7 +327,7 @@ test('the four job tools are always the card\'s, and the line is read on every p
 
 test('a mounted card repaints when the line flips, in both directions', () => {
   const asked = [];
-  publishBridge(ACTIVITY, asked);
+  publishShellApi(ACTIVITY, asked);
   const resolver = jobsResolver();
   const args = { command: COMMAND, label: LABEL };
   // ONE card, mounted: the components the host built before any of this changed.
@@ -337,19 +337,19 @@ test('a mounted card repaints when the line flips, in both directions', () => {
   const on = { call: call.render(70), result: result.render(70) };
   assert.match(unpaint(on.call[0]), /⧗ bash background · Release runs/u, 'the card is drawn while the line says activity');
   // The line is turned off, and the SAME mounted components are repainted.
-  publishBridge({ kind: 'native' });
+  publishShellApi({ kind: 'native' });
   const off = { call: call.render(70), result: result.render(70) };
   assert.deepEqual([...off.call, ...off.result], piSettledRows('bash_background', args, STARTED, settled, 70), 'flipped off, the rows are the host\'s own');
   assert.doesNotMatch(unpaint(off.call.join('\n')), /⧗/u, 'the card\'s mark is gone');
   // And back on, from the same two components.
-  publishBridge(ACTIVITY, asked);
+  publishShellApi(ACTIVITY, asked);
   assert.deepEqual(call.render(70), on.call, 'flipped back on, the card is drawn again, unchanged');
   assert.deepEqual(result.render(70), on.result, 'the result half too');
   assert.equal(asked.length, 4, 'each paint of each half asked the line once: two paints on, and two back on');
 });
 
 test('no other tool is ever claimed: bash, the file tools and an unknown tool come back as the chain resolved them', () => {
-  publishBridge(ACTIVITY);
+  publishShellApi(ACTIVITY);
   const resolver = jobsResolver();
   for (const tool of ['bash', 'read', 'write', 'edit', 'grep', 'codemode', 'job_unknown']) {
     assert.equal(slots(resolver, tool), PI_DEFAULT, tool);
@@ -359,7 +359,7 @@ test('no other tool is ever claimed: bash, the file tools and an unknown tool co
 // ---- the call ----
 
 test('a background job heads with its mark, its label and nothing it did not state', () => {
-  publishBridge(ACTIVITY);
+  publishShellApi(ACTIVITY);
   const rows = callRows(jobsResolver(), 'bash_background', { command: COMMAND, label: LABEL }, taggedTheme);
   assert.equal(rows.length, 1, 'collapsed, a finished call is one rule');
   const text = unpaint(rows[0]);
@@ -371,7 +371,7 @@ test('a background job heads with its mark, its label and nothing it did not sta
 });
 
 test('without a label the first line of the command names the job; the other tools name their target', () => {
-  publishBridge(ACTIVITY);
+  publishShellApi(ACTIVITY);
   const resolver = jobsResolver();
   assert.match(unpaint(callRows(resolver, 'bash_background', { command: '\n  npm test --silent\nnpm run lint' }, plainTheme)[0]), /⧗ bash background · npm test --silent/u);
   assert.match(unpaint(callRows(resolver, 'monitor', { command: 'tail -f app.log', label: 'app log', timeout_seconds: 60 }, plainTheme)[0]), /⧗ bash monitor · app log/u);
@@ -380,7 +380,7 @@ test('without a label the first line of the command names the job; the other too
 });
 
 test('both job tools wear one mark and one role, so a monitor reads as a background job', () => {
-  publishBridge(ACTIVITY);
+  publishShellApi(ACTIVITY);
   const resolver = jobsResolver();
   const background = callRows(resolver, 'bash_background', { command: COMMAND, label: LABEL }, taggedTheme)[0];
   const monitor = callRows(resolver, 'monitor', { command: COMMAND, label: LABEL, timeout_seconds: 60 }, taggedTheme)[0];
@@ -390,7 +390,7 @@ test('both job tools wear one mark and one role, so a monitor reads as a backgro
 });
 
 test('the two bash tools keep the role on the frame and the name, and mute the input text', () => {
-  publishBridge(ACTIVITY);
+  publishShellApi(ACTIVITY);
   const resolver = jobsResolver();
   const background = callRows(resolver, 'bash_background', { command: COMMAND, label: LABEL }, taggedTheme)[0];
   const monitor = callRows(resolver, 'monitor', { command: COMMAND, label: LABEL, timeout_seconds: 60 }, taggedTheme)[0];
@@ -402,7 +402,7 @@ test('the two bash tools keep the role on the frame and the name, and mute the i
 });
 
 test('expanded, the whole command is stated below the heading, every line of it', () => {
-  publishBridge(ACTIVITY);
+  publishShellApi(ACTIVITY);
   const rows = callRows(jobsResolver(), 'bash_background', { command: 'sleep 20\n\ngh run list --repo acme/api', label: LABEL }, plainTheme, 70, { isPartial: false, expanded: true }).map(unpaint);
   const joined = rows.join('\n');
   assert.match(joined, /Release runs for 1\.9\.1/u);
@@ -412,7 +412,7 @@ test('expanded, the whole command is stated below the heading, every line of it'
 });
 
 test('a call still waiting for its result closes its own frame; once the result exists the result closes it', () => {
-  publishBridge(ACTIVITY);
+  publishShellApi(ACTIVITY);
   const resolver = jobsResolver();
   const state = {};
   const running = slots(resolver, 'bash_background').renderCall({ command: COMMAND }, plainTheme, { isPartial: true, state }).render(70).map(unpaint);
@@ -425,7 +425,7 @@ test('a call still waiting for its result closes its own frame; once the result 
 // ---- the result ----
 
 test('the result previews the first rows collapsed, everything expanded, and always closes the frame', () => {
-  publishBridge(ACTIVITY);
+  publishShellApi(ACTIVITY);
   const resolver = jobsResolver();
   const collapsed = resultRows(resolver, 'bash_background', { command: COMMAND }, `${STARTED}\nextra line four`).map(unpaint);
   assert.match(collapsed.join('\n'), /Started background job job-2/u);
@@ -437,7 +437,7 @@ test('the result previews the first rows collapsed, everything expanded, and alw
 });
 
 test('the minimal card content level draws the call alone, but a failure still says why', () => {
-  publishBridge(ACTIVITY);
+  publishShellApi(ACTIVITY);
   globalThis[CARD_CONTENT_SLOT] = CARD_CONTENT.MINIMAL;
   const resolver = jobsResolver();
   const quiet = resultRows(resolver, 'bash_background', { command: COMMAND }, STARTED).map(unpaint);
@@ -450,7 +450,7 @@ test('the minimal card content level draws the call alone, but a failure still s
 // ---- the style and the width ----
 
 test('neon draws the outlined frame and float the borderless rail, whichever tool is drawn', () => {
-  publishBridge(ACTIVITY);
+  publishShellApi(ACTIVITY);
   const resolver = jobsResolver();
   for (const tool of JOB_TOOLS) {
     const args = tool === 'job_stop' ? { job_id: 'job-2' } : tool === 'job_list' ? {} : { command: COMMAND, label: LABEL };
@@ -466,7 +466,7 @@ test('neon draws the outlined frame and float the borderless rail, whichever too
 });
 
 test('every row fits the width the host asked for, at narrow and wide terminals', () => {
-  publishBridge(ACTIVITY);
+  publishShellApi(ACTIVITY);
   const resolver = jobsResolver();
   for (const style of [CARD_STYLE.NEON, CARD_STYLE.FLOAT]) {
     globalThis[CARD_STYLE_SLOT] = style;
@@ -491,7 +491,7 @@ test('registerJobsCard hands one resolver to the host hook and reports a host th
   assert.deepEqual(registerJobsCard({}, { metrics }), { registered: false, resolver: undefined });
 });
 
-test('the Card activity line covers the four job tools, so the bridge can answer for them', () => {
+test('the Card activity line covers the four job tools, so the shell API can answer for them', () => {
   for (const scopes of [true, false]) {
     const design = toolsActivityDesign({ scopes });
     for (const tool of JOB_TOOLS) assert.ok(design.tools.includes(tool), `${tool} (scopes: ${scopes})`);

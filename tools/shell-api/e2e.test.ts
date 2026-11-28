@@ -35,9 +35,9 @@ import {
   type TranscriptTransform,
 } from "../../lib/shell-api/index.ts";
 // The real Pi entry: armed and commanded exactly as Pi loads it.
-import gentleShellBridge, {
-  type BridgeExtensionApi,
-  type BridgeSessionHandler,
+import gentleShellShellApi, {
+  type ShellExtensionApi,
+  type ShellSessionHandler,
 } from "../../lib/shell-api/extension.ts";
 
 /** One recorded command registration: the host's own shape, used to prove none is added. */
@@ -92,15 +92,15 @@ test.afterEach(() => {
 });
 
 interface Entry {
-  sessionHandlers: BridgeSessionHandler[];
+  sessionHandlers: ShellSessionHandler[];
   commands: Array<{ name: string; description?: string; handler: RecordedCommandHandler }>;
 }
 
 /** Load the real extension entry against a recording API, as Pi would. */
 const loadEntry = (): Entry => {
-  const sessionHandlers: BridgeSessionHandler[] = [];
+  const sessionHandlers: ShellSessionHandler[] = [];
   const commands: Entry["commands"] = [];
-  const pi: BridgeExtensionApi = {
+  const pi: ShellExtensionApi = {
     // `gentle-pi` is loaded, so the runtime gate is open (S9/T12).
     getCommands: () => [{ name: "gentle:customize" }],
     on(_event, handler) {
@@ -110,11 +110,11 @@ const loadEntry = (): Entry => {
       commands.push({ name, description: command.description, handler: command.handler });
     },
   };
-  gentleShellBridge(pi);
+  gentleShellShellApi(pi);
   return { sessionHandlers, commands };
 };
 
-/** Pi fires `session_start`; the entry arms the bridge. */
+/** Pi fires `session_start`; the entry arms the shell API. */
 const armThroughEntry = (ui: unknown): Entry => {
   const entry = loadEntry();
   entry.sessionHandlers[0]({}, { hasUI: true, ui });
@@ -239,14 +239,14 @@ test("the hook registry is preferred through the entry: nothing wrapped, rows vi
 
 test("createStore writes atomically under the real config-home override", () => {
   const store = createStore("e2e");
-  const bridgeDir = join(configHome, "gentle-shell-bridge");
+  const storeDir = join(configHome, "gentle-shell-bridge");
 
   store.set("bannerSource", "output");
 
-  assert.ok(store.path.startsWith(bridgeDir), "the store path follows GENTLE_PI_CONFIG_HOME");
-  assert.equal(store.path, join(bridgeDir, "e2e.json"));
+  assert.ok(store.path.startsWith(storeDir), "the store path follows GENTLE_PI_CONFIG_HOME");
+  assert.equal(store.path, join(storeDir, "e2e.json"));
   assert.equal(store.get("bannerSource", "activity"), "output");
-  const entries = readdirSync(bridgeDir);
+  const entries = readdirSync(storeDir);
   assert.ok(entries.includes("e2e.json"));
   assert.deepEqual(entries.filter((name) => name.endsWith(".tmp")), [], "no temp file remains");
   const document = JSON.parse(readFileSync(store.path, "utf8"));
@@ -255,9 +255,9 @@ test("createStore writes atomically under the real config-home override", () => 
 });
 
 test("a malformed store file falls back, is recorded as a problem, and is fixed by a later set", () => {
-  const bridgeDir = join(configHome, "gentle-shell-bridge");
-  mkdirSync(bridgeDir, { recursive: true });
-  const path = join(bridgeDir, "broken.json");
+  const storeDir = join(configHome, "gentle-shell-bridge");
+  mkdirSync(storeDir, { recursive: true });
+  const path = join(storeDir, "broken.json");
   writeFileSync(path, "{ not json", "utf8");
   const store = createStore("broken");
 
@@ -316,13 +316,12 @@ test("S8 end to end: action persists first and the repaint shows the new bullet"
 
 test("the public entry exports exactly the contract surface and no test seams", () => {
   assert.deepEqual(Object.keys(publicApi).sort(), [
-    "BRIDGE_READY_EVENT",
+    "SHELL_READY_EVENT",
     "STORE_SCHEMA_VERSION",
     "VERSION",
-    "bridgeApi",
     "createStore",
-    "isBridgeApi",
-    "onBridgeApi",
+    "isShellApi",
+    "onShellApi",
     "registerCardStyle",
     "registerMessageDesign",
     "registerRows",
@@ -333,6 +332,7 @@ test("the public entry exports exactly the contract surface and no test seams", 
     "resolveMessageDesignFollow",
     "resolveMessageDesignSelection",
     "resolveToolDesignSelection",
+    "shellApi",
   ]);
   for (const seam of [
     "installCardStyleTransform",
@@ -364,9 +364,9 @@ test("the public entry exports exactly the contract surface and no test seams", 
     "setRailContributor",
     "getSectionFailures",
     "getSidebarDiagnostics",
-    "resetBridgeApiForTests",
-    "publishBridgeApi",
-    "BRIDGE_API_KEY",
+    "resetShellApiForTests",
+    "publishShellApi",
+    "SHELL_API_KEY",
     "snapshotTransforms",
     "resetTransformsForTests",
     "applyTransforms",

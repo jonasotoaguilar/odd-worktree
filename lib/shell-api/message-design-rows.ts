@@ -19,7 +19,7 @@
  * This module is internal: `src/index.ts` does not re-export it.
  */
 
-import { registerBridgeRows, snapshotProviders } from "./bus.ts";
+import { registerShellApiRows, snapshotProviders } from "./bus.ts";
 import { HOST_CARD_STYLE_CATEGORY } from "./card-style-line.ts";
 import { recordNotice } from "./notices.ts";
 import { requestRepaint } from "./repaint.ts";
@@ -38,8 +38,8 @@ import {
 } from "./message-designs.ts";
 import type { CustomizeRow, MessageDesignRegistration, RowPreview, RowProvider } from "./types.ts";
 
-/** The rows provider's id; it is the bridge's own registration, never a plugin's. */
-export const MESSAGE_DESIGN_ROWS_PROVIDER_ID = "bridge.message-designs";
+/** The rows provider's id; it is the shell API's own registration, never a plugin's. */
+export const MESSAGE_DESIGN_ROWS_PROVIDER_ID = "shell-api.message-designs";
 
 /** The word every message line starts with: the `Cards` category's vocabulary for a message surface. */
 const MESSAGE_LINE_PREFIX = "Message";
@@ -212,7 +212,7 @@ export function messageDesignRows(): CustomizeRow[] {
 }
 
 interface MessageDesignRowsState {
-  /** The live provider's disposer, while the bridge has it registered. */
+  /** The live provider's disposer, while the shell API has it registered. */
   dispose?: () => void;
   /**
    * The exact provider object this process registered. the diagnostics record filters by IDENTITY and not by
@@ -221,8 +221,8 @@ interface MessageDesignRowsState {
   provider?: RowProvider;
 }
 
-/** Process-global, like every other piece of bridge state: two copies must agree. */
-const ROWS_KEY = Symbol.for("gentle-shell-bridge.message-designs.rows.v1");
+/** Process-global, like every other piece of shell API state: two copies must agree. */
+const ROWS_KEY = Symbol.for("odd-worktree.message-designs.rows.v1");
 
 function rowsHost(): Record<symbol, MessageDesignRowsState | undefined> {
   // SAFETY: only `rowsState()` writes this key, and it re-checks the shape before trusting a value left
@@ -247,17 +247,17 @@ function rowsState(): MessageDesignRowsState {
 /**
  * Register the message-design line for this process and return a disposer that withdraws it.
  *
- * Call it when the bridge arms; it needs no `tui` and no capture. The provider is NOT registered
+ * Call it when the shell API arms; it needs no `tui` and no capture. The provider is NOT registered
  * here: it is registered the moment a design exists, because a session with no design must gain no
  * provider, no row and no status line, and must pay nothing per menu build (S4). A design already
- * registered when the bridge arms installs the line immediately. Installing twice is a no-op, so a
+ * registered when the shell API arms installs the line immediately. Installing twice is a no-op, so a
  * second arm or a second loaded copy of this package cannot contribute the line twice.
  */
 export function installMessageDesignRows(): () => void {
   const state = rowsState();
   const install = (): void => {
     if (state.dispose !== undefined) return;
-    // The bus replaces a provider that reuses an id. This id is the bridge's own, so a plugin that
+    // The bus replaces a provider that reuses an id. This id is the shell API's own, so a plugin that
     // registered it first keeps it: replacing it would silently take a provider the user already has
     // off the menu, and hiding it from the diagnostics record would make the report lie about it.
     if (snapshotProviders().some((provider) => provider.id === MESSAGE_DESIGN_ROWS_PROVIDER_ID)) {
@@ -274,10 +274,10 @@ export function installMessageDesignRows(): () => void {
       rows: () => messageDesignRows(),
     };
     state.provider = provider;
-    state.dispose = registerBridgeRows(provider);
+    state.dispose = registerShellApiRows(provider);
   };
   setMessageDesignRowsInstaller(install);
-  // A design that registered before the bridge armed is already waiting to be shown, and nothing else
+  // A design that registered before the shell API armed is already waiting to be shown, and nothing else
   // can be: the id is reserved (§1), so no plugin can hold it, hand it back, or be replaced by it. With
   // no design there is no provider at all — Pi credits one fewer registration, the menu runs nothing
   // extra, and the diagnostics record keeps its historical output (S4).
@@ -296,9 +296,9 @@ export function installMessageDesignRows(): () => void {
 
 /**
  * The exact provider object this process registered, or `undefined` when it has none. Internal: it is
- * how the diagnostics record tells the bridge's own line from a plugin's provider that uses the same id.
+ * how the diagnostics record tells the shell API's own line from a plugin's provider that uses the same id.
  */
-export function bridgeMessageDesignRowsProvider(): RowProvider | undefined {
+export function shellApiMessageDesignRowsProvider(): RowProvider | undefined {
   return rowsState().provider;
 }
 

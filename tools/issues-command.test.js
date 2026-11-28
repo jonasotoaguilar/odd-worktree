@@ -36,7 +36,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { LIB_DIR, stubbedSource, installDefaultBridge, withGhPath } = require('./fixtures/load-extension.js');
+const { LIB_DIR, stubbedSource, installDefaultShellApi, withGhPath } = require('./fixtures/load-extension.js');
 
 // The client and git seam the extension itself loaded. One extension load compiles
 // its own lib modules, so a fake must reach THAT instance — the extension's
@@ -95,9 +95,9 @@ afterEach(() => {
   // reach the next one.
   if (typeof ghIssues.setGateClock === 'function') ghIssues.setGateClock(null);
   if (typeof ghIssues.clearCachedGhStatus === 'function') ghIssues.clearCachedGhStatus();
-  // S8 (T4): the rail's published bridge is process-wide, so no test may leave
+  // S8 (T4): the rail's published shell API is process-wide, so no test may leave
   // one behind for the next.
-  delete globalThis[Symbol.for('gentle-shell-bridge/api/v1')];
+  delete globalThis[Symbol.for('odd-worktree/shell-api/v1')];
 });
 
 // S4 (T3): the read cache has a disk half now, so every test gets its own cache
@@ -121,9 +121,9 @@ function fixture(name) {
 // runs with a PATH that answers the way the case asked — present unless it passes
 // `{ gh: false }` — so the machine the suite runs on decides nothing.
 async function loadExtension(options = {}) {
-  // S18 (T14): the extension registers nothing without gentle-shell-bridge, so
-  // this file's own host publishes the shared fixture's bridge before the load.
-  installDefaultBridge();
+  // S18 (T14): the extension registers nothing without the shell API, so
+  // this file's own host publishes the shared fixture's shell API before the load.
+  installDefaultShellApi();
   return withGhPath(options && options.gh === false ? 'absent' : 'present', async () => {
     const dir = track(fs.mkdtempSync(path.join(os.tmpdir(), 'odd-issues-ext-')));
     const copy = path.join(dir, 'odd-worktree-tools.mjs');
@@ -171,7 +171,7 @@ async function fireSessionStart(hooks, ctx) {
   }
 }
 
-// This file is about the `gh` gate and the panel. T2 (native-bridge) removed the missing-bridge
+// This file is about the `gh` gate and the panel. T2 (native-shell API) removed the missing-shell API
 // hint entirely — there is no install line and no per-process warn slot — so every count below is
 // the whole list the host received, and it means the same thing alone or in the full run.
 const recordNote = (notes) => (message, level) => {
@@ -1904,7 +1904,7 @@ describe('/issues <number> opens the panel on one issue (S7)', () => {
 // ---------------------------------------------------------------------------
 // S8 (the panel ODD's T4; the sidebar ODD's S9 consumer half): the rail's
 // process cache is what makes the first frame instant. The cache is filled by
-// the section's ONE combined read — through the published bridge — and the
+// the section's ONE combined read — through the published shell API — and the
 // panel READS it, keyed by the identity the panel itself just proved.
 //
 // The contract under test, through the public surface only:
@@ -1920,19 +1920,19 @@ describe('/issues <number> opens the panel on one issue (S7)', () => {
 // ---------------------------------------------------------------------------
 
 describe('/issues opens from the rail cache (S8/T4)', () => {
-  const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+  const SHELL_SLOT = Symbol.for('odd-worktree/shell-api/v1');
   // The identity both halves prove for the fixture checkout: one remote would
   // have no scope identity, and `makeRepo` has none at all, so gh's own answer
   // (`tools/fixtures/gh-repo-view.json`) is normalized host-qualified.
   const IDENTITY = 'github.com/jonasotoaguilar/herdr-gentle-shell';
 
-  function installBridge() {
+  function installShellApi() {
     const registered = [];
-    globalThis[BRIDGE_SLOT] = {
-      schema: 'gentle-shell-bridge/api',
+    globalThis[SHELL_SLOT] = {
+      schema: 'odd-worktree/shell-api',
       version: 1,
       registerRows: () => {},
-      // T5 of odd-rail-section: the bridge carries TWO sections now, so this double
+      // T5 of odd-rail-section: the shell API carries TWO sections now, so this double
       // records the `GITHUB` one it is about. Every registration still receives a
       // disposer, so the `ODD` rail registers alongside rather than being refused.
       registerSection: (section) => {
@@ -2066,12 +2066,12 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
     return { component, notes };
   }
 
-  // The rail fills the cache exactly as it does in a live session: the bridge is
+  // The rail fills the cache exactly as it does in a live session: the shell API is
   // published BEFORE the extension loads (that is when the section is
   // registered), `session_start` binds the checkout, and ONE drawn frame starts
   // the section's read.
   async function warmRail(root, related, options = {}) {
-    const registered = installBridge();
+    const registered = installShellApi();
     const loaded = await loadExtension();
     const gh = cacheRunner({
       related,
@@ -2081,7 +2081,7 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
     });
     ghIssues.setGhRunner(gh.runner);
     await fireSessionStart(loaded.hooks, gateCtx(root, []));
-    assert.equal(registered.length, 1, 'the rail section is registered through the bridge');
+    assert.equal(registered.length, 1, 'the rail section is registered through the shell API');
     const section = registered[0];
     const ctx = { cwd: root, ui: { notify: () => {} } };
     const deadline = Date.now() + 4000;
@@ -2237,7 +2237,7 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
     const base = makeIssuesRunner();
     const calls = [];
     const held = [];
-    // No bridge at all: no rail, no draw, so no entry for this identity.
+    // No shell API at all: no rail, no draw, so no entry for this identity.
     const loaded = await loadExtension();
     ghIssues.setGhRunner(async (bin, argv, opts) => {
       calls.push({ bin, argv: argv.slice(), cwd: opts ? opts.cwd : undefined });
@@ -2421,7 +2421,7 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
 // asignacion … no se refresca altiro los tabs … actualmente eso demora o no
 // refrezca de hecho hasta que lo cierro y abro panel». This drives the REAL
 // panel over the injected `gh` client, and the REAL rail section over the
-// published bridge, so every assertion below is a read or a write that reached
+// published shell API, so every assertion below is a read or a write that reached
 // `gh`:
 // - a save that changed the VIEWER's own assignment drops the rail's cached
 //   entry for this repository, so the rail's next read is the FULL one (a delta
@@ -2432,7 +2432,7 @@ describe('/issues opens from the rail cache (S8/T4)', () => {
 //   the pre-write rows and count stay, and the draft stays open with the error.
 // ---------------------------------------------------------------------------
 describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)', () => {
-  const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+  const SHELL_SLOT = Symbol.for('odd-worktree/shell-api/v1');
   const VIEWER = 'jonasotoaguilar';
 
   // The one repository state both surfaces read. `assignees` is what makes an
@@ -2554,13 +2554,13 @@ describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)
     return { runner, calls };
   }
 
-  // The rail fills its cache exactly as a live session does: the bridge is
+  // The rail fills its cache exactly as a live session does: the shell API is
   // published BEFORE the extension loads, `session_start` binds the checkout,
   // and ONE drawn frame starts the read.
   async function warmRail(root, state, options = {}) {
     const registered = [];
-    globalThis[BRIDGE_SLOT] = {
-      schema: 'gentle-shell-bridge/api',
+    globalThis[SHELL_SLOT] = {
+      schema: 'odd-worktree/shell-api',
       version: 1,
       registerRows: () => {},
       // T5 of odd-rail-section: record the `GITHUB` section this case is about; the
@@ -2576,7 +2576,7 @@ describe('/issues reflects a self-assignment on the panel and the rail (S21/T17)
     const gh = assignmentRunner(state, options.failure);
     ghIssues.setGhRunner(gh.runner);
     await fireSessionStart(loaded.hooks, gateCtx(root, []));
-    assert.equal(registered.length, 1, 'the rail section is registered through the bridge');
+    assert.equal(registered.length, 1, 'the rail section is registered through the shell API');
     const section = registered[0];
     const ctx = { cwd: root, ui: { notify: () => {} } };
     const deadline = Date.now() + 4000;

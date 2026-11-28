@@ -148,13 +148,13 @@ test("a disposer from another module copy removes its provider", async () => {
 test("the bus lives on globalThis behind a stable Symbol.for key", () => {
   registerRows(withId("a"));
   const slot = (globalThis as unknown as Record<symbol, unknown>)[
-    Symbol.for("gentle-shell-bridge.providers")
+    Symbol.for("odd-worktree.providers")
   ];
   assert.ok(slot !== undefined, "the registration state must sit on globalThis");
   assert.notEqual(
-    Symbol.for("gentle-shell-bridge.providers"),
+    Symbol.for("odd-worktree.providers"),
     Symbol.for("gentle-pi.customize-row-providers"),
-    "the bridge bus must not reuse the hook registry key",
+    "the shell API bus must not reuse the hook registry key",
   );
 });
 

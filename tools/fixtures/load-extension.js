@@ -10,9 +10,9 @@ const { pathToFileURL } = require('node:url');
 
 const LIB_DIR = path.resolve(__dirname, '../../lib');
 const SRC = path.resolve(__dirname, '../../extensions/odd-worktree-tools.ts');
-// The bridge's real slot, read here the way the extension and its own suites read
+// The shell API's real slot, read here the way the extension and its own suites read
 // it: the one published object, never an import.
-const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+const SHELL_SLOT = Symbol.for('odd-worktree/shell-api/v1');
 
 const TYPE_STUB = [
   'const Type = {',
@@ -28,14 +28,14 @@ const TYPE_STUB = [
 // The stubbed source is read once per process; a test that asserts on the
 // source itself can read SRC directly.
 //
-// S2/S3 (native-bridge T5): the entry statically imports the shell API from
+// S2/S3 (native-shell API T5): the entry statically imports the shell API from
 // `../lib/shell-api/extension.ts` — odd-worktree's own code, which publishes the API slot at
 // module load and arms the shell surfaces. A plain-JS suite may import neither a `.ts` file nor
 // its TypeScript graph, so that import is stubbed here exactly like the two Pi package imports:
 // the scratch `.mjs` gets a no-op factory and the slot is whatever the fixture publishes (see
-// `installDefaultBridge`).
-const BRIDGE_IMPORT = 'import bridgeExtension from "../lib/shell-api/extension.ts";';
-const BRIDGE_STUB = 'const bridgeExtension = () => {};';
+// `installDefaultShellApi`).
+const SHELL_API_IMPORT = 'import shellApiExtension from "../lib/shell-api/extension.ts";';
+const SHELL_API_STUB = 'const shellApiExtension = () => {};';
 
 function stubOnce(source, needle, replacement) {
   if (source.includes(needle) === false) return null;
@@ -50,35 +50,35 @@ function stubbedSource() {
   const stubbedTool = stubOnce(stubbedType === null ? srcText : stubbedType,
     'import { defineTool } from "@earendil-works/pi-coding-agent";',
     'const defineTool = (def) => def;');
-  const stubbed = stubOnce(stubbedTool === null ? srcText : stubbedTool, BRIDGE_IMPORT, BRIDGE_STUB);
+  const stubbed = stubOnce(stubbedTool === null ? srcText : stubbedTool, SHELL_API_IMPORT, SHELL_API_STUB);
   if (stubbedType === null || stubbedTool === null || stubbed === null || stubbed === srcText) {
-    throw new Error('expected all imports stubbed: the two Pi package imports and the vendored bridge import');
+    throw new Error('expected all imports stubbed: the two Pi package imports and the vendored shell API import');
   }
   cached = stubbed;
   return cached;
 }
 
-// S18 (issues-startup-performance T14) as amended by native-bridge T2/T5: the shell API is
+// S18 (issues-startup-performance T14) as amended by native-shell API T2/T5: the shell API is
 // NATIVE (`lib/shell-api/`, stubbed out of this plain-JS copy), so a host double
 // that publishes nothing on the slot gets an extension that registers NOTHING — every suite
-// here would then be asserting nothing. The fake host therefore HAS the bridge:
-// `defaultBridge()` is the published object with the schema and version the code validates
+// here would then be asserting nothing. The fake host therefore HAS the shell API:
+// `defaultShellApi()` is the published object with the schema and version the code validates
 // and the members the surfaces this package contributes actually use — the rail's
 // `registerSection`, the `Cards` rows' `registerRows`, the design's `registerToolDesign`, the
 // picker's keymap action and palette row, and the store. Nothing here weakens
-// `issuesSidebarBridge()`'s slot check: the object is a real enough bridge, not a thin one.
+// `issuesSidebarShellApi()`'s slot check: the object is a real enough shell API, not a thin one.
 //
-// `loadExtension(pi, { bridge: false })` is the opt-out for a suite that must
+// `loadExtension(pi, { shellApi: false })` is the opt-out for a suite that must
 // prove the absent-or-incompatible case: it publishes nothing and touches no slot, so the
 // test itself decides what is on it.
-function defaultBridge() {
+function defaultShellApi() {
   const sections = [];
   const rows = [];
   const designs = [];
   const keymaps = [];
   const commands = [];
   const api = {
-    schema: 'gentle-shell-bridge/api',
+    schema: 'odd-worktree/shell-api',
     version: 1,
     registerSection: (section) => {
       sections.push(section);
@@ -92,7 +92,7 @@ function defaultBridge() {
       designs.push(design);
       return () => {};
     },
-    // The picker's two optional members: present, but this bridge resolves no key,
+    // The picker's two optional members: present, but this shell API resolves no key,
     // so no suite that did not ask for one gets a shortcut bound.
     registerKeymap: (registration) => {
       keymaps.push(registration);
@@ -102,7 +102,7 @@ function defaultBridge() {
       commands.push(registration);
       return () => {};
     },
-    resolveKeymap: () => ({ unavailable: 'the default test bridge publishes no key' }),
+    resolveKeymap: () => ({ unavailable: 'the default test shell API publishes no key' }),
     createStore: () => ({
       get: () => undefined,
       set: () => {},
@@ -113,15 +113,15 @@ function defaultBridge() {
   return { api, sections, rows, designs, keymaps, commands };
 }
 
-// Publish the default bridge on the real slot, unless a suite already published
-// its own (a suite's fake always wins: it is the one that bridge's assertions
+// Publish the default shell API on the real slot, unless a suite already published
+// its own (a suite's fake always wins: it is the one that shell API's assertions
 // measure). The published object is left in place afterwards, exactly like a real
-// bridge's: it is the host's, not this load's.
-function installDefaultBridge() {
-  if (globalThis[BRIDGE_SLOT] !== undefined && globalThis[BRIDGE_SLOT] !== null) return null;
-  const bridge = defaultBridge();
-  globalThis[BRIDGE_SLOT] = bridge.api;
-  return bridge;
+// shell API's: it is the host's, not this load's.
+function installDefaultShellApi() {
+  if (globalThis[SHELL_SLOT] !== undefined && globalThis[SHELL_SLOT] !== null) return null;
+  const shellApi = defaultShellApi();
+  globalThis[SHELL_SLOT] = shellApi.api;
+  return shellApi;
 }
 
 // S13 (issues-startup-performance T11, corrected): the two issues surfaces are
@@ -164,16 +164,16 @@ async function withGhPath(mode, run) {
 // Load the extension with the injected `pi` double. Returns the registered
 // commands and tools keyed by name, exactly as the host received them.
 //
-// S18 (T14): the slot is checked ONCE, in the factory, and the vendored bridge's own factory
+// S18 (T14): the slot is checked ONCE, in the factory, and the vendored shell API's own factory
 // is stubbed here (no `.ts` may be imported by a plain-JS suite), so the fixture publishes the
-// bridge BEFORE the factory runs. With no bridge the extension registers nothing at all, so a
-// suite that wants that passes `{ bridge: false }`.
+// shell API BEFORE the factory runs. With no shell API the extension registers nothing at all, so a
+// suite that wants that passes `{ shellApi: false }`.
 //
 // S13 (T11): `gh` is present on PATH unless the suite passes `{ gh: false }`, for the
 // same reason — the issues surfaces do not exist without it.
 async function loadExtension(pi, options = {}) {
   const opts = options && typeof options === 'object' ? options : {};
-  if (opts.bridge !== false) installDefaultBridge();
+  if (opts.shellApi !== false) installDefaultShellApi();
   return withGhPath(opts.gh === false ? 'absent' : 'present', () => loadWithPath(pi));
 }
 
@@ -209,13 +209,13 @@ async function loadWithPath(pi) {
 module.exports = {
   LIB_DIR,
   SRC,
-  BRIDGE_SLOT,
-  BRIDGE_IMPORT,
-  BRIDGE_STUB,
+  SHELL_SLOT,
+  SHELL_API_IMPORT,
+  SHELL_API_STUB,
   loadExtension,
   stubbedSource,
-  defaultBridge,
-  installDefaultBridge,
+  defaultShellApi,
+  installDefaultShellApi,
   ghPath,
   withGhPath,
 };

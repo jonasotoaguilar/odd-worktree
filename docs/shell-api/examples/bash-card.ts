@@ -2,13 +2,13 @@
  * Worked consumer of odd-worktree's shell API: ONE Pi extension that contributes a tool DESIGN, a card
  * STYLE, a sidebar section, and a demo row provider, and nothing else.
  *
- * A. The bash design — through the bridge, as a `registerToolDesign` registration. The host draws a
+ * A. The bash design — through the shell API, as a `registerToolDesign` registration. The host draws a
  *    minimal bash card with just the `$` prompt as its glyph (`quiet-tools.ts:521-525`: *"Minimal
  *    cards title bash with the bare command; the card glyph supplies the `$` prompt"*), so the card
  *    heads with a mark the user cannot change from `/gentle:customize`. This file registers the
  *    design the user asked for: the SAME card, headed with the word `bash` instead of that mark.
  *
- *    A design is not a card renderer and not a second grammar. The bridge registers Pi's ONE
+ *    A design is not a card renderer and not a second grammar. The shell API registers Pi's ONE
  *    `registerToolRenderer` resolver, builds the HOST's own component, and hands `apply` the rows
  *    that card produced:
  *
@@ -19,7 +19,7 @@
  *    So the frame is the host's, by construction: with `Card style = neon` the card stays neon, with
  *    `float` it stays float, and every byte this file does not deliberately change — ANSI, padding,
  *    hint, rail — comes back exactly as drawn. Pi resolves renderers when it builds a card, and the
- *    bridge reads the live selection on every render pass, so choosing the design repaints the cards
+ *    shell API reads the live selection on every render pass, so choosing the design repaints the cards
  *    already on screen, not only the next one.
  *
  *    The design changes exactly two things, both on the heading row: the `$` mark becomes `bash`, and
@@ -45,18 +45,18 @@
  *    `native`, the host's own card, so installing this file changes no rendering until the user picks
  *    the `bash heading` value.
  *
- * B. The card style — through the bridge. `registerCardStyle` adds one value, `plain`, to the
+ * B. The card style — through the shell API. `registerCardStyle` adds one value, `plain`, to the
  *    `Card style` line `/gentle:customize` already draws: `○ neon ○ float ○ plain`. Choosing it
- *    makes the bridge repaint every tool card the host drew with this file's frame — a single
+ *    makes the shell API repaint every tool card the host drew with this file's frame — a single
  *    gutter character per row, the heading as plain text, no box — and choosing `neon` or `float`
  *    puts the host's own rendering back. It is a style for TOOL cards in general: a `read` card is
- *    repainted exactly like a `bash` one. Nothing here parses a card: the bridge measures, extracts
+ *    repainted exactly like a `bash` one. Nothing here parses a card: the shell API measures, extracts
  *    the heading and the hint, and hands them over. Because the design runs FIRST and this style
  *    repaints AFTER, the word `bash` the design put on a bash heading is what `plain` draws — and a
  *    card content the host draws outside the float grammar (`default`) is passed through exactly,
  *    because a style can only repaint what the host framed.
  *
- * C. The sidebar section — through the bridge. `registerSection` adds a `CARD BASH` card to
+ * C. The sidebar section — through the shell API. `registerSection` adds a `CARD BASH` card to
  *    gentle-shell's fullscreen sidebar, drawn by the host's own frame, and the same registration
  *    gives it a `Sections` toggle in `/gentle:customize` with no row, setting or store written by
  *    this file. It reports the LIVE design state: which value is selected for `bash` (the header's
@@ -65,7 +65,7 @@
  *    design could recognise the frames it was handed (`unrecognised  none`, or the reason — also
  *    delivered once through `ctx.ui.notify`).
  *
- *    The card behaves like a host card (N10–N14): clicking the HEADER folds the section (the bridge
+ *    The card behaves like a host card (N10–N14): clicking the HEADER folds the section (the shell API
  *    owns that, and persists it) and the header's right-aligned meta is the live selection — printed
  *    once, so the value never appears twice. The design is chosen on the `Cards` line, so the report
  *    rows carry no `onClick`; the section's ONE action row is the demo below.
@@ -76,30 +76,30 @@
  *    (and hover paints it with the host's own role), so both the plugin's state and the pointer
  *    handling are visible without a debug build.
  *
- * D. The demo category — through the bridge, as a `registerRows` registration. ONE provider (stable
+ * D. The demo category — through the shell API, as a `registerRows` registration. ONE provider (stable
  *    id, replaced in place on `/reload`) adds a category no host code had to know about — `Card
  *    bash` — with exactly two rows as the user reads them: a `Demo toggle` (two consecutive rows
  *    sharing one `choice.setting`, values `on`/`off`, persisted default `off`) and a plain `Demo
  *    button` row with an `action` and no `choice`. Neither does anything real; they exist only to
  *    prove the surface works, and their effect is visible in the section above. Their state lives in
- *    the example's OWN store (`bash-card`), never in the bridge's selection file.
+ *    the example's OWN store (`bash-card`), never in the shell API's selection file.
  *
- *    The selection lives in the BRIDGE's own store (`bridge-tool-designs`), which is what makes it
+ *    The selection lives in the SHELL API's own store (`bridge-tool-designs`), which is what makes it
  *    survive a reload and belong to the user rather than to this example. The example only READS it,
  *    through the published `createStore`, to describe the state; it never writes another owner's file.
  *
- * E. The handshake — a runtime meeting, not a dependency. The file and the bridge agree on one stable
+ * E. The handshake — a runtime meeting, not a dependency. The file and the shell API agree on one stable
  *    `globalThis` symbol, so there is no path, no environment variable and no import (this repository
- *    depends on neither Pi nor the bridge). Two load orders really happen, so both work: the example
+ *    depends on neither Pi nor the shell API). Two load orders really happen, so both work: the example
  *    reads the symbol in its own `session_start` handler, AND listens on Pi's cross-extension bus for
- *    `"gentle-shell-bridge:ready"` when the symbol is not there yet. Whichever happens first registers
+ *    `"odd-worktree:shell-ready"` when the symbol is not there yet. Whichever happens first registers
  *    the surfaces; a guard makes the second a no-op, and the returned disposer removes every one.
  *
- * A bridge that publishes an incompatible API is treated as absent, and the example registers nothing.
+ * A shell API that publishes an incompatible API is treated as absent, and the example registers nothing.
  * It says so once through `ctx.ui.notify` — the only channel Pi renders inside its TUI; nothing here
- * writes to stdout/stderr. A bridge object older than `registerToolDesign` keeps the section and
+ * writes to stdout/stderr. A shell API object older than `registerToolDesign` keeps the section and
  * says `resolver  absent`; one older than `registerCardStyle` says `card style  absent`; the members
- * are optional, so a surface the bridge never promised is never warned about.
+ * are optional, so a surface the shell API never promised is never warned about.
  *
  * Loading: copy this file into `~/.pi/agent/extensions/` (or point Pi's `packages` entry at this
  * repository) and `/reload`. The `bash` line defaults to the host's own card.
@@ -124,19 +124,19 @@ const DESIGN_ID = "bash-card.bash-heading";
 const DESIGN_LABEL = "bash heading";
 /**
  * This plugin's INTEGRATIONS row. Required for a file with no owning `package.json` above it: the
- * bridge refuses to invent a name, so a copied single-file extension names itself here. The first
+ * shell API refuses to invent a name, so a copied single-file extension names itself here. The first
  * registration fixes the name for the identity; the section below inherits it.
  */
 const PLUGIN_NAME = "Card bash";
 
 /**
- * The bridge's own selection file, mirrored the way the API symbol is (this file cannot import the
- * bridge, not even for a constant). The example READS it to describe the live state; the value is
- * written by the bridge's own `Cards` row, so the user's choice has one owner.
+ * The shell API's own selection file, mirrored the way the API symbol is (this file cannot import the
+ * shell API, not even for a constant). The example READS it to describe the live state; the value is
+ * written by the shell API's own `Cards` row, so the user's choice has one owner.
  */
 const DESIGNS_STORE_ID = "bridge-tool-designs";
 const DESIGNS_STORE_KEY = "selections";
-/** The reserved value meaning "the host's own card" (`TOOL_DESIGN_NATIVE` in the bridge). */
+/** The reserved value meaning "the host's own card" (`TOOL_DESIGN_NATIVE` in the shell API). */
 const NATIVE_VALUE = "native";
 
 /** Stable across loads, so `/reload` replaces this section instead of stacking it. */
@@ -144,7 +144,7 @@ const SECTION_ID = "bash-card.status";
 /** The card heading, drawn by the host's own frame like `AGENTS` / `STATS`. */
 const SECTION_TITLE = "CARD BASH";
 /**
- * What the `Sections` toggle reads. Passed explicitly: the bridge derives `card bash` from the title
+ * What the `Sections` toggle reads. Passed explicitly: the shell API derives `card bash` from the title
  * anyway, but a reader should copy a label, never the dotted id above.
  */
 const SECTION_ROW_LABEL = "card bash";
@@ -159,7 +159,7 @@ const SECTION_PRESSES_LABEL = "demo presses";
  */
 const DEMO_PROVIDER_ID = "bash-card.demo";
 const DEMO_CATEGORY = "Card bash";
-/** The example's OWN store, not the bridge's design-selection file. */
+/** The example's OWN store, not the shell API's design-selection file. */
 const EXAMPLE_STORE_ID = "bash-card";
 const DEMO_TOGGLE_SETTING = "Demo toggle";
 const DEMO_BUTTON_LABEL = "Demo button";
@@ -170,7 +170,7 @@ const DEMO_PRESSES_KEY = "demoPresses";
 // Host shapes, declared structurally
 // ---------------------------------------------------------------------------------------------
 
-interface BridgeStoreLike {
+interface ShellStoreLike {
   get<T>(key: string, fallback: T): T;
   set(key: string, value: unknown): void;
 }
@@ -214,7 +214,7 @@ interface RowProviderLike {
 }
 
 /**
- * What a card style's `top` receives (`lib/shell-api/types.ts`, `CardFrameTopContext`): the width the bridge
+ * What a card style's `top` receives (`lib/shell-api/types.ts`, `CardFrameTopContext`): the width the shell API
  * measured and the heading it extracted. A style never parses a card; it only draws.
  */
 interface CardFrameTopLike {
@@ -243,7 +243,7 @@ interface CardFrameLike {
 }
 
 /**
- * One card style as the bridge accepts it (`lib/shell-api/types.ts`, `CardStyleRegistration`). The id is the
+ * One card style as the shell API accepts it (`lib/shell-api/types.ts`, `CardStyleRegistration`). The id is the
  * stored selection key and stays internal; `label` is the short value the user reads on the line.
  */
 interface CardStyleLike {
@@ -257,7 +257,7 @@ interface CardStyleLike {
 }
 
 /**
- * One tool design as the bridge accepts it (`lib/shell-api/types.ts`, `ToolDesignRegistration`). The host's
+ * One tool design as the shell API accepts it (`lib/shell-api/types.ts`, `ToolDesignRegistration`). The host's
  * rows go in, the rows to draw come out; `apply` never sees Pi and never owns the frame.
  *
  * Exactly one of `tool` / (`line` + `tools`) is required. This example uses the UNGROUPED shape, so
@@ -291,15 +291,15 @@ interface ToolDesignContextLike {
   theme?: unknown;
   /**
    * Which half of the card this pass is drawing (S12): `renderCall` or `renderResult`. OPTIONAL here
-   * because a bridge published before the field existed hands a context without it; this file then
+   * because a shell API published before the field existed hands a context without it; this file then
    * treats the part as UNKNOWN and keeps its previous behaviour (the row grammar decides), so an
-   * older bridge decorates exactly what it decorated before.
+   * older shell API decorates exactly what it decorated before.
    */
   part?: "call" | "result";
   /**
    * What the host's render context says about THIS call (`lib/shell-api/types.ts`, `ToolDesignRender`): its
    * `args` (read-only, the host's own object), `isPartial` (still running), `isError`, `durationMs`,
-   * `toolCallId`, `expanded`. OPTIONAL: an older bridge, or a host with no render context, leaves it out,
+   * `toolCallId`, `expanded`. OPTIONAL: an older shell API, or a host with no render context, leaves it out,
    * and this file does not read it today. A design that needs it must draw its previous output without.
    */
   render?: {
@@ -327,7 +327,7 @@ interface SectionRowLike {
 
 /**
  * The section contract (`docs/contract.md` §11), structural like every host shape here. A section
- * writes content only: no `choice`, no `action`, no `preview` — the bridge contributes the toggle,
+ * writes content only: no `choice`, no `action`, no `preview` — the shell API contributes the toggle,
  * the header, the collapse control and the pointer handling.
  */
 interface SidebarSectionLike {
@@ -342,25 +342,25 @@ interface SidebarSectionLike {
   /**
    * Where the card sits in the rail: `"start"` (top), `"end"` (the default, after every native
    * card), or `{ after: "<id>" }` — another section's id, or one of the host's own parts `todo`,
-   * `jobs`, `agents`, `footer`. Registration data like `order`: the bridge resolves it every frame,
+   * `jobs`, `agents`, `footer`. Registration data like `order`: the shell API resolves it every frame,
    * never stores it, and keeps where the card really landed (with the reason) in the record.
-   * Absent or unrecognisable means `"end"`, so an older bridge draws this card
+   * Absent or unrecognisable means `"end"`, so an older shell API draws this card
    * exactly where it drew it before the field existed.
    */
   placement?: "start" | "end" | { after: string };
 }
 
 /**
- * The API object this package publishes (`lib/shell-api/api.ts`, `BridgeApi`): the members this
+ * The API object this package publishes (`lib/shell-api/api.ts`, `ShellApi`): the members this
  * example calls, structurally. Nothing here imports the package, so the shape has to be declared.
  *
  * `registerToolDesign` is OPTIONAL by contract: the published object is first-wins, so a process
  * running an older copy can hand back an object without it. A consumer gates with `typeof
  * api.registerToolDesign === "function"` and keeps the section working. The same applies to
- * `registerRows`, `registerCardStyle` and `requestRepaint`: an older bridge keeps the design, the
+ * `registerRows`, `registerCardStyle` and `requestRepaint`: an older shell API keeps the design, the
  * plain style and the section, and the example degrades to no demo category rather than throwing.
  */
-interface BridgeApiLike {
+interface ShellApiLike {
   readonly schema: string;
   readonly version: number;
   registerSection(section: SidebarSectionLike): () => void;
@@ -368,7 +368,7 @@ interface BridgeApiLike {
   registerCardStyle?(style: CardStyleLike): () => void;
   registerRows?(provider: RowProviderLike): () => void;
   requestRepaint?(): void;
-  createStore(pluginId: string): BridgeStoreLike;
+  createStore(pluginId: string): ShellStoreLike;
 }
 
 /** The part of Pi's `session_start` context this file reads. */
@@ -425,7 +425,7 @@ interface ExtensionEventsLike {
 //    prompt) is output, not a heading.
 //
 // In the `float` cell the top row and a body row share both chrome and position, so this row grammar
-// alone could not tell a heading from output — which is why the bridge says WHICH part of the card it
+// alone could not tell a heading from output — which is why the shell API says WHICH part of the card it
 // is drawing (`ctx.part`, S12). The design acts on the CALL only: everything the result component
 // draws is returned byte-identical, so a script that echoes `$ …` keeps its output intact.
 //
@@ -854,16 +854,16 @@ function unrecognisedText(): string {
  * reported once.
  */
 function applyBashHeading(lines: readonly string[], ctx: ToolDesignContextLike): string[] {
-  // The tool name is the bridge's, and it is the same one this file declared; a design that
-  // received another tool's rows would be a bridge bug, and drawing them unchanged is the safe
+  // The tool name is the shell API's, and it is the same one this file declared; a design that
+  // received another tool's rows would be a shell API bug, and drawing them unchanged is the safe
   // answer rather than rewriting a card the design was not for.
   if (ctx.tool !== TOOL_NAME) return [...lines];
 
   // Only the CALL component heads a card (S12). The host draws the call and the result with the same
   // chrome, so in the `float` cell a result body row that begins with `$ ` sits exactly where a
   // heading sits — and real output does begin with `$ ` when a script echoes its commands. The
-  // bridge wraps the two renderers separately and says which one this is, so output is never
-  // rewritten. A context with NO `part` comes from an older bridge and is UNKNOWN, not a result:
+  // shell API wraps the two renderers separately and says which one this is, so output is never
+  // rewritten. A context with NO `part` comes from an older shell API and is UNKNOWN, not a result:
   // the previous behaviour stands and the row grammar below decides.
   if (ctx.part === "result") return [...lines];
 
@@ -905,7 +905,7 @@ function applyBashHeading(lines: readonly string[], ctx: ToolDesignContextLike):
 
 /**
  * A literal depiction for `/gentle:customize`'s preview. A Cards value draws ONE row (D5), so the
- * sample is the card's heading row and nothing else: the bridge uses a preview's first line.
+ * sample is the card's heading row and nothing else: the shell API uses a preview's first line.
  */
 const DESIGN_PREVIEW = {
   title: `Cards · ${DESIGN_LABEL}`,
@@ -931,7 +931,7 @@ function bashHeadingDesign(): ToolDesignLike {
 //
 // Restored from the version this file had before the design rewrite (`5c0c123:examples/bash-card.ts`
 // lines 344-415): the SAME id, so a stored selection still resolves, the same label and the same
-// literal preview. Nothing about it is bash-specific — the bridge hands a style the heading, the
+// literal preview. Nothing about it is bash-specific — the shell API hands a style the heading, the
 // hint and the body text it extracted from any tool card, and the style only decides what chrome to
 // draw around them.
 
@@ -939,7 +939,7 @@ function bashHeadingDesign(): ToolDesignLike {
 const CARD_STYLE_ID = "bash-card.plain";
 /**
  * What the user reads on the host's own `Card style` line. Short, and it collides with neither the
- * host's values (`neon`, `float`), the bridge's `native`, nor another style's label — the bridge
+ * host's values (`neon`, `float`), the shell API's `native`, nor another style's label — the shell API
  * rejects a duplicate label at registration (`docs/contract.md` §12).
  */
 const CARD_STYLE_LABEL = "plain";
@@ -961,7 +961,7 @@ function clipLine(text: string, width: number): string {
 }
 
 /**
- * The frame. Three functions, each handed a width and text the BRIDGE already measured and
+ * The frame. Three functions, each handed a width and text the SHELL API already measured and
  * extracted; nothing here looks for a title in a line or strips a frame. Every row goes through
  * `clipLine`, so the style can never emit a line wider than the width it was given.
  *
@@ -1005,14 +1005,14 @@ const CARD_STYLE_PREVIEW = {
 };
 
 /**
- * The registration this file sends, or nothing. A style draws what it is given: the bridge owns
+ * The registration this file sends, or nothing. A style draws what it is given: the shell API owns
  * detection, the heading and the width.
  */
 function bashCardStyle(): CardStyleLike {
   return {
     id: CARD_STYLE_ID,
     label: CARD_STYLE_LABEL,
-    // A label a user reads, passed explicitly so a reader copies the shape; the bridge would derive
+    // A label a user reads, passed explicitly so a reader copies the shape; the shell API would derive
     // `plain` from the label anyway, and the id never appears in a row.
     rowLabel: CARD_STYLE_ROW_LABEL,
     // After any style the host or another plugin leaves unordered; the host's own values come
@@ -1024,15 +1024,15 @@ function bashCardStyle(): CardStyleLike {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Reading the bridge's selection: one function, so the header and the row can never disagree
+// Reading the shell API's selection: one function, so the header and the row can never disagree
 // ---------------------------------------------------------------------------------------------
 
 /**
  * The value selected for `bash` right now, read LIVE so the card follows the menu without a reload.
  * Anything unreadable, malformed or missing reads as `native` — the host's own card — which is what
- * the bridge itself would draw.
+ * the shell API itself would draw.
  */
-function readSelection(store: BridgeStoreLike | undefined): string {
+function readSelection(store: ShellStoreLike | undefined): string {
   if (store === undefined) return NATIVE_VALUE;
   try {
     const selections: unknown = store.get<unknown>(DESIGNS_STORE_KEY, {});
@@ -1062,7 +1062,7 @@ function selectionText(selected: string): string {
 type DemoToggle = "on" | "off";
 
 /** Live read from the example's OWN store; anything unreadable is the default, never a crash. */
-function readDemoToggle(store: BridgeStoreLike | undefined): DemoToggle {
+function readDemoToggle(store: ShellStoreLike | undefined): DemoToggle {
   if (store === undefined) return "off";
   try {
     return store.get<unknown>(DEMO_TOGGLE_KEY, "off") === "on" ? "on" : "off";
@@ -1072,7 +1072,7 @@ function readDemoToggle(store: BridgeStoreLike | undefined): DemoToggle {
 }
 
 /** The button's press count, read live; anything malformed reads as zero. */
-function readDemoPresses(store: BridgeStoreLike | undefined): number {
+function readDemoPresses(store: ShellStoreLike | undefined): number {
   if (store === undefined) return 0;
   try {
     const stored = store.get<unknown>(DEMO_PRESSES_KEY, 0);
@@ -1083,7 +1083,7 @@ function readDemoPresses(store: BridgeStoreLike | undefined): number {
 }
 
 /** Persist one demo value. A store that refuses costs the demo its memory, never the action. */
-function writeDemo(store: BridgeStoreLike | undefined, key: string, value: unknown): void {
+function writeDemo(store: ShellStoreLike | undefined, key: string, value: unknown): void {
   if (store === undefined) return;
   try {
     store.set(key, value);
@@ -1092,7 +1092,7 @@ function writeDemo(store: BridgeStoreLike | undefined, key: string, value: unkno
   }
 }
 
-/** Ask the bridge to repaint when the published object offers it; an older bridge simply does not. */
+/** Ask the shell API to repaint when the published object offers it; an older shell API simply does not. */
 function requestSurfaceRepaint(request: (() => void) | undefined): void {
   if (request === undefined) return;
   try {
@@ -1117,7 +1117,7 @@ const DEMO_BUTTON_PREVIEW = {
  * them — a two-value toggle and a plain button. Neither does anything real: the toggle is stored,
  * and the button counts its presses, so the user can see both work in the section below.
  */
-function demoProvider(store: BridgeStoreLike | undefined, repaint: (() => void) | undefined): RowProviderLike {
+function demoProvider(store: ShellStoreLike | undefined, repaint: (() => void) | undefined): RowProviderLike {
   const toggle = (value: DemoToggle): CustomizeRowLike => ({
     category: DEMO_CATEGORY,
     label: DEMO_TOGGLE_SETTING,
@@ -1158,12 +1158,12 @@ function demoProvider(store: BridgeStoreLike | undefined, repaint: (() => void) 
 
 /**
  * Live state for the card: the value selected for `bash`, and whether this load's design reached the
- * bridge. A function rather than a boolean, so the row stays honest if registration came later than
+ * shell API. A function rather than a boolean, so the row stays honest if registration came later than
  * this section's creation.
  */
 function bashDesignSection(
-  store: BridgeStoreLike | undefined,
-  demoStore: BridgeStoreLike | undefined,
+  store: ShellStoreLike | undefined,
+  demoStore: ShellStoreLike | undefined,
   repaint: (() => void) | undefined,
   designRegistered: () => boolean,
   cardStyleRegistered: () => boolean,
@@ -1181,9 +1181,9 @@ function bashDesignSection(
     meta: () => selectedLabel(),
     lines: () => [
       // A plain string, inert on purpose: it reports whether this load's design reached the bus.
-      // The per-CARD mount count is the bridge's own record, not a plugin's.
+      // The per-CARD mount count is the shell API's own record, not a plugin's.
       `resolver  ${designRegistered() ? "registered" : "absent"}`,
-      // The same answer for the restored `plain` style, so an older bridge cannot look like it
+      // The same answer for the restored `plain` style, so an older shell API cannot look like it
       // accepted a surface it never had: `absent` is the honest state, never an assumed `registered`.
       `card style  ${cardStyleRegistered() ? "registered" : "absent"}`,
       // The live answer to "did the design recognise the cards it was handed?". `none` until a frame
@@ -1194,8 +1194,8 @@ function bashDesignSection(
       // without opening a file.
       `demo toggle  ${readDemoToggle(demoStore)}`,
       // The section's ONE action row (N12): the count is the right-aligned meta, and a click
-      // increments the example's own store ONCE and asks the bridge to repaint the section. The
-      // bridge draws it like the host's own clickable rows — and paints it with the host's hover
+      // increments the example's own store ONCE and asks the shell API to repaint the section. The
+      // shell API draws it like the host's own clickable rows — and paints it with the host's hover
       // role — so the live pointer path can be verified without a debug build.
       {
         label: SECTION_PRESSES_LABEL,
@@ -1224,49 +1224,49 @@ function bashDesignSection(
 // ---------------------------------------------------------------------------------------------
 //
 // A Pi extension lives outside every package, so it cannot resolve a bare specifier, and an absolute
-// path is not a contract between two independent projects. So the bridge and the plugin meet on
+// path is not a contract between two independent projects. So the shell API and the plugin meet on
 // `globalThis`, the one channel Pi sanctions (`docs/extensions.md:1965-1972`), behind one stable
 // symbol:
 //
-//   Symbol.for("gentle-shell-bridge/api/v1")  → the frozen, versioned API object
+//   Symbol.for("odd-worktree/shell-api/v1")  → the frozen, versioned API object
 //
-// Registration happens in this file's own `session_start` handler, AND on the bridge's
+// Registration happens in this file's own `session_start` handler, AND on the shell API's
 // announcement. Pi does not guarantee that the package loaded first: global extensions load and
 // receive `session_start` before a configured package's module publishes, which is exactly the
 // order the real TUI reported. So when the symbol is absent the example subscribes to
-// `"gentle-shell-bridge:ready"` and registers when it fires; when the symbol is present there is
+// `"odd-worktree:shell-ready"` and registers when it fires; when the symbol is present there is
 // nothing to wait for and no listener is taken. Each path calls the same guarded registration.
 //
 // The constant and the gate MIRROR `lib/shell-api/api.ts` and are inlined on purpose: this file must not
-// import the bridge, not even to say hello. Keep them in sync — a breaking change is a new `v2` key,
+// import the shell API, not even to say hello. Keep them in sync — a breaking change is a new `v2` key,
 // never a mutation of this one.
 
 /** The published API object's key. */
-const BRIDGE_API_KEY = Symbol.for("gentle-shell-bridge/api/v1");
+const SHELL_API_KEY = Symbol.for("odd-worktree/shell-api/v1");
 
 /**
- * The channel the bridge announces itself on. The string MIRRORS `lib/shell-api/api.ts`: this file cannot
+ * The channel the shell API announces itself on. The string MIRRORS `lib/shell-api/api.ts`: this file cannot
  * import it, so the two are kept in sync by hand. The announcement is a notification, never a
  * registry: it says "the object is published now", and this file reads the symbol again.
  */
-const BRIDGE_READY_EVENT = "gentle-shell-bridge:ready";
+const SHELL_READY_EVENT = "odd-worktree:shell-ready";
 
-function bridgeHost(): Record<symbol, unknown> {
+function shellApiHost(): Record<symbol, unknown> {
   // SAFETY: `globalThis` accepts symbol keys; every value read through this view is gated by
-  // `isBridgeApi` before use.
+  // `isShellApi` before use.
   return globalThis as unknown as Record<symbol, unknown>;
 }
 
 /**
  * The shape gate: the schema string, `version === 1` and the members this example calls. Anything
  * else — another library's object, a future major version, a partial object — is treated as ABSENT,
- * never as an error, exactly as the bridge's own `isBridgeApi` does.
+ * never as an error, exactly as the shell API's own `isShellApi` does.
  */
-function isBridgeApi(value: unknown): value is BridgeApiLike {
+function isShellApi(value: unknown): value is ShellApiLike {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return (
-    candidate.schema === "gentle-shell-bridge/api" &&
+    candidate.schema === "odd-worktree/shell-api" &&
     candidate.version === 1 &&
     typeof candidate.registerSection === "function" &&
     typeof candidate.createStore === "function"
@@ -1276,21 +1276,21 @@ function isBridgeApi(value: unknown): value is BridgeApiLike {
 /**
  * The two notices for "no published object yet", which are honestly DIFFERENT states:
  *
- * - with a bus, the bridge may still load and announce itself, so the example is waiting and says
+ * - with a bus, the shell API may still load and announce itself, so the example is waiting and says
  *   what will register when the announcement arrives;
  * - without one, nothing can arrive in this process, so this load adds nothing and says that.
  *
- * Neither claims the bridge is not installed unless nothing can arrive.
+ * Neither claims the shell API is not installed unless nothing can arrive.
  */
 const NO_SIGNAL_NOTICE =
-  "[bash-card] no compatible gentle-shell-bridge is installed, and this Pi has no cross-extension " +
+  "[bash-card] no compatible shell API is installed, and this Pi has no cross-extension " +
   "event bus (`pi.events`) for one to announce itself on, so nothing can arrive later: this load " +
   "adds nothing — no bash design, no plain card style, no demo category and no CARD BASH sidebar " +
   "section. A slot that holds another object is treated as absent, never used.";
 
 const WAITING_NOTICE =
-  "[bash-card] no compatible gentle-shell-bridge API is published yet, so this load is waiting for " +
-  'the "gentle-shell-bridge:ready" announcement the bridge emits when it publishes. If a bridge is ' +
+  "[bash-card] no compatible shell API is published yet, so this load is waiting for " +
+  'the "odd-worktree:shell-ready" announcement the shell API emits when it publishes. If a shell API is ' +
   "installed it registers the bash design for the `bash` tool and the CARD BASH sidebar section " +
   "when the announcement arrives — together with the example's plain card style and its demo " +
   "category; if it is not installed, or the published object is incompatible, " +
@@ -1298,7 +1298,7 @@ const WAITING_NOTICE =
   "never used.";
 
 // ---------------------------------------------------------------------------------------------
-// The host's cross-extension bus: how a later bridge reaches this load
+// The host's cross-extension bus: how a later shell API reaches this load
 // ---------------------------------------------------------------------------------------------
 
 /**
@@ -1378,7 +1378,7 @@ function flushNotices(ui: unknown, settled: boolean): void {
 // ---------------------------------------------------------------------------------------------
 
 export default function bashCardExample(pi: ExtensionApiLike): () => void {
-  // Holds whether each optional surface was there at registration. `false` means the bridge is
+  // Holds whether each optional surface was there at registration. `false` means the shell API is
   // older than that surface: the section still registers and states which one is absent.
   const state: {
     designRegistered: boolean;
@@ -1390,8 +1390,8 @@ export default function bashCardExample(pi: ExtensionApiLike): () => void {
 
   const disposers: Array<() => void> = [];
   let closed = false;
-  let bridgeRegistered = false;
-  // The bus this Pi offers, when it offers one: the only channel a later-loading bridge can use.
+  let shellApiRegistered = false;
+  // The bus this Pi offers, when it offers one: the only channel a later-loading shell API can use.
   const events = extensionEvents(pi);
   let unsubscribeReady: EventUnsubscribe | undefined;
 
@@ -1420,26 +1420,26 @@ export default function bashCardExample(pi: ExtensionApiLike): () => void {
     }
   };
 
-  /** Register the bridge surfaces once. A stable id each, so a `/reload` replaces, not stacks. */
-  const registerWithBridge = (api: BridgeApiLike): void => {
-    if (closed || bridgeRegistered) return;
+  /** Register the shell API surfaces once. A stable id each, so a `/reload` replaces, not stacks. */
+  const registerWithShellApi = (api: ShellApiLike): void => {
+    if (closed || shellApiRegistered) return;
 
-    // The selection is the BRIDGE's: this file opens the published store to READ the value the
+    // The selection is the SHELL API's: this file opens the published store to READ the value the
     // `Cards` row writes. A store that refuses to answer only costs the section its live text.
-    let store: BridgeStoreLike | undefined;
+    let store: ShellStoreLike | undefined;
     try {
       store = api.createStore(DESIGNS_STORE_ID);
     } catch (error) {
       recordNotice(
-        `[bash-card] could not read the bridge's design selections: ` +
+        `[bash-card] could not read the shell API's design selections: ` +
           `${error instanceof Error ? error.message : String(error)}`,
       );
     }
 
-    // The demo's OWN store, under this example's plugin id. It is not the bridge's selection file:
+    // The demo's OWN store, under this example's plugin id. It is not the shell API's selection file:
     // a plugin's state belongs to the plugin. A store that refuses to open only costs the demo its
     // memory, never the section or the design.
-    let demoStore: BridgeStoreLike | undefined;
+    let demoStore: ShellStoreLike | undefined;
     try {
       demoStore = api.createStore(EXAMPLE_STORE_ID);
     } catch (error) {
@@ -1452,7 +1452,7 @@ export default function bashCardExample(pi: ExtensionApiLike): () => void {
     // The design first, so its explicit `name` fixes the plugin's one INTEGRATIONS row before the
     // section's registration inherits it. Optional by contract: an object published by an older copy
     // passes the gate without it, and then only the section registers. Its own failure is reported
-    // and never costs the section: one surface refusing is not the plugin going silent (the bridge
+    // and never costs the section: one surface refusing is not the plugin going silent (the shell API
     // records the rejection in its own record as well).
     const registerDesign = api.registerToolDesign;
     if (typeof registerDesign === "function") {
@@ -1461,7 +1461,7 @@ export default function bashCardExample(pi: ExtensionApiLike): () => void {
         state.designRegistered = true;
       } catch (error) {
         recordNotice(
-          `[bash-card] the bridge refused the bash design: ` +
+          `[bash-card] the shell API refused the bash design: ` +
             `${error instanceof Error ? error.message : String(error)}`,
         );
       }
@@ -1477,14 +1477,14 @@ export default function bashCardExample(pi: ExtensionApiLike): () => void {
         state.cardStyleRegistered = true;
       } catch (error) {
         recordNotice(
-          `[bash-card] the bridge refused the plain card style: ` +
+          `[bash-card] the shell API refused the plain card style: ` +
             `${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }
 
     // The demo provider: ONE stable id, so a `/reload` replaces it in place instead of stacking a
-    // second category. `registerRows` is optional by contract, so an older bridge keeps the design
+    // second category. `registerRows` is optional by contract, so an older shell API keeps the design
     // and the section and simply contributes no demo category.
     const registerRows = api.registerRows;
     if (typeof registerRows === "function") {
@@ -1492,7 +1492,7 @@ export default function bashCardExample(pi: ExtensionApiLike): () => void {
         disposers.push(registerRows.call(api, demoProvider(demoStore, api.requestRepaint)));
       } catch (error) {
         recordNotice(
-          `[bash-card] the bridge refused the demo category: ` +
+          `[bash-card] the shell API refused the demo category: ` +
             `${error instanceof Error ? error.message : String(error)}`,
         );
       }
@@ -1509,7 +1509,7 @@ export default function bashCardExample(pi: ExtensionApiLike): () => void {
         ),
       ),
     );
-    bridgeRegistered = true;
+    shellApiRegistered = true;
   };
 
   /**
@@ -1518,38 +1518,38 @@ export default function bashCardExample(pi: ExtensionApiLike): () => void {
    * fail while the API is right there.
    */
   const tryRegister = (): "registered" | "absent" | "failed" => {
-    if (closed || bridgeRegistered) return "registered";
-    const published = bridgeHost()[BRIDGE_API_KEY];
-    if (!isBridgeApi(published)) return "absent";
+    if (closed || shellApiRegistered) return "registered";
+    const published = shellApiHost()[SHELL_API_KEY];
+    if (!isShellApi(published)) return "absent";
     try {
-      registerWithBridge(published);
+      registerWithShellApi(published);
     } catch (error) {
       recordNotice(
-        `[bash-card] the published bridge refused to register its section: ` +
+        `[bash-card] the published shell API refused to register its section: ` +
           `${error instanceof Error ? error.message : String(error)}`,
       );
       return "failed";
     }
-    return bridgeRegistered ? "registered" : "failed";
+    return shellApiRegistered ? "registered" : "failed";
   };
 
   /**
-   * The bridge published after this file loaded. Registration is the same guarded call
+   * The shell API published after this file loaded. Registration is the same guarded call
    * `session_start` makes, so an announcement and a later session cannot both register, and a
    * "waiting" notice the user has not seen yet is withdrawn because it is no longer true.
    */
-  const onBridgeReady = (): void => {
+  const onShellReady = (): void => {
     // The announcement only says "look again": the symbol is the authority.
     if (tryRegister() === "absent") return;
     withdrawWaitingNotice();
     stopListening();
   };
 
-  // The symbol first. If the bridge loaded before this file there is nothing to wait for, so no
-  // listener is taken at all. Otherwise the announcement is the only way a later bridge is heard.
-  if (events !== undefined && !isBridgeApi(bridgeHost()[BRIDGE_API_KEY])) {
+  // The symbol first. If the shell API loaded before this file there is nothing to wait for, so no
+  // listener is taken at all. Otherwise the announcement is the only way a later shell API is heard.
+  if (events !== undefined && !isShellApi(shellApiHost()[SHELL_API_KEY])) {
     try {
-      const off = events.on(BRIDGE_READY_EVENT, onBridgeReady);
+      const off = events.on(SHELL_READY_EVENT, onShellReady);
       if (typeof off === "function") unsubscribeReady = off;
     } catch {
       // No subscription: the `session_start` attempt below still tries the symbol.
@@ -1562,14 +1562,14 @@ export default function bashCardExample(pi: ExtensionApiLike): () => void {
     if (closed || ctx.hasUI !== true) return;
 
     if (tryRegister() === "absent") {
-      // Two honest states: with a bus the bridge may still announce itself, without one nothing can
+      // Two honest states: with a bus the shell API may still announce itself, without one nothing can
       // arrive in this process. The notice says which, and the waiting one is withdrawn if it
       // happens to register before the next session shows it.
       if (events === undefined) recordNotice(NO_SIGNAL_NOTICE);
       else recordNotice(WAITING_NOTICE, { untilRegistered: true });
     }
 
-    flushNotices(ctx.ui, bridgeRegistered);
+    flushNotices(ctx.ui, shellApiRegistered);
   };
   if (typeof pi.on === "function") pi.on("session_start", onSessionStart);
 

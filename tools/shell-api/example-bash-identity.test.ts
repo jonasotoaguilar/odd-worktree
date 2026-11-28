@@ -6,7 +6,7 @@
  * instead, and changes nothing else: the frame, the ANSI, the padding, the right-aligned hint and
  * every body row are the host's own bytes.
  *
- * This file loads the real example, arms the real bridge (which installs the one resolver and the
+ * This file loads the real example, arms the real shell API (which installs the one resolver and the
  * `Cards` rows), and renders the components Pi keeps — the call component and the result component —
  * so the claim is made about the rows a user sees, not about a helper. `float` here; the `neon`
  * outline is `test/example-neon-transform.test.ts`.
@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { publishBridgeApi, resetBridgeApiForTests } from "../../lib/shell-api/api.ts";
+import { publishShellApi, resetShellApiForTests } from "../../lib/shell-api/api.ts";
 import {
   resetBusForTests,
   resetCardStylesForTests,
@@ -27,7 +27,7 @@ import {
 import { resetCardStyleTransformForTests } from "../../lib/shell-api/card-style-transform.ts";
 import { disableCardStyleTransform, resetCardStyleWiringForTests } from "../../lib/shell-api/card-style-wiring.ts";
 import { disableCaptureBackend, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
-import gentleShellBridge, { type BridgeExtensionApi } from "../../lib/shell-api/extension.ts";
+import gentleShellShellApi, { type ShellExtensionApi } from "../../lib/shell-api/extension.ts";
 import { resetHookStateForTests } from "../../lib/shell-api/hook.ts";
 import { resetNoticesForTests } from "../../lib/shell-api/notices.ts";
 import { resetPluginLinesForTests } from "../../lib/shell-api/plugin-lines.ts";
@@ -64,7 +64,7 @@ test.after(() => {
 
 test.beforeEach(() => {
   rmSync(join(configHome, "gentle-shell-bridge"), { recursive: true, force: true });
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetBusForTests();
   resetSectionsForTests();
   resetCardStylesForTests();
@@ -93,7 +93,7 @@ interface FakePi {
   on?: (event: string, handler: SessionHandler) => void;
   registerCommand?: () => void;
   registerToolRenderer?: (resolver: unknown) => void;
-  /** Present because the bridge checks the REQUIRED host package at runtime (S9/T12). */
+  /** Present because the shell API checks the REQUIRED host package at runtime (S9/T12). */
   getCommands?: () => Array<{ name: string }>;
 }
 
@@ -165,7 +165,7 @@ function mount(
 }
 
 interface World {
-  /** The one resolver the bridge registered on this Pi. */
+  /** The one resolver the shell API registered on this Pi. */
   readonly resolver: (tool: string, next: () => FakeRenderers) => FakeRenderers | undefined;
   /** The rows the customize menu builds right now. */
   rows(): CustomizeRow[];
@@ -175,20 +175,20 @@ interface World {
 }
 
 /**
- * A session as Pi runs it: the bridge arms itself (installing the one resolver and the design rows),
+ * A session as Pi runs it: the shell API arms itself (installing the one resolver and the design rows),
  * then the example registers its design from its own `session_start`.
  */
-/** The tool-design line's setting, old bridge (`bash`) and current bridge (`Card bash`). */
+/** The tool-design line's setting, old shell API (`bash`) and current shell API (`Card bash`). */
 const isBashDesignSetting = (setting: string | undefined): boolean =>
   setting === "bash" || setting === "Card bash";
 
 async function startWorld(tag: string): Promise<World> {
-  publishBridgeApi();
+  publishShellApi();
   const host = createFakeHost();
   const resolvers: unknown[] = [];
   const sessionHandlers: SessionHandler[] = [];
   const pi: FakePi = {
-    // `gentle-pi` is present, so the bridge's `session_start` arms (S9/T12).
+    // `gentle-pi` is present, so the shell API's `session_start` arms (S9/T12).
     getCommands: () => [{ name: "gentle:customize" }],
     on(_event, handler) {
       sessionHandlers.push(handler);
@@ -199,11 +199,11 @@ async function startWorld(tag: string): Promise<World> {
     },
   };
 
-  gentleShellBridge(pi as BridgeExtensionApi);
+  gentleShellShellApi(pi as ShellExtensionApi);
   const dispose = (await loadExample(tag))(pi);
   for (const handler of sessionHandlers) handler({}, { hasUI: true, ui: host.ui });
 
-  assert.equal(resolvers.length, 1, "the bridge registers exactly one resolver");
+  assert.equal(resolvers.length, 1, "the shell API registers exactly one resolver");
   const resolver = resolvers[0] as World["resolver"];
   assert.equal(typeof resolver, "function");
 
@@ -348,7 +348,7 @@ test("T10: the design is declared for the `bash` tool name, so another tool is u
   const world = await startWorld("other-tool");
   const readRenderers = fakeRenderers(
     [" \u001b[90m▎\u001b[39m \u001b[2m≡ read src/api.ts\u001b[39m"],
-    [" \u001b[90m▎\u001b[39m export function bridgeApi() {"],
+    [" \u001b[90m▎\u001b[39m export function shellApi() {"],
   );
 
   const resolved = world.resolver("read", () => readRenderers);

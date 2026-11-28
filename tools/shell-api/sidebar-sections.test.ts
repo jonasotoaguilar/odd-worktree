@@ -204,7 +204,7 @@ test("two independent module copies in one process share one section registry", 
 test("the section list is reachable behind the same bus slot as the providers", () => {
   registerSection(section("a"));
   const slot = (globalThis as unknown as Record<symbol, unknown>)[
-    Symbol.for("gentle-shell-bridge.providers")
+    Symbol.for("odd-worktree.providers")
   ];
   assert.ok(slot !== undefined, "the bus is the provider bus, not a second registry");
 });
@@ -214,7 +214,7 @@ test("a bus slot created before sections existed keeps its providers and grows a
   // must not throw away the providers already registered in it.
   const earlierProvider = provider("earlier");
   const slot = globalThis as unknown as Record<symbol, unknown>;
-  slot[Symbol.for("gentle-shell-bridge.providers")] = { entries: [{ provider: earlierProvider }] };
+  slot[Symbol.for("odd-worktree.providers")] = { entries: [{ provider: earlierProvider }] };
 
   registerSection(section("a"));
 

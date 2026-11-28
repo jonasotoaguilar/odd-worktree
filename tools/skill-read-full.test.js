@@ -12,24 +12,24 @@ const assert = require('node:assert/strict');
 const os = require('node:os');
 
 const { isArtifactMarkdown, keepArtifactReadWhole } = require('../lib/artifact-read-full.js');
-const { BRIDGE_SLOT, defaultBridge, loadExtension } = require('./fixtures/load-extension.js');
+const { SHELL_SLOT, defaultShellApi, loadExtension } = require('./fixtures/load-extension.js');
 
-// S5: the module switch is read from the bridge's own store when the extension registers, so a
+// S5: the module switch is read from the shell API's own store when the extension registers, so a
 // suite that turns `Worktrees+` off publishes the document first and restores the slot after.
-const savedBridge = globalThis[BRIDGE_SLOT];
+const savedShellApi = globalThis[SHELL_SLOT];
 async function loadWithModules(modules) {
-  const bridge = defaultBridge();
-  bridge.api.createStore = () => ({
+  const shellApi = defaultShellApi();
+  shellApi.api.createStore = () => ({
     get: (key, fallback) => (key === 'modules' && modules !== undefined ? modules : fallback),
     set: () => {},
     delete: () => {},
   });
-  globalThis[BRIDGE_SLOT] = bridge.api;
+  globalThis[SHELL_SLOT] = shellApi.api;
   try {
     return await loadExtension({});
   } finally {
-    if (savedBridge === undefined) delete globalThis[BRIDGE_SLOT];
-    else globalThis[BRIDGE_SLOT] = savedBridge;
+    if (savedShellApi === undefined) delete globalThis[SHELL_SLOT];
+    else globalThis[SHELL_SLOT] = savedShellApi;
   }
 }
 

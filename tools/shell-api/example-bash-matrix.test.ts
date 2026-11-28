@@ -22,8 +22,8 @@
  * | a REGISTERED   | `minimal`    | the float rows above, repainted by `src/card-style-…`    |
  * | style (added)  | `default`    | unreachable: the repaint needs the float ` ▎ ` grammar   |
  *
- * Everything here is driven through the REAL bridge: the example registers through the published
- * API, the bridge's one resolver wraps the host's renderers, and the design is selected by pressing
+ * Everything here is driven through the REAL shell API: the example registers through the published
+ * API, the shell API's one resolver wraps the host's renderers, and the design is selected by pressing
  * its `Cards` row. Nothing calls `applyBashHeading` directly, because a helper that works is exactly
  * what the earlier iterations had.
  */
@@ -34,7 +34,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { publishBridgeApi, resetBridgeApiForTests } from "../../lib/shell-api/api.ts";
+import { publishShellApi, resetShellApiForTests } from "../../lib/shell-api/api.ts";
 import {
   registerCardStyle,
   resetBusForTests,
@@ -49,7 +49,7 @@ import {
 } from "../../lib/shell-api/card-style-wiring.ts";
 import { setCardStyleSelection } from "../../lib/shell-api/card-styles.ts";
 import { disableCaptureBackend, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
-import gentleShellBridge, { type BridgeExtensionApi } from "../../lib/shell-api/extension.ts";
+import gentleShellShellApi, { type ShellExtensionApi } from "../../lib/shell-api/extension.ts";
 import { resetHookStateForTests } from "../../lib/shell-api/hook.ts";
 import { resetNoticesForTests } from "../../lib/shell-api/notices.ts";
 import { resetPluginLinesForTests } from "../../lib/shell-api/plugin-lines.ts";
@@ -102,7 +102,7 @@ test.after(() => {
 
 test.beforeEach(() => {
   rmSync(join(configHome, "gentle-shell-bridge"), { recursive: true, force: true });
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetBusForTests();
   resetSectionsForTests();
   resetCardStylesForTests();
@@ -210,7 +210,7 @@ interface World {
 }
 
 async function startWorld(tag: string): Promise<World> {
-  publishBridgeApi();
+  publishShellApi();
   const host = createFakeHost();
   const resolvers: unknown[] = [];
   const sessionHandlers: SessionHandler[] = [];
@@ -223,7 +223,7 @@ async function startWorld(tag: string): Promise<World> {
     },
   };
   const pi: FakePi = {
-    // `gentle-pi` is present, so the bridge's `session_start` arms (S9/T12).
+    // `gentle-pi` is present, so the shell API's `session_start` arms (S9/T12).
     getCommands: () => [{ name: "gentle:customize" }],
     on(_event, handler) {
       sessionHandlers.push(handler);
@@ -235,15 +235,15 @@ async function startWorld(tag: string): Promise<World> {
   };
 
   const sessionStart = (): void => {
-    // The bridge and the example both subscribe; each gets the same context, as on Pi.
+    // The shell API and the example both subscribe; each gets the same context, as on Pi.
     for (const handler of sessionHandlers) handler({}, { hasUI: true, ui });
   };
 
-  gentleShellBridge(pi as BridgeExtensionApi);
+  gentleShellShellApi(pi as ShellExtensionApi);
   const dispose = (await loadExample(tag))(pi);
   sessionStart();
 
-  assert.equal(resolvers.length, 1, "the bridge registers exactly one resolver");
+  assert.equal(resolvers.length, 1, "the shell API registers exactly one resolver");
   const resolver = resolvers[0] as Resolver;
   assert.equal(typeof resolver, "function");
 
@@ -418,7 +418,7 @@ test("T18: with the host's card selected, every cell draws the host's rows byte 
   for (const cell of CELLS) {
     const renderers = fakeRenderers(cell.call, cell.result);
     const resolved = world.resolver("bash", () => renderers);
-    assert.ok(resolved !== undefined, `${cell.id}: the bridge's wrapper is what the card uses`);
+    assert.ok(resolved !== undefined, `${cell.id}: the shell API's wrapper is what the card uses`);
     const call = mount(resolved, "renderCall");
 
     assert.deepEqual(call.render(cell.width), [...cell.call], `${cell.id}: the host's card`);
@@ -635,7 +635,7 @@ test("T21/S12: in the float cell an output row that starts with the mark passes 
 
   // The call component and the result component of a float card are drawn with the SAME chrome and
   // the same row positions (padding row, then a `▎ ` row), so `cat script.sh` printing a line that
-  // begins with `$ ` sits exactly where a heading sits. The bridge now says WHICH part it is drawing
+  // begins with `$ ` sits exactly where a heading sits. The shell API now says WHICH part it is drawing
   // (`ctx.part`), so the design acts on the call alone and the host's output is what is drawn: no
   // data is lost, no row is widened, and every byte — ANSI, padding, the echoed command — comes
   // back as the host drew it.
@@ -656,18 +656,18 @@ test("T21/S12: in the float cell an output row that starts with the mark passes 
   world.dispose();
 });
 
-test("T21/S12: a context with no `part` (an older bridge) keeps the previous behaviour", async () => {
+test("T21/S12: a context with no `part` (an older shell API) keeps the previous behaviour", async () => {
   const world = await startWorld("matrix-no-part");
   await world.pick("bash heading");
 
-  // A bridge published BEFORE this field hands a design `{ width, tool, theme }` and no `part` at all.
+  // A shell API published BEFORE this field hands a design `{ width, tool, theme }` and no `part` at all.
   // This build's wrapper always sets it, so an older context cannot be produced through the bus: this
   // is the one place the registered design is driven directly, and what it pins is the fallback — the
   // part is UNKNOWN, never `result`, so the design keeps the behaviour it had before the field
-  // existed (the row grammar decides) instead of refusing every frame an older bridge hands it.
+  // existed (the row grammar decides) instead of refusing every frame an older shell API hands it.
   const design = snapshotToolDesigns("bash").find((entry) => entry.id === "bash-card.bash-heading");
   assert.ok(design !== undefined, "the example's design is the one on the bus");
-  // SAFETY: the older bridge's context has no `part`; the published type says it is always set, so the
+  // SAFETY: the older shell API's context has no `part`; the published type says it is always set, so the
   // older shape is spelled on purpose here — that IS the case this test exists for.
   const legacyContext = { width: 60, tool: "bash" } as ToolDesignContext;
   const legacy = design.apply(BASH_MINIMAL_FLOAT_RESULT_PROMPT, legacyContext);
@@ -719,7 +719,7 @@ test("T19: a heading with no fill to take the word's three columns is left alone
 });
 
 // ---------------------------------------------------------------------------------------------
-// T18: an ADDED card style — the bridge repaints the frame AFTER the design
+// T18: an ADDED card style — the shell API repaints the frame AFTER the design
 // ---------------------------------------------------------------------------------------------
 
 /** A registered style whose chrome is readable at a glance and whose rows fit the width. */
@@ -788,7 +788,7 @@ test("T18: the design's heading survives a style ADDED through registerCardStyle
   }
 
   // The difference comes from the design, not from the style: with the host's card selected the
-  // very same transform draws the host's heading. The bridge drops the leading glyph before it hands
+  // very same transform draws the host's heading. The shell API drops the leading glyph before it hands
   // the title to a style (`stripGlyph`, `src/card-style-transform.ts:301-305`), which is why the
   // host's `$` never reaches a registered style and the design's whole word does.
   await world.pick("default");
@@ -838,7 +838,7 @@ test("T18: an added style cannot reach the default cell, and the design's rows p
     "the repaint only knows the float grammar, so pi's native rows are the same array instance",
   );
 
-  // The outlined `minimal` card is not repaintable either: the bridge's grammar is float's.
+  // The outlined `minimal` card is not repaintable either: the shell API's grammar is float's.
   const neon = world.resolver("bash", () => fakeRenderers(BASH_MINIMAL_NEON_CALL, BASH_MINIMAL_NEON_RESULT));
   assert.ok(neon !== undefined);
   const neonRows = [

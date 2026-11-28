@@ -1,14 +1,14 @@
 /**
  * The rail surface (R1–R5): the card style reaches the sidebar cards through the SAME repaint the
- * conversation uses, and a write to bridge-owned state repaints its surface before the action
+ * conversation uses, and a write to shell-API-owned state repaints its surface before the action
  * returns.
  *
  * What is real here and what is modelled: the two card fixtures the rail renders are bytes produced
  * by gentle-shell's own `lib/shell-card.ts` (see `RAIL_HOST_CARD` in `./fake-sidebar.ts`), and the
- * `tui` the bridge walks is the host's own layout shape — root `vstack` → `hstack` →
+ * `tui` the shell API walks is the host's own layout shape — root `vstack` → `hstack` →
  * `[conversation, rail ScrollView]`, the rail's framed rows being that view's child through the
  * layout protocol. The running TUI is not available to this package, so the *host component* is
- * modelled and the bridge's walk, wrapper and transform are the real code.
+ * modelled and the shell API's walk, wrapper and transform are the real code.
  */
 
 import assert from "node:assert/strict";
@@ -38,7 +38,7 @@ import { resetSectionFailuresForTests } from "../../lib/shell-api/sidebar-render
 import { resetStoreStateForTests } from "../../lib/shell-api/store.ts";
 import type { CustomizeRow, InlineHelpers, RowContext, SidebarSection } from "../../lib/shell-api/types.ts";
 import {
-  RAIL_BRIDGE_CARD,
+  RAIL_SHELL_API_CARD,
   RAIL_HOST_CARD,
   type Rail,
   createRailTui,
@@ -93,8 +93,8 @@ const PLAIN_STYLE = {
   },
 };
 
-/** The rail as the host frames it: the host's own section card, a gap, then the bridge's. */
-const RAIL_FRAMES: readonly string[] = [...RAIL_HOST_CARD, "", ...RAIL_BRIDGE_CARD];
+/** The rail as the host frames it: the host's own section card, a gap, then the shell API's. */
+const RAIL_FRAMES: readonly string[] = [...RAIL_HOST_CARD, "", ...RAIL_SHELL_API_CARD];
 
 /** A rail component that hands back ONE array instance every frame, like the host's closure. */
 const stableRail = (lines: readonly string[]): Rail => ({
@@ -113,7 +113,7 @@ const section = (id: string, extra: Partial<SidebarSection> = {}): SidebarSectio
 
 const ctx = (): RowContext => ({ theme: undefined, configHome });
 
-/** What the host hands a row's action; the bridge's toggles use none of it. */
+/** What the host hands a row's action; the shell API's toggles use none of it. */
 const inlineHelpers: InlineHelpers = {
   input: async () => undefined,
   confirm: async () => true,
@@ -122,7 +122,7 @@ const inlineHelpers: InlineHelpers = {
 
 const rowsNow = (): CustomizeRow[] => {
   const provider = snapshotProviders().find((entry) => entry.id === SECTION_ROWS_PROVIDER_ID);
-  assert.ok(provider !== undefined, "the bridge registers its own Sections provider");
+  assert.ok(provider !== undefined, "the shell API registers its own Sections provider");
   return provider.rows(ctx());
 };
 
@@ -217,7 +217,7 @@ test("R1: a second rail attach wraps once, so a frame is never restyled twice", 
   assert.deepEqual(tui.renderRail(), once, "the marker certifies the exact wrapper already installed");
 });
 
-test("R1: a rail mounted after the factory is reached on the next bridge-owned write", () => {
+test("R1: a rail mounted after the factory is reached on the next shell-API-owned write", () => {
   // Pi hands the widget factory a tui before gentle-shell has mounted its fullscreen layout, so the
   // first attach can legitimately fail. It must not need a timer: the next write re-attempts once.
   registerCardStyle(PLAIN_STYLE);
@@ -313,7 +313,7 @@ test("R3: a visibility toggle repaints the rail before the action returns, exact
   const hidden = rowsNow().find(
     (row) => row.choice?.setting === "music" && row.choice.value === "hidden",
   );
-  assert.ok(hidden?.action !== undefined, "the bridge derives the action");
+  assert.ok(hidden?.action !== undefined, "the shell API derives the action");
   hidden.action(inlineHelpers);
 
   assert.equal(tui.requestRenderCount(), 1, "one frame was requested, inside the action");

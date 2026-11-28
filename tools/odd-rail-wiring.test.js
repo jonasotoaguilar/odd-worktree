@@ -1,13 +1,13 @@
 'use strict';
 // T4, second half (odd-rail-section S1, S5, S6, S7, S9, S12, S13): the ODD rail
-// section as the HOST sees it, through the fake host and the bridge's published
+// section as the HOST sees it, through the fake host and the shell API's published
 // object only.
 //
 // What this asserts, in the order the extension really does it:
-// - The section is registered on the bridge with id `odd-worktree.odd-rail`, title
+// - The section is registered on the shell API with id `odd-worktree.odd-rail`, title
 //   `ODD` and `placement: { after: "agents" }` (S1), and with `Worktrees+` OFF —
 //   the corrected S7: registration is what gates the rail, never the module — and
-//   with NO bridge nothing is registered at all (the bridge object is the only
+//   with NO shell API nothing is registered at all (the shell API object is the only
 //   gate).
 // - The rows come from the grouped model scoped to the SESSION's registered
 //   worktrees: one row per ODD name (S12), `meta` naming the copy the click opens
@@ -19,7 +19,7 @@
 // - A click dispatches exactly ONE `/odd <path>` message through the one-shot
 //   guard, a second click inside the guard window dispatches nothing, and running
 //   the command releases the guard (S6).
-// - `session_shutdown` disposes the section: the bridge's unregister runs and the
+// - `session_shutdown` disposes the section: the shell API's unregister runs and the
 //   disposed section neither reads nor dispatches again.
 //
 // The git reads are observed through the module instance THIS load uses
@@ -35,9 +35,9 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
 const {
-  BRIDGE_SLOT,
+  SHELL_SLOT,
   LIB_DIR,
-  defaultBridge,
+  defaultShellApi,
   stubbedSource,
   withGhPath,
 } = require('./fixtures/load-extension.js');
@@ -103,24 +103,24 @@ function writeTask(root, name, body, secondsAgo = 0) {
   return file;
 }
 
-// One extension load per test with a bridge that records what the rail registers
-// and what it releases. `modules` is the bridge's own store document, so
+// One extension load per test with a shell API that records what the rail registers
+// and what it releases. `modules` is the shell API's own store document, so
 // `{ worktrees: false }` is exactly the Worktrees+ switch a host would have.
 let loads = 0;
 async function load(options = {}) {
   const opts = options !== null && typeof options === 'object' ? options : {};
-  const bridge = defaultBridge();
+  const shellApi = defaultShellApi();
   const sections = [];
   const disposers = [];
   const repaints = [];
   const document = opts.modules === undefined ? undefined : { ...opts.modules };
-  bridge.api.createStore = () => ({
+  shellApi.api.createStore = () => ({
     get: (key, fallback) => (key === 'modules' && document !== undefined ? document : fallback),
     set: () => {},
     delete: () => {},
   });
-  bridge.api.requestRepaint = () => { repaints.push(1); };
-  bridge.api.registerSection = (section) => {
+  shellApi.api.requestRepaint = () => { repaints.push(1); };
+  shellApi.api.registerSection = (section) => {
     sections.push(section);
     const disposer = () => {
       disposers.push(section.id);
@@ -128,11 +128,11 @@ async function load(options = {}) {
     };
     return disposer;
   };
-  globalThis[BRIDGE_SLOT] = bridge.api;
-  // A host that publishes no bridge registers nothing (native-bridge T2): the slot is read ONCE,
+  globalThis[SHELL_SLOT] = shellApi.api;
+  // A host that publishes no shell API registers nothing (native-shell API T2): the slot is read ONCE,
   // in the factory, so a case below removes the object to model it and a later publication is
-  // NOT a wake-up path — `noBridge` is therefore never combined with an expectation of a surface.
-  if (opts.noBridge === true) delete globalThis[BRIDGE_SLOT];
+  // NOT a wake-up path — `noShellApi` is therefore never combined with an expectation of a surface.
+  if (opts.noShellApi === true) delete globalThis[SHELL_SLOT];
   return withGhPath('present', async () => {
     process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-rail-ext-'));
@@ -158,7 +158,7 @@ async function load(options = {}) {
       // A host without the event seam: the rail still registers, and the TTL stays
       // its only refresh.
       if (opts.noEvents !== true) {
-        // The bridge announces its publication on ONE event; a host without the
+        // The shell API announces its publication on ONE event; a host without the
         // seam never subscribes, so the fallback below needs it to exist.
         host.events = {
           on: (event, handler) => {
@@ -168,7 +168,7 @@ async function load(options = {}) {
         };
       }
       mod.default(host);
-      return { mod, host, bridge, sections, disposers, repaints, commands, tools, hooks, ready, messages };
+      return { mod, host, shellApi, sections, disposers, repaints, commands, tools, hooks, ready, messages };
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -301,10 +301,10 @@ function observeGit(mod) {
   };
 }
 
-const savedBridge = globalThis[BRIDGE_SLOT];
+const savedShellApi = globalThis[SHELL_SLOT];
 after(() => {
-  if (savedBridge === undefined) delete globalThis[BRIDGE_SLOT];
-  else globalThis[BRIDGE_SLOT] = savedBridge;
+  if (savedShellApi === undefined) delete globalThis[SHELL_SLOT];
+  else globalThis[SHELL_SLOT] = savedShellApi;
 });
 
 describe('registration (S1, corrected S7)', () => {
@@ -322,23 +322,23 @@ describe('registration (S1, corrected S7)', () => {
     assert.ok(loaded.commands.has('odd'), 'and `/odd` is still the command a click dispatches');
   });
 
-  test('with no bridge nothing is registered, and a publication after the load is picked up by the next load', async () => {
-    const loaded = await load({ noBridge: true });
-    assert.equal(globalThis[BRIDGE_SLOT], undefined, 'the slot really is empty');
-    assert.deepEqual(loaded.sections, [], 'nothing is contributed without a bridge');
+  test('with no shell API nothing is registered, and a publication after the load is picked up by the next load', async () => {
+    const loaded = await load({ noShellApi: true });
+    assert.equal(globalThis[SHELL_SLOT], undefined, 'the slot really is empty');
+    assert.deepEqual(loaded.sections, [], 'nothing is contributed without a shell API');
     assert.deepEqual(loaded.hooks, [], 'no hook either: the gate observer is gone');
     assert.deepEqual(loaded.ready, [], 'and no ready announcement is listened to');
 
     // The plugin publishes afterwards and announces it: this load already read the slot, so
     // NEITHER the section nor a subscription answers.
-    globalThis[BRIDGE_SLOT] = loaded.bridge.api;
+    globalThis[SHELL_SLOT] = loaded.shellApi.api;
     assert.deepEqual(loaded.sections, [], 'a late publication contributes no section to this load');
     assert.deepEqual(loaded.ready, [], 'and nothing subscribes to the announcement');
 
-    // The NEXT load is the one that sees the bridge, with the rail it always had.
+    // The NEXT load is the one that sees the shell API, with the rail it always had.
     const next = await load();
     const rail = next.sections.find((section) => section.id === RAIL_ID);
-    assert.ok(rail, 'the published bridge brings the rail');
+    assert.ok(rail, 'the published shell API brings the rail');
     assert.equal(rail.title, 'ODD');
   });
 });
@@ -585,7 +585,7 @@ describe('teardown (S6, S9)', () => {
       const section = sectionOf(loaded);
       const rows = await waitForRows(section, ctx, 2);
       shutdown(loaded, ctx);
-      assert.ok(loaded.disposers.includes(RAIL_ID), 'the bridge’s own unregister ran for the rail');
+      assert.ok(loaded.disposers.includes(RAIL_ID), 'the shell API’s own unregister ran for the rail');
 
       observed.clear();
       section.lines(ctx);

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { armBridge } from "../../lib/shell-api/arm.ts";
+import { armShellApi } from "../../lib/shell-api/arm.ts";
 import { registerRows, resetBusForTests } from "../../lib/shell-api/bus.ts";
 import {
   disableCaptureBackend,
@@ -225,7 +225,7 @@ test("a capture-to-hook transition disables the capture wrapper", () => {
 
   const registry: unknown[] = [];
   setHook(registry);
-  const result = armBridge(host.ui);
+  const result = armShellApi(host.ui);
 
   assert.deepEqual(result, { outcome: "hooked", backend: "hook" });
   assert.equal(getCaptureDiagnostics().armedTargets, 0, "the previous path is disabled");
@@ -254,7 +254,7 @@ test("a frozen array registry falls back to capture instead of throwing", () => 
   assert.doesNotThrow(() => installHookBackend());
   assert.equal(installHookBackend().installed, false);
 
-  const result = armBridge(host.ui);
+  const result = armShellApi(host.ui);
   assert.deepEqual(result, {
     outcome: "fallback-capture",
     backend: "capture",
@@ -334,9 +334,9 @@ test("an unknown schema version reads defaults even when the key exists", () => 
   configHome = mkdtempSync(join(tmpdir(), "gsb-regression-"));
   previousConfigHome = process.env.GENTLE_PI_CONFIG_HOME;
   process.env.GENTLE_PI_CONFIG_HOME = configHome;
-  const bridgeDir = join(configHome, "gentle-shell-bridge");
-  mkdirSync(bridgeDir, { recursive: true });
-  const path = join(bridgeDir, "foreign.json");
+  const storeDir = join(configHome, "gentle-shell-bridge");
+  mkdirSync(storeDir, { recursive: true });
+  const path = join(storeDir, "foreign.json");
   writeFileSync(path, JSON.stringify({ schemaVersion: 99, values: { mode: "foreign" } }), "utf8");
 
   const store = createStore("foreign");
@@ -408,9 +408,9 @@ test("an unknown-schema payload is not carried into a written schema-1 document"
   configHome = mkdtempSync(join(tmpdir(), "gsb-regression-"));
   previousConfigHome = process.env.GENTLE_PI_CONFIG_HOME;
   process.env.GENTLE_PI_CONFIG_HOME = configHome;
-  const bridgeDir = join(configHome, "gentle-shell-bridge");
-  mkdirSync(bridgeDir, { recursive: true });
-  const path = join(bridgeDir, "future.json");
+  const storeDir = join(configHome, "gentle-shell-bridge");
+  mkdirSync(storeDir, { recursive: true });
+  const path = join(storeDir, "future.json");
   writeFileSync(path, JSON.stringify({ schemaVersion: 99, values: { mode: "foreign" } }), "utf8");
   const store = createStore("future");
 

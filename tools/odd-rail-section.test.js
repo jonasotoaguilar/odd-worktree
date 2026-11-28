@@ -143,7 +143,7 @@ test('S1: the section is the ODD card, placed right after the native AGENTS part
   assert.equal(typeof handle.section.meta, 'function', 'the heading draws its `N odd` through meta()');
   assert.deepEqual(Object.keys(handle.section).sort(),
     ['defaultVisible', 'id', 'lines', 'meta', 'placement', 'rowLabel', 'title'],
-    'the section is exactly the shape the bridge registers');
+    'the section is exactly the shape the shell API registers');
   assert.equal(typeof handle.invalidate, 'function', 'the session boundary has its seam');
 });
 

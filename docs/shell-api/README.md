@@ -8,17 +8,17 @@ second plugin installed, no build step and no import: it reads one process-globa
 ## Quick path
 
 1. Read the slot and gate it on schema, version `1` and the members you call (the snippet below checks all three) — a schema alone does not tell you the object is the API.
-2. Register what you contribute from `session_start`, or when the `gentle-shell-bridge:ready` event
+2. Register what you contribute from `session_start`, or when the `odd-worktree:shell-ready` event
    announces a later publication — an absent symbol there is "not yet" or "not installed"; the API cannot tell
    which, so register again if the event arrives.
 3. Keep the disposer each `register*` returns, so a `/reload` replaces your registration instead of
    stacking a second one.
 
 ```ts
-const KEY = Symbol.for("gentle-shell-bridge/api/v1");
+const KEY = Symbol.for("odd-worktree/shell-api/v1");
 const isApi = (value: any): boolean =>
   typeof value === "object" && value !== null &&
-  value.schema === "gentle-shell-bridge/api" && value.version === 1 &&
+  value.schema === "odd-worktree/shell-api" && value.version === 1 &&
   typeof value.registerRows === "function" &&
   typeof value.registerSection === "function" &&
   typeof value.createStore === "function";
@@ -77,18 +77,15 @@ rejected on the spot and nothing is registered.
 ## Compatibility you can rely on
 
 The public identity is frozen on purpose, so an existing plugin and a user's saved choices keep working:
-the slot `Symbol.for("gentle-shell-bridge/api/v1")`, the schema `gentle-shell-bridge/api` at version 1,
-`VERSION` `0.16.2`, every `Symbol.for("gentle-shell-bridge…")` key, the `gentle-shell-bridge:ready`
-event, `bridgeApi()`/`onBridgeApi`, and the store directory `<config home>/gentle-shell-bridge`. None of
+the slot `Symbol.for("odd-worktree/shell-api/v1")`, the schema `odd-worktree/shell-api` at version 1,
+`VERSION` `0.16.2`, every `Symbol.for("odd-worktree…")` key, the `odd-worktree:shell-ready`
+event, `shellApi()`/`onShellApi`, and the store directory `<config home>/gentle-shell-bridge`. None of
 those names change when this package changes, and neither does the shape of the shared state behind them.
 
 ## Origin and compatibility in one paragraph
 
-This API was born as the standalone `gentle-shell-bridge` package and odd-worktree now owns it, so
-nothing external is needed — a standalone bridge that is still installed is simply unnecessary, and if
-both are loaded they share the same global state ("first wins"), which is why the compatibility names
-and the state shapes above never move. The visible differences are the older package's extra
-`/bridge-status` command and whose wording a shared notice uses.
+This API lives in this package, so nothing external is needed. The store directory keeps its original
+name so saved choices still load, which is also why the state shapes above never move.
 
 ## Next step
 

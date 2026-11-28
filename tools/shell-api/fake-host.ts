@@ -8,7 +8,7 @@
  * `options.rows` on the adapter never matches, exactly like the real host.
  *
  * The adapter renders from the live array, so a test asserts what the user would see after an
- * injection, not just what the bridge captured.
+ * injection, not just what the shell API captured.
  */
 
 import type { CustomizeRow, InlineHelpers, RowLabel } from "../../lib/shell-api/types.ts";

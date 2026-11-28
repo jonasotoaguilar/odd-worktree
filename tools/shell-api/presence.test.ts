@@ -1,7 +1,7 @@
 /**
  * T12/T13 — the RUNTIME presence gate for the required host package (S9).
  *
- * `gentle-pi` is the package that owns `/gentle:customize`, the surface this bridge feeds. Its
+ * `gentle-pi` is the package that owns `/gentle:customize`, the surface this shell API feeds. Its
  * presence is never read from disk: the sanctioned check is `pi.getCommands()` including the
  * `gentle:customize` command, the same precedent gentle-shell itself uses
  * (`extensions/gentle-design.ts:137`, `extensions/gentle-guide.ts:62`). All extensions are loaded
@@ -19,16 +19,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { bridgeApi } from "../../lib/shell-api/api.ts";
+import { shellApi } from "../../lib/shell-api/api.ts";
 import { registerRows, resetBusForTests } from "../../lib/shell-api/bus.ts";
 import { resetCardStyleRowStateForTests } from "../../lib/shell-api/card-style-rows.ts";
 import { resetCardStyleTransformForTests } from "../../lib/shell-api/card-style-transform.ts";
 import { disableCardStyleTransform, resetCardStyleWiringForTests } from "../../lib/shell-api/card-style-wiring.ts";
 import { getCaptureDiagnostics, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
-import gentleShellBridge, {
-  type BridgeCommandEntry,
-  type BridgeSessionHandler,
-  type BridgeExtensionApi,
+import gentleShellShellApi, {
+  type ShellCommandEntry,
+  type ShellSessionHandler,
+  type ShellExtensionApi,
 } from "../../lib/shell-api/extension.ts";
 import { resetHookStateForTests } from "../../lib/shell-api/hook.ts";
 import { resetNoticesForTests } from "../../lib/shell-api/notices.ts";
@@ -92,7 +92,7 @@ test.beforeEach(() => {
 
 interface RecordingWorld {
   /** The API object the entry was loaded against; `getCommands` disappears for the absent case. */
-  pi: BridgeExtensionApi;
+  pi: ShellExtensionApi;
   start: () => void;
   warnings: string[];
   widgets: number;
@@ -108,7 +108,7 @@ interface RecordingWorld {
 const createWorld = (getCommands: (() => unknown) | undefined, rowLabel?: string): RecordingWorld => {
   const warnings: string[] = [];
   const statuses: Array<{ key: string; text?: string }> = [];
-  const handlers: BridgeSessionHandler[] = [];
+  const handlers: ShellSessionHandler[] = [];
   const resolvers: unknown[] = [];
   let widgets = 0;
   const host = createFakeHost();
@@ -119,7 +119,7 @@ const createWorld = (getCommands: (() => unknown) | undefined, rowLabel?: string
   };
   ui.setStatus = (key: string, text?: string) => statuses.push({ key, text });
 
-  const pi: BridgeExtensionApi = {
+  const pi: ShellExtensionApi = {
     on(event, handler) {
       if (event === "session_start") handlers.push(handler);
     },
@@ -132,9 +132,9 @@ const createWorld = (getCommands: (() => unknown) | undefined, rowLabel?: string
     // The host is a TRUST BOUNDARY: the cast models a host whose answer violates Pi's own type
     // (a non-array, an entry with no name, a throwing call), which is exactly what `./presence.ts`
     // re-validates at runtime.
-    pi.getCommands = getCommands as () => readonly BridgeCommandEntry[];
+    pi.getCommands = getCommands as () => readonly ShellCommandEntry[];
   }
-  gentleShellBridge(pi);
+  gentleShellShellApi(pi);
 
   if (rowLabel !== undefined) {
     registerRows({
@@ -176,7 +176,7 @@ const recordedPresence = () => {
 };
 
 // ---------------------------------------------------------------------------------------------
-// T13 — present: the bridge arms exactly as it does today
+// T13 — present: the shell API arms exactly as it does today
 // ---------------------------------------------------------------------------------------------
 
 test("present: session_start arms every surface exactly as today", () => {
@@ -184,7 +184,7 @@ test("present: session_start arms every surface exactly as today", () => {
 
   world.start();
 
-  assert.equal(getCaptureDiagnostics().armedTargets, 1, "the row bridge is armed");
+  assert.equal(getCaptureDiagnostics().armedTargets, 1, "the row shell API is armed");
   assert.equal(world.resolvers.length, 1, "the ONE tool-design resolver is registered");
   assert.ok(world.widgets >= 1, "the sidebar widget factory is handed to the host");
   assert.equal(
@@ -233,7 +233,7 @@ test("absent: nothing is armed, one warning per absence, and the report says mis
   assert.equal(getCaptureDiagnostics().armedTargets, 0, "no wrapper is armed");
   assert.equal(world.resolvers.length, 0, "no tool-design resolver is registered");
   assert.equal(world.widgets, 0, "no sidebar widget factory is handed out");
-  assert.deepEqual(world.statuses, [], "no footer line: the bridge never claims readiness");
+  assert.deepEqual(world.statuses, [], "no footer line: the shell API never claims readiness");
   assert.equal(
     getPluginLineReport().availability,
     "not-armed",
@@ -259,13 +259,13 @@ test("absent: a plugin's registrations still succeed and never throw", () => {
   const world = createWorld(undefined);
 
   assert.doesNotThrow(() =>
-    bridgeApi()?.registerRows({
+    shellApi()?.registerRows({
       id: "presence.offline",
       category: "Banner",
       rows: () => [{ label: "Offline", action: () => {} }],
     }),
   );
-  const api = bridgeApi();
+  const api = shellApi();
   assert.ok(api !== undefined, "the API object is still published while disabled");
   assert.equal(typeof api.registerToolDesign, "function");
   assert.doesNotThrow(() =>
@@ -337,7 +337,7 @@ test("a throwing getCommands on session_start is missing, warned and never armed
 // T13 — a late host: missing, then present
 // ---------------------------------------------------------------------------------------------
 
-test("a late session_start after gentle-pi appears enables the bridge exactly once", () => {
+test("a late session_start after gentle-pi appears enables the shell API exactly once", () => {
   let commands: unknown = [];
   const world = createWorld(() => commands, "Probe row");
 
@@ -350,7 +350,7 @@ test("a late session_start after gentle-pi appears enables the bridge exactly on
   commands = [{ name: GENTLE_PI_COMMAND }];
   world.start();
 
-  assert.equal(getCaptureDiagnostics().armedTargets, 1, "the row bridge arms on the re-check");
+  assert.equal(getCaptureDiagnostics().armedTargets, 1, "the row shell API arms on the re-check");
   assert.equal(world.resolvers.length, 1, "the resolver registers on the re-check");
   assert.ok(world.widgets >= 1, "the sidebar widget factory is installed on the re-check");
   assert.equal(getPluginLineReport().availability, "installed");

@@ -1,9 +1,9 @@
 'use strict';
-// native-bridge T5: the real-host check. It drives a real `pi --mode rpc` with ONLY this package
+// native-shell API T5: the real-host check. It drives a real `pi --mode rpc` with ONLY this package
 // loaded, so it proves what the fixture-stubbed suite cannot: odd-worktree's own shell API
 // publishes the slot, arms, and a third party can extend it. It needs the host binary and a
 // type-stripping Node, so it is opt-in:
-//   NATIVE_BRIDGE_PI="$(command -v pi)" node --test tools/shell-api-rpc.test.js
+//   SHELL_API_PI="$(command -v pi)" node --test tools/shell-api-rpc.test.js
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
@@ -11,9 +11,9 @@ const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const test = require('node:test');
 
-const pi = process.env.NATIVE_BRIDGE_PI;
+const pi = process.env.SHELL_API_PI;
 const entry = resolve(__dirname, '../extensions/odd-worktree-tools.ts');
-const slot = 'Symbol.for("gentle-shell-bridge/api/v1")';
+const slot = 'Symbol.for("odd-worktree/shell-api/v1")';
 const get = { type: 'get_commands', id: '1' };
 
 function rpc(t, before, after, commands) {
@@ -77,9 +77,9 @@ test('only this package: six commands, the slot published, and a third party ext
   for (const name of ['warp', 'odd', 'files', 'issues', 'prs', 'identity']) {
     assert.equal(names.filter((candidate) => candidate === name).length, 1, name);
   }
-  assert.equal(names.includes('bridge-status'), false, 'the status command is gone');
+  assert.equal(names.includes('status'), false, 'the status command is gone');
   const answer = report();
-  assert.equal(answer.schema, 'gentle-shell-bridge/api');
+  assert.equal(answer.schema, 'odd-worktree/shell-api');
   assert.equal(answer.version, 1);
   assert.equal(answer.VERSION, '0.16.2', 'the release consumers gate on');
   assert.deepEqual(answer.members, [
@@ -106,11 +106,11 @@ test('a first-loaded plugin sees the API, adds a section and removes it again', 
     export default function (pi) {
       pi.registerCommand("gentle:customize", { handler() {} });
       let ready = 0;
-      pi.events.on("gentle-shell-bridge:ready", () => { ready += 1; });
+      pi.events.on("odd-worktree:shell-ready", () => { ready += 1; });
       pi.on("session_start", () => {
         const api = globalThis[${slot}];
         const ids = () =>
-          globalThis[Symbol.for("gentle-shell-bridge.providers")].sections
+          globalThis[Symbol.for("odd-worktree.providers")].sections
             .map((entry) => entry.section.id)
             .sort();
         const own = ids();
@@ -134,12 +134,12 @@ test('a first-loaded plugin sees the API, adds a section and removes it again', 
   assert.deepEqual(saw.added, [...own, 'verification.section'], 'a third party adds its own');
   assert.deepEqual(saw.after, own, 'and its disposer removes exactly that one, twice safely');
   assert.equal(saw.ready, 1, 'the ready announcement reaches a plugin loaded first');
-  assert.deepEqual(saw.identity, ['gentle-shell-bridge/api', 1, '0.16.2']);
+  assert.deepEqual(saw.identity, ['odd-worktree/shell-api', 1, '0.16.2']);
 });
 
 test('an incompatible object on the slot leaves this package\'s surface unregistered and says so once', { skip: !pi }, (t) => {
   const { records } = rpc(t, `
-    globalThis[${slot}] = { schema: "other-bridge/api", version: 2 };
+    globalThis[${slot}] = { schema: "other-shell-api/api", version: 2 };
     export default function (pi) {
       pi.registerCommand("gentle:customize", { handler() {} });
     }
@@ -151,12 +151,12 @@ test('an incompatible object on the slot leaves this package\'s surface unregist
   const warnings = records.filter((x) => x.method === 'notify' && x.notifyType === 'warning');
   const foreign = warnings.filter((x) => x.message.startsWith('odd-worktree:'));
   assert.equal(foreign.length, 1, 'one notice, in this package\'s own words');
-  assert.match(foreign[0].message, /other-bridge\/api/, 'it names the schema the slot really holds');
+  assert.match(foreign[0].message, /other-shell-api\/api/, 'it names the schema the slot really holds');
   assert.match(foreign[0].message, /"2"/, 'and its version');
   assert.match(foreign[0].message, /sidebar sections/, 'and what is off');
 });
 
-for (const schema of ['third-party/v2', 'gentle-shell-bridge/api']) {
+for (const schema of ['third-party/v2', 'odd-worktree/shell-api']) {
   test(`foreign slot ${schema}: one warning, no commands, no row of this package, and no load failure`, { skip: !pi }, (t) => {
     const { records, report } = rpc(t, `
       import { writeFileSync } from "node:fs";
@@ -169,7 +169,7 @@ for (const schema of ['third-party/v2', 'gentle-shell-bridge/api']) {
       export default function (pi) {
         pi.registerCommand("gentle:customize", { handler() {} });
         pi.on("session_start", () => setImmediate(() => {
-          const bus = globalThis[Symbol.for("gentle-shell-bridge.providers")];
+          const bus = globalThis[Symbol.for("odd-worktree.providers")];
           writeFileSync(process.env.PROBE_REPORT, JSON.stringify({
             preserved: globalThis[key] === foreign,
             providers: ((bus && bus.entries) || []).map((entry) => entry.provider.id),

@@ -255,7 +255,7 @@ test("S1: installing twice contributes the line once, and the disposer withdraws
   const providers = snapshotProviders().filter(
     (provider) => provider.id === MESSAGE_DESIGN_ROWS_PROVIDER_ID,
   );
-  assert.equal(providers.length, 1, "one provider, however many times the bridge armed");
+  assert.equal(providers.length, 1, "one provider, however many times the shell API armed");
 
   dispose();
   assert.equal(

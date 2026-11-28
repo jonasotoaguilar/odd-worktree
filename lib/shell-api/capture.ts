@@ -37,9 +37,9 @@
  *   `Array.prototype.map`, so a throw leaves no trace — and a session only ever rolls back the
  *   array it pushed into, so an inner factory's rollback can never touch the outer session's rows.
  *
- * Net guarantee: after any factory invocation, no array holds bridge rows except the one the late
+ * Net guarantee: after any factory invocation, no array holds shell API rows except the one the late
  * decision chose. The cost, stated honestly: for the duration of the factory an array that
- * satisfies the strict proof can hold bridge rows, visible only to code running inside that
+ * satisfies the strict proof can hold shell API rows, visible only to code running inside that
  * factory, and the guess is undone whenever the decision disagrees with it.
  *
  * ## The proof: what makes an array the menu's rows
@@ -53,11 +53,11 @@
  *   synthetic row naming it — so `row => row.category` and any constant mapper cannot qualify on
  *   the host's own rows alone;
  * - does not throw (a throw means "not proven", never a broken host call);
- * - and derives `row.category ?? "Settings"` for every row the bridge is about to append, run over
- *   them BEFORE they are pushed, so the host's own `map` can never throw because of a bridge row.
+ * - and derives `row.category ?? "Settings"` for every row the shell API is about to append, run over
+ *   them BEFORE they are pushed, so the host's own `map` can never throw because of a shell API row.
  *
  * Stated cost of the proof: the host's mapper runs over the host's own rows once more per row-like
- * `map` call, and once over each row the bridge appends. It is the host's own
+ * `map` call, and once over each row the shell API appends. It is the host's own
  * `row => row.category ?? "Settings"`, pure by construction in the host; a mapper with side effects
  * sees them once more per element, which is the price of not guessing.
  *
@@ -79,7 +79,7 @@
  * - A nested session that throws rolls back only its own array: nothing is left in it, and the
  *   outer session continues and resolves its own array.
  * - If ONE session captures more than one row-like array (an incidental row-shaped array before
- *   the menu, for example) the bridge does not guess: the outcome is `uncaptured (ambiguous)` and
+ *   the menu, for example) the shell API does not guess: the outcome is `uncaptured (ambiguous)` and
  *   nothing is injected. The one exception is the proof above: when exactly ONE of those arrays
  *   derives pages like the menu does, that array is the menu by evidence and is what the late path
  *   takes (S18 needs it, or a brand-new page could never be reached); two proven arrays are
@@ -121,11 +121,11 @@ import type { RowBuildResult } from "./rows.ts";
 import type { CustomizeRow } from "./types.ts";
 
 /** Marks a UI target this module wrapped; the value is the wrapper function it installed. */
-const CAPTURE_WRAPPED = Symbol.for("gentle-shell-bridge.capture.wrapped.v1");
+const CAPTURE_WRAPPED = Symbol.for("odd-worktree.capture.wrapped.v1");
 /** Marks a captured rows array that already received an injection. */
-const CAPTURE_INJECTED = Symbol.for("gentle-shell-bridge.capture.injected.v1");
+const CAPTURE_INJECTED = Symbol.for("odd-worktree.capture.injected.v1");
 /** Process-global arming/diagnostics slot. */
-const CAPTURE_STATE = Symbol.for("gentle-shell-bridge.capture.state.v1");
+const CAPTURE_STATE = Symbol.for("odd-worktree.capture.state.v1");
 
 /**
  * Minimum length for a mapped array to count as the host's rows array.
@@ -152,7 +152,7 @@ const HOST_DEFAULT_CATEGORY = "Settings";
  * ignores its argument — a constant — cannot return this for one row and `"Settings"` for another,
  * and a mapper that echoes `row.category` cannot return `"Settings"` for the row that has none.
  */
-const SENTINEL_CATEGORY = "gentle-shell-bridge probe sentinel";
+const SENTINEL_CATEGORY = "shell-api probe sentinel";
 
 /**
  * The two rows the host never had. They are the whole difference between "this callback derives
@@ -161,8 +161,8 @@ const SENTINEL_CATEGORY = "gentle-shell-bridge probe sentinel";
  * (JD-A-001).
  */
 const SYNTHETIC_PROOF_ROWS: readonly CustomizeRow[] = [
-  { label: "Bridge probe without a category", action: () => {} },
-  { category: SENTINEL_CATEGORY, label: "Bridge probe with a sentinel category", action: () => {} },
+  { label: "Shell API probe without a category", action: () => {} },
+  { category: SENTINEL_CATEGORY, label: "Shell API probe with a sentinel category", action: () => {} },
 ];
 
 /** A provider that threw while its rows were built; its rows were dropped. */
@@ -199,7 +199,7 @@ export interface InstallCaptureResult {
 /**
  * What the host's `custom` hands back: the plain adapter component gentle-shell returns
  * (`gentle-shell.ts:3550-3562`), possibly wrapped in a promise (`interactive-mode.ts:3136`).
- * Opaque by design — the bridge only ever calls `invalidate()`, and only on the sync shape.
+ * Opaque by design — the shell API only ever calls `invalidate()`, and only on the sync shape.
  */
 export interface HostComponent {
   invalidate?: () => void;
@@ -285,7 +285,7 @@ interface EarlyCardStyleSplice {
   start: number;
   /** How many host rows the splice replaced at that index. */
   hostCount: number;
-  /** How many bridge value rows it inserted after them. */
+  /** How many shell API value rows it inserted after them. */
   values: number;
   /** The host's own rows, by identity, exactly as they were before the splice. */
   original: readonly CustomizeRow[];
@@ -357,7 +357,7 @@ export function resetCaptureStateForTests(): void {
   state.lastOutcome = undefined;
   state.lastFailures = [];
   state.wrappers = [];
-  // The shared `Sections` preview keeps the last patch, which is how a bridge row finds the host's
+  // The shared `Sections` preview keeps the last patch, which is how a shell API row finds the host's
   // base list; a new test starts with no patched array to borrow from.
   resetSharedSectionsPreviewForTests();
 }
@@ -450,7 +450,7 @@ function wrapCustom(target: MutableTarget, shape: "instance" | "prototype"): Ins
 
   const callHost = current as HostCustom;
   // SAFETY: `current` is verified callable above, and the host's `custom` is documented to
-  // resolve its factory to a component (or a promise of one) — architecture.md §3. The bridge
+  // resolve its factory to a component (or a promise of one) — architecture.md §3. The shell API
   // never inspects the result, it only forwards it, so the return type is not a claim about its
   // shape.
 
@@ -484,7 +484,7 @@ function wrapCustom(target: MutableTarget, shape: "instance" | "prototype"): Ins
 /**
  * Disable every capture wrapper, restoring the host's own `custom` on the exact targets that were
  * wrapped. Used when a different backend becomes active, so one menu cannot receive two copies of
- * the bridge's rows.
+ * the shell API's rows.
  */
 export function disableCaptureBackend(): number {
   const state = captureState();
@@ -625,16 +625,16 @@ function resolveSession(session: CaptureSession, component: HostCustomResult): v
   // S1: the host's own `Card style` line is extended IN PLACE here, before the providers' rows are
   // appended — the one moment the array is reachable, and the only place the two could be confused.
   // It never throws: an unreachable line records the `separate` mode and leaves the fallback
-  // provider to draw the bridge's own line on this same build. The early path extends the same line
+  // provider to draw the shell API's own line on this same build. The early path extends the same line
   // at the same point in the array's life; the splice is not idempotent, so only one of them runs.
   if (!session.extendedCardStyle) {
     session.extendedCardStyle = true;
     extendCardStyleLine(captured);
   }
 
-  // S1/S2: the host's own `Sections` rows now preview the bridge's sections too. Patched after the
+  // S1/S2: the host's own `Sections` rows now preview the shell API's sections too. Patched after the
   // splice, so the recorded indices describe the array the providers are about to join, and before
-  // the rows are built: a bridge row's preview reads the patch lazily, at render time.
+  // the rows are built: a shell API row's preview reads the patch lazily, at render time.
   patchSharedSections(captured);
 
   const built = buildRows(createRowContext(session.theme));
@@ -680,7 +680,7 @@ type LatePick =
  * captured, several are ambiguous and nothing is injected — with one refinement S18 needs: when
  * exactly ONE candidate proved itself the menu's rows at a `map` call (S20's proof), that array is
  * the menu by evidence, so a merely row-LIKE array mapped beside it does not make the target
- * ambiguous. Two proven arrays are ambiguous, and so are two unproven ones: the bridge still never
+ * ambiguous. Two proven arrays are ambiguous, and so are two unproven ones: the shell API still never
  * guesses between two arrays that both look like the menu.
  */
 function pickLateTarget(session: CaptureSession): LatePick {
@@ -733,18 +733,18 @@ function describeRollbackError(error: unknown): string {
   }
 }
 
-/** One truthful rollback count: appended, already removed by the host, removed by the bridge, left. */
+/** One truthful rollback count: appended, already removed by the host, removed by the shell API, left. */
 function removalReport(
   appended: number,
   hostRemoved: number,
-  bridgeRemoved: number,
+  shellApiRemoved: number,
   unremovable: number,
   detail?: string,
 ): string {
   const rows = appended === 1 ? "row" : "rows";
   const counts =
     `appended ${appended} ${rows}; ${hostRemoved} already removed by the host; ` +
-    `${bridgeRemoved} removed by the bridge; ${unremovable} could not be removed`;
+    `${shellApiRemoved} removed by the shell API; ${unremovable} could not be removed`;
   return detail === undefined ? counts : `${detail}; ${counts}`;
 }
 
@@ -827,7 +827,7 @@ function removeTailTo(array: CustomizeRow[], start: number): string | undefined 
  * S21: undo the mid-array insertions a rollback must remove, in reverse order.
  *
  * Every identity is checked before anything is removed: a region the host has since rearranged is
- * left untouched, because removing a row the host wrote would be worse than leaving a bridge row
+ * left untouched, because removing a row the host wrote would be worse than leaving a shell API row
  * behind. Returns the reason it could not finish, or `undefined`.
  */
 function removeInsertedRows(early: EarlyInjection): string | undefined {
@@ -996,7 +996,7 @@ function rollbackEarly(session: CaptureSession): void {
   const insertProblem = removeInsertedRows(early);
   if (insertProblem !== undefined) {
     recordNotice(
-      `gentle-shell-bridge: could not fully roll back the provisional rows: ${insertProblem}. ` +
+      `odd-worktree: could not fully roll back the provisional rows: ${insertProblem}. ` +
         "The host menu was left as consistent as the array allowed.",
       "error",
     );
@@ -1004,7 +1004,7 @@ function rollbackEarly(session: CaptureSession): void {
   const rollbackProblem = removeInjectedTail({ ...early, rows: early.tail });
   if (rollbackProblem !== undefined) {
     recordNotice(
-      `gentle-shell-bridge: could not fully roll back the provisional rows: ${rollbackProblem}. ` +
+      `odd-worktree: could not fully roll back the provisional rows: ${rollbackProblem}. ` +
         "The host menu was left as consistent as the array allowed.",
       "error",
     );
@@ -1136,7 +1136,7 @@ function insertBuiltRows(
  *
  * Everything here is recorded so `rollbackEarly` can undo it: the append index, the rows by
  * identity, and the `Card style` splice. The mapper is also run over the rows about to be appended,
- * before they are pushed, so the host's own `map` can never throw because of a bridge row
+ * before they are pushed, so the host's own `map` can never throw because of a shell API row
  * (JD-A-003) — if it would, nothing is appended and the late path behaves exactly as before.
  */
 function injectProvisionalRows(
@@ -1162,7 +1162,7 @@ function injectProvisionalRows(
       cardStyle = extendCardStyleProvisional(array);
     }
     // S1/S2: the host's `Sections` rows are patched BEFORE the host's own `map` reads this array,
-    // so the list it previews already names the bridge's sections. Undone with everything else.
+    // so the list it previews already names the shell API's sections. Undone with everything else.
     sectionPreview = patchSharedSections(array);
     const built = buildRows(createRowContext(session.theme));
     // S4/S5: the provisional placement uses the same plan as the late path, computed against the
@@ -1284,7 +1284,7 @@ function provesCategoryMap(
 
 /**
  * The mapper, run over only the rows this injection inserts — at the index they will have in
- * `planned`, so a mapper that throws on a bridge row (or would put one in the wrong page) never
+ * `planned`, so a mapper that throws on a shell API row (or would put one in the wrong page) never
  * meets one in the host's own `map` call (JD-A-003). The host's own rows are already proved.
  */
 function provesPlannedRows(

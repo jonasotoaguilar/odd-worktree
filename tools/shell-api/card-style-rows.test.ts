@@ -2,8 +2,8 @@
  * The `Card style` line (S1, S12): the host's own line, extended in place, with a separate-line
  * fallback that is reported rather than silent.
  *
- * These tests drive the REAL capture path (`armBridge` on the fake host), because the whole point
- * of the design is that the bridge does not add a second line: it splices the host's rows out of
+ * These tests drive the REAL capture path (`armShellApi` on the fake host), because the whole point
+ * of the design is that the shell API does not add a second line: it splices the host's rows out of
  * the captured array and puts them back at the same index, immediately followed by one row per
  * registered style, so the host coalesces them into one line. What a test asserts is what the
  * renderer draws (`fakeHost.toggleLines()`), plus the live row objects themselves.
@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { armBridge } from "../../lib/shell-api/arm.ts";
+import { armShellApi } from "../../lib/shell-api/arm.ts";
 import {
   registerCardStyle,
   resetBusForTests,
@@ -33,7 +33,7 @@ import {
   resetCardStyleRowStateForTests,
 } from "../../lib/shell-api/card-style-rows.ts";
 import { HOST_CARD_STYLE_SETTING } from "../../lib/shell-api/card-style-line.ts";
-import { CARD_STYLE_STORE_ID, getCardStyleSelection, setCardStyleSelection } from "../../lib/shell-api/card-styles.ts";
+import { LEGACY_CARD_STYLE_STORE_ID, getCardStyleSelection, setCardStyleSelection } from "../../lib/shell-api/card-styles.ts";
 import { disableCaptureBackend, resetCaptureStateForTests } from "../../lib/shell-api/capture.ts";
 import { resetHookStateForTests } from "../../lib/shell-api/hook.ts";
 import { resetRowBuildStateForTests } from "../../lib/shell-api/rows.ts";
@@ -141,7 +141,7 @@ const settingLines = (lines: readonly string[], setting: string): string[] =>
 
 test("capture extends the host's own Card style line instead of adding a second one", () => {
   const host = createFakeHost({ rows: rowsWithHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(style("loon.cute", { label: "cute" }));
 
@@ -162,7 +162,7 @@ test("the host's rows stay at their index; only their current() is wrapped (S13)
   const rows = rowsWithHostLine();
   const [neonRow, floatRow] = [rows[3] as FakeRow, rows[4] as FakeRow];
   const host = createFakeHost({ rows });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(style("loon.cute", { label: "cute" }));
 
@@ -183,7 +183,7 @@ test("the host's rows stay at their index; only their current() is wrapped (S13)
     assert.equal(after[field], before[field], `choice.${field} is untouched`);
   }
   assert.notEqual(after.current, before.current, "current() is wrapped (S13)");
-  assert.equal(after.current(), before.current(), "and it delegates while no bridge style is selected");
+  assert.equal(after.current(), before.current(), "and it delegates while no shell API style is selected");
   assert.notEqual(wrapped.action, neonRow.action, "action() is wrapped: pressing a host value exits (S13)");
 
   assert.equal(live[5]?.choice?.value, "cute", "the registered value follows immediately");
@@ -194,16 +194,16 @@ test("the host's rows stay at their index; only their current() is wrapped (S13)
   );
 });
 
-test("while a bridge style is selected the host's own values are NOT current (S13)", async () => {
+test("while a shell API style is selected the host's own values are NOT current (S13)", async () => {
   const host = createFakeHost({ rows: rowsWithHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(style("loon.cute", { label: "cute" }));
   host.buildMenu();
 
   assert.deepEqual(settingLines(host.toggleLines(), HOST_CARD_STYLE_SETTING), [
     "Card style ○ neon ● float ○ cute",
-  ], "native: the host's own answer, delegated, and no bridge value is current");
+  ], "native: the host's own answer, delegated, and no shell API value is current");
 
   await host.pressRow(
     (row) => row.choice?.setting === HOST_CARD_STYLE_SETTING && row.choice?.value === "cute",
@@ -211,13 +211,13 @@ test("while a bridge style is selected the host's own values are NOT current (S1
 
   assert.deepEqual(settingLines(host.toggleLines(), HOST_CARD_STYLE_SETTING), [
     "Card style ○ neon ○ float ● cute",
-  ], "one current value, and it is the bridge's");
+  ], "one current value, and it is the shell API's");
 
   // Pressing a host value IS the way back (S13): the host's own action runs, and the wrapped action
-  // clears the bridge selection, so the host renders again.
+  // clears the shell API selection, so the host renders again.
   await host.press("Card style: float");
   assert.equal(hostActions.at(-1), "float", "the host's setter ran");
-  assert.equal(getCardStyleSelection(), "native", "and the bridge selection is native again");
+  assert.equal(getCardStyleSelection(), "native", "and the shell API selection is native again");
   assert.deepEqual(settingLines(host.toggleLines(), HOST_CARD_STYLE_SETTING), [
     "Card style ○ neon ● float ○ cute",
   ], "exactly one bullet, on the host's value");
@@ -233,7 +233,7 @@ test("while a bridge style is selected the host's own values are NOT current (S1
 test("a stale selection lets the host's own values speak again (S12, S13)", () => {
   const dispose = registerCardStyle(style("loon.cute", { label: "cute" }));
   const host = createFakeHost({ rows: rowsWithHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   setCardStyleSelection("loon.cute");
   host.buildMenu();
@@ -242,7 +242,7 @@ test("a stale selection lets the host's own values speak again (S12, S13)", () =
   dispose();
   const reopened = createFakeHost({ rows: rowsWithHostLine() });
   resetCaptureStateForTests();
-  armBridge(reopened.ui);
+  armShellApi(reopened.ui);
   reopened.buildMenu();
 
   assert.deepEqual(settingLines(reopened.toggleLines(), HOST_CARD_STYLE_SETTING), [
@@ -256,7 +256,7 @@ test("a throwing host action still returns to native and never throws out of the
       throw new Error("host setter exploded");
     }),
   });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(style("loon.cute", { label: "cute" }));
   host.buildMenu();
@@ -270,41 +270,41 @@ test("a throwing host action still returns to native and never throws out of the
   assert.equal(
     getCardStyleSelection(),
     "native",
-    "a failed host action must not leave the user trapped in a bridge style",
+    "a failed host action must not leave the user trapped in a shell API style",
   );
   const noticed = snapshotNotices().entries.map((entry) => entry.message).join("\n");
   assert.match(noticed, /host setter exploded/u, "and the failure is recorded, not swallowed silently");
 });
 
-test("pressing a native value calls the host's own action; a registered value is the bridge's", async () => {
+test("pressing a native value calls the host's own action; a registered value is the shell API's", async () => {
   const host = createFakeHost({ rows: rowsWithHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(style("loon.cute", { label: "cute" }));
   host.buildMenu();
 
   await host.press("Card style: neon");
-  assert.deepEqual(hostActions, ["neon"], "the host's setter ran; the bridge did not replace it");
-  assert.equal(getCardStyleSelection(), "native", "and the bridge store was not touched");
+  assert.deepEqual(hostActions, ["neon"], "the host's setter ran; the shell API did not replace it");
+  assert.equal(getCardStyleSelection(), "native", "and the shell API store was not touched");
 
   await host.pressRow(
     (row) => row.choice?.setting === HOST_CARD_STYLE_SETTING && row.choice?.value === "cute",
   );
-  assert.equal(getCardStyleSelection(), "loon.cute", "the bridge persisted first");
+  assert.equal(getCardStyleSelection(), "loon.cute", "the shell API persisted first");
   assert.deepEqual(hostActions, ["neon"], "and the host's own setter never ran for our value");
-  const file = join(configHome, "gentle-shell-bridge", `${CARD_STYLE_STORE_ID}.json`);
+  const file = join(configHome, "gentle-shell-bridge", `${LEGACY_CARD_STYLE_STORE_ID}.json`);
   assert.equal(
     (JSON.parse(readFileSync(file, "utf8")) as { values: Record<string, string> }).values.cardStyle,
     "loon.cute",
   );
   assert.deepEqual(settingLines(host.toggleLines(), HOST_CARD_STYLE_SETTING), [
     "Card style ○ neon ○ float ● cute",
-  ], "the bridge's value is the only current one (S13)");
+  ], "the shell API's value is the only current one (S13)");
 });
 
 test("three plugins, three styles, one line, deterministic order", () => {
   const host = createFakeHost({ rows: rowsWithHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   // Three independent plugins registering in an arbitrary order; `order` decides among two of them.
   registerCardStyle(style("loon.loud", { label: "loud", order: 20 }));
@@ -320,7 +320,7 @@ test("three plugins, three styles, one line, deterministic order", () => {
 
 test("nothing capped or hidden: the row carries every registered value", () => {
   const host = createFakeHost({ rows: rowsWithHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   const registered = Array.from({ length: 12 }, (_, index) => `plugin.${index}`);
   for (const id of registered) registerCardStyle(style(id));
@@ -336,7 +336,7 @@ test("nothing capped or hidden: the row carries every registered value", () => {
 
 test("with no style registered the host's line is left exactly as it was", () => {
   const host = createFakeHost({ rows: rowsWithHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
 
   host.buildMenu();
@@ -350,7 +350,7 @@ test("with no style registered the host's line is left exactly as it was", () =>
 
 test("a registered value previews literally, and a throwing preview cannot break the menu", () => {
   const host = createFakeHost({ rows: rowsWithHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(
     style("loon.cute", {
@@ -380,7 +380,7 @@ test("a registered value previews literally, and a throwing preview cannot break
 
 test("a disposed style leaves the line and its row, and the rest keep working (S12)", () => {
   const host = createFakeHost({ rows: rowsWithHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   const dispose = registerCardStyle(style("loon.cute", { label: "cute" }));
   registerCardStyle(style("pix.mono", { label: "mono" }));
@@ -392,7 +392,7 @@ test("a disposed style leaves the line and its row, and the rest keep working (S
   // a fresh fake host is the honest model of "the next open".
   const reopened = createFakeHost({ rows: rowsWithHostLine() });
   resetCaptureStateForTests();
-  armBridge(reopened.ui);
+  armShellApi(reopened.ui);
   reopened.buildMenu();
 
   assert.deepEqual(settingLines(reopened.toggleLines(), HOST_CARD_STYLE_SETTING), [
@@ -404,9 +404,9 @@ test("a disposed style leaves the line and its row, and the rest keep working (S
 // Fallback: one separate line, reported
 // ---------------------------------------------------------------------------------------------
 
-test("without a host line the bridge contributes its own line: native plus every style", () => {
+test("without a host line the shell API contributes its own line: native plus every style", () => {
   const host = createFakeHost({ rows: rowsWithoutHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(style("loon.cute", { label: "cute" }));
 
@@ -414,14 +414,14 @@ test("without a host line the bridge contributes its own line: native plus every
 
   assert.equal(cardStyleRowMode(), "separate");
   assert.deepEqual(settingLines(host.toggleLines(), CARD_STYLE_FALLBACK_SETTING), [
-    "Bridge card style ● native ○ cute",
+    "API card style ● native ○ cute",
   ]);
   assert.deepEqual(settingLines(host.toggleLines(), HOST_CARD_STYLE_SETTING), []);
 });
 
 test("the fallback setting and label never collide with the host's own Card style", () => {
   const host = createFakeHost({ rows: rowsWithoutHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(style("loon.cute", { label: "cute" }));
   host.buildMenu();
@@ -439,12 +439,12 @@ test("the fallback setting and label never collide with the host's own Card styl
 
 test("in fallback mode native is the default and pressing it persists 'native'", async () => {
   const host = createFakeHost({ rows: rowsWithoutHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   registerCardStyle(style("loon.cute", { label: "cute" }));
   host.buildMenu();
   assert.deepEqual(settingLines(host.toggleLines(), CARD_STYLE_FALLBACK_SETTING), [
-    "Bridge card style ● native ○ cute",
+    "API card style ● native ○ cute",
   ]);
 
   await host.pressRow(
@@ -477,7 +477,7 @@ test("an array that cannot be spliced degrades to the fallback instead of throwi
 
 test("the fallback provider is registered only while the separate line is what the user sees", () => {
   const host = createFakeHost({ rows: rowsWithHostLine() });
-  armBridge(host.ui);
+  armShellApi(host.ui);
   installCardStyleRows();
   const providerIds = (): string[] =>
     snapshotProviders()

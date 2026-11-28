@@ -12,7 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { LIB_DIR, stubbedSource, installDefaultBridge } = require('./fixtures/load-extension.js');
+const { LIB_DIR, stubbedSource, installDefaultShellApi } = require('./fixtures/load-extension.js');
 
 const scratch = [];
 function track(dir) {
@@ -192,10 +192,10 @@ before(async () => {
 // reach; this file therefore loads the extension itself — same stubs, same lib
 // override, same fake host as the shared fixture — and keeps the registrations.
 async function loadExtensionWithModule(pi) {
-  // S18 (T14): the extension loads nothing without gentle-shell-bridge, so this
-  // file's own host publishes the shared fixture's bridge before the factory runs —
+  // S18 (T14): the extension loads nothing without the shell API, so this
+  // file's own host publishes the shared fixture's shell API before the factory runs —
   // the same object the rest of the suite loads against.
-  installDefaultBridge();
+  installDefaultShellApi();
   process.env.GENTLE_WORKTREE_LIB_DIR = LIB_DIR;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-wt-ext-'));
   try {

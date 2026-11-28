@@ -18,25 +18,25 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { decideSkillReadGuard } = require('../lib/skill-read-guard.js');
-const { BRIDGE_SLOT, defaultBridge, loadExtension } = require('./fixtures/load-extension.js');
+const { SHELL_SLOT, defaultShellApi, loadExtension } = require('./fixtures/load-extension.js');
 
 // modular-tools (`Skills+`): the two read rules are their own half and that switch is OFF
 // until someone turns it on, so a suite that proves the rule publishes the document first
 // and restores the slot after.
-const savedBridge = globalThis[BRIDGE_SLOT];
+const savedShellApi = globalThis[SHELL_SLOT];
 async function loadWithModules(modules) {
-  const bridge = defaultBridge();
-  bridge.api.createStore = () => ({
+  const shellApi = defaultShellApi();
+  shellApi.api.createStore = () => ({
     get: (key, fallback) => (key === 'modules' && modules !== undefined ? modules : fallback),
     set: () => {},
     delete: () => {},
   });
-  globalThis[BRIDGE_SLOT] = bridge.api;
+  globalThis[SHELL_SLOT] = shellApi.api;
   try {
     return await loadExtension({});
   } finally {
-    if (savedBridge === undefined) delete globalThis[BRIDGE_SLOT];
-    else globalThis[BRIDGE_SLOT] = savedBridge;
+    if (savedShellApi === undefined) delete globalThis[SHELL_SLOT];
+    else globalThis[SHELL_SLOT] = savedShellApi;
   }
 }
 

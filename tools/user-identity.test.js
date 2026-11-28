@@ -1,5 +1,5 @@
 'use strict';
-// identity-command (S1-S4): the user's own name. `/identity <name>` stores it in the bridge's
+// identity-command (S1-S4): the user's own name. `/identity <name>` stores it in the shell API's
 // store, the user prompt card heads with it instead of `You`, and one line about it is appended
 // to the orchestrator's prompt; `/identity clear` takes it away again.
 //
@@ -8,17 +8,19 @@
 // registered on a fake host. No internal state is read.
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const identity = require('../lib/user-identity.js');
 const fixture = require('./fixtures/load-extension.js');
 
-const BRIDGE_SLOT = Symbol.for('gentle-shell-bridge/api/v1');
+const SHELL_SLOT = Symbol.for('odd-worktree/shell-api/v1');
 const STORE = 'odd-worktree';
 
-// A bridge whose `createStore` keeps ONE in-memory document per plugin id, with the same
+// A shell API whose `createStore` keeps ONE in-memory document per plugin id, with the same
 // key-merge the published store has (`get` and `set` only). `deletable: false` models that real
-// store exactly: gentle-shell-bridge's `Store` interface has no `delete`.
-function fakeBridge(initial = {}, options = {}) {
+// store exactly: the shell API's `Store` interface has no `delete`.
+function fakeShellApi(initial = {}, options = {}) {
   const documents = new Map(Object.entries(initial));
   const writes = [];
   const store = {
@@ -39,7 +41,7 @@ function fakeBridge(initial = {}, options = {}) {
       writes.push([key]);
     };
   }
-  return { api: { schema: 'gentle-shell-bridge/api', version: 1, createStore: () => store }, documents, writes };
+  return { api: { schema: 'odd-worktree/shell-api', version: 1, createStore: () => store }, documents, writes };
 }
 
 const stored = (name) => ({ [STORE]: { identity: { schema: 1, name } } });
@@ -83,8 +85,8 @@ describe('the name a command may store', () => {
 
 describe('reading the stored name', () => {
   test('the stored name is read back, and every unreadable document is no name at all', () => {
-    assert.equal(identity.readIdentityName(fakeBridge(stored('Jona')).api), 'Jona');
-    assert.equal(identity.readIdentityName(fakeBridge(stored('  Jona   Soto ')).api), 'Jona Soto', 'read normalizes');
+    assert.equal(identity.readIdentityName(fakeShellApi(stored('Jona')).api), 'Jona');
+    assert.equal(identity.readIdentityName(fakeShellApi(stored('  Jona   Soto ')).api), 'Jona Soto', 'read normalizes');
     for (const document of [
       'Jona',
       42,
@@ -97,8 +99,8 @@ describe('reading the stored name', () => {
       { schema: 1, name: '   ' },
       { schema: 1 },
     ]) {
-      const bridge = fakeBridge({ [STORE]: { identity: document } });
-      assert.equal(identity.readIdentityName(bridge.api), undefined, JSON.stringify(document));
+      const shellApi = fakeShellApi({ [STORE]: { identity: document } });
+      assert.equal(identity.readIdentityName(shellApi.api), undefined, JSON.stringify(document));
     }
   });
 
@@ -106,9 +108,9 @@ describe('reading the stored name', () => {
     assert.equal(identity.readIdentityName(undefined), undefined);
     assert.equal(identity.readIdentityName(null), undefined);
     assert.equal(identity.readIdentityName({}), undefined);
-    assert.equal(identity.readIdentityName({ schema: 'gentle-shell-bridge/api', version: 1 }), undefined);
+    assert.equal(identity.readIdentityName({ schema: 'odd-worktree/shell-api', version: 1 }), undefined);
     assert.equal(identity.readIdentityName({ createStore: () => { throw new Error('disk'); } }), undefined);
-    const throwing = fakeBridge();
+    const throwing = fakeShellApi();
     throwing.api.createStore = () => ({ get: () => { throw new Error('disk'); }, set: () => {} });
     assert.equal(identity.readIdentityName(throwing.api), undefined);
   });
@@ -116,22 +118,22 @@ describe('reading the stored name', () => {
 
 describe('writing the stored name', () => {
   test('the name is one document named `identity`, and every other document survives it', () => {
-    const bridge = fakeBridge({ [STORE]: { modules: { worktrees: false } } });
-    assert.equal(identity.writeIdentityName(bridge.api, '  Jona  '), true);
-    assert.deepEqual(bridge.documents.get(STORE), {
+    const shellApi = fakeShellApi({ [STORE]: { modules: { worktrees: false } } });
+    assert.equal(identity.writeIdentityName(shellApi.api, '  Jona  '), true);
+    assert.deepEqual(shellApi.documents.get(STORE), {
       modules: { worktrees: false },
       identity: { schema: 1, name: 'Jona' },
     });
-    assert.equal(identity.readIdentityName(bridge.api), 'Jona', 'and it reads back');
+    assert.equal(identity.readIdentityName(shellApi.api), 'Jona', 'and it reads back');
   });
 
   test('a refused name and an api with no store write nothing and answer false', () => {
-    const bridge = fakeBridge();
+    const shellApi = fakeShellApi();
     for (const bad of ['', '   ', 42, null, 'a'.repeat(41)]) {
-      assert.equal(identity.writeIdentityName(bridge.api, bad), false, String(bad));
+      assert.equal(identity.writeIdentityName(shellApi.api, bad), false, String(bad));
     }
-    assert.deepEqual(bridge.writes, [], 'nothing was written');
-    assert.deepEqual(bridge.documents.get(STORE), undefined, 'and no document was created');
+    assert.deepEqual(shellApi.writes, [], 'nothing was written');
+    assert.deepEqual(shellApi.documents.get(STORE), undefined, 'and no document was created');
     assert.equal(identity.writeIdentityName(undefined, 'Jona'), false);
     assert.equal(identity.writeIdentityName({}, 'Jona'), false);
     assert.equal(identity.writeIdentityName({ createStore: () => { throw new Error('disk'); } }, 'Jona'), false);
@@ -140,37 +142,37 @@ describe('writing the stored name', () => {
 
 describe('clearing the stored name', () => {
   test('after a clear there is no name, and every other document survives it', () => {
-    const bridge = fakeBridge({ [STORE]: { identity: { schema: 1, name: 'Jona' }, modules: { codegraph: false } } });
-    assert.equal(identity.clearIdentityName(bridge.api), true);
-    assert.equal(identity.readIdentityName(bridge.api), undefined);
-    assert.deepEqual(bridge.documents.get(STORE), { modules: { codegraph: false } }, 'the other document survives');
+    const shellApi = fakeShellApi({ [STORE]: { identity: { schema: 1, name: 'Jona' }, modules: { codegraph: false } } });
+    assert.equal(identity.clearIdentityName(shellApi.api), true);
+    assert.equal(identity.readIdentityName(shellApi.api), undefined);
+    assert.deepEqual(shellApi.documents.get(STORE), { modules: { codegraph: false } }, 'the other document survives');
   });
 
   test('a store with no delete (the published one) removes the name by overwriting the document', () => {
-    const bridge = fakeBridge({ [STORE]: { identity: { schema: 1, name: 'Jona' }, modules: { codegraph: false } } }, { deletable: false });
-    assert.equal(identity.clearIdentityName(bridge.api), true);
-    assert.equal(identity.readIdentityName(bridge.api), undefined, 'the strict read refuses the cleared document');
-    assert.deepEqual(bridge.documents.get(STORE), {
+    const shellApi = fakeShellApi({ [STORE]: { identity: { schema: 1, name: 'Jona' }, modules: { codegraph: false } } }, { deletable: false });
+    assert.equal(identity.clearIdentityName(shellApi.api), true);
+    assert.equal(identity.readIdentityName(shellApi.api), undefined, 'the strict read refuses the cleared document');
+    assert.deepEqual(shellApi.documents.get(STORE), {
       modules: { codegraph: false },
       identity: { schema: 1, name: null },
     }, 'no name survives it');
   });
 
   test('nothing stored is nothing to clear, and no store clears nothing either', () => {
-    assert.equal(identity.clearIdentityName(fakeBridge().api), false);
+    assert.equal(identity.clearIdentityName(fakeShellApi().api), false);
     assert.equal(identity.clearIdentityName(undefined), false);
     assert.equal(identity.clearIdentityName({}), false);
-    assert.equal(identity.clearIdentityName(fakeBridge(), 'x'), false, 'an api that is not an object');
+    assert.equal(identity.clearIdentityName(fakeShellApi(), 'x'), false, 'an api that is not an object');
   });
 
   test('an already-cleared store is not written again', () => {
     // The published store has no `delete`, so a clear overwrites the document with the cleared
     // shape: a second clear on that store must find no name and write nothing.
-    const bridge = fakeBridge({ [STORE]: { identity: { schema: 1, name: 'Jona' } } }, { deletable: false });
-    assert.equal(identity.clearIdentityName(bridge.api), true);
-    const writes = bridge.writes.length;
-    assert.equal(identity.clearIdentityName(bridge.api), false, 'there is nothing left to clear');
-    assert.equal(bridge.writes.length, writes, 'and nothing is written');
+    const shellApi = fakeShellApi({ [STORE]: { identity: { schema: 1, name: 'Jona' } } }, { deletable: false });
+    assert.equal(identity.clearIdentityName(shellApi.api), true);
+    const writes = shellApi.writes.length;
+    assert.equal(identity.clearIdentityName(shellApi.api), false, 'there is nothing left to clear');
+    assert.equal(shellApi.writes.length, writes, 'and nothing is written');
   });
 });
 
@@ -188,6 +190,15 @@ describe('the block', () => {
 
 // ---- D4: where it is injected ----
 
+/**
+ * The deps one append takes: the store seam, a clean environment and the `Card message` seam.
+ * `cardMessage` defaults to On, which is the row's documented default (an absent document reads On),
+ * so a case that cares about the switch passes its own.
+ */
+function GATED(name = 'Jona', on = true) {
+  return { api: fakeShellApi(name === null ? {} : stored(name)).api, env: {}, cardMessage: () => on };
+}
+
 describe('the prompt append', () => {
   const name = stored('Jona');
 
@@ -200,14 +211,14 @@ describe('the prompt append', () => {
     ];
     for (const [before, after] of cases) {
       const event = { systemPromptOptions: { appendSystemPrompt: before } };
-      identity.appendUserIdentitySection(event, { api: fakeBridge(name).api, env: {} });
+      identity.appendUserIdentitySection(event, GATED('Jona'));
       assert.equal(event.systemPromptOptions.appendSystemPrompt, after, JSON.stringify(before));
     }
   });
 
   test('a second call appends nothing, and a block already there is left alone', () => {
     const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
-    const deps = { api: fakeBridge(name).api, env: {} };
+    const deps = GATED('Jona');
     identity.appendUserIdentitySection(event, deps);
     const once = event.systemPromptOptions.appendSystemPrompt;
     identity.appendUserIdentitySection(event, deps);
@@ -217,7 +228,7 @@ describe('the prompt append', () => {
 
   test('no stored name injects nothing', () => {
     const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
-    identity.appendUserIdentitySection(event, { api: fakeBridge().api, env: {} });
+    identity.appendUserIdentitySection(event, GATED(null, true));
     assert.equal(event.systemPromptOptions.appendSystemPrompt, 'base');
   });
 
@@ -225,7 +236,7 @@ describe('the prompt append', () => {
     // Only a line that IS the heading counts: prose that happens to name the block must not
     // suppress the one line a stored name states.
     const event = { systemPromptOptions: { appendSystemPrompt: 'See ## User identity for the name.' } };
-    identity.appendUserIdentitySection(event, { api: fakeBridge(name).api, env: {} });
+    identity.appendUserIdentitySection(event, GATED('Jona'));
     assert.equal(event.systemPromptOptions.appendSystemPrompt,
       "See ## User identity for the name.\n\n## User identity\n\nThe user's name is Jona.");
   });
@@ -237,7 +248,7 @@ describe('the prompt append', () => {
 
   test('a child session and a named-agent event get nothing, both keeping the text they had', () => {
     const child = { systemPromptOptions: { appendSystemPrompt: 'base' } };
-    identity.appendUserIdentitySection(child, { api: fakeBridge(name).api, env: { GENTLE_PI_AGENTS_CHILD: '1' } });
+    identity.appendUserIdentitySection(child, { api: fakeShellApi(name).api, env: { GENTLE_PI_AGENTS_CHILD: '1' }, cardMessage: () => true });
     assert.equal(child.systemPromptOptions.appendSystemPrompt, 'base', 'a child gets none of it');
     for (const agentEvent of [
       { agentName: 'reviewer' },
@@ -247,52 +258,109 @@ describe('the prompt append', () => {
       { subagent: { name: 'reviewer' } },
     ]) {
       const event = { systemPromptOptions: { appendSystemPrompt: 'base' }, ...agentEvent };
-      identity.appendUserIdentitySection(event, { api: fakeBridge(name).api, env: {} });
+      identity.appendUserIdentitySection(event, GATED('Jona'));
       assert.equal(event.systemPromptOptions.appendSystemPrompt, 'base', JSON.stringify(agentEvent));
     }
   });
 
   test('a missing or unusable systemPromptOptions writes nothing and throws nothing', () => {
     for (const event of [undefined, null, {}, { systemPromptOptions: null }, { systemPromptOptions: 'text' }, { systemPromptOptions: 42 }]) {
-      assert.doesNotThrow(() => identity.appendUserIdentitySection(event, { api: fakeBridge(name).api, env: {} }), String(event));
+      assert.doesNotThrow(() => identity.appendUserIdentitySection(event, GATED('Jona')), String(event));
     }
     const stringly = { systemPromptOptions: { appendSystemPrompt: 42 } };
-    identity.appendUserIdentitySection(stringly, { api: fakeBridge(name).api, env: {} });
+    identity.appendUserIdentitySection(stringly, GATED('Jona'));
     assert.equal(stringly.systemPromptOptions.appendSystemPrompt, `## User identity\n\nThe user's name is Jona.`, 'a non-string value is not a prefix');
   });
 
-  test('without an injected api the name is read from the published bridge, and no bridge injects nothing', () => {
-    const bridge = fakeBridge(name);
-    const previous = globalThis[BRIDGE_SLOT];
-    globalThis[BRIDGE_SLOT] = bridge.api;
+  test('without an injected api the name is read from the published shell API, and no shell API injects nothing', () => {
+    const shellApi = fakeShellApi(name);
+    const previous = globalThis[SHELL_SLOT];
+    globalThis[SHELL_SLOT] = shellApi.api;
     try {
       assert.equal(identity.currentIdentityName(), 'Jona');
       const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
       identity.appendUserIdentitySection(event, { env: {} });
       assert.equal(event.systemPromptOptions.appendSystemPrompt, "base\n\n## User identity\n\nThe user's name is Jona.");
-      delete globalThis[BRIDGE_SLOT];
-      assert.equal(identity.currentIdentityName(), undefined, 'no bridge, no name');
+      delete globalThis[SHELL_SLOT];
+      assert.equal(identity.currentIdentityName(), undefined, 'no shell API, no name');
       const unset = { systemPromptOptions: { appendSystemPrompt: 'base' } };
       identity.appendUserIdentitySection(unset, { env: {} });
       assert.equal(unset.systemPromptOptions.appendSystemPrompt, 'base');
     } finally {
-      if (previous === undefined) delete globalThis[BRIDGE_SLOT];
-      else globalThis[BRIDGE_SLOT] = previous;
+      if (previous === undefined) delete globalThis[SHELL_SLOT];
+      else globalThis[SHELL_SLOT] = previous;
     }
+  });
+});
+
+// ---- S4: the section is only injected with a name AND `Card message` On ----
+
+describe('the Card message gate', () => {
+  test('a stored name with Card message Off appends nothing', () => {
+    const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
+    identity.appendUserIdentitySection(event, GATED('Jona', false));
+    assert.equal(event.systemPromptOptions.appendSystemPrompt, 'base');
+  });
+
+  test('a stored name with Card message On appends the exact section', () => {
+    const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
+    identity.appendUserIdentitySection(event, GATED('Jona', true));
+    assert.equal(event.systemPromptOptions.appendSystemPrompt,
+      "base\n\n## User identity\n\nThe user's name is Jona.");
+  });
+
+  test('no name with Card message On appends nothing either', () => {
+    const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
+    identity.appendUserIdentitySection(event, { api: fakeShellApi().api, env: {}, cardMessage: () => true });
+    assert.equal(event.systemPromptOptions.appendSystemPrompt, 'base');
+  });
+
+  test('a seam that throws is a no, and with no seam the published document decides', () => {
+    const throwing = { systemPromptOptions: { appendSystemPrompt: 'base' } };
+    identity.appendUserIdentitySection(throwing, { api: fakeShellApi(stored('Jona')).api, env: {}, cardMessage: () => { throw new Error('disk'); } });
+    assert.equal(throwing.systemPromptOptions.appendSystemPrompt, 'base', 'an unreadable switch appends nothing');
+
+    const previous = globalThis[SHELL_SLOT];
+    try {
+      const shellApi = fakeShellApi(stored('Jona'));
+      shellApi.documents.set(STORE, { ...shellApi.documents.get(STORE), 'card-message': { schema: 1, on: false } });
+      globalThis[SHELL_SLOT] = shellApi.api;
+      const event = { systemPromptOptions: { appendSystemPrompt: 'base' } };
+      identity.appendUserIdentitySection(event, { env: {} });
+      assert.equal(event.systemPromptOptions.appendSystemPrompt, 'base', 'Card message Off on the published store');
+    } finally {
+      if (previous === undefined) delete globalThis[SHELL_SLOT];
+      else globalThis[SHELL_SLOT] = previous;
+    }
+  });
+});
+
+// ---- S4: the section is prose on disk, next to the other two rule files ----
+
+describe('the section is prose on disk', () => {
+  const SECTION_FILE = path.resolve(__dirname, '..', 'lib', 'identity-prompt', 'user-identity.md');
+
+  test('the section lives in its own Markdown file, and the rendered block is that file', () => {
+    assert.ok(fs.existsSync(SECTION_FILE), 'the section file exists');
+    const template = fs.readFileSync(SECTION_FILE, 'utf8').trim();
+    assert.ok(template.startsWith('## User identity'), template.split('\n')[0]);
+    assert.equal(template.split('{{name}}').length - 1, 1, 'the placeholder is stated once');
+    assert.equal(identity.identitySection('Jona'), template.replace('{{name}}', 'Jona'));
+    assert.equal(template.replace('{{name}}', 'Jona Soto'), identity.identitySection('  Jona   Soto '));
   });
 });
 
 // ---- D6: the command surface ----
 
 // The fixture drives registrations through a fake host, so the command is cheap to load here: the
-// bridge is published on the real slot BEFORE the extension loads, exactly as the fixture does,
+// shell API is published on the real slot BEFORE the extension loads, exactly as the fixture does,
 // and its store is one this test can read back.
-function commandBridge() {
-  const bridge = fixture.defaultBridge();
+function commandShellApi() {
+  const shellApi = fixture.defaultShellApi();
   const documents = new Map();
   const writes = [];
   const repaints = [];
-  bridge.api.createStore = (id) => ({
+  shellApi.api.createStore = (id) => ({
     get: (key, fallback) => {
       const document = documents.get(id);
       return document !== undefined && Object.hasOwn(document, key) ? document[key] : fallback;
@@ -308,27 +376,27 @@ function commandBridge() {
       writes.push([id, key]);
     },
   });
-  bridge.api.requestRepaint = () => repaints.push(repaints.length + 1);
-  return { api: bridge.api, documents, writes, repaints };
+  shellApi.api.requestRepaint = () => repaints.push(repaints.length + 1);
+  return { api: shellApi.api, documents, writes, repaints };
 }
 
 const NOT_SET = 'identity: not set · messages head with "You"';
 const REFUSAL = 'identity: a name needs 1-40 printable characters and no markdown heading';
 
-/** The extension loaded over a bridge this test owns, with a live session that owns the repaint. */
+/** The extension loaded over a shell API this test owns, with a live session that owns the repaint. */
 async function loadIdentityCommand(initialIdentity, modules) {
-  const made = commandBridge();
+  const made = commandShellApi();
   if (initialIdentity !== undefined) made.documents.set(STORE, { identity: initialIdentity });
   if (modules !== undefined) made.documents.set(STORE, { ...(made.documents.get(STORE) ?? {}), modules });
-  const previous = globalThis[BRIDGE_SLOT];
-  globalThis[BRIDGE_SLOT] = made.api;
+  const previous = globalThis[SHELL_SLOT];
+  globalThis[SHELL_SLOT] = made.api;
   try {
     const loaded = await fixture.loadExtension({});
     for (const [event, handler] of loaded.hooks) {
       if (event === 'session_start') await handler({}, {});
     }
     const command = loaded.commands.get('identity');
-    assert.notEqual(command, undefined, '/identity is registered with the bridge present');
+    assert.notEqual(command, undefined, '/identity is registered with the shell API present');
     const notifications = [];
     const ctx = { ui: { notify: (text, level) => notifications.push(level === undefined ? [text] : [text, level]) } };
     // Loading seeds documents of its own (the bash design's marker), which are not this
@@ -343,13 +411,13 @@ async function loadIdentityCommand(initialIdentity, modules) {
       writes: made.writes,
       repaints: made.repaints,
       restore: () => {
-        if (previous === undefined) delete globalThis[BRIDGE_SLOT];
-        else globalThis[BRIDGE_SLOT] = previous;
+        if (previous === undefined) delete globalThis[SHELL_SLOT];
+        else globalThis[SHELL_SLOT] = previous;
       },
     };
   } catch (error) {
-    if (previous === undefined) delete globalThis[BRIDGE_SLOT];
-    else globalThis[BRIDGE_SLOT] = previous;
+    if (previous === undefined) delete globalThis[SHELL_SLOT];
+    else globalThis[SHELL_SLOT] = previous;
     throw error;
   }
 }
@@ -434,6 +502,23 @@ describe('/identity', () => {
       await loaded.command.handler('Jona', loaded.ctx);
       await loaded.command.handler('cle\u0001ar', loaded.ctx);
       assert.equal(Object.hasOwn(loaded.documents.get(STORE), 'identity'), false, 'it cleared instead of storing `clear`');
+      assert.deepEqual(loaded.notifications.at(-1), [NOT_SET]);
+    } finally {
+      loaded.restore();
+    }
+  });
+
+  test('with Card message Off the command still sets, reports and clears the name (S3)', async () => {
+    const loaded = await loadIdentityCommand();
+    try {
+      loaded.documents.set(STORE, { ...(loaded.documents.get(STORE) ?? {}), 'card-message': { schema: 1, on: false } });
+      await loaded.command.handler('Jona', loaded.ctx);
+      assert.deepEqual(loaded.documents.get(STORE).identity, { schema: 1, name: 'Jona' }, 'the name is stored anyway');
+      assert.deepEqual(loaded.notifications.at(-1), ['identity: Jona']);
+      await loaded.command.handler('', loaded.ctx);
+      assert.deepEqual(loaded.notifications.at(-1), ['identity: Jona'], 'and reported');
+      await loaded.command.handler('clear', loaded.ctx);
+      assert.equal(Object.hasOwn(loaded.documents.get(STORE), 'identity'), false, 'and cleared');
       assert.deepEqual(loaded.notifications.at(-1), [NOT_SET]);
     } finally {
       loaded.restore();

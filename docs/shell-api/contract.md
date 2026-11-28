@@ -4,21 +4,21 @@ What a plugin can rely on when it extends gentle-shell through odd-worktree. The
 in [architecture.md](architecture.md); the persistence decision in [state.md](state.md).
 
 This is this package's own API, published at one global slot, so a plugin needs no second install and
-no import: it reads `Symbol.for("gentle-shell-bridge/api/v1")` and gates on the schema and version
-(§9). The names keep their `gentle-shell-bridge` spelling because third-party plugins and saved choices
-depend on them; the code lives in `lib/shell-api/` and is edited like any other module.
-"The API" and "the bridge" below both mean that surface.
+no import: it reads `Symbol.for("odd-worktree/shell-api/v1")` and gates on the schema and version
+(§9). The store directory keeps its original name because saved choices
+depend on it; the code lives in `lib/shell-api/` and is edited like any other module.
+"The API" and "the shell API" below both mean that surface.
 
 ## 1. `registerRows(provider): () => void`
 
-**The bridge's own provider ids are reserved.** `bridge.sections`, `bridge.card-styles`,
-`bridge.tool-designs` and `bridge.message-designs` are refused with an error, and nothing is stored.
+**The shell API's own provider ids are reserved.** `shell-api.sections`, `shell-api.card-styles`,
+`shell-api.tool-designs` and `shell-api.message-designs` are refused with an error, and nothing is stored.
 They are this package's plumbing: odd-worktree's own surfaces are served through them, and none of them
 ever appears among the registrations a plugin makes. A plugin that took one would take a line off the menu (the
 bus answers an id first-come) or be silently replaced by it. Register your rows under an id of your
 own, e.g. `"loon.rows"`.
 
-The reservation is enforced by THIS copy of the bridge. In a mixed-copy process (`./api.ts`'s
+The reservation is enforced by THIS copy of the shell API. In a mixed-copy process (`./api.ts`'s
 first-wins slot) an OLDER published API object still accepts those ids, and a plugin holding it can
 still register one; the reservation protects the sessions that load this copy first.
 
@@ -26,9 +26,9 @@ still register one; the reservation protects the sessions that load this copy fi
 const dispose: () => void = registerRows(provider);
 ```
 
-Registers a row provider with the process-global bridge and returns a disposer
-unsubscribing exactly that provider — no other provider's rows and no bridge state are
-touched. It is safe to call from `session_start`, including after a rebind: the bridge
+Registers a row provider with the process-global shell API and returns a disposer
+unsubscribing exactly that provider — no other provider's rows and no shell API state are
+touched. It is safe to call from `session_start`, including after a rebind: the shell API
 arms once, and a provider registered twice under the same `id` replaces its previous
 registration instead of stacking rows.
 
@@ -38,13 +38,13 @@ constructed.
 The package's public entry exports exactly `registerRows`, `registerSection`,
 `registerCardStyle`, `registerTransform`, `registerToolDesign`, `resolveToolDesignSelection`,
 `registerMessageDesign`, `resolveMessageDesignSelection`,
-`createStore`, `STORE_SCHEMA_VERSION`, `VERSION`, the runtime helpers `bridgeApi`, `isBridgeApi`,
-`onBridgeApi`, the announcement channel `BRIDGE_READY_EVENT` (§9), and the
+`createStore`, `STORE_SCHEMA_VERSION`, `VERSION`, the runtime helpers `shellApi`, `isShellApi`,
+`onShellApi`, the announcement channel `SHELL_READY_EVENT` (§9), and the
 row/provider/section/store/API types.
 `tools/shell-api/e2e.test.ts` pins that exact set. `requestRepaint` is the one contract member with no named
 export: a plugin reaches it through the published object (`api.requestRepaint`, §9). `snapshotProviders`, `snapshotSections`,
-`publishBridgeApi`, `announceBridgeReady` and every `…ForTests` seam are **internal**: they exist so
-the bridge's own backends and tests can drive one process, and they are not part of this
+`publishShellApi`, `announceShellReady` and every `…ForTests` seam are **internal**: they exist so
+the shell API's own backends and tests can drive one process, and they are not part of this
 contract.
 
 ## 2. Provider
@@ -75,13 +75,13 @@ interface RowProvider {
 
 ### Placement and ordering
 
-`placement` and `order` are REGISTRATION data, like a section's `order`: the bridge resolves them on
+`placement` and `order` are REGISTRATION data, like a section's `order`: the shell API resolves them on
 every menu build and never persists them. Placement is resolved per the category each ROW actually
 uses (`row.category ?? provider.category`), never the provider's declared category. A provider whose
 rows stay in one category contributes one block there; an opted-in provider whose rows override the
 category contributes one block per actual category, while an unopted provider keeps its rows in one
 tail block. For a block placed in a category, an insertion point is therefore a boundary of that
-category, so a rendered consecutive `choice.setting` pair — and the bridge's own `Card style` value
+category, so a rendered consecutive `choice.setting` pair — and the shell API's own `Card style` value
 splice — is never split, with or without a category override. Rows of one provider stay contiguous
 WITHIN one category.
 
@@ -99,7 +99,7 @@ placement?: "start" | "end" | { after: string };
   default; a provider that names neither field is not placed and keeps the tail append above.
 - **`"start"`** sits before the category's first row.
 - **`{ after: id }`** sits right after that provider's block, ids only. A host row's label text
-  (`"Card style"`, `"Bridge card style"`) is NOT an anchor: the host gives its own rows no identity,
+  (`"Card style"`, `"API card style"`) is NOT an anchor: the host gives its own rows no identity,
   so a label would be fragile and ambiguous. The follower goes where the anchor's rows actually are:
   - an anchor that opted in (`placement` or `order`) is inside its actual category, so the follower
     lands right after its block there, and chains resolve transitively inside that category;
@@ -164,21 +164,21 @@ still registers, its rows use the default end placement, and it is kept as a row
 (§8); a corrected re-registration clears the record.
 
 When the write itself is refused — a read-only index, a frozen array, or no writable slot — the
-bridge skips the whole move and leaves every block in the pre-feature tail position rather than
+shell API skips the whole move and leaves every block in the pre-feature tail position rather than
 half-applying it, and the real landing is what the build keeps, for example `placement start → end
 (the block stayed at the end because the host array's index 1 is read-only)`.
 
 ## 3. Row fields
 
 All of these are already understood by gentle-shell's renderer
-(`lib/visual-customize-view.ts:107-128`); the bridge carries them through unchanged, with one
+(`lib/visual-customize-view.ts:107-128`); the shell API carries them through unchanged, with one
 deliberate exception: it sets `choice.applyOnMove: false` on every row it contributes (§4).
 
 | Field | Type | Behaviour |
 | --- | --- | --- |
 | `category` | string (existing category) | which menu page the row joins |
 | `label` | `string \| (() => string)` | row text; a function is evaluated when the menu is built |
-| `choice` | `{ setting, value, current(), hint?, applyOnMove? }` | one value of a setting; consecutive rows of the same `setting` share a line. The bridge forces `applyOnMove: false` (§4) |
+| `choice` | `{ setting, value, current(), hint?, applyOnMove? }` | one value of a setting; consecutive rows of the same `setting` share a line. The shell API forces `applyOnMove: false` (§4) |
 | `preview()` | `{ title, sample }` | read-only depiction of the highlighted choice, never an application |
 | `visible()` | `() => boolean` | hidden when false; a throw fails closed (row hidden) |
 | `keyhint` | string | footer hint for this row instead of the category default |
@@ -197,16 +197,16 @@ use them rather than `ctx.ui.input`.
 
 ### Visibility
 
-`visible` is the one row field the bridge never reads. It is handed to the host as the same function
+`visible` is the one row field the shell API never reads. It is handed to the host as the same function
 reference — `tools/shell-api/button-rows.test.ts:185-212` asserts that identity and that no field is added,
 dropped or renamed — so whether a row shows is the plugin's own live state, evaluated by the
-renderer, not a bridge setting. The contract on it is two sentences (`lib/shell-api/types.ts:87-88`): hidden
+renderer, not a shell API setting. The contract on it is two sentences (`lib/shell-api/types.ts:87-88`): hidden
 when it returns `false`, and a throw fails closed, so the row is hidden.
 
-A hidden row is still a row the provider returned: the bridge neither evaluates nor filters it
+A hidden row is still a row the provider returned: the shell API neither evaluates nor filters it
 (`lib/shell-api/rows.ts:203-240` is the whole row build, and it never mentions `visible`), so its
 `choice.setting` still counts towards the duplicate check of §6 and its `label` still has to pass
-the row-name rule of §4. A row hidden by a throw leaves no trace in the BRIDGE's channels either —
+the row-name rule of §4. A row hidden by a throw leaves no trace in the SHELL API's channels either —
 `visible` is not wrapped the way a button `action` is, so a failure inside it reaches neither the
 notice buffer of §8 nor the API's failure record; what the host does with that throw is the host's
 business, as §7 records.
@@ -216,7 +216,7 @@ suite's fake host (`tools/shell-api/fake-host.ts:86-92`: no `visible` means visi
 which models the host's renderer instead of proving it. The renderer itself is not in this workspace,
 and no test here makes a `visible()` throw. Nothing beyond those two sentences is promised.
 
-This is not the bridge-owned visibility of a sidebar section (`lib/shell-api/visibility.ts:119-132`), which is
+This is not the shell API-owned visibility of a sidebar section (`lib/shell-api/visibility.ts:119-132`), which is
 persisted per section id and reaches the user as the generated `Sections` toggle (§11). A row's
 `visible()` belongs to the plugin: nothing about it is stored, and its answer is whatever the
 plugin's state says when the renderer asks.
@@ -242,18 +242,18 @@ the cursor inside the line and applies a value only when that row does not defer
 whatever is focused (`lib/visual-customize-view.ts:552-577`). "Consecutive" is literal — a row
 between the two values splits them into two lines.
 
-### Moving never applies: every bridge row defers to Enter
+### Moving never applies: every shell API row defers to Enter
 
-A line the bridge contributes is navigated, not switched under the user's fingers: ←/→ moves the
+A line the shell API contributes is navigated, not switched under the user's fingers: ←/→ moves the
 `›` cursor and Enter applies. That is one row field, so it is one rule for every category:
 
-- every row the bridge itself builds — the `Sections` toggle, the card-style values in both modes
-  (the host's `Card style` line extended in place, and the fallback `Bridge card style` line)
+- every row the shell API itself builds — the `Sections` toggle, the card-style values in both modes
+  (the host's `Card style` line extended in place, and the fallback `API card style` line)
   including `native`, and every value of a tool design's `Cards` line — carries
   `choice.applyOnMove: false`;
 - `buildRows` enforces it for a plugin's own provider rows too, by shallow-copying the row and its
   `choice` (the provider's objects are never mutated, and every other field is the same reference).
-  An authored `applyOnMove: true` is overridden: the bridge owns the integration and the design is
+  An authored `applyOnMove: true` is overridden: the shell API owns the integration and the design is
   one behaviour for every row it adds, so the field has no author-facing meaning here;
 - the host's OWN rows are untouched. `Card style · neon/float` still applies on ←/→ because the
   host wrote it that way, so a line holding both behaves per row — which is exactly the host's rule.
@@ -261,7 +261,7 @@ A line the bridge contributes is navigated, not switched under the user's finger
 While such a row is focused the host's footer reads `←/→ choose · Enter apply` instead of
 `←/→ change` (`lib/visual-customize-view.ts:35-38,751`), and moving costs nothing: no store write,
 no persisted value, no repaint request. Enter runs `action()` exactly once, which is where the
-bridge's write path (persist first, repaint second) lives.
+shell API's write path (persist first, repaint second) lives.
 
 Other row kinds follow from the same shape:
 
@@ -278,7 +278,7 @@ A row is one of two first-class kinds. A **toggle** has a `choice`; consecutive 
 runs the action, the shape of gentle-shell's own `Profiles` and `Reset` rows. A button's label is its
 whole visible text, so the row-name rule below applies to it exactly as to a toggle's label (one to three
 plain words, no structural marks; refused and reported, never rewritten). `preview`, `keyhint` and
-`visible` pass through untouched, and the bridge injects neither a `choice` nor an `applyOnMove`. Its
+`visible` pass through untouched, and the shell API injects neither a `choice` nor an `applyOnMove`. Its
 one change is the `action`, wrapped so a throw or a rejected promise is contained and recorded once as
 a notice (§8), while the menu and every other row stay usable; the provider's object
 is never mutated, so the host receives a copy.
@@ -297,7 +297,7 @@ Bash card: rendering            BAD   colon
 Section: bash-card.status       BAD   prefix plus a dotted id
 ```
 
-The bridge enforces the shape instead of trusting authors; it is never a silent rewrite:
+The shell API enforces the shape instead of trusting authors; it is never a silent rewrite:
 
 - a provider row whose line name or label breaks it is **dropped from the menu build** — absent
   from the rows the host receives AND from the duplicate comparison of that build, so it
@@ -309,7 +309,7 @@ The bridge enforces the shape instead of trusting authors; it is never a silent 
 
 Derived names (a section `title`, a card style `label`) cannot violate the shape: derivation drops
 every non-word character — marks included — and clamps the result to the same word limit. The
-clamp is the only transformation the bridge performs, and only on text it derives itself.
+clamp is the only transformation the shell API performs, and only on text it derives itself.
 
 ## 5. Ordering and idempotency
 
@@ -339,7 +339,7 @@ determined by where their rows land in the array (placement included):
 
 Recommended policy: **pick a distinct plain-word name**, e.g. `"Loon banner source"` rather than
 `"Banner source"`. Namespacing with punctuation (`"Loon → Banner source"`) is not an option: the
-row-name shape forbids arrows and colons, and the bridge rejects such a name before it is stored
+row-name shape forbids arrows and colons, and the shell API rejects such a name before it is stored
 (see §4, "Row names"). The API keeps the duplicate `category` + `setting` pairs it saw in the last menu
 build (`no build yet` before the first build); it does not rename rows, because a row's setting name is
 its identity in the renderer, so two lines that read the same are the plugin's to fix.
@@ -398,7 +398,7 @@ card styles or transforms that plugin registers (one plugin, one line).
   glyph must be part of the text itself (the host's own fixture row is `🧠 gentle-pi · ready`).
 - **Colour belongs to the host.** Every entry is painted with one shared status role. A plugin
   cannot choose a colour; it can only choose a glyph.
-- **The name is derived, or given once.** The bridge captures the module that registered, resolves
+- **The name is derived, or given once.** The shell API captures the module that registered, resolves
   it to its owning `package.json` and derives one to three plain words from its `name`
   (`@acme/loon-kit` → `Loon kit`). The answer is cached per module. A module with no owning package
   (a single copied file) gets NO row, and nothing is guessed about it. The Pi installation itself is
@@ -473,20 +473,20 @@ before it fires `session_start` (`docs/extensions.md:213`), and it fires that ev
 `reload`, `new`, `resume` and `fork` (`:393`). But it does not guarantee that THIS package loaded
 before the plugin: global extensions (`~/.pi/agent/extensions`) load — and receive `session_start` —
 before a configured package's module publishes. A real TUI showed exactly that, with the plugin's
-handler finding no symbol while the bridge went on to publish a moment later.
+handler finding no symbol while the shell API went on to publish a moment later.
 
 So an absent symbol at `session_start` is **"not yet"**, not "not installed". The symbol stays the
 only authority for *which* object to use; the announcement below is how a plugin learns that a
-later publication happened. The bridge publishes its object as its module loads, and the process is
+later publication happened. The shell API publishes its object as its module loads, and the process is
 told once, on Pi's cross-extension bus.
 
 ### What is published
 
-`Symbol.for("gentle-shell-bridge/api/v1")` holds exactly:
+`Symbol.for("odd-worktree/shell-api/v1")` holds exactly:
 
 ```ts
 Object.freeze({
-  schema: "gentle-shell-bridge/api", // identity, so a foreign payload is never mistaken for ours
+  schema: "odd-worktree/shell-api", // identity, so a foreign payload is never mistaken for ours
   version: 1,                        // the major; a breaking change is a NEW symbol key
   VERSION: "0.16.2",                 // the publishing release; informational only
   registerRows,
@@ -506,7 +506,7 @@ and the slot is never reset. A consumer gates on the schema string, `version ===
 callable members below — `registerCardStyle`, `registerTransform`, `registerToolDesign`,
 `requestRepaint`, `resolveToolDesignSelection` and `registerMessageDesign` are NOT part of the gate, so
 an object published
-by an older copy is still a usable bridge for rows, sections and the store; a plugin that needs a
+by an older copy is still a usable shell API for rows, sections and the store; a plugin that needs a
 later surface checks
 `typeof api.registerCardStyle === "function"` (or the same test on any later member) before
 calling it. Anything else — another library's
@@ -518,13 +518,13 @@ the major: a breaking change is a new `v2` key, never a mutation of this one.
 ### Two ways to read it
 
 Read the symbol directly — no import, the form the worked example uses. The `session_start` attempt
-is kept, and the announcement covers a bridge that publishes after this file loaded:
+is kept, and the announcement covers a shell API that publishes after this file loaded:
 
 ```ts
-const KEY = Symbol.for("gentle-shell-bridge/api/v1");
+const KEY = Symbol.for("odd-worktree/shell-api/v1");
 const isApi = (value: any): boolean =>
   typeof value === "object" && value !== null &&
-  value.schema === "gentle-shell-bridge/api" && value.version === 1 &&
+  value.schema === "odd-worktree/shell-api" && value.version === 1 &&
   typeof value.registerRows === "function" &&
   typeof value.registerSection === "function" &&
   typeof value.createStore === "function";
@@ -537,7 +537,7 @@ const register = (): boolean => {
 };
 
 const registered = register();
-if (!registered) pi.events?.on("gentle-shell-bridge:ready", register);
+if (!registered) pi.events?.on("odd-worktree:shell-ready", register);
 
 pi.on("session_start", (_event, ctx) => {
   if (!register()) {
@@ -549,12 +549,12 @@ pi.on("session_start", (_event, ctx) => {
 });
 ```
 
-Inside this package the two forms are one call — `onBridgeApi(handler, pi.events)`, exported from
+Inside this package the two forms are one call — `onShellApi(handler, pi.events)`, exported from
 `lib/shell-api/index.ts` — and a plugin outside it inlines the same four lines, which is why the
 worked example imports nothing at all:
 
 ```ts
-const KEY = Symbol.for("gentle-shell-bridge/api/v1");
+const KEY = Symbol.for("odd-worktree/shell-api/v1");
 
 const reach = (handler: (api: any) => void): (() => void) => {
   const published = (globalThis as any)[KEY];
@@ -562,7 +562,7 @@ const reach = (handler: (api: any) => void): (() => void) => {
     handler(published);
     return () => {};
   }
-  const off = pi.events?.on("gentle-shell-bridge:ready", () => {
+  const off = pi.events?.on("odd-worktree:shell-ready", () => {
     const late = (globalThis as any)[KEY];
     if (isApi(late)) handler(late);
   });
@@ -570,27 +570,27 @@ const reach = (handler: (api: any) => void): (() => void) => {
 };
 ```
 
-`bridgeApi()` and `onBridgeApi()` never wait, defer or retry: they answer about the slot as it is
+`shellApi()` and `onShellApi()` never wait, defer or retry: they answer about the slot as it is
 right now.
 
-### The announcement: `gentle-shell-bridge:ready`
+### The announcement: `odd-worktree:shell-ready`
 
 When this package publishes its object, it emits one event on Pi's cross-extension bus
 (`docs/extensions.md:1965-1972`), the same channel gentle-shell's other extensions use:
 
 ```ts
-pi.events.on("gentle-shell-bridge:ready", (payload) => {
-  // { schema: "gentle-shell-bridge/api", version: 1, VERSION: "0.16.2" }
+pi.events.on("odd-worktree:shell-ready", (payload) => {
+  // { schema: "odd-worktree/shell-api", version: 1, VERSION: "0.16.2" }
 });
 ```
 
-- **Name:** `gentle-shell-bridge:ready`. Payload: `{ schema, version, VERSION }` — the same identity,
+- **Name:** `odd-worktree:shell-ready`. Payload: `{ schema, version, VERSION }` — the same identity,
   major and release the published object carries, frozen. Informational only: the payload says
-  *which* bridge announced itself, never *what* it can do.
+  *which* shell API announced itself, never *what* it can do.
 - **Emitted once per process**, after a successful publish, no matter how many copies of the package
   Pi loaded (`moduleCache: false` gives it one module instance per extension, not one per process).
 - **Never for an incompatible slot.** If the symbol holds another library's payload or another major,
-  nothing is announced: there is no object to send a listener to, and `bridgeApi()` stays
+  nothing is announced: there is no object to send a listener to, and `shellApi()` stays
   `undefined`.
 - **Silent without a bus.** On a Pi with no `pi.events`, nothing is emitted and nothing is reported;
   the symbol still works for any plugin that reads it.
@@ -638,7 +638,7 @@ host's "Preview unavailable" default. `dispose()` removes exactly this provider'
 One call adds the card to gentle-shell's fullscreen sidebar **and** its show/hide toggle to
 `/gentle:customize` → `Sections`. The plugin writes content only; it never names a `setting`, a
 value, the `Sections` category or a rail KEY: a `placement` names where in the section list the card
-goes, which is a placement the bridge resolves, not a part the plugin writes:
+goes, which is a placement the shell API resolves, not a part the plugin writes:
 
 ```ts
 const dispose = api.registerSection({
@@ -653,7 +653,7 @@ const dispose = api.registerSection({
 });
 ```
 
-The bridge generates the `Sections` rows for it: two consecutive rows sharing one label,
+The shell API generates the `Sections` rows for it: two consecutive rows sharing one label,
 values `shown` / `hidden`, with a live `current()` and a persist-first `action()`. The label — not
 the id — is the line's name: `music  ● shown  ○ hidden`, next to the host's own
 `stats  ● shown  ○ hidden`. A hidden section is not rendered and its `lines()`/`meta()` are not
@@ -662,7 +662,7 @@ removes the card and the toggle together, leaving every other section untouched.
 
 #### Where the card goes: `placement`
 
-`placement` is registration data, like `order`: nothing is persisted, and the bridge resolves it on
+`placement` is registration data, like `order`: nothing is persisted, and the shell API resolves it on
 every frame, so a re-registration that changes it moves the card on the next one.
 
 | Value | Where the card's rows are drawn |
@@ -673,7 +673,7 @@ every frame, so a re-registration that changes it moves the card on the next one
 | `{ after: "todo" }`, `"jobs"`, `"agents"`, `"footer"` | right after one of the host's own rail parts |
 
 The native granularity is the rail PART. The host's status sections (`CHANGES`, `STATS`,
-`INTEGRATIONS`) are built inside a closure the bridge cannot reach, so "after a status section" is
+`INTEGRATIONS`) are built inside a closure the shell API cannot reach, so "after a status section" is
 not offered and cannot be.
 
 **Order inside one slot never depends on load order.** Sections asking for the same place form one
@@ -683,7 +683,7 @@ load in the opposite order draw the same rail. This is a behaviour change from 0
 where a tie kept registration order; `order` no longer breaks ties between slots either, because
 every slot has its own list.
 
-**Every fallback is deterministic and reported.** The bridge resolves anchors by RENDER, so a card is
+**Every fallback is deterministic and reported.** The shell API resolves anchors by RENDER, so a card is
 never placed by registration luck, and it never throws:
 
 | Situation | Result |
@@ -696,7 +696,7 @@ never placed by registration luck, and it never throws:
 | `"start"` and the host paints no part at all | the end, with the reason |
 | `placement` is malformed (none of the three shapes, `after` not a non-empty string, extra fields) | the section still REGISTERS and the card is placed at the end; the value is recorded exactly as written (see §8) |
 
-A native part that renders no rows draws none of the bridge's rows there either: that part painted no
+A native part that renders no rows draws none of the shell API's rows there either: that part painted no
 frame, and a frame of ours there would appear exactly where the host suppressed its own. One
 consequence worth knowing: a part key can collide with a section id (`"todo"`, `"jobs"`, `"agents"`,
 `"footer"` are legal section ids), and then the NATIVE part wins as an `after` target — the reason that placement
@@ -704,14 +704,14 @@ resolved there is kept for the section (§8).
 
 Those rows draw no preview of their own. Every `Sections` row shows the host's ONE shared preview —
 the list of the sections that are active (`[changes] [rdd] [agents] [todo] [usageCost]`) — and the
-bridge puts the section into that list itself: `issues` appears beside the host's own while it is
+shell API puts the section into that list itself: `issues` appears beside the host's own while it is
 shown, and leaves the list when it is hidden. A `shown` row previews the list with the section in
 it, a `hidden` row previews it without, on top of the persisted state of the rest. There is nothing
 to declare and nothing to opt into: `registerSection` has no `preview` field.
 
 ### Surface 3: the optional namespaced store
 
-`createStore(pluginId)` is optional. A plugin may keep its own file instead; the bridge never reads
+`createStore(pluginId)` is optional. A plugin may keep its own file instead; the shell API never reads
 or writes that file.
 
 ```ts
@@ -732,22 +732,22 @@ document. Details and the rejected alternatives: §10 and [state.md](state.md).
 
 | What the handler sees | What it means | What the plugin may do |
 | --- | --- | --- |
-| `bridgeApi() === undefined`, or the direct read is `undefined`, **and no announcement arrived** | no bridge has published in this process (yet) | notify and continue, wait for `gentle-shell-bridge:ready`, or fail loudly — say which |
+| `shellApi() === undefined`, or the direct read is `undefined`, **and no announcement arrived** | no shell API has published in this process (yet) | notify and continue, wait for `odd-worktree:shell-ready`, or fail loudly — say which |
 | the object fails the gate | another library's payload, another major, or a partial object | same as absent: never call it |
-| a compatible object | the bridge is installed, with every surface above | register, then forget about load order |
+| a compatible object | the shell API is installed, with every surface above | register, then forget about load order |
 
-Absent is still absent: `bridgeApi()` describes the slot as it is right now. What changed is the
+Absent is still absent: `shellApi()` describes the slot as it is right now. What changed is the
 conclusion a plugin draws from it — "not installed" is only honest when no announcement can arrive
-(a Pi without `pi.events`, or a plugin that chose not to listen). The bridge cannot tell a plugin
+(a Pi without `pi.events`, or a plugin that chose not to listen). The shell API cannot tell a plugin
 what to do when it is absent, and does not try: notify-and-continue, a local fallback and a loud
 failure are all legitimate, and only the plugin knows which one fits.
 
 ### The compatibility cliff, on purpose
 
-An older bridge publishes nothing at this key, so a newer plugin sees **absent** instead of being
-deferred silently. A newer bridge and an older plugin meet the same way when the plugin's gate
+An older shell API publishes nothing at this key, so a newer plugin sees **absent** instead of being
+deferred silently. A newer shell API and an older plugin meet the same way when the plugin's gate
 demands a member the old object does not have. That is the intended answer: a plugin can always
-tell the user it found no compatible bridge, and no registration can sit invisible in a holding
+tell the user it found no compatible shell API, and no registration can sit invisible in a holding
 area waiting for a version that will never arrive.
 
 ### The canonical `session_start` skeleton
@@ -797,10 +797,10 @@ pi.on("session_start", () => {
 pi.on("session_shutdown", () => disposeAll());
 ```
 
-1. **Reach it.** `onBridgeApi(handler, events)` (`lib/shell-api/api.ts:435`) is the corrected timing rule in one
+1. **Reach it.** `onShellApi(handler, events)` (`lib/shell-api/api.ts:435`) is the corrected timing rule in one
    call: the handler runs in the same turn when the object is already published, and takes no
    subscription at all (`lib/shell-api/api.ts:445-449`); otherwise it subscribes to
-   `gentle-shell-bridge:ready`, runs the handler once and detaches itself (`lib/shell-api/api.ts:468-475`). A
+   `odd-worktree:shell-ready`, runs the handler once and detaches itself (`lib/shell-api/api.ts:468-475`). A
    host with no `pi.events` can never hear a later publication, so the helper returns a no-op
    (`lib/shell-api/api.ts:451-452`) — the honest answer there, and the reason the returned disposer is kept
    even when it does nothing. A handler that throws is contained, because one plugin's failure must
@@ -817,14 +817,14 @@ pi.on("session_shutdown", () => disposeAll());
 
 ## 10. Persistence
 
-The bridge composes rows; it does not own preferences. A plugin reads and writes its own
+The shell API composes rows; it does not own preferences. A plugin reads and writes its own
 state. `createStore(pluginId)` is an **optional** helper for a namespaced file with atomic
-writes and a schema version; a plugin may keep its own file instead, and the bridge never
+writes and a schema version; a plugin may keep its own file instead, and the shell API never
 reads or writes that file.
 
 The document is `{ "schemaVersion": 1, "values": { … } }`. `values` is an envelope, so a
 plugin key cannot collide with `schemaVersion`. The file lives at
-`<bridge config home>/<pluginId>.json`, where `<bridge config home>` is `<gentle config
+`<shell API config home>/<pluginId>.json`, where `<shell API config home>` is `<gentle config
 home>/gentle-shell-bridge`; `pluginId` is rejected before it reaches the filesystem unless
 it is one non-empty path segment. A malformed file, or one whose `schemaVersion` is not `1`,
 reads as empty and is kept as a store problem (§8); the file is not repaired or deleted, and
@@ -837,7 +837,7 @@ One call adds a card to gentle-shell's fullscreen sidebar **and** its show/hide 
 `/gentle:customize` → `Sections`. The plugin writes content; it never writes a `setting`, a
 `value`, a `current()`, an `action()`, a `preview()`, never names the `Sections` category and
 never touches the rail. The shared preview is part of that promise: every `Sections` row draws the
-host's one list of active sections, and the bridge adds a section to it itself — there is no preview
+host's one list of active sections, and the shell API adds a section to it itself — there is no preview
 to declare and nothing to opt into.
 
 ```ts
@@ -865,8 +865,8 @@ const dispose: () => void = api.registerSection({
 - `id` — registering an existing id **replaces** the previous section in place; a second
   card never appears. It is the toggle's identity (replacement, disposer and the persisted
   visibility key), and it is **internal**: it never appears in a row.
-- `title` — the heading the host's own card frame draws. The bridge does not draw a box.
-- `rowLabel` — optional: what the `Sections` row reads, e.g. `music`. When absent the bridge
+- `title` — the heading the host's own card frame draws. The shell API does not draw a box.
+- `rowLabel` — optional: what the `Sections` row reads, e.g. `music`. When absent the shell API
   derives one from `title`: lowercase words joined by spaces, dots and punctuation dropped, no
   prefix, clamped to three words (`"BASH CARD"` → `"bash card"`, `"usageCost"` → `"usage cost"`,
   `"MUSIC PLAYER NOW PLAYING"` → `"music player now"`). Two sections whose labels would read the
@@ -883,11 +883,11 @@ disagree about which one moved. A `rowLabel` that breaks the row-name shape (one
   in registration order. Ties keep registration order. The rule is computed from an explicit
   sort key, never from map iteration.
 - `preview` — **not a field**, and there is nothing to opt into. Every `Sections` row draws the
-  host's single shared preview, the list of sections that are active, and the bridge adds this
+  host's single shared preview, the list of sections that are active, and the shell API adds this
   section to it automatically (see *The automatic `Sections` rows*).
 
 `ctx` carries the same shape as `RowContext`: the resolved gentle-shell config home and, now that Pi
-hands the bridge a theme (`ctx.ui.setWidget(key, (tui, theme) => …)`), the host theme — so a section
+hands the shell API a theme (`ctx.ui.setWidget(key, (tui, theme) => …)`), the host theme — so a section
 can paint with the same roles the rest of the shell uses. Before the widget factory runs, `theme` is
 `undefined` and the card is drawn uncoloured; the frame's record says which (§8).
 
@@ -911,20 +911,20 @@ A row is a plain **string** or a structured **row object**:
 - `meta` is read at render time, so the same registration can show a value that moves (a mode, a
   count, an elapsed time) with no re-registration.
 
-The bridge maps physical rows to row identity and answers the host's own pointer dispatch; clicking
+The shell API maps physical rows to row identity and answers the host's own pointer dispatch; clicking
 an actionable row runs exactly one `onClick`, once per click. A throwing `onClick` is recorded (phase
 `onClick`) and never escapes into the host.
 
 ### Rendering
 
-A section is drawn by the host's own card code: the bridge contributes the part's header and rows and
+A section is drawn by the host's own card code: the shell API contributes the part's header and rows and
 the card groups over them, and the layout calls `sectionCardRows` on them. The HEADER is the host's
 header — caret from the section's own collapse state, uppercase title, right-aligned `meta`, the
 host's hover accent.
 
 Where those two builders come from is reported, not assumed. The host's own
 `renderPanelHeader`/`renderPanelRow` live in gentle-shell's `lib/shell-panel.ts`, which this package
-cannot import (Pi loads each extension in its own module graph). So the bridge **looks** for them on
+cannot import (Pi loads each extension in its own module graph). So the shell API **looks** for them on
 every object it is handed — the rail part, the Pi theme, the terminal's sidebar state — and:
 
 - when it finds them, it draws with them, and the record says `section frame: host`;
@@ -945,7 +945,7 @@ const active = railLines.length > 0 && railLines.every((line) => visibleWidth(li
 rail, and the conversation then takes every column: the layout's widths changed because of what a
 part returned.
 
-**N17 — a contributed part never asks for more room than it was given.** Every row the bridge
+**N17 — a contributed part never asks for more room than it was given.** Every row the shell API
 contributes is at most the width the host handed the part, measured the way the host measures it:
 `visibleWidth` (`pi-tui/dist/utils.js:212-268`) strips ANSI, expands a TAB to **three** columns
 (`graphemeWidth`, `:148-155`) and charges each grapheme cluster as a whole (`:255-258`) — an emoji
@@ -956,7 +956,7 @@ the column wants to be wider.
 
 **N18 — the host's own rule, matched.** The host's parts PAD: `renderPanelRow(width, left, right,
 indent)` is `fitPanelLine("  " + left, right, width)`, and `fitPanelLine` pads `left`/`right` to
-`width` (`lib/shell-panel.ts:31-40,78-80`). The bridge therefore pads identically — and to the
+`width` (`lib/shell-panel.ts:31-40,78-80`). The shell API therefore pads identically — and to the
 HOST-measured width, which is the whole of N17. A plain string row stays unpadded, byte for byte
 (`§11`, N10).
 
@@ -972,26 +972,26 @@ rail never rendered a section records no such line.
 
 A plain string row is clipped to the width the host passes and the body is capped at 8 rows with a
 visible `… +N more` marker, measured in the host's columns. A structured row is fitted by the panel
-builder, which measures **columns** the same way. The bridge never returns a row wider than that
+builder, which measures **columns** the same way. The shell API never returns a row wider than that
 number, so a wide CJK glyph, an emoji or a TAB can no longer slip past the clip.
 
 **Sections render after the native ones. Interleaving is impossible**: the host's status
-sections (`CHANGES`, `STATS`, `INTEGRATIONS`) are built in a closure the bridge cannot reach
+sections (`CHANGES`, `STATS`, `INTEGRATIONS`) are built in a closure the shell API cannot reach
 (`lib/shell-bar.ts:247,251-316`), and the rail paints a hard-coded key order
-(`lib/shell-sidebar-layout.ts:344`). The bridge therefore appends to the last painted part
+(`lib/shell-sidebar-layout.ts:344`). The shell API therefore appends to the last painted part
 (`footer`), so a section always follows every native card.
 
 ### Collapsing
 
 The header is the section's collapse control, as it is for the host's own cards: clicking it folds
 the card. A collapsed section is its header alone — the body is **not built**, not built and hidden,
-so `lines()` is not called while it is folded. The folded state is bridge-owned store state (the
+so `lines()` is not called while it is folded. The folded state is shell-API-owned store state (the
 plugin writes no flag and no setting for it), and a click persists it and asks for the frame in the
 same call.
 
 ### Live updates and the digest
 
-`meta()` and `lines()` are read per frame, and the bridge folds what they produced into the rail
+`meta()` and `lines()` are read per frame, and the shell API folds what they produced into the rail
 part's `digest`. The host's layout re-renders a part only when that value moves
 (`lib/shell-sidebar-layout.ts:114-119`), so a row field that changed — a mode, a count, a hovered row
 — reaches the screen with no re-registration and no timer. The host's own digest stays part of the
@@ -1014,7 +1014,7 @@ recorded with phase `onClick`.
 ### The automatic `Sections` rows
 
 The host's own `Sections` rows are bare labels: `changes`, `rdd`, `agents`, `todo`,
-`usageCost`, `modelDetails`, `contextWarning`, `stats`. The bridge's rows read the same way — a
+`usageCost`, `modelDetails`, `contextWarning`, `stats`. The shell API's rows read the same way — a
 label the user reads, never an id and never a prefix:
 
 ```text
@@ -1022,7 +1022,7 @@ stats             ● shown  ○ hidden     ← the host's own row
 music             ● shown  ○ hidden     ← a plugin's section (id "loon.music", title "MUSIC")
 ```
 
-For every registered section the bridge emits **two consecutive rows** in category `Sections`,
+For every registered section the shell API emits **two consecutive rows** in category `Sections`,
 sharing one label as their `choice.setting` (the host prints the setting as the line's name) with
 values `shown` and `hidden`:
 
@@ -1037,9 +1037,9 @@ values `shown` and `hidden`:
   `hidden` row leaves it out — on top of the persisted state of the rest. It is never the host's
   "Preview unavailable" default.
 
-The list is the host's own, extended: the bridge reads the sample of the host `Sections` row whose
+The list is the host's own, extended: the shell API reads the sample of the host `Sections` row whose
 `current()` is `true` (that row's hypothetical *is* the persisted state), appends the labels of the
-bridge sections that are visible right now — the same strings the rows read — and every `Sections`
+shell API sections that are visible right now — the same strings the rows read — and every `Sections`
 row previews that merged list. Hiding a section therefore removes it from the preview of every row,
 including the host's own.
 
@@ -1047,7 +1047,7 @@ including the host's own.
 `Sections`-row disposer and `bridge-sections.json`; it is never rendered. The label is the only
 thing a user sees.
 
-**Two sections never collide.** If two labels would read the same, the bridge disambiguates in
+**Two sections never collide.** If two labels would read the same, the shell API disambiguates in
 render order: the first keeps the label, the next gets the lowest free suffix (`music`, `music 2`,
 `music 3`, …), never the raw id. The assignment is recomputed per menu build from the live
 registry, so it is deterministic for a given set of registrations. The label in force for each section,
@@ -1060,7 +1060,7 @@ without re-registering anything, and a disposed section's rows disappear with it
 
 ### Persistence: the same experience, a different file
 
-Visibility is **bridge-owned state**, not plugin state — the bridge added the toggle, so a
+Visibility is **shell-API-owned state**, not plugin state — the shell API added the toggle, so a
 plugin needs no store of its own. It is persisted through the existing `createStore` helper in
 one namespaced file:
 
@@ -1079,7 +1079,7 @@ one namespaced file:
 `sections` maps a section id to `true` (shown) / `false` (hidden); a missing id falls back to
 `defaultVisible`. `collapsed` maps a section id to `true` (folded) / `false` (open); a missing id is
 OPEN, the state a card a user has never folded starts in. A value that is not a boolean is ignored
-rather than coerced. Both maps are bridge-owned: the plugin writes neither a flag nor a setting.
+rather than coerced. Both maps are shell-API-owned: the plugin writes neither a flag nor a setting.
 
 Why not `visual-customization.json`: the host validates that file against a closed
 `VISUAL_SECTION_KEYS` list (`lib/visual-customization-policy.ts:82`, `keysMatch` ~:112-130) and
@@ -1121,12 +1121,12 @@ bottom(ctx: { width: number }): string;
 glyph and without the right-aligned hint; `hint` is that hint when its style runs prove it is one
 (a subtitle is never passed as a hint, and when the split is not provable the whole remainder
 arrives as `title` with `hint` undefined). `line` receives one body row at a time, `first` true for
-the card's first row. The bridge extracts all of it and passes it in; a style parses nothing. A row
+the card's first row. The shell API extracts all of it and passes it in; a style parses nothing. A row
 a style returns wider than `width` is clipped before it reaches the screen.
 
 ### The host's own line is extended, never duplicated
 
-At capture the bridge locates the host's `Card style` rows (category `Cards`, that `setting`),
+At capture the shell API locates the host's `Card style` rows (category `Cards`, that `setting`),
 splices them out and puts them back at the same index, immediately followed by one row per
 registered style, all sharing the host's `setting`. The host coalesces consecutive rows that share a
 setting, so the user sees ONE line in the host's own position:
@@ -1137,16 +1137,16 @@ Card style  ○ neon ● float ○ cute
 
 The host's own rows keep the host's `current()` and `action()`, wrapped in exactly two ways:
 `current()` reports `false` while a registered style is selected (one bullet at a time), and
-`action()` also returns the bridge to native rendering (below). The bridge never reimplements
+`action()` also returns the shell API to native rendering (below). The shell API never reimplements
 `neon`/`float` and never writes the host's `card-style.json`.
 
 ### Which surfaces a style reaches
 
 A style is one global choice, so it paints **both** surfaces the host frames cards on:
 
-- **the conversation** — the chat component, whose `render(width)` the bridge wraps;
+- **the conversation** — the chat component, whose `render(width)` the shell API wraps;
 - **the rail** — the fullscreen sidebar, whose section cards the host frames itself
-  (`lib/shell-sidebar-layout.ts:36-47`) and whose framed rows the bridge repaints through the same
+  (`lib/shell-sidebar-layout.ts:36-47`) and whose framed rows the shell API repaints through the same
   `transformCardLines` the conversation uses. Host sections (`CHANGES`, `AGENTS`, …) and the
   sections a plugin contributed are restyled alike, because the rail frames them with one function.
 
@@ -1156,7 +1156,7 @@ declared is the whole change — and each surface's outcome is kept separately (
 conversation changed but the sidebar did not" is answerable.
 
 The rail is restyled only where the host already drew a `float` frame: a `neon` rail, a panel
-surface, or any row the bridge cannot prove is a card passes through untouched.
+surface, or any row the shell API cannot prove is a card passes through untouched.
 
 ### A selection repaints, synchronously
 
@@ -1170,20 +1170,20 @@ reached no surface is never silent.
 ### The way back to host rendering
 
 Pressing a host value (`neon`/`float`) **is** the way back: the host's own action runs, and the
-bridge clears its selection to `native` in a `finally`, so even a throwing setter cannot leave the
-session trapped inside a bridge style. The host's values are native rendering.
+shell API clears its selection to `native` in a `finally`, so even a throwing setter cannot leave the
+session trapped inside a shell API style. The host's values are native rendering.
 
 ### Fallback mode
 
 If the host's line cannot be located (a renamed setting, a menu without `Cards`, no capture at
-all), the bridge contributes its own line instead — `Bridge card style`, with `native` plus every
-registered style. `native` means "the bridge leaves the conversation alone". The selection in force is
+all), the shell API contributes its own line instead — `API card style`, with `native` plus every
+registered style. `native` means "the shell API leaves the conversation alone". The selection in force is
 kept in the record; the values are never dropped to fit a narrow terminal, and the
-bridge does not control that width.
+shell API does not control that width.
 
 ### The selection
 
-The selection is the bridge's state, not the plugin's:
+The selection is the shell API's state, not the plugin's:
 `<gentle config home>/gentle-shell-bridge/bridge-card-style.json`.
 
 ```json
@@ -1217,7 +1217,7 @@ conversation broken.
 ### What cannot be promised
 
 - A later post-processor that rewrites the conversation — a component that re-frames the rows and
-  strips box chrome — can erase this frame. The bridge cannot prevent it, and
+  strips box chrome — can erase this frame. The shell API cannot prevent it, and
   the record says so instead of pretending otherwise, naming the mechanism and no product.
 - The repaint depends on the host's own `float` grammar (see
   [architecture.md](architecture.md) §14): a card drawn some other way is left exactly as it is.
@@ -1229,7 +1229,7 @@ conversation broken.
 One call adds a function that sees the conversation's rows on **every frame** and returns the rows to
 draw. It is the layer a rendering choice needs, because `pi.registerToolRenderer` resolves once, when
 a tool row is BUILT: a choice made there can only reach the NEXT row, while a transform runs inside
-the wrapper the bridge already installs on the conversation component
+the wrapper the shell API already installs on the conversation component
 ([architecture.md](architecture.md) §15).
 
 ```ts
@@ -1260,7 +1260,7 @@ A transform receives LINES and nothing else: no tool name, no arguments, no resu
 that needs tool metadata uses `pi.registerToolRenderer` for rows yet to be built; a plugin that needs
 a rendering choice to apply to rows ALREADY on screen uses a transform.
 
-### What the bridge guarantees
+### What the shell API guarantees
 
 - **Order.** Transforms with an `order` run first, ascending, then the rest in registration order —
 the rule sections and card styles already use. The sequence is snapshotted once per frame.
@@ -1295,7 +1295,7 @@ A shape name is the transform's own word for a frame it knows; it never carries 
 that reads `float` cards and the host's `neon` outline reports those two names, so the frame's record
 names the shape that matched instead of leaving the reader to guess.
 
-The bridge adds the count of lines the transform received and stores the whole record as that
+The shell API adds the count of lines the transform received and stores the whole record as that
 frame's entry — one record per transform, replaced by the next frame, never accumulated.
 
 **Counts only.** A frame carries the user's private output, so nothing of it is stored or shown: no
@@ -1306,7 +1306,7 @@ names are kept per frame. A shape name lives in the record beside plugin ids, wh
 diagnostics, never a row (§4).
 
 **It cannot cost a frame.** The counts come from the same call that produces the output, with no
-second pass, and recording is guarded: a bridge older than the telemetry has no `report` at all (the
+second pass, and recording is guarded: a shell API older than the telemetry has no `report` at all (the
 member is optional — gate with `typeof ctx.report === "function"`), a report of nonsense records
 zeros, and a transform that throws keeps the counts it reached. Telemetry never changes what is
 drawn.
@@ -1351,7 +1351,7 @@ const HOME_PREFIX = /(^|\s)(?:\/home\/[^/\s]+|\/Users\/[^/\s]+)(?=\/)/u;
 const dispose = api.registerTransform({
   id: "loon.tilde",
   transform: (lines: readonly string[], ctx: TransformContext): readonly string[] => {
-    // Optional on the context and ALWAYS set by this bridge: an unknown origin is [], never a guess.
+    // Optional on the context and ALWAYS set by this shell API: an unknown origin is [], never a guess.
     const rows = ctx.rows ?? [];
     let candidates = 0;
     let recognised = 0;
@@ -1435,7 +1435,7 @@ api.registerToolDesign({
 
 Exactly one of `tool` / (`line` + `tools`) is required; mixing them is refused. `tools` must be
 non-empty, deduplicated, and each entry a valid tool name. Several registrations naming the same
-`line` — from one plugin or two — join ONE line (S3): `default` is added by the bridge once, first,
+`line` — from one plugin or two — join ONE line (S3): `default` is added by the shell API once, first,
 never registered by a plugin, and the line's tool set is the union of its designs' `tools`. A tool has
 at most ONE **unscoped** claim (S5/D1, S9), and only a tool's SECOND **unscoped** claim is refused:
 that registration is refused whole and kept as a `line` conflict (§8), so nothing
@@ -1461,7 +1461,7 @@ call (`render`, below), and the card style the user has selected (`cardStyle`, b
 **`part` is what tells the call from the result.** A card has two components and the host draws both
 with the same chrome, so the rows alone cannot distinguish a heading from output: under the `float`
 style a result body row that begins with `$ ` (a script echoing its commands) sits exactly where a
-heading sits. The bridge wraps the two renderers separately and sets `part` per renderer, so a design
+heading sits. The shell API wraps the two renderers separately and sets `part` per renderer, so a design
 that must not touch the result returns it unchanged when `ctx.part === "result"` instead of guessing
 from drawn text. The field is additive: a design that never reads it behaves exactly as before.
 
@@ -1483,15 +1483,15 @@ interface ToolDesignRender {
 
 - **Every field is optional and typed.** A field is forwarded only when the host provided it with the
   documented type; a `NaN` duration or a non-boolean flag is dropped, never coerced.
-- **Three states, all valid.** No `ctx.render` at all (an older bridge, or a host that hands no render
+- **Three states, all valid.** No `ctx.render` at all (an older shell API, or a host that hands no render
   context), `ctx.render === {}` (a context with nothing usable), or a populated one. A design must draw
   its pre-`render` output in the first two.
 - **Nothing else crosses.** `state`, `invalidate`, `lastComponent` and every other host member are not
   forwarded; a design cannot reach the host's live context. A context whose accessors throw yields no
   `render`, never a failed frame.
 - **`args` is the host's own object, by reference.** Treat it as read-only: Pi keeps updating it while
-  the call streams, and the bridge neither freezes nor clones it. Mutating it is unsupported.
-- **Key per-call memory by `toolCallId`.** The bridge offers no eviction, so a design that caches per id
+  the call streams, and the shell API neither freezes nor clones it. Mutating it is unsupported.
+- **Key per-call memory by `toolCallId`.** The shell API offers no eviction, so a design that caches per id
   owns that cache's lifetime.
 - **Per-tool shapes differ.** `args` for `bash` is `{ command }`, for `write` `{ path, content }`: a design
   shared across tools branches on `ctx.tool`.
@@ -1509,7 +1509,7 @@ type CardStyleSelection =
   | { kind: "missing"; id: string };                 // the chosen style was disposed
 ```
 
-- **`native` is "the user chose nothing", not "no bridge".** It is the default, and the design draws
+- **`native` is "the user chose nothing", not "no shell API".** It is the default, and the design draws
   what it draws with no style at all.
 - **`missing` is an answer, not an error.** A style disposed while it was selected (a plugin unloaded, a
   `/reload`) leaves a stored id nobody owns: the design degrades to its `native` chrome, and the
@@ -1532,7 +1532,7 @@ apply(lines, ctx) {
 
 **The frame is the host's, so the card style is preserved by construction.** With `Card style` on
 `neon` the card is still neon, with `float` it is still float, because the chrome was drawn before the
-design saw a byte of it. The bridge never re-frames, re-measures or clips a design's output (§13's
+design saw a byte of it. The shell API never re-frames, re-measures or clips a design's output (§13's
 width rule is the transform pipeline's); a design keeps the rows it was given exactly as wide as the
 host made them.
 
@@ -1551,7 +1551,7 @@ Two rules follow from that:
 A design names a tool (`bash`, `write`, `edit`, `mcp__engram__mem_save`, `lsp_navigation`, …). The bus
 keeps one registry per name, no name is special-cased, and a design declared for a tool that has no
 card yet applies as soon as Pi builds one: Pi resolves renderers when the card is CONSTRUCTED, and the
-bridge's one resolver is installed for the whole session.
+shell API's one resolver is installed for the whole session.
 
 A grouped registration (`line` + `tools`) is still declared by tool name: the line's tool set is the
 union of its designs' `tools`, and the resolver looks a tool up to find the lines that claim it — one
@@ -1560,7 +1560,7 @@ claim set with no unscoped claim beside it), and two scopes may match the very s
 claim PRECEDENCE order. Coverage stays a tool NAME, never drawn text: what a scope adds is a narrower
 claim on the CALLS of ONE tool — `scopes[tool]`, or `scope` for every tool of the registration — never
 a second way to declare one. From a tool's point of view nothing
-changes — the bridge reads every claiming line's selection on every pass and hands the design the rows
+changes — the shell API reads every claiming line's selection on every pass and hands the design the rows
 of whatever tool it wraps, with `ctx.tool` naming that tool.
 
 ### One line over several tools (S1–S3, S8)
@@ -1586,7 +1586,7 @@ export interface ToolDesignCall {
 export interface ToolDesignScope {
   /** One short line a preview and the record can show, e.g. `paths under skills/ or odd/`. */
   readonly description: string;
-  /** Whether this line owns THIS call. Cheap and pure; the bridge isolates a throw. */
+  /** Whether this line owns THIS call. Cheap and pure; the shell API isolates a throw. */
   matches(call: ToolDesignCall): boolean;
 }
 
@@ -1661,11 +1661,11 @@ stores `odd.worktree-activity` (its row shows the label `activity`) and `Card di
 it matches and the generic one for every other. A line whose stored value is `native` (its default,
 shown as the label `default`, and what a line never selected reads) DECLINES the call, and the next
 candidate answers. When no candidate paints,
-the answer is not a design, and no design's `apply` is called for that call: the bridge's wrapper
+the answer is not a design, and no design's `apply` is called for that call: the shell API's wrapper
 returns the host's own rows for every selection kind other than `design` (`lib/shell-api/tool-design-wiring.ts`).
 
 A scope is a PREDICATE, never a declarative path rule: path identity ("under `skills/` or `odd/`") is
-the consumer's own rule, and this bridge is tool-agnostic by construction. It is the same trust model
+the consumer's own rule, and this shell API is tool-agnostic by construction. It is the same trust model
 `apply` already has — plugin code the host runs, isolated on throw — and it sees `{ tool, args }` and
 nothing else:
 both halves of one card are resolved by the SAME procedure against the same arguments, so no half is
@@ -1687,7 +1687,7 @@ reads the same with `scopes` in the suggested shape and ends "(`scopes` on an un
 refused). The registration was refused whole.":
 
 ```text
-gentle-shell-bridge: invalid tool design "loon.skill-writes" for tool "write": a scope is declared
+odd-worktree: invalid tool design "loon.skill-writes" for tool "write": a scope is declared
 on a GROUPED registration only, and `{ tool, id, label, apply }` is that tool's own Card "write"
 line, which means every call of the tool. To claim only SOME calls, register a grouped line
 `{ line, tools, scope, id, label, apply }` for the tool beside the line that already claims it.
@@ -1710,7 +1710,7 @@ The refusal names the design id, its subject (the line, or the tool for an ungro
 when one entry of the map is the problem, the offending tool key:
 
 ```text
-gentle-shell-bridge: invalid tool design "odd.worktree-activity" for line "tools": scopes names
+odd-worktree: invalid tool design "odd.worktree-activity" for line "tools": scopes names
 tool "grep", which is not one of this registration's tools (bash, read). scopes is keyed by the tools
 the design paints. A scope is { description, matches }: `description` is the one line the menu and the record show, and `matches(call)` answers whether the line owns that call (the call is { tool,
 args }). The registration was refused whole.
@@ -1720,7 +1720,7 @@ A map value that is not a scope reads `scopes for tool "write" <what is wrong wi
 members given together read:
 
 ```text
-gentle-shell-bridge: invalid tool design "odd.worktree-activity" for line "tools": `scope` and
+odd-worktree: invalid tool design "odd.worktree-activity" for line "tools": `scope` and
 `scopes` cannot be combined. `scope` is the shorthand for the SAME scope on every tool of `tools`;
 use `scopes` keyed by tool to give each tool its own scope. The registration was refused whole.
 ```
@@ -1753,7 +1753,7 @@ that names T must still be that same object, and any disagreement refuses the wh
 `scope` conflict:
 
 ```text
-gentle-shell-bridge: design "loon.diff-two" for line "diff" was refused whole: the line already
+odd-worktree: design "loon.diff-two" for line "diff" was refused whole: the line already
 carries a different scope on tool "write" (design "loon.diff"). One line is one switch per call of a
 tool, so every live registration of a line that names tool "write" must share the SAME scope object
 for it (S8); a registration that does not name the tool does not constrain it, and re-registering the
@@ -1780,7 +1780,7 @@ and every other rule about `tools` and the line shape is unchanged. A registrati
 is refused whole when ANY of its unscoped claims meets another line's unscoped claim on that same tool:
 
 ```text
-gentle-shell-bridge: tool "write" already belongs to the line "tools", so design
+odd-worktree: tool "write" already belongs to the line "tools", so design
 "odd.worktree-diff" for line "diff" was refused whole (S5/D1). A tool belongs to at most one line;
 register it on that line or remove the other registration.
 ```
@@ -1834,19 +1834,19 @@ answer stays `native` even when a matching CALL resolves `not-covered`: the
 call, so the two answers are computed separately. A `scope` conflict or a scope's failure is
 recorded like any other refusal, for the API's own record and the tests — nothing prints it.
 
-### When the bridge is not first in the chain (S10)
+### When the shell API is not first in the chain (S10)
 
 Pi composes tool-renderer resolvers in **extension load order** (`runner.js:550-553`) and exposes no
 API to reorder them (`loader.js:298-302` only pushes). A resolver loaded before this package decides
-first, and one that answers WITHOUT calling `next()` hides the bridge's resolver completely. The
+first, and one that answers WITHOUT calling `next()` hides the shell API's resolver completely. The
 host's own quiet bash resolver does exactly that while `Card content` is `minimal`
 (`extensions/quiet-tools.ts:910-914`), which is why a selected design could still leave every card
 drawing `$ …`.
 
-The design therefore has a second path: after Pi constructs a card, the bridge adopts it. The
-conversation component the bridge already wraps for card styles has Pi's `ToolExecutionComponent`s as
+The design therefore has a second path: after Pi constructs a card, the shell API adopts it. The
+conversation component the shell API already wraps for card styles has Pi's `ToolExecutionComponent`s as
 children; each carries `toolName` and the `toolDefinition` Pi resolved for it. On every conversation
-render pass, before the host renders its children, the bridge replaces that card's `toolDefinition`
+render pass, before the host renders its children, the shell API replaces that card's `toolDefinition`
 with the same wrapper the resolver path uses (so the frame and the live-selection rule are
 identical), marks the wrapper so the two paths cannot stack, and invalidates the card so its stored
 renderer re-runs through the design. Cards Pi rebuilds (reload, `/tree`, session switch) are new
@@ -1854,7 +1854,7 @@ children and are adopted on the next pass. A card of a tool with no designs is n
 whose `toolDefinition` is missing or refuses the assignment is kept in the record (§8) and drawn
 by the host.
 
-This does not replace the resolver path: when the bridge IS ahead in the chain its resolver wraps the
+This does not replace the resolver path: when the shell API IS ahead in the chain its resolver wraps the
 renderers at construction, and adoption then recognises the marker and adds nothing. the record counts both per tool (`wrapper mounted on N cards`, `adopted N cards`), so the next failure
 says which path ran.
 
@@ -1940,7 +1940,7 @@ tool's legacy per-tool value if it names a design of the line, and writes it the
 stays `default`. A migration that cannot be written is reported and never fails the registration.
 
 **Coverage (S6/D4).** Two separate reports, and neither is an inference from the other. The PER-TOOL
-`selection` is the bridge's answer for a tool asked WITHOUT arguments: the selected design's id,
+`selection` is the shell API's answer for a tool asked WITHOUT arguments: the selected design's id,
 `native`, `missing` (the selected design left the line) or `not covered` (that design does not name
 this tool). The LINE report is a different shape: the line, its row name, its tools, and each value
 with the tools it `covers`. With a `scope` in play the per-tool answer describes only the calls no
@@ -1962,13 +1962,13 @@ resolveToolDesignSelection(tool: string, args?: unknown):
   | { kind: "not-covered"; id: string };
 ```
 
-The same answer the bridge's own card wrapper acts on, for a plugin that paints its own chrome around
+The same answer the shell API's own card wrapper acts on, for a plugin that paints its own chrome around
 a tool (a file card beside the rows, a heading, a badge) and must obey the user's `Cards` switch
 instead of guessing. `native` means the host's own card is what draws; `design` carries the LIVE
 registration, so a caller reads its `id` and `label` rather than re-deriving them; `missing` and
 `not-covered` are the two degrades above, and both paint the host's card.
 
-`args` is the CALL's arguments, opaque to the bridge and forwarded to a scope by reference. Pass what
+`args` is the CALL's arguments, opaque to the shell API and forwarded to a scope by reference. Pass what
 the card is drawing (`ctx.render.args`) and a scoped claim on that tool becomes a candidate for THIS
 call only when its scope's `matches({ tool, args })` returned `true` for that call; any other answer
 leaves it out of the candidate list, so it is not a candidate at all. The candidates are then resolved
@@ -1977,14 +1977,14 @@ claim exists answers exactly what it did before scopes existed — and a tool cl
 claims answers `native` — for a consumer that only knows a tool name.
 The union gained NO variant: only which lines are candidates changed, so a consumer that compares
 `answer.design.id` compiles and behaves identically, and its own gate on `native`, `missing` and
-`not-covered` ("do not paint") keeps meaning what it means. The bridge's wrapper resolves with
+`not-covered` ("do not paint") keeps meaning what it means. The shell API's wrapper resolves with
 `render?.args`, so with no render context from the host the argument is `undefined` and the card is
 drawn as before.
 
 It never throws and is not a pure read: no store, an unreadable store or a malformed document reads
 as `native`, exactly like the record; a scope that cannot answer — one that throws, or one that
 returns anything but a boolean — has that failure recorded, once per (tool, design id, message). It costs **one persisted-selection read per call**, whatever the number of
-candidate lines — what one render pass of the bridge's own wrapper already pays for that tool
+candidate lines — what one render pass of the shell API's own wrapper already pays for that tool
 (`lib/shell-api/tool-design-wiring.ts`) — so asking on every frame for the tool being painted is the intended
 use. Asking once per tool per frame multiplies that count, and nothing here caches the answer: a
 selection can change between frames, and that is exactly why the wrapper reads it every pass.
@@ -1993,7 +1993,7 @@ The raw stored value is deliberately **not** on the contract (`getToolDesignLine
 internal): an id alone would push the resolution rule — which design is live, whether it covers the
 tool, what a disposed design means — onto every consumer, and two copies of that rule drift.
 
-A plugin on an older bridge checks `typeof api.resolveToolDesignSelection === "function"` before use
+A plugin on an older shell API checks `typeof api.resolveToolDesignSelection === "function"` before use
 (§9); a design with no reader draws its own chrome unconditionally, which is the pre-switch behaviour.
 
 **A preview is ONE row (D5).** Whatever a design's `preview()` returns, a Cards value draws only the
@@ -2035,13 +2035,13 @@ calls instead of timing them: a switch invalidates no component, re-parses no Ma
 exactly one differential frame, and performs at most one persisted-selection read per card per frame,
 whatever the number of Markdown rows in the transcript.
 
-#### What a bridge-owned switch costs (S19)
+#### What a shell API-owned switch costs (S19)
 
-`requestSurfaceRepaint()` — the path a bridge-owned row takes (a card style such as the example's
+`requestSurfaceRepaint()` — the path a shell API-owned row takes (a card style such as the example's
 `plain`, a section toggle) — used to keep the invalidation and the forced frame. It is now the same two
 steps as `requestRepaint()`: the host's sidebar revision and one differential frame. Measured with real
 pi components, with and without `tui.invalidate()` + `requestRender(true)`, the rows are byte-identical
-on the conversation, on a rail host panel and on a bridge section hidden, collapsed and expanded: the
+on the conversation, on a rail host panel and on a shell API section hidden, collapsed and expanded: the
 style is repainted by the wrapper on the host's own already-rendered rows on every pass, and a section
 toggle moves `sectionRailDigest`, which the host's rail memo already keys on.
 
@@ -2082,7 +2082,7 @@ owning `package.json` gets an INTEGRATIONS line only if it names itself, and a p
 ONLY designs is attributed like any other — its registrations are `accepted`/`rejected` in the
 report, and its `name` is sticky for the identity (§8).
 
-The bridge registers exactly ONE `pi.registerToolRenderer` resolver for the whole process and fans it
+The shell API registers exactly ONE `pi.registerToolRenderer` resolver for the whole process and fans it
 out to these designs. That is why two plugins contributing designs for the same tool do not stack
 wrappers, and why a plugin must never call `pi.registerToolRenderer` itself for a design.
 
@@ -2138,7 +2138,7 @@ same type.
 `(line, id)` is the value identity: a second registration of the same pair replaces the earlier one
 in place and is reported as a `replaced` conflict, so a takeover is never silent. `id` is validated
 like every other registration id, `label` must be a non-empty string, and `apply` must be a function.
-**`default` and `native` are reserved labels**: `default` is the value the bridge adds first and
+**`default` and `native` are reserved labels**: `default` is the value the shell API adds first and
 `native` is its stored identity, so a design carrying either is refused with a message naming the
 reserved word.
 
@@ -2165,7 +2165,7 @@ interface MessageDesignContext {
   width: number;                     // the width the host asked the message component to render at
   customType: string;                // the type this design was declared for
   theme?: unknown;                   // the host's opaque theme object
-  cardStyle?: CardStyleSelection;    // the bridge's `Card style` selection, read on ACCESS
+  cardStyle?: CardStyleSelection;    // the shell API's `Card style` selection, read on ACCESS
   render: MessageDesignRender;       // Pi's own render options, plus the message
 }
 ```
@@ -2177,7 +2177,7 @@ carry the documented type, and Pi's defaults (`false`, `1`) answer otherwise.
 - **`cardStyle` is the same kind of field a tool design reads** (§14): resolved on ACCESS, at most
 once per pass, so a design that never reads it pays nothing and one that reads it twice cannot draw a
 message that is half of each style. `native`, a registered style and `missing` mean exactly what they
-mean there. It is the BRIDGE's `Card style` selection — native, a registered style, or missing — and
+mean there. It is the SHELL API's `Card style` selection — native, a registered style, or missing — and
 **not** the host's own `float`/`neon` chrome: a custom message nobody styles has no styled frame to
 preserve, so a design that wants that chrome draws it from the host's own setting, which this context
 does not read.
@@ -2185,7 +2185,7 @@ does not read.
 ### The rule: the host frame, or the box
 
 ```text
-Pi rebuild() → the bridge's renderer → the host's renderer(message, options, theme) → host component
+Pi rebuild() → the shell API's renderer → the host's renderer(message, options, theme) → host component
              → [live selection] → design.apply(host rows, ctx) → rows
 ```
 
@@ -2203,7 +2203,7 @@ sent by an extension that registers no renderer for them, so Pi draws its own de
 style ever reaches them. There is no frame to preserve, so the design OWNS the box (S2) and draws
 everything around the body: it receives the message's **own body, plainly** — its `[customType]`
 label, a blank row and its text — never a picture of Pi's styled box, because the design is about to
-frame it and the bridge has no business choosing colours. `ctx.render.message`, `ctx.width` and
+frame it and the shell API has no business choosing colours. `ctx.render.message`, `ctx.width` and
 `ctx.cardStyle` are what it draws from, and the body it was handed is also what a FAILING design falls
 back to: a message whose body the agent must read is never the thing that gets dropped.
 
@@ -2219,7 +2219,7 @@ resort when there is no box to ask.
 
 Two consequences are deliberate rather than incidental: a design receives rows, never a renderer
 object, so it cannot wrap, delay or re-enter the host's component; and it never sees a byte of the
-chrome, so the bridge never re-frames, re-measures or clips what it draws.
+chrome, so the shell API never re-frames, re-measures or clips what it draws.
 
 The renderer clips nothing, and that is all it promises. A 40-row body of 190-column rows leaves the
 message renderer — and the conversation wrapper — unchanged at width 24. What happens after that is
@@ -2228,7 +2228,7 @@ actual renderer writes the terminal's columns, and the main screen refuses a row
 terminal at all (`Rendered line 1 exceeds terminal width (190 > 24).`). A registered TRANSCRIPT
 transform's output is likewise clipped to the terminal width by the pipeline
 (`lib/shell-api/transform-pipeline.ts`'s `clipResult`, pre-existing). So no row is ever withheld by a policy of
-this surface, and a design that wants its body wrapped or centred must do it itself — the bridge is
+this surface, and a design that wants its body wrapped or centred must do it itself — the shell API is
 not the thing that will.
 
 ### Selection, and the default
@@ -2243,7 +2243,7 @@ The selected design per line is a row in `/gentle:customize` → `Cards`, named 
 2. every design of that line, in registration order, each shown by its `label`.
 
 `default` appears before the first design, and the line is installed the moment a design EXISTS — at
-registration, or when the bridge arms if one was already registered — and never before. So a session
+registration, or when the shell API arms if one was already registered — and never before. So a session
 that never registers one has no provider, no row and nothing to pay per menu build (S4). A line's name
 is derived from its custom type (`gentle-pi.exploration-budget` → `Message exploration budget`) or
 from its line id (`reminders` → `Message reminders`), clamped to one to three plain words by the same
@@ -2251,7 +2251,7 @@ rule every row name obeys (`lib/shell-api/row-names.ts`), and two lines that der
 with an ordinal. The name is not identity: the store is keyed by the custom type or the line id, and a
 value is the design's `id`, so renaming a label moves nothing but the text the user reads.
 
-**Where the value is stored.** The bridge's own file, `bridge-message-designs` → `selections`, flat for
+**Where the value is stored.** The shell API's own file, `bridge-message-designs` → `selections`, flat for
 the ungrouped case (`{ "gentle-pi.exploration-budget": "<id>" }`) and the grouped values under the
 reserved `$lines` key in the same document (`{ "$lines": { "reminders": "<id>" } }`), so ONE read
 serves both and a frame reads the file once. `$lines` is written only once a line has a value, so a
@@ -2263,7 +2263,7 @@ session that never groups a line gains nothing.
 resolveMessageDesignSelection(customType: string): MessageDesignSelection;
 ```
 
-The same answer the bridge's own renderer acts on, for a plugin that paints its own chrome around a
+The same answer the shell API's own renderer acts on, for a plugin that paints its own chrome around a
 message and must obey the user's switch instead of guessing:
 
 - `native` — the host's own output; nothing claimed this type, or the line's value is `default`;
@@ -2284,12 +2284,12 @@ every frame multiplies that count, and nothing here caches the answer, because a
 between frames. The raw stored value is deliberately not on the contract: an id alone would push the
 resolution rule onto every consumer, and two copies of that rule drift.
 
-A plugin on an older bridge checks `typeof api.registerMessageDesign === "function"` before use (§9);
+A plugin on an older shell API checks `typeof api.registerMessageDesign === "function"` before use (§9);
 with no member there is no design surface to register on, which is the pre-switch behaviour.
 
 ### Nothing claimed, nothing touched (S4)
 
-With no design registered for a type, the bridge does nothing at all to it: the adoption pass
+With no design registered for a type, the shell API does nothing at all to it: the adoption pass
 recognises a message by CLAIM, never by the frame it drew, and a type no live design claims is
 `ignored` — no renderer replaced, no repaint requested, no store read. Pi's own output for it is
 byte-identical, no pass pays for this surface, and the record gains nothing for it: what a session kept
@@ -2318,7 +2318,7 @@ message design adoption: none
   replaced and what a paint threw, with the type, the design id and the message, and exist only when
   there is something to name.
 
-The bridge's own row provider (`bridge.message-designs`) is plumbing, not a plugin provider: like the
+The shell API's own row provider (`shell-api.message-designs`) is plumbing, not a plugin provider: like the
 `Sections` and `Card style` providers it is never listed among a plugin's own registrations, and what
 it produces is the entry above. Its id is **reserved** (§1), so no plugin can take the line off the menu or be silently replaced
 by it — and because nobody else can hold that id, the line is installed by the FIRST design and not at
@@ -2331,16 +2331,16 @@ build runs anything.
 map (`dist/core/extensions/loader.js:284-287`): every extension gets its own `pi` object with its own
 closure. The runner answers `getMessageRenderer(customType)` by scanning the loaded extensions in LOAD
 ORDER and returning the FIRST one that has the type (`dist/core/extensions/runner.js:534-540`), with
-no `next()` chain — unlike tool renderers (`:550-553`). So there is no composition to join: a bridge
+no `next()` chain — unlike tool renderers (`:550-553`). So there is no composition to join: a shell API
 that registered a renderer for a type another extension already renders would either steal the slot or
 be silently ignored, and it could not delegate in either case, because the other renderer is
 unreachable. For the same reason a plugin must never call `pi.registerMessageRenderer` itself for a
-type it gives this bridge a design for.
+type it gives this shell API a design for.
 
 The capture point Pi does offer is the component. `CustomMessageComponent` keeps the renderer Pi
 resolved for its message in `customRenderer`, calls it again on every `rebuild()`, and falls back to
 its own box when the renderer answers `undefined`
-(`dist/modes/interactive/components/custom-message.js`). The conversation pass the bridge already runs
+(`dist/modes/interactive/components/custom-message.js`). The conversation pass the shell API already runs
 for card styles and tool cards therefore replaces that field with the rule above, marks the component
 so a reload or a second loaded copy of this package cannot stack two renderers on one message, and
 calls `invalidate()` ONCE so the stored renderer is resolved again through the design. Pi keeps its
@@ -2355,18 +2355,18 @@ rebuilt once when that shape changes — and never twice for the same shape.
 Three limits belong to the contract, not to the implementation:
 
 - **A message Pi mounted BEFORE the pass first runs is adopted on the next conversation render.** The
-  pass runs inside the conversation component the bridge already wraps; a message that arrives and is
+  pass runs inside the conversation component the shell API already wraps; a message that arrives and is
   drawn before that pass has run keeps Pi's own rendering until the next frame, and then draws through
   the design. Nothing older is rewritten retroactively.
 - **A design that fails on a message whose host renderer DECLINED that build shows the message's body,
   and Pi's own box from the next frame** — because the failed design is not retried while it stays
   selected, which is what lets Pi run the default path that populates the box. A conditional renderer (`(message, options) => options.expanded
   ? undefined : component()`) leaves Pi's default box unpopulated: Pi only fills it on its own default
-  path, which a design bypasses. The bridge cannot render a box that was never built, so the failing
+  path, which a design bypasses. The shell API cannot render a box that was never built, so the failing
   frame carries the plain body — never nothing — and Pi's box appears as soon as the message is rebuilt.
   A design that throws on every frame therefore costs a readable frame, not a blank one.
-- **`ctx.cardStyle` is the bridge's own `Card style` selection** — `native`, a registered style, or
-  `missing` — and NOT the host's own `float`/`neon` chrome. The bridge cannot read the host's style
+- **`ctx.cardStyle` is the shell API's own `Card style` selection** — `native`, a registered style, or
+  `missing` — and NOT the host's own `float`/`neon` chrome. The shell API cannot read the host's style
   setting for a message it never framed; a design that must match it paints from the host's own
   setting, which this context never touches.
 
@@ -2375,8 +2375,8 @@ Three limits belong to the contract, not to the implementation:
 - `registerRows`, `registerSection`, `registerCardStyle`, `registerTransform`,
   `registerToolDesign`, `resolveToolDesignSelection`,
   `registerMessageDesign`, `resolveMessageDesignSelection`, `requestRepaint`,
-  `createStore`, `bridgeApi`, `isBridgeApi`, `onBridgeApi`
-  and the `gentle-shell-bridge:ready` event are the contract; anything a plugin does inside `action()` beyond
+  `createStore`, `shellApi`, `isShellApi`, `onShellApi`
+  and the `odd-worktree:shell-ready` event are the contract; anything a plugin does inside `action()` beyond
   calling inline helpers is the plugin's own business.
 - **`Keymaps` stays reserved for row providers.** A provider registered with `category: "Keymaps"` is
   refused before anything is stored, with an error naming the category and why; the refusal is a rejected
@@ -2409,7 +2409,7 @@ Three limits belong to the contract, not to the implementation:
   the `tui` through renders nothing visible is **unconfirmed** (see
   [architecture.md](architecture.md) §12).
 - `current()` must read live state and `action()` must persist before returning. This is a
-  correctness rule the bridge cannot enforce at runtime; a plugin that caches a stale value
+  correctness rule the shell API cannot enforce at runtime; a plugin that caches a stale value
   renders a lying `●`.
 - No numeric insertion index exists: `placement` names a slot (`start`, `end`, or after an id) and
   `order` only orders providers inside that slot.
@@ -2434,11 +2434,11 @@ Three limits belong to the contract, not to the implementation:
 - A design receives ROWS, a width and the PART it is drawing (`call` or `result`), never a renderer
   object and never the theme's shape. `part` is one of two literals; a design that ignores it is
   byte-identical to one written before the field existed, and a context produced by an older copy of
-  the bridge carries no `part` at all — a design reads it as unknown (`ctx.part === "result"` is
+  the shell API carries no `part` at all — a design reads it as unknown (`ctx.part === "result"` is
   simply false) and keeps working. `cardStyle` is the same kind of field for the style: read on
   access, absent on an older copy, and irrelevant to a design that never reads it.
-- A transform is a per-frame pass, so a slow transform is a slow frame; the bridge isolates its
+- A transform is a per-frame pass, so a slow transform is a slow frame; the shell API isolates its
   failures and clips its width, and can bound nothing else. It sees lines, never tool metadata.
 - The API is released (`0.16.2`). The `v1` symbol is the compatibility boundary: a breaking
-  change takes a new key instead of mutating this one (§9). The `gentle-shell-bridge:ready` event is
+  change takes a new key instead of mutating this one (§9). The `odd-worktree:shell-ready` event is
   additive: a plugin that never subscribes loses nothing but the late-load case.

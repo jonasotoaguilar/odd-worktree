@@ -51,11 +51,11 @@ test('anything else is not a search call', () => {
 // ---- bash (S3) ----
 
 test('the shell session that cd-ed into another project is a call into that project', () => {
-  const command = 'cd /home/jona/dev/projects/gentle-shell-bridge && cat package.json 2>/dev/null | head -60 && echo "---FILES---" && find . -type f -not -path \'./.git/*\' -not -path \'./node_modules/*\' | head -80';
+  const command = 'cd /home/tester/projects/other-project && cat package.json 2>/dev/null | head -60 && echo "---FILES---" && find . -type f -not -path \'./.git/*\' -not -path \'./node_modules/*\' | head -80';
   const call = searchCall(event('bash', { command }), CWD);
   assert.equal(call.tool, 'bash');
-  assert.ok(call.paths.includes('/home/jona/dev/projects/gentle-shell-bridge'), 'the cd target is named');
-  assert.deepEqual(call.paths, ['/home/jona/dev/projects/gentle-shell-bridge'], 'and nothing of the session checkout survives the cd');
+  assert.ok(call.paths.includes('/home/tester/projects/other-project'), 'the cd target is named');
+  assert.deepEqual(call.paths, ['/home/tester/projects/other-project'], 'and nothing of the session checkout survives the cd');
 });
 
 test('a chain of reads with no other path stays in the session checkout', () => {

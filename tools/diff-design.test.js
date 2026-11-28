@@ -1,14 +1,14 @@
 'use strict';
-// The `diff` design (T2, S1/S2/S5/S7/S8): what a caller of the bridge's `registerToolDesign`
-// observes on the second `Card diff` line, and the rows it draws.
+// The `file` design (T2, S1/S2/S5/S7/S8): what a caller of the shell API's `registerToolDesign`
+// observes on the second `Card file` line, and the rows it draws.
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  DIFF_DESIGN_ID,
+  FILE_DESIGN_ID,
   DIFF_DESIGN_LABEL,
   DIFF_DESIGN_PREVIEW,
   applyDiffDesign,
-  bridgeSupportsDiffLine,
+  shellApiSupportsDiffLine,
   diffColorDesign,
   registerDiffDesign,
   seedDiffDesignSelection,
@@ -82,14 +82,14 @@ const resultCtx = (extra = {}) => ({ tool: 'write', part: 'result', width: WIDTH
 const WRITE_ARGS = { path: 'lib/app.js', content: 'const x = 1\nconst y = 2' };
 const writeHalves = () => ({ call: [neonCall()], result: [neonBody('✓ wrote 22 bytes'), neonClose()] });
 
-describe('the Card diff line (S2)', () => {
+describe('the Card file line (S2/S5)', () => {
   test('one grouped registration over write and edit, labelled `color`', () => {
     const design = diffColorDesign(seamFor().seam);
-    assert.equal(design.line, 'diff');
+    assert.equal(design.line, 'file');
     assert.deepEqual(design.tools, ['write', 'edit']);
     assert.equal(Object.hasOwn(design, 'tool'), false, 'never both shapes');
-    assert.equal(design.id, DIFF_DESIGN_ID);
-    assert.equal(design.id, 'odd-worktree.diff');
+    assert.equal(design.id, FILE_DESIGN_ID);
+    assert.equal(design.id, 'odd-worktree.file');
     assert.equal(design.label, DIFF_DESIGN_LABEL);
     assert.equal(design.label, 'color', 'the value the user reads on the Cards row');
     assert.equal(design.name, 'Odd worktree');
@@ -99,9 +99,26 @@ describe('the Card diff line (S2)', () => {
     assert.equal(typeof design.preview, 'function');
   });
 
-  test('the preview is ONE row, titled after the LINE so both options read as one line', () => {
-    const preview = diffColorDesign(seamFor().seam).preview();
-    assert.equal(preview.title, 'Cards · Card diff', 'the same title the `default` value shows');
+  test('it does not claim `read`, and a read comes back unchanged (T2/S2)', () => {
+    const design = diffColorDesign(seamFor().seam);
+    assert.equal(design.tools.includes('read'), false, '`read` belongs to the file card, never to this line');
+    // The file card supplies a plain read's selection from this line; the line itself never paints
+    // one, whatever the shell API hands it — that is what keeps a read drawn exactly once.
+    const rows = ['╭─ ✿ read · src/app.js:5-6 ──────────╮', '│  5 │ const a = 1;                  │', '╰───────────────────────────────────╯'];
+    for (const part of ['call', 'result']) {
+      const out = design.apply(rows, { tool: 'read', part, width: WIDTH, theme, render: { args: { path: 'src/app.js', offset: 4, limit: 2 } } });
+      assert.deepEqual(out, rows, `${part}: the rows it was handed`);
+      assert.notEqual(out, rows, `${part}: a fresh array, never the caller's`);
+    }
+  });
+
+  test('the row the shell API builds is `Card file`, and the preview is titled after it', () => {
+    const design = diffColorDesign(seamFor().seam);
+    // The shell API derives the row from the line key itself (`Card <line>`); this pins the name
+    // the user reads on the menu, next to the `default` value.
+    assert.equal(`Card ${design.line}`, 'Card file');
+    const preview = design.preview();
+    assert.equal(preview.title, 'Cards · Card file', 'the same title the `default` value shows');
     assert.equal(preview.sample.split('\n').length, 1, 'one row, like every Cards value');
     assert.deepEqual(preview, DIFF_DESIGN_PREVIEW);
   });
@@ -112,7 +129,7 @@ describe('the Card diff line (S2)', () => {
     const dispose = registerDiffDesign(api, seamFor().seam);
     assert.equal(typeof dispose, 'function');
     assert.equal(seen.length, 1);
-    assert.equal(seen[0].line, 'diff');
+    assert.equal(seen[0].line, 'file');
     assert.equal(registerDiffDesign(api, seamFor().seam), dispose, 'a second call is the same registration');
     dispose();
     dispose();
@@ -120,8 +137,8 @@ describe('the Card diff line (S2)', () => {
   });
 });
 
-describe('S6: an old or absent bridge registers nothing and never throws', () => {
-  test('no bridge member means no registration', () => {
+describe('S6: an old or absent shell API registers nothing and never throws', () => {
+  test('no shell API member means no registration', () => {
     for (const api of [null, undefined, {}, { registerToolDesign: 'nope' }]) {
       assert.equal(registerDiffDesign(api, seamFor().seam), null, String(api));
     }
@@ -132,8 +149,8 @@ describe('S6: an old or absent bridge registers nothing and never throws', () =>
       const seen = [];
       const api = { VERSION: version, registerToolDesign: (design) => { seen.push(design); return () => {}; } };
       assert.equal(registerDiffDesign(api, seamFor().seam), null, String(version));
-      assert.deepEqual(seen, [], `${String(version)}: nothing was offered for a row the bridge would refuse`);
-      assert.equal(bridgeSupportsDiffLine(api), false, String(version));
+      assert.deepEqual(seen, [], `${String(version)}: nothing was offered for a row the shell API would refuse`);
+      assert.equal(shellApiSupportsDiffLine(api), false, String(version));
     }
   });
 
@@ -145,8 +162,8 @@ describe('S6: an old or absent bridge registers nothing and never throws', () =>
       assert.equal(typeof dispose, 'function', version);
       dispose();
       assert.equal(seen.length, 1, version);
-      assert.equal(seen[0].line, 'diff', version);
-      assert.equal(bridgeSupportsDiffLine(api), true, version);
+      assert.equal(seen[0].line, 'file', version);
+      assert.equal(shellApiSupportsDiffLine(api), true, version);
     }
   });
 
@@ -157,21 +174,21 @@ describe('S6: an old or absent bridge registers nothing and never throws', () =>
     for (const version of ['0.9.0-rc.1', '0.9.0+build.7', '0.9.0-rc.1+sha.abc']) {
       const seen = [];
       const api = { VERSION: version, registerToolDesign: (design) => { seen.push(design); return () => {}; } };
-      assert.equal(bridgeSupportsDiffLine(api), false, version);
+      assert.equal(shellApiSupportsDiffLine(api), false, version);
       assert.equal(registerDiffDesign(api, seamFor().seam), null, version);
-      assert.deepEqual(seen, [], `${version}: nothing is offered for a row the bridge would refuse`);
+      assert.deepEqual(seen, [], `${version}: nothing is offered for a row the shell API would refuse`);
     }
   });
 
-  test('a bridge that refuses the registration is null, never a throw', () => {
+  test('a shell API that refuses the registration is null, never a throw', () => {
     const api = { VERSION: '0.9.0', registerToolDesign: () => { throw new Error('refused'); } };
     assert.doesNotThrow(() => registerDiffDesign(api, seamFor().seam));
     assert.equal(registerDiffDesign(api, seamFor().seam), null);
   });
 });
 
-describe('the first-run selection (S2)', () => {
-  function fakeBridge(files = {}) {
+describe('the first-run selection and the `diff` -> `file` carry-over (S2/S5)', () => {
+  function fakeShellApi(files = {}) {
     const writes = [];
     const createStore = (id) => ({
       get: (key, fallback) => (files[id] && Object.hasOwn(files[id], key) ? files[id][key] : fallback),
@@ -181,64 +198,137 @@ describe('the first-run selection (S2)', () => {
   }
 
   test('a first load with no choice selects color on the line and touches nothing else', () => {
-    const { api, files } = fakeBridge({
+    const { api, files } = fakeShellApi({
       'bridge-tool-designs': { selections: { bash: 'odd-worktree.bash-activity', $lines: { tools: 'odd-worktree.bash-activity' } } },
     });
     assert.equal(seedDiffDesignSelection(api), true);
     assert.deepEqual(files['bridge-tool-designs'].selections, {
       bash: 'odd-worktree.bash-activity',
-      $lines: { tools: 'odd-worktree.bash-activity', diff: DIFF_DESIGN_ID },
+      $lines: { tools: 'odd-worktree.bash-activity', file: FILE_DESIGN_ID },
     });
   });
 
   test('a fresh install with no store file at all selects color', () => {
-    const { api, files } = fakeBridge();
+    const { api, files } = fakeShellApi();
     assert.equal(seedDiffDesignSelection(api), true);
-    assert.deepEqual(files['bridge-tool-designs'].selections, { $lines: { diff: DIFF_DESIGN_ID } });
+    assert.deepEqual(files['bridge-tool-designs'].selections, { $lines: { file: FILE_DESIGN_ID } });
   });
 
-  test('a choice the user already made is never overwritten, default included', () => {
+  test('a saved `diff` design id is carried over mapped, and the old key is left in place', () => {
+    const { api, files } = fakeShellApi({
+      'bridge-tool-designs': { selections: { $lines: { diff: 'odd-worktree.diff' } } },
+    });
+    assert.equal(seedDiffDesignSelection(api), true);
+    assert.deepEqual(files['bridge-tool-designs'].selections.$lines, {
+      diff: 'odd-worktree.diff',
+      file: FILE_DESIGN_ID,
+    }, 'the new id under the new key, the old key untouched');
+  });
+
+  test('a saved reserved value is carried over as it is, so `default` stays `default`', () => {
+    const { api, files } = fakeShellApi({
+      'bridge-tool-designs': { selections: { $lines: { diff: 'native' } } },
+    });
+    assert.equal(seedDiffDesignSelection(api), true);
+    assert.deepEqual(files['bridge-tool-designs'].selections.$lines, { diff: 'native', file: 'native' });
+  });
+
+  test('a choice the user already made on `file` is never overwritten, default included', () => {
     for (const chosen of ['native', 'someone.else']) {
-      const { api, files, writes } = fakeBridge({ 'bridge-tool-designs': { selections: { $lines: { diff: chosen } } } });
+      const { api, files, writes } = fakeShellApi({ 'bridge-tool-designs': { selections: { $lines: { file: chosen } } } });
       assert.equal(seedDiffDesignSelection(api), false, chosen);
-      assert.equal(files['bridge-tool-designs'].selections.$lines.diff, chosen, chosen);
+      assert.equal(files['bridge-tool-designs'].selections.$lines.file, chosen, chosen);
       assert.equal(writes.some(([, key]) => key === 'selections'), false, 'nothing was written');
     }
   });
 
-  test('it seeds once: default chosen afterwards stays default on the next load', () => {
-    const { api, files } = fakeBridge();
+  test('a stored `file` value wins over a `diff` one beside it', () => {
+    const { api, files } = fakeShellApi({
+      'bridge-tool-designs': { selections: { $lines: { diff: 'odd-worktree.diff', file: 'native' } } },
+    });
+    assert.equal(seedDiffDesignSelection(api), false);
+    assert.deepEqual(files['bridge-tool-designs'].selections.$lines, { diff: 'odd-worktree.diff', file: 'native' });
+  });
+
+  test('the marker set means no write at all, the carry-over included', () => {
+    const { api, files, writes } = fakeShellApi({
+      'odd-worktree': { fileDesignSeeded: true },
+      'bridge-tool-designs': { selections: { $lines: { diff: 'odd-worktree.diff' } } },
+    });
+    assert.equal(seedDiffDesignSelection(api), false);
+    assert.deepEqual(writes, [], 'neither store was written');
+    assert.deepEqual(files['bridge-tool-designs'].selections.$lines, { diff: 'odd-worktree.diff' });
+  });
+
+  test('an old `diffDesignSeeded` marker alone does not block the carry-over', () => {
+    const { api, files } = fakeShellApi({
+      'odd-worktree': { diffDesignSeeded: true },
+      'bridge-tool-designs': { selections: { $lines: { diff: 'odd-worktree.diff' } } },
+    });
     assert.equal(seedDiffDesignSelection(api), true);
-    files['bridge-tool-designs'] = { selections: { $lines: { diff: 'native' } } };
+    assert.equal(files['bridge-tool-designs'].selections.$lines.file, FILE_DESIGN_ID);
+    assert.equal(files['odd-worktree'].fileDesignSeeded, true);
+  });
+
+  test('it seeds once: default chosen afterwards stays default on the next load', () => {
+    const { api, files, writes } = fakeShellApi();
+    assert.equal(seedDiffDesignSelection(api), true);
+    assert.equal(seedDiffDesignSelection(api), false);
+    assert.deepEqual(writes.map(([id, key]) => `${id}/${key}`), [
+      'bridge-tool-designs/selections',
+      'odd-worktree/fileDesignSeeded',
+    ], 'the selection once, then the marker');
+    files['bridge-tool-designs'] = { selections: { $lines: { file: 'native' } } };
     assert.equal(seedDiffDesignSelection(api), false);
     files['bridge-tool-designs'] = { selections: { $lines: {} } };
     assert.equal(seedDiffDesignSelection(api), false);
     assert.deepEqual(files['bridge-tool-designs'].selections, { $lines: {} });
   });
 
-  test('a bridge without createStore, a malformed document or a failing store seeds nothing', () => {
+  test('a shell API without createStore, a malformed document or a failing store seeds nothing', () => {
     assert.equal(seedDiffDesignSelection({}), false);
     assert.equal(seedDiffDesignSelection(null), false);
     for (const selections of ['oops', [], null]) {
-      const { api } = fakeBridge({ 'bridge-tool-designs': { selections } });
+      const { api } = fakeShellApi({ 'bridge-tool-designs': { selections } });
       assert.equal(seedDiffDesignSelection(api), false, JSON.stringify(selections));
     }
-    const { api } = fakeBridge({ 'bridge-tool-designs': { selections: { $lines: 'oops' } } });
+    const { api } = fakeShellApi({ 'bridge-tool-designs': { selections: { $lines: 'oops' } } });
     assert.equal(seedDiffDesignSelection(api), false);
     const throwing = { createStore: () => { throw new Error('no store'); } };
     assert.doesNotThrow(() => seedDiffDesignSelection(throwing));
     assert.equal(seedDiffDesignSelection(throwing), false);
   });
 
+  test('a store that throws on a read or on a write changes nothing and never throws', () => {
+    for (const failOn of ['get', 'set']) {
+      const files = { 'bridge-tool-designs': { selections: { $lines: { diff: 'odd-worktree.diff' } } } };
+      const before = JSON.stringify(files);
+      const createStore = (id) => ({
+        get: (key, fallback) => {
+          if (failOn === 'get') throw new Error('no read');
+          return files[id] && Object.hasOwn(files[id], key) ? files[id][key] : fallback;
+        },
+        set: (key, value) => {
+          if (failOn === 'set') throw new Error('no write');
+          files[id] = { ...files[id], [key]: value };
+        },
+      });
+      const api = { VERSION: '0.9.0', registerToolDesign: () => () => {}, createStore };
+      assert.doesNotThrow(() => seedDiffDesignSelection(api), failOn);
+      assert.equal(seedDiffDesignSelection(api), false, failOn);
+      assert.equal(JSON.stringify(files), before, `${failOn}: the document is byte-identical`);
+    }
+  });
+
   test('the seed follows an ACCEPTED registration only, so a refusal stores nothing', () => {
-    const { api, files } = fakeBridge();
+    const { api, files } = fakeShellApi();
     api.registerToolDesign = () => { throw new Error('refused'); };
     assert.equal(registerDiffDesign(api, seamFor().seam), null);
     assert.equal(files['bridge-tool-designs'], undefined, 'no value names a design nobody registered');
 
-    const accepted = fakeBridge();
+    const accepted = fakeShellApi();
     registerDiffDesign(accepted.api, seamFor().seam)();
-    assert.equal(accepted.files['bridge-tool-designs'].selections.$lines.diff, DIFF_DESIGN_ID);
+    assert.equal(accepted.files['bridge-tool-designs'].selections.$lines.file, FILE_DESIGN_ID);
   });
 });
 
@@ -399,7 +489,7 @@ describe('a repaint reads the theme and the content of THIS pass (S1/S5)', () =>
 describe('a host that draws no frame gets the whole pane (S1)', () => {
   // Pi's own shell wraps the renderer's component, so a design sees the write BODY alone: heading,
   // content rows and the host's own fold row, which carries the expand affordance. This host never
-  // reaches a design through gentle-shell-bridge today; the path exists so such a host degrades
+  // reaches a design through the shell API today; the path exists so such a host degrades
   // into a drawn pane instead of an untouched card.
   const plainCall = (hint = '... (12 more lines, 22 total, ctrl+o to expand)') => [
     '+ write lib/app.js (2 lines)',

@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
-import { bridgeApi, publishBridgeApi } from "../../lib/shell-api/api.ts";
+import { shellApi, publishShellApi } from "../../lib/shell-api/api.ts";
 import {
   registerRows,
   resetBusForTests,
@@ -14,9 +14,9 @@ import {
   resetTransformsForTests,
   snapshotSections,
 } from "../../lib/shell-api/bus.ts";
-import gentleShellBridge, {
-  type BridgeExtensionApi,
-  type BridgeSessionHandler,
+import gentleShellShellApi, {
+  type ShellExtensionApi,
+  type ShellSessionHandler,
 } from "../../lib/shell-api/extension.ts";
 import {
   HOST_OWN_STATUS_KEYS,
@@ -50,7 +50,7 @@ import {
 /**
  * The integration line is proven against a FAKE footer: an object with `setStatus(key, text)` that
  * stores what it was handed, which is the whole of Pi's documented contract
- * (`docs/extensions.md:2895-2896`) and the whole of what the bridge can observe. The host's real
+ * (`docs/extensions.md:2895-2896`) and the whole of what the shell API can observe. The host's real
  * map, its sort order and the shared status role it paints with are read-only evidence from
  * gentle-shell (`extensions/gentle-shell.ts:357-385`, `lib/shell-bar.ts:289-298`), not something
  * these tests can execute.
@@ -85,17 +85,17 @@ const createFakeFooter = (initial: Record<string, string> = {}): FakeFooter => {
 };
 
 interface FakePi {
-  api: BridgeExtensionApi;
-  sessions: BridgeSessionHandler[];
-  shutdowns: BridgeSessionHandler[];
+  api: ShellExtensionApi;
+  sessions: ShellSessionHandler[];
+  shutdowns: ShellSessionHandler[];
   commands: Array<{ name: string; handler: (args: string, ctx: unknown) => unknown }>;
 }
 
 const createFakePi = (): FakePi => {
-  const sessions: BridgeSessionHandler[] = [];
-  const shutdowns: BridgeSessionHandler[] = [];
+  const sessions: ShellSessionHandler[] = [];
+  const shutdowns: ShellSessionHandler[] = [];
   const commands: Array<{ name: string; handler: (args: string, ctx: unknown) => unknown }> = [];
-  const api: BridgeExtensionApi = {
+  const api: ShellExtensionApi = {
     // `gentle-pi` is present, so `session_start` installs the INTEGRATIONS surface (S9/T12).
     getCommands: () => [{ name: "gentle:customize" }],
     on(event, handler) {
@@ -117,7 +117,7 @@ const createFakePi = (): FakePi => {
 const scratchDirs: string[] = [];
 let fixtureCount = 0;
 
-const PLUGIN_SOURCE_HEAD = `const api = globalThis[Symbol.for("gentle-shell-bridge/api/v1")];\n`;
+const PLUGIN_SOURCE_HEAD = `const api = globalThis[Symbol.for("odd-worktree/shell-api/v1")];\n`;
 
 /**
  * Write one plugin module into a fresh temporary package. `packageName: null` writes no manifest, so
@@ -267,7 +267,7 @@ test("the derived name is clamped to three words, stripped of marks, and always 
   assert.equal(derivePluginName("@acme/loon-kit"), "Loon kit");
   assert.equal(derivePluginName("a-b-c-d-e"), "A b c");
   assert.equal(derivePluginName("!!!"), undefined);
-  for (const packageName of ["@acme/loon-kit", "gentle.shell.bridge", "a-b-c-d-e"]) {
+  for (const packageName of ["@acme/loon-kit", "gentle.shell.kit", "a-b-c-d-e"]) {
     const derived = derivePluginName(packageName);
     assert.ok(derived !== undefined);
     assert.equal(rowNameProblem(derived), undefined, `"${derived}" must satisfy the shape rule`);
@@ -342,13 +342,13 @@ test("session_start paints the line and session_shutdown clears it with undefine
   assert.equal(footer.statuses.size, 0, "registered before any ui existed");
 
   const pi = createFakePi();
-  gentleShellBridge(pi.api);
+  gentleShellShellApi(pi.api);
   pi.sessions[0]({}, { hasUI: true, ui: footer.ui });
   assert.deepEqual([...footer.statuses.values()], ["Loon kit · ready"]);
 
   pi.shutdowns[0]({}, { hasUI: true, ui: footer.ui });
 
-  assert.equal(footer.statuses.size, 0, "the bridge's own row is gone");
+  assert.equal(footer.statuses.size, 0, "the shell API's own row is gone");
   const last = footer.calls[footer.calls.length - 1];
   assert.deepEqual(last, { key: [...footer.calls][0].key, text: undefined });
 });
@@ -430,8 +430,8 @@ test("the report lists the plugin once, with its derived name and no rejection",
   assert.equal(record.line, "set");
 });
 
-test("bridgeApi() is what the fixture plugins read", () => {
-  assert.ok(bridgeApi() !== undefined);
+test("shellApi() is what the fixture plugins read", () => {
+  assert.ok(shellApi() !== undefined);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -643,7 +643,7 @@ test("the example installed under the Pi distribution registers one identity and
   scratchDirs.push(configHome);
   const previousConfigHome = process.env.GENTLE_PI_CONFIG_HOME;
   process.env.GENTLE_PI_CONFIG_HOME = configHome;
-  publishBridgeApi();
+  publishShellApi();
 
   const footer = createFakeFooter();
   installPluginStatus(footer.ui);
@@ -733,8 +733,8 @@ test("T42: the example's `demo presses` row is clickable, prints once, and hover
     disableSidebarBackend();
 
     // The real entry: the example's default export, loaded from its own file, registers the section
-    // through the published bridge object exactly as Pi loads it.
-    publishBridgeApi();
+    // through the published shell API object exactly as Pi loads it.
+    publishShellApi();
     const installed = new URL("../../docs/shell-api/examples/bash-card.ts", import.meta.url);
     const sessionHandlers: Array<
       (event: unknown, ctx: { hasUI?: boolean; ui?: unknown }) => void

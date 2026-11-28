@@ -8,7 +8,7 @@
  * after the view exists; a row that names a NEW page cannot, because nothing can select a page the
  * list does not hold.
  *
- * The bridge appends the providers' rows BEFORE the constructor's `map` reads the array, and only
+ * The shell API appends the providers' rows BEFORE the constructor's `map` reads the array, and only
  * for an array PROVEN to be the menu's rows (`src/capture.ts`): the host's own mapper must derive
  * `category ?? "Settings"` for the array's own elements AND for two synthetic rows the host never
  * had — one with no category, one naming a page that cannot exist — and it must not throw. The
@@ -17,9 +17,9 @@
  * That early step is PROVISIONAL (S20): it is a guess made before the factory finished, so it is
  * reconciled against the late decision at the end of the factory, and rolled back on a throw, on
  * another array, on ambiguity or on an async factory. The net guarantee this suite pins: after any
- * factory invocation, no array holds bridge rows except the one the late decision chose.
+ * factory invocation, no array holds shell API rows except the one the late decision chose.
  *
- * Through the real entry (`publishBridgeApi().registerRows`, `armBridge`) and a view that computes
+ * Through the real entry (`publishShellApi().registerRows`, `armShellApi`) and a view that computes
  * its pages in its constructor exactly like the host's, this suite proves:
  *
  * - the new page appears once, AFTER the host's own pages and never before them;
@@ -41,8 +41,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { publishBridgeApi, resetBridgeApiForTests } from "../../lib/shell-api/api.ts";
-import { armBridge } from "../../lib/shell-api/arm.ts";
+import { publishShellApi, resetShellApiForTests } from "../../lib/shell-api/api.ts";
+import { armShellApi } from "../../lib/shell-api/arm.ts";
 import {
   registerCardStyle,
   resetBusForTests,
@@ -86,8 +86,8 @@ const visible = (row: CustomizeRow): boolean => {
 const sameRows = (rows: readonly CustomizeRow[], before: readonly CustomizeRow[]): boolean =>
   rows.length === before.length && rows.every((row, index) => row === before[index]);
 
-/** The bridge's own rows wherever they are, by the label the provider gave them. */
-const bridgeLabels = (rows: readonly CustomizeRow[]): string[] =>
+/** The shell API's own rows wherever they are, by the label the provider gave them. */
+const shellApiLabels = (rows: readonly CustomizeRow[]): string[] =>
   rows.map((row) => labelText(row.label)).filter((label) => label.startsWith("Loon"));
 
 /** Rows an incidental array can hold: row-shaped, above the capture threshold, no provider identity. */
@@ -267,10 +267,10 @@ function createMenuHost(options: MenuHostOptions = {}): MenuHost {
   };
 }
 
-/** The real entry: arm the bridge on a host-shaped `ctx.ui`, then ask the host to build its menu. */
+/** The real entry: arm the shell API on a host-shaped `ctx.ui`, then ask the host to build its menu. */
 const menuHost = (options: MenuHostOptions = {}): MenuHost => {
   const host = createMenuHost(options);
-  armBridge(host.ui);
+  armShellApi(host.ui);
   return host;
 };
 
@@ -308,7 +308,7 @@ test.after(() => {
 
 test.beforeEach(() => {
   rmSync(join(configHome, "gentle-shell-bridge"), { recursive: true, force: true });
-  resetBridgeApiForTests();
+  resetShellApiForTests();
   resetBusForTests();
   resetSectionsForTests();
   resetCardStylesForTests();
@@ -328,7 +328,7 @@ test.beforeEach(() => {
 // ---------------------------------------------------------------------------------------------
 
 test("a provider's new page appears once, after the host's own pages and never before them", () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
 
   const host = menuHost();
   host.build();
@@ -347,7 +347,7 @@ test("S21: a provider can place its own page after another category's block", ()
   // The page list is the FIRST appearance of each category in the rows the host maps, so the block
   // has to be inserted there, not appended: `Sections` is one of the host's pages, and the provider
   // asks to open its page right after it.
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.page",
     category: "Loon page",
     rows: loonPage,
@@ -365,7 +365,7 @@ test("S21: a provider can place its own page after another category's block", ()
 });
 
 test("S21: an anchor the menu does not have falls back to the end, as before", () => {
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.page",
     category: "Loon page",
     rows: loonPage,
@@ -385,7 +385,7 @@ test("S21: an anchor the menu does not have falls back to the end, as before", (
 test("S21: only the rows of the page being placed move, never the whole block", () => {
   // A block's rows may each declare their own category (`src/rows.ts:326-338`). Moving the block
   // would drag the first appearance of the OTHER page to the anchor as well.
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.split",
     category: "Loon page",
     categoryPlacement: { after: "Cards" },
@@ -409,8 +409,8 @@ test("S21: only the rows of the page being placed move, never the whole block", 
 test("S21: a rollback still removes a page placed in the MIDDLE of the host's rows", async () => {
   // The rollback primitive is tail-shaped, so a mid-array insert has to record what it wrote: with
   // `Cards` as the anchor the insertion index is not `original.length`, and a tail-shaped removal
-  // would leave the bridge rows behind (and could remove host rows instead).
-  publishBridgeApi().registerRows({
+  // would leave the shell API rows behind (and could remove host rows instead).
+  publishShellApi().registerRows({
     id: "loon.page",
     category: "Loon page",
     rows: loonPage,
@@ -427,12 +427,12 @@ test("S21: a rollback still removes a page placed in the MIDDLE of the host's ro
     { kind: "uncaptured", injectedRows: 0, reason: "ambiguous" },
     "the late decision disagrees with the early guess",
   );
-  assert.deepEqual(bridgeLabels(host.liveRows()), [], "no bridge row survives the rollback");
+  assert.deepEqual(shellApiLabels(host.liveRows()), [], "no shell API row survives the rollback");
   assert.ok(sameRows(host.liveRows(), before), "the host's own rows are exactly as they were");
 });
 
 test("the new page holds its toggle and its button, in the provider's order", () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
 
   const host = menuHost();
   host.build();
@@ -461,12 +461,12 @@ test("the new page holds its toggle and its button, in the provider's order", ()
 // ---------------------------------------------------------------------------------------------
 
 test("two providers naming the same new page share it, in registration order", () => {
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.first",
     category: "Loon page",
     rows: () => [button("Loon alpha")],
   });
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.second",
     category: "Loon page",
     rows: () => [button("Loon beta")],
@@ -488,7 +488,7 @@ test("two providers naming the same new page share it, in registration order", (
 });
 
 test("a provider in an existing page still joins it and adds no page (PRESERVE)", () => {
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.cards",
     category: "Cards",
     rows: () => [button("Loon card")],
@@ -510,7 +510,7 @@ test("a provider in an existing page still joins it and adds no page (PRESERVE)"
 });
 
 test("a single ROW naming a new page creates it, with the provider's own page untouched", () => {
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.row-page",
     category: "Cards",
     rows: () => [
@@ -544,7 +544,7 @@ test("a single ROW naming a new page creates it, with the provider's own page un
 // ---------------------------------------------------------------------------------------------
 
 test("Keymaps is refused at registration and per row, and never becomes a page", () => {
-  const api = publishBridgeApi();
+  const api = publishShellApi();
   assert.throws(
     () => api.registerRows({ id: "loon.keymaps", category: "Keymaps", rows: () => [] }),
     new RegExp(`reserved category "Keymaps"`),
@@ -590,7 +590,7 @@ test("Keymaps is refused at registration and per row, and never becomes a page",
 // ---------------------------------------------------------------------------------------------
 
 test("an incidental row-shaped array in the same factory is not injected into, and the page still appears", () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
   const incidental: CustomizeRow[] = [
     { category: "Cards", label: "Incidental one", action: () => {} },
     { category: "Cards", label: "Incidental two", action: () => {} },
@@ -617,7 +617,7 @@ test("an incidental row-shaped array in the same factory is not injected into, a
 // ---------------------------------------------------------------------------------------------
 
 test("a nested custom call that throws does not steal the outer menu's page", () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
   const nested: CustomizeRow[] = [
     { category: "Cards", label: "Nested one", action: () => {} },
     { category: "Cards", label: "Nested two", action: () => {} },
@@ -649,7 +649,7 @@ test("a nested custom call that throws does not steal the outer menu's page", ()
 // ---------------------------------------------------------------------------------------------
 
 test("a host that invokes the factory in a later microtask still gets its page", async () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
 
   const host = menuHost({ deferred: true });
   await host.build();
@@ -667,7 +667,7 @@ test("a host that invokes the factory in a later microtask still gets its page",
 // ---------------------------------------------------------------------------------------------
 
 test("calling the factory twice neither duplicates the page nor its rows", () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
 
   const host = menuHost();
   host.build();
@@ -705,7 +705,7 @@ test("calling the factory twice neither duplicates the page nor its rows", () =>
 // category) received the rows, blocked the real menu behind `session.injected`, and diagnostics
 // still said `injected`.
 test("JD-A-001: an incidental array mapped to its categories, or to a constant, is left alone and blocks nothing", () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
 
   const echo: CustomizeRow[] = incidentalRows("Echo", "Cards");
   const constant: CustomizeRow[] = incidentalRows("Constant", "Cards");
@@ -744,7 +744,7 @@ test("JD-A-001: an incidental array mapped to its categories, or to a constant, 
 // JD-A-002: the array was recorded on the FIRST map call and never proved again, so mapping the
 // menu's rows to labels first and to categories later lost the page.
 test("JD-A-002: the page still appears when the menu's rows are mapped to labels before their categories", () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
 
   const host = menuHost({ preBuild: (rows) => void rows.map((row) => row.label) });
   host.build();
@@ -759,19 +759,19 @@ test("JD-A-002: the page still appears when the menu's rows are mapped to labels
 });
 
 // JD-A-003 (first half): the proof ran the mapper of whatever row-like array it met, so an impure
-// mapper ran extra times with nothing bounding the cost. Every bridge row the mapper must now read
+// mapper ran extra times with nothing bounding the cost. Every shell API row the mapper must now read
 // is read exactly twice: once by the pre-push check, once by the host's own map.
-test("JD-A-003: an impure mapper reads each bridge row exactly twice, once before it is pushed", () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+test("JD-A-003: an impure mapper reads each shell API row exactly twice, once before it is pushed", () => {
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
 
-  const calls = { all: 0, bridge: 0 };
+  const calls = { all: 0, shellApi: 0 };
   const host = menuHost({
     deriveCategories: (rows) =>
       [
         ...new Set(
           rows.map((row) => {
             calls.all += 1;
-            if (labelText(row.label).startsWith("Loon")) calls.bridge += 1;
+            if (labelText(row.label).startsWith("Loon")) calls.shellApi += 1;
             return row.category ?? "Settings";
           }),
         ),
@@ -781,9 +781,9 @@ test("JD-A-003: an impure mapper reads each bridge row exactly twice, once befor
 
   assert.deepEqual(host.view().pages(), ["Cards", "Banner", "Layout", "Loon page"]);
   assert.equal(
-    calls.bridge,
+    calls.shellApi,
     6,
-    "three bridge rows, read twice each: once by the pre-push check, once by the host's own map",
+    "three shell API rows, read twice each: once by the pre-push check, once by the host's own map",
   );
   assert.equal(
     calls.all,
@@ -794,16 +794,16 @@ test("JD-A-003: an impure mapper reads each bridge row exactly twice, once befor
 });
 
 // JD-A-003 (second half): the proof ran the mapper over host rows only, so a mapper that throws on
-// a bridge row broke the factory AFTER the rows had been appended.
-test("JD-A-003: a mapper that throws on a bridge row never meets one, so the factory survives", () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+// a shell API row broke the factory AFTER the rows had been appended.
+test("JD-A-003: a mapper that throws on a shell API row never meets one, so the factory survives", () => {
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
 
   const host = menuHost({
     deriveCategories: (rows) =>
       [
         ...new Set(
           rows.map((row) => {
-            if (labelText(row.label).startsWith("Loon")) throw new Error("bridge row exploded");
+            if (labelText(row.label).startsWith("Loon")) throw new Error("shell API row exploded");
             return row.category ?? "Settings";
           }),
         ),
@@ -814,7 +814,7 @@ test("JD-A-003: a mapper that throws on a bridge row never meets one, so the fac
   assert.deepEqual(
     host.view().pages(),
     ["Cards", "Banner", "Layout"],
-    "no page is claimed: the host's mapper cannot read a bridge row, so the proof fails and the page list is the host's own",
+    "no page is claimed: the host's mapper cannot read a shell API row, so the proof fails and the page list is the host's own",
   );
   assert.deepEqual(
     host.liveRows().map((row) => labelText(row.label)),
@@ -835,7 +835,7 @@ test("JD-A-003: a mapper that throws on a bridge row never meets one, so the fac
 // JD-A-004: the early injection mutated the array before the factory returned, so a factory that
 // mapped categories and then threw left its rows and its marker behind.
 test("JD-A-004: a factory that maps categories and then throws leaves the array exactly as it was", () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
 
   const host = menuHost({
     postBuild: () => {
@@ -861,7 +861,7 @@ test("JD-A-004: a factory that maps categories and then throws leaves the array 
 // JD-A-005: an async factory built its view synchronously, received the early rows, and was then
 // reported `uncaptured (async-factory)` with the rows still in the array.
 test("JD-A-005: a factory that returns a promise keeps nothing and reports the previous outcome", async () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
 
   const host = menuHost({ factoryPromise: true });
   const before = [...host.liveRows()];
@@ -884,11 +884,11 @@ test("JD-A-005: a factory that returns a promise keeps nothing and reports the p
 });
 
 // ---------------------------------------------------------------------------------------------
-// The net guarantee: after any factory invocation, only the chosen array holds bridge rows
+// The net guarantee: after any factory invocation, only the chosen array holds shell API rows
 // ---------------------------------------------------------------------------------------------
 
-test("the net guarantee: a rollback leaves no bridge row and no marker anywhere", async () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+test("the net guarantee: a rollback leaves no shell API row and no marker anywhere", async () => {
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
 
   // (a) the factory throws after the guess injected
   const incidentalThrow: CustomizeRow[] = incidentalRows("Throw", "Cards");
@@ -900,8 +900,8 @@ test("the net guarantee: a rollback leaves no bridge row and no marker anywhere"
   });
   const throwingBefore = [...throwing.liveRows()];
   assert.throws(() => throwing.build(), /factory exploded after the map/);
-  assert.deepEqual(bridgeLabels(throwing.liveRows()), [], "a throw leaves the host's array free of bridge rows");
-  assert.deepEqual(bridgeLabels(incidentalThrow), [], "and the incidental array was never touched");
+  assert.deepEqual(shellApiLabels(throwing.liveRows()), [], "a throw leaves the host's array free of shell API rows");
+  assert.deepEqual(shellApiLabels(incidentalThrow), [], "and the incidental array was never touched");
   assert.ok(sameRows(throwing.liveRows(), throwingBefore));
 
   // (b) the factory returns a promise: no late decision will ever run
@@ -912,8 +912,8 @@ test("the net guarantee: a rollback leaves no bridge row and no marker anywhere"
   });
   const asyncBefore = [...asyncHost.liveRows()];
   await asyncHost.build();
-  assert.deepEqual(bridgeLabels(asyncHost.liveRows()), [], "an async factory keeps nothing either");
-  assert.deepEqual(bridgeLabels(incidentalAsync), []);
+  assert.deepEqual(shellApiLabels(asyncHost.liveRows()), [], "an async factory keeps nothing either");
+  assert.deepEqual(shellApiLabels(incidentalAsync), []);
   assert.ok(sameRows(asyncHost.liveRows(), asyncBefore));
 
   // (c) the late decision is ambiguous: two arrays proved to be the menu's rows
@@ -927,8 +927,8 @@ test("the net guarantee: a rollback leaves no bridge row and no marker anywhere"
     { kind: "uncaptured", injectedRows: 0, reason: "ambiguous" },
     "two arrays that both prove themselves are ambiguous, exactly like two row-like arrays",
   );
-  assert.deepEqual(bridgeLabels(ambiguous.liveRows()), [], "so neither of them keeps a bridge row");
-  assert.deepEqual(bridgeLabels(twin), []);
+  assert.deepEqual(shellApiLabels(ambiguous.liveRows()), [], "so neither of them keeps a shell API row");
+  assert.deepEqual(shellApiLabels(twin), []);
   assert.ok(sameRows(twin, twinBefore));
   assert.ok(sameRows(ambiguous.liveRows(), ambiguousBefore));
 
@@ -936,15 +936,15 @@ test("the net guarantee: a rollback leaves no bridge row and no marker anywhere"
   const incidentalChosen: CustomizeRow[] = incidentalRows("Chosen", "Cards");
   const chosen = menuHost({ preBuild: () => void incidentalChosen.map((row) => row.label) });
   chosen.build();
-  assert.deepEqual(bridgeLabels(chosen.liveRows()), ["Loon heading", "Loon heading", "Loon repaint"]);
-  assert.deepEqual(bridgeLabels(incidentalChosen), []);
+  assert.deepEqual(shellApiLabels(chosen.liveRows()), ["Loon heading", "Loon heading", "Loon repaint"]);
+  assert.deepEqual(shellApiLabels(incidentalChosen), []);
   assert.deepEqual(getCaptureDiagnostics().lastOutcome, { kind: "injected", injectedRows: 3 });
 });
 
-// S1 / PRESERVE: the card style line is a ROW the bridge writes into the array it guessed, so a
+// S1 / PRESERVE: the card style line is a ROW the shell API writes into the array it guessed, so a
 // rollback has to put the host's own rows — and only those — back.
 test("a rolled-back guess gives the host's own Card style rows back untouched (PRESERVE)", async () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
   registerCardStyle(cardStyle("loon.cute"));
 
   const midBuild: string[][] = [];
@@ -983,7 +983,7 @@ test("a rolled-back guess gives the host's own Card style rows back untouched (P
 // S20: "including for nested sessions: an inner factory's rollback must never touch the outer
 // session's array."
 test("a nested session's rollback never touches the outer session's rows", () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
 
   const inner: CustomizeRow[] = incidentalRows("Inner", "Cards");
   const innerBefore = [...inner];
@@ -1012,7 +1012,7 @@ test("a nested session's rollback never touches the outer session's rows", () =>
   );
   assert.equal(host.view().rowsOf("Loon page").length, 3, "with the rows exactly once");
   assert.equal(
-    bridgeLabels(host.liveRows()).length,
+    shellApiLabels(host.liveRows()).length,
     3,
     "the nested rollback removed the inner rows without touching the outer ones",
   );
@@ -1025,7 +1025,7 @@ test("a nested session's rollback never touches the outer session's rows", () =>
 // throw: the host's own error was replaced by a TypeError and the patched `map` stayed installed for
 // the whole process, which is exactly what that `finally` exists to prevent.
 test("E10: a rollback that cannot touch a frozen array never masks the host's error nor leaks the map patch", () => {
-  publishBridgeApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
+  publishShellApi().registerRows({ id: "loon.page", category: "Loon page", rows: loonPage });
   const nativeMap = Array.prototype.map;
   const rows = [...hostRows()];
   const host = menuHost({
@@ -1050,7 +1050,7 @@ test("E10: a rollback that cannot touch a frozen array never masks the host's er
 // ---------------------------------------------------------------------------------------------
 
 test("a rollback takes back a placed block and the Card style splice together, exactly", async () => {
-  publishBridgeApi().registerRows({
+  publishShellApi().registerRows({
     id: "loon.top",
     category: "Cards",
     placement: "start",

@@ -83,7 +83,7 @@ const section = (id: string, extra: Partial<SidebarSection> = {}): SidebarSectio
   ...extra,
 });
 
-/** Native host first, then the bridge's interception and the section renderer. */
+/** Native host first, then the shell API's interception and the section renderer. */
 function arm(): void {
   registerNativeFooter();
   installSidebarBackend(() => fakeTui());
@@ -91,7 +91,7 @@ function arm(): void {
 }
 
 const rail = () => fakeState().parts.get(SIDEBAR_RAIL_KEY);
-/** The rows the bridge contributes for one frame, native rows excluded. */
+/** The rows the shell API contributes for one frame, native rows excluded. */
 const contributed = (width = 40): string[] => (rail()?.render(width) ?? []).slice(3);
 
 test("a plain string row reaches the rail byte for byte, even with a theme in force", () => {

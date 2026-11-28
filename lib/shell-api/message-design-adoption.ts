@@ -8,8 +8,8 @@
  * by scanning extensions in LOAD ORDER and returning the first one that has the type
  * (`dist/core/extensions/runner.js:534-540`). There is no `next()` chain, unlike tool renderers, and
  * no accessor for another extension's map. Every extension holds its own `pi` object with its own
- * closure, so a bridge that patched `pi.registerMessageRenderer` would capture only calls made
- * through the bridge's object — that is, none.
+ * closure, so a shell API that patched `pi.registerMessageRenderer` would capture only calls made
+ * through the shell API's object — that is, none.
  *
  * What the host does expose is the component it built: `CustomMessageComponent` keeps the renderer Pi
  * resolved in `customRenderer`, re-calls it on every `rebuild()`, and falls back to its own box when
@@ -92,7 +92,7 @@ interface AdoptedMessage {
  * one message.
  */
 const ADOPTED_MESSAGE: unique symbol = Symbol.for(
-  "gentle-shell-bridge.message-designs.adopted-message.v1",
+  "odd-worktree.message-designs.adopted-message.v1",
 );
 
 interface AdoptionState {
@@ -113,8 +113,8 @@ interface AdoptionState {
   adoptedByContainer: WeakMap<object, Set<unknown>>;
 }
 
-/** Stable process-global slot, like every other piece of bridge state: two copies must agree. */
-const ADOPTION_KEY = Symbol.for("gentle-shell-bridge.message-designs.adoption.v1");
+/** Stable process-global slot, like every other piece of shell API state: two copies must agree. */
+const ADOPTION_KEY = Symbol.for("odd-worktree.message-designs.adoption.v1");
 
 function adoptionHost(): Record<symbol, AdoptionState | undefined> {
   // SAFETY: only `adoptionState()` writes this key, and it re-checks the shape before trusting a
@@ -332,7 +332,7 @@ function adoptMessage(child: unknown, perPass: Map<string, boolean>): MessageOut
   const hostRenderer = readMember(child, "customRenderer");
   // Pi calls its renderer as a MEMBER (`this.customRenderer(...)`), so a host renderer that is a method
   // gets the component as `this`. The design renderer must call it the same way or a method renderer
-  // breaks the moment the bridge wraps it.
+  // breaks the moment the shell API wraps it.
   const boundHost =
     typeof hostRenderer === "function"
       ? (message: unknown, options: unknown, theme?: unknown): unknown =>

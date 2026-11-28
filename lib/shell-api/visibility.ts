@@ -1,8 +1,8 @@
 /**
- * Bridge-owned section visibility (S5, S6).
+ * ShellApi-owned section visibility (S5, S6).
  *
- * Whether a section is shown is the BRIDGE's state, not the plugin's: the plugin asked for a
- * section, the bridge added the toggle that hides it. Keeping it in the bridge's own store is what
+ * Whether a section is shown is the SHELL API's state, not the plugin's: the plugin asked for a
+ * section, the shell API added the toggle that hides it. Keeping it in the shell API's own store is what
  * makes S1's "one call, zero extra steps" true — a plugin never needs a store, a setting name, a
  * file or a `current()` of its own, and a user's choice survives `/reload` like any native setting.
  *
@@ -32,14 +32,14 @@ import { isRecord } from "./rows.ts";
 import { createStore } from "./store.ts";
 import type { SidebarSection } from "./types.ts";
 
-/** The bridge's own plugin id for section visibility: one namespaced file for every section. */
-export const SECTIONS_STORE_ID = "bridge-sections";
+/** The shell API's own plugin id for section visibility: one namespaced file for every section. */
+export const LEGACY_SECTIONS_STORE_ID = "bridge-sections";
 
 /** The key that holds section visibility. */
 export const SECTIONS_STORE_KEY = "sections";
 
 /**
- * The key that holds section collapse state (N13). One file, two keys: both are bridge-owned state
+ * The key that holds section collapse state (N13). One file, two keys: both are shell-API-owned state
  * about the same sections, so a user's choices survive `/reload` together, and a single store write
  * can never erase the other map.
  *
@@ -72,7 +72,7 @@ function toFlagMap(value: unknown): SectionVisibility {
  * frame never costs a file read per section.
  */
 function readFlags(key: string): SectionVisibility {
-  return toFlagMap(createStore(SECTIONS_STORE_ID).get<unknown>(key, {}));
+  return toFlagMap(createStore(LEGACY_SECTIONS_STORE_ID).get<unknown>(key, {}));
 }
 
 /**
@@ -96,7 +96,7 @@ function isFlagOn(
  * writes through the same null-prototype shape the read produced.
  */
 function writeFlag(key: string, id: string, value: boolean): void {
-  const store = createStore(SECTIONS_STORE_ID);
+  const store = createStore(LEGACY_SECTIONS_STORE_ID);
   const current = toFlagMap(store.get<unknown>(key, {}));
   const next = Object.create(null) as SectionVisibility;
   for (const [entry, flag] of Object.entries(current)) next[entry] = flag;
@@ -132,8 +132,8 @@ export function setSectionVisible(id: string, visible: boolean): void {
 }
 
 /**
- * The whole collapse map (N13). Collapsed is bridge-owned state for the same reason visibility is:
- * the bridge added the header that folds the card, so the plugin needs no flag, no setting and no
+ * The whole collapse map (N13). Collapsed is shell-API-owned state for the same reason visibility is:
+ * the shell API added the header that folds the card, so the plugin needs no flag, no setting and no
  * store of its own.
  */
 export function getSectionCollapsed(): SectionCollapsed {

@@ -28,7 +28,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { BRIDGE_SLOT, LIB_DIR, defaultBridge, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
+const { SHELL_SLOT, LIB_DIR, defaultShellApi, loadExtension, stubbedSource } = require('./fixtures/load-extension.js');
 
 const guard = require('../lib/worktree-session-guard.js');
 
@@ -349,18 +349,18 @@ describe('the `Worktrees+` switch owns the active-session guard', () => {
     for (const [key, value] of Object.entries(savedEnv)) process.env[key] = value;
   });
 
-  // The module namespace for one setting of the switch: the bridge's own store answers the
+  // The module namespace for one setting of the switch: the shell API's own store answers the
   // `modules` document, exactly like the real one. `factory(host)` is called because the
   // switches are read while the extension registers, not when the module is imported — the
   // close below is the same namespace instance the load just configured.
   async function closeWith(modules) {
-    const bridge = defaultBridge();
-    bridge.api.createStore = () => ({
+    const shellApi = defaultShellApi();
+    shellApi.api.createStore = () => ({
       get: (key, fallback) => (key === 'modules' && modules !== undefined ? modules : fallback),
       set: () => {},
       delete: () => {},
     });
-    globalThis[BRIDGE_SLOT] = bridge.api;
+    globalThis[SHELL_SLOT] = shellApi.api;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 't5-identity-gate-'));
     try {
       const copy = path.join(dir, 'odd-worktree-tools.mjs');

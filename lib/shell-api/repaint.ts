@@ -1,11 +1,11 @@
 /**
- * Repaint triggers (R3) and per-surface bookkeeping (R4): the half of a bridge-owned write that
+ * Repaint triggers (R3) and per-surface bookkeeping (R4): the half of a shell API-owned write that
  * makes it visible.
  *
  * ## Why a write needs to ask for a frame
  *
- * The bridge owns state that a HOST surface draws: a section's visibility (the rail paints the
- * section) and the card-style selection (both surfaces paint chrome from it). The bridge persists
+ * The shell API owns state that a HOST surface draws: a section's visibility (the rail paints the
+ * section) and the card-style selection (both surfaces paint chrome from it). The shell API persists
  * that state synchronously — the host's row renderer re-reads `current()` when it repaints — but
  * persistence alone changes nothing on screen: gentle-shell re-renders a rail part only when its
  * digest changes or when the layout's own revision counter moves
@@ -34,7 +34,7 @@
  * components says neither is needed by EITHER kind of caller, and that they are what the freeze
  * was:
  *
- * | 600 children, one switch        | bridge row, today | differential only | invalidate + force |
+ * | 600 children, one switch        | shell API row, today | differential only | invalidate + force |
  * | ------------------------------- | ----------------- | ----------------- | ------------------ |
  * | card style → example `plain`     | 697 ms            | 420 ms            | 721 ms             |
  * | card style → the host's `float`  | 306 ms            |  16 ms            | 307 ms             |
@@ -44,7 +44,7 @@
  * next frame re-parses every Markdown message of the transcript. The force is the other half: it
  * resets the renderer's differential state and rewrites the whole buffer.
  *
- * Neither buys the bridge anything, proven per surface (S19/T35, `test/surface-repaint-cost.ts`):
+ * Neither buys the shell API anything, proven per surface (S19/T35, `test/surface-repaint-cost.ts`):
  *
  * - the CONVERSATION repaints the selected style in the wrapper, on the host's ALREADY rendered
  *   rows, on every pass (`./card-style-wiring.ts` → `./card-style-transform.ts`), so a cache that
@@ -52,7 +52,7 @@
  *   with and without the invalidation at 50, 200 and 600 children;
  * - the RAIL is framed the same way, by the same wrapper over the host's rail component
  *   (`transformCardLines(..., "rail")`), so a host memo that answers from its own cache is
- *   restyled too; and a SECTION toggle moves the bridge's own section digest, which the host's memo
+ *   restyled too; and a SECTION toggle moves the shell API's own section digest, which the host's memo
  *   already keys on (`./sidebar-render.ts` `sectionRailDigest`), while the revision bumped below is
  *   the host's documented part-owner step for a digest that does not move;
  * - a style that came from the HOST (pressing `neon`/`float`) is inside the host card's own frame
@@ -70,7 +70,7 @@
  *
  * ## Surfaces
  *
- * Two surfaces paint bridge-owned chrome: the conversation (the component
+ * Two surfaces paint shell-API-owned chrome: the conversation (the component
  * `./card-style-wiring.ts` wraps) and the rail (the host's rail component, wrapped the same way).
  * The reach of each is recorded where the attach is attempted, so a report can say "the rail was
  * never reached, and why" instead of only "no frame".
@@ -135,8 +135,8 @@ interface RepaintState {
   lastTrigger?: RepaintTrigger;
 }
 
-/** Process-global, like every other piece of bridge state (`./bus.ts` explains why). */
-const REPAINT_STATE = Symbol.for("gentle-shell-bridge.repaint.state.v1");
+/** Process-global, like every other piece of shell API state (`./bus.ts` explains why). */
+const REPAINT_STATE = Symbol.for("odd-worktree.repaint.state.v1");
 
 function repaintHost(): Record<symbol, RepaintState | undefined> {
   // SAFETY: only `repaintState()` writes this key, and it re-checks the shape it finds.
@@ -244,7 +244,7 @@ function invalidateHostSidebar(tui: Record<string, unknown>): void {
 /**
  * The one place a frame is asked for, shared by every repaint path (T4, S19/T36).
  *
- * One kind of caller, both kinds of value: a BRIDGE-owned row (`./card-style-rows.ts`,
+ * One kind of caller, both kinds of value: a SHELL-API-owned row (`./card-style-rows.ts`,
  * `./sections-rows.ts`) and a plugin's own (`api.requestRepaint()`). Both change a value that a
  * wrapper re-reads on top of the host's rows on every pass, so one differential frame
  * (`requestRender()`, `tui.js:665-672`) draws the changed rows and leaves every other component's
@@ -290,7 +290,7 @@ function requestFrame(input: {
 }
 
 /**
- * Ask the host for a frame after a write to bridge-owned state (R3), retuned by S19/T36.
+ * Ask the host for a frame after a write to shell-API-owned state (R3), retuned by S19/T36.
  *
  * Runs synchronously, before the caller's action returns: the host's sidebar revision is bumped
  * exactly as `invalidateSidebar(tui)` does (`lib/shell-sidebar-layout.ts:105-107`) and one
@@ -298,7 +298,7 @@ function requestFrame(input: {
  * the frame; measuring the restored example `plain` style, the way back to a host style, and a
  * section toggle on real pi-tui and pi's `ToolExecutionComponent` (50/200/600 children) says those
  * two halves cost 697/306/99 ms against 420/16/3 ms, and that the rows they draw are byte-identical
- * on the conversation, on a rail host panel, and on a bridge section collapsed, expanded and hidden
+ * on the conversation, on a rail host panel, and on a shell API section collapsed, expanded and hidden
  * (`test/surface-repaint-cost.test.ts` bounds the work; the tables in this module's header record
  * the numbers).
  *
@@ -328,11 +328,11 @@ export function requestSurfaceRepaint(input: {
  * | `requestRender(true)`            |  33 ms | 6.9 MB (whole buffer cleared and rewritten) |
  * | invalidate + force (old T4)      | 753 ms | 6.9 MB |
  *
- * A bridge-owned row makes the same claim, and measuring it is what S19/T35 added: the rows it
+ * A shell API-owned row makes the same claim, and measuring it is what S19/T35 added: the rows it
  * changes are repainted by the same wrapper, on top of the host's already rendered rows, so the
  * drawn card changes without any cache being dropped either — and the one cache that could replay
  * old chrome, the host card's `ToolCardRows`, is keyed on the HOST's own style
- * (`cards-bash-v2` `extensions/quiet-tools.ts:942-965`), which a bridge style never touches.
+ * (`cards-bash-v2` `extensions/quiet-tools.ts:942-965`), which a shell API style never touches.
  *
  * The host's own `Card style` switch is the precedent its user compares with: it writes the value,
  * bumps the sidebar revision and calls `requestRender()` with no argument

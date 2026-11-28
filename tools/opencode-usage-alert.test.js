@@ -11,7 +11,7 @@ const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
 
-const { BRIDGE_SLOT, defaultBridge, loadExtension } = require('./fixtures/load-extension.js');
+const { SHELL_SLOT, defaultShellApi, loadExtension } = require('./fixtures/load-extension.js');
 
 // Tuesday, inside DeepSeek's first UTC window (01:00–04:00) and outside Claude's.
 const DEEPSEEK_PEAK = Date.UTC(2026, 10, 24, 2, 0, 0);
@@ -51,11 +51,11 @@ function capturingUi() {
   return { ui, calls, lastFor };
 }
 
-/** A bridge whose own-store `alerts` document is the one handed in. */
+/** A shell API whose own-store `alerts` document is the one handed in. */
 async function load(alertsDocument) {
-  const bridge = defaultBridge();
+  const shellApi = defaultShellApi();
   let document = alertsDocument;
-  bridge.api.createStore = () => ({
+  shellApi.api.createStore = () => ({
     get: (key, fallback) => (key === 'alerts' && document !== undefined ? document : fallback),
     set: (key, value) => {
       if (key === 'alerts') document = value;
@@ -64,18 +64,18 @@ async function load(alertsDocument) {
   });
   const emitted = [];
   // The slot is installed BEFORE the load: the extension reads the published object once, at
-  // registration, and the fixture's own default bridge only fills an empty slot.
-  globalThis[BRIDGE_SLOT] = bridge.api;
+  // registration, and the fixture's own default shell API only fills an empty slot.
+  globalThis[SHELL_SLOT] = shellApi.api;
   const loaded = await loadExtension({
     events: { emit: (name, payload) => emitted.push({ name, payload }) },
   });
-  return { ...loaded, bridge, emitted, storeDocument: () => document };
+  return { ...loaded, shellApi, emitted, storeDocument: () => document };
 }
 
-const saved = globalThis[BRIDGE_SLOT];
+const saved = globalThis[SHELL_SLOT];
 afterEach(() => {
-  if (saved === undefined) delete globalThis[BRIDGE_SLOT];
-  else globalThis[BRIDGE_SLOT] = saved;
+  if (saved === undefined) delete globalThis[SHELL_SLOT];
+  else globalThis[SHELL_SLOT] = saved;
 });
 
 /** Run `run` with the process clock answering exactly `instant`. */
@@ -98,7 +98,7 @@ function startSessionAt(loaded, ui, instant) {
   return ctx;
 }
 
-const alertRowsOf = (bridge) => bridge.rows.find((provider) => provider.category === 'Alert');
+const alertRowsOf = (shellApi) => shellApi.rows.find((provider) => provider.category === 'Alert');
 
 describe('the OpenCode Go usage source', () => {
   test('registers one payload with the four contract keys', async () => {
@@ -137,8 +137,8 @@ describe('the OpenCode Go usage source', () => {
 
 describe('the Alert page', () => {
   test('is one provider, one Off/On pair, in the registry order, both Off by default', async () => {
-    const { bridge } = await load(undefined);
-    const alerts = alertRowsOf(bridge);
+    const { shellApi } = await load(undefined);
+    const alerts = alertRowsOf(shellApi);
     assert.ok(alerts, 'the page is registered');
     assert.deepEqual(alerts.categoryPlacement, { after: 'Notifications' });
     const rows = alerts.rows({});
@@ -155,8 +155,8 @@ describe('the Alert page', () => {
   });
 
   test('each provider reads and writes its own value, leaving the other alone', async () => {
-    const { bridge, storeDocument } = await load(undefined);
-    const alerts = alertRowsOf(bridge);
+    const { shellApi, storeDocument } = await load(undefined);
+    const alerts = alertRowsOf(shellApi);
     const claudeOn = alerts.rows({}).find((row) => row.choice.setting === 'Claude peak' && row.choice.value === 'On');
     claudeOn.action({});
     assert.deepEqual(storeDocument(), { peaks: { claude: true } });
@@ -217,8 +217,8 @@ describe('the peak rows above the editor', () => {
 
   test('Off withholds one row in the running session and On brings it back', async () => {
     const loaded = await load({ peaks: { deepseek: true } });
-    const { bridge, storeDocument } = loaded;
-    const alerts = alertRowsOf(bridge);
+    const { shellApi, storeDocument } = loaded;
+    const alerts = alertRowsOf(shellApi);
     const { ui, lastFor } = capturingUi();
     startSessionAt(loaded, ui, DEEPSEEK_PEAK);
     assert.ok(Array.isArray(lastFor(WIDGET_KEY).content));

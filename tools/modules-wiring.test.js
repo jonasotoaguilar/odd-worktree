@@ -1,13 +1,13 @@
 'use strict';
 // S1/S2 (modular-tools): what the extension registers for each setting of the two module
-// switches. The switches are read ONCE, when the extension registers, from the bridge's
+// switches. The switches are read ONCE, when the extension registers, from the shell API's
 // store, and a missing document keeps everything on — so every other suite in this package
 // loads the whole thing.
 const { test, describe, after, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
 
-const { BRIDGE_SLOT, defaultBridge, loadExtension } = require('./fixtures/load-extension.js');
+const { SHELL_SLOT, defaultShellApi, loadExtension } = require('./fixtures/load-extension.js');
 
 // The prompt assertions below read the extension's own `before_agent_start`, which honors these
 // two switches from the ambient environment: a suite that ran inside a subagent child (or under
@@ -26,30 +26,30 @@ after(() => {
   }
 });
 
-const saved = globalThis[BRIDGE_SLOT];
+const saved = globalThis[SHELL_SLOT];
 afterEach(() => {
-  if (saved === undefined) delete globalThis[BRIDGE_SLOT];
-  else globalThis[BRIDGE_SLOT] = saved;
+  if (saved === undefined) delete globalThis[SHELL_SLOT];
+  else globalThis[SHELL_SLOT] = saved;
 });
 
-// A bridge whose own-store `modules` document is the one handed in; everything else the
-// default bridge does stays as it is.
+// A shell API whose own-store `modules` document is the one handed in; everything else the
+// default shell API does stays as it is.
 async function load(modules, { selection, host } = {}) {
-  const bridge = defaultBridge();
+  const shellApi = defaultShellApi();
   const document = modules === undefined ? undefined : { ...modules };
-  bridge.api.createStore = () => ({
+  shellApi.api.createStore = () => ({
     get: (key, fallback) => (key === 'modules' && document !== undefined ? document : fallback),
     set: () => {},
     delete: () => {},
   });
   // S11: the `Card activity` reader the CodeGraph card follows, when a case needs one.
-  if (typeof selection === 'function') bridge.api.resolveToolDesignSelection = selection;
-  globalThis[BRIDGE_SLOT] = bridge.api;
+  if (typeof selection === 'function') shellApi.api.resolveToolDesignSelection = selection;
+  globalThis[SHELL_SLOT] = shellApi.api;
   const loaded = await loadExtension(host || {});
-  return { ...loaded, bridge };
+  return { ...loaded, shellApi };
 }
 
-/** The activity design, as the bridge answers it while `Card activity` is on `activity`. */
+/** The activity design, as the shell API answers it while `Card activity` is on `activity`. */
 const ACTIVITY = () => ({ kind: 'design', design: { id: 'odd-worktree.bash-activity' } });
 
 const toolCallHandlers = (loaded) => loaded.hooks.filter(([name]) => name === 'tool_call').length;
@@ -65,8 +65,8 @@ async function promptOf(loaded, selectedTools) {
 describe('the Tools page', () => {
   test('the extension registers one provider on the `Tools` page, whatever the switches say', async () => {
     for (const modules of [undefined, { codegraph: false }, { worktrees: false }, { codegraph: false, worktrees: false }]) {
-      const { bridge } = await load(modules);
-      const tools = bridge.rows.filter((provider) => provider.category === 'Tools');
+      const { shellApi } = await load(modules);
+      const tools = shellApi.rows.filter((provider) => provider.category === 'Tools');
       assert.equal(tools.length, 1, JSON.stringify(modules));
       assert.deepEqual(
         tools[0].rows({}).map((row) => `${row.choice.setting} ${row.choice.value}`),
@@ -75,7 +75,7 @@ describe('the Tools page', () => {
       assert.deepEqual(
         tools[0].categoryPlacement,
         { after: 'Sections' },
-        'the page is placed by the bridge, right after the host Sections page',
+        'the page is placed by the shell API, right after the host Sections page',
       );
     }
   });

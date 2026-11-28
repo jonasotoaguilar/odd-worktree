@@ -1,11 +1,11 @@
 /**
- * Section rendering (S3, S7, S8; N10–N14): the bridge's half of the sidebar surface, contributed
+ * Section rendering (S3, S7, S8; N10–N14): the shell API's half of the sidebar surface, contributed
  * through the rail backend's `setRailContributor` extension point (`./sidebar.ts`).
  *
  * ## The host draws the frame, we supply the header and the rows
  *
  * A section must look like `AGENTS` / `CHANGES` / `STATS`, and those are drawn by the host's own
- * card frame — so the bridge never draws a box. It contributes two things per frame: the part's
+ * card frame — so the shell API never draws a box. It contributes two things per frame: the part's
  * rows, and the card groups over them. The group shape mirrors
  * `lib/shell-sidebar-layout.ts:392-410`: a group's `start` is the row that carries the card heading
  * (`▾ TITLE`, plus the count right-aligned) and `end` is one past the last body row, both indices
@@ -33,7 +33,7 @@
  * the part's `handleMouse` (`lib/shell-sidebar-layout.ts:245-259`), so this module records which of
  * its own rows is the header and which are clickable, and answers only those events. A row without
  * `onClick` is inert: it never highlights and never answers. The header toggles the section; the
- * collapse flag lives in the bridge's store, like visibility (`./visibility.ts`), and the frame is
+ * collapse flag lives in the shell API's store, like visibility (`./visibility.ts`), and the frame is
  * requested synchronously (`./repaint.ts`).
  *
  * ## What a section costs
@@ -133,7 +133,7 @@ interface SectionBlock {
 
 // Bumped to v2 with the per-part ranges: a copy at 0.16.1 shares this slot, and its single wide
 // `frame.blocks` is not the shape read below, so the two versions must not read one another's state.
-const SECTION_RENDER_STATE = Symbol.for("gentle-shell-bridge.sections.render.v2");
+const SECTION_RENDER_STATE = Symbol.for("odd-worktree.sections.render.v2");
 
 interface SectionRenderState {
   /** What the most recent frame failed on, so the diagnostics record reports the latest frame. */
@@ -178,7 +178,7 @@ export function getSectionFailures(): SectionRenderFailure[] {
 }
 
 /**
- * The width the last frame was handed and the widest row the bridge produced at it (N20), both in
+ * The width the last frame was handed and the widest row the shell API produced at it (N20), both in
  * the host's own columns. `undefined` until a frame contributed rows, so a report of a session whose
  * rail never painted stays exactly as it was.
  */
@@ -189,7 +189,7 @@ export interface SectionFrameWidth {
   widest: number;
 }
 
-/** N20: the last render's given width and the widest line the bridge produced, host-measured. */
+/** N20: the last render's given width and the widest line the shell API produced, host-measured. */
 export function getSectionFrameWidth(): SectionFrameWidth | undefined {
   const frame = sectionRenderState().frame;
   if (frame === undefined) return undefined;

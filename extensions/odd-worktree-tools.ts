@@ -11174,7 +11174,12 @@ function registerModuleRows(api) {
   try {
     if (!api || typeof api.registerRows !== "function") return;
     const modules = libRequire("modules.js");
-    api.registerRows(modules.moduleRowsProvider({ api, notify: notifyModulesChange }));
+    // S2/S3: a kept `Codegraph+` switch wires the MCP entry and the agents' tools.json (`lib/codegraph-session.js`).
+    api.registerRows(modules.moduleRowsProvider({
+      api,
+      notify: notifyModulesChange,
+      onChange: (key, on) => libRequire("codegraph-session.js").onCodegraphSwitch(key, on),
+    }));
   } catch {
     // The page is optional: a shell API that refuses it keeps both modules on.
   }
@@ -12386,13 +12391,13 @@ function registerOddWorktreeSurfaceEntries(pi) {
   });
   // CodeGraph, only with its CLI installed: the global MCP entry, create-or-sync at session
   // start, the compaction sync, the observed native init and the edit/write sync. Every
-  // piece runs in the background and none can fail the host.
-  if (oddModules.codegraph) {
-    try {
-      libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });
-    } catch {
-      // CodeGraph is best effort.
-    }
+  // piece runs in the background and none can fail the host. The one registration is made with
+  // the module Off too, and then it only keeps the agents' `tools.json` free of the CodeGraph server.
+  const codegraphOn = oddModules.codegraph === true;
+  try {
+    libRequire("codegraph-session.js").registerCodegraph(pi, { enabled: codegraphOn, metrics: () => resolveWorktreeToolCardMetrics() });
+  } catch {
+    // CodeGraph is best effort.
   }
   // S1 (T2): the file cards, through the same host hook. A `read`/`edit`/`write` call whose
   // path names a skill or an ODD artifact heads as that file while the shell API's `Card activity`

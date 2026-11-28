@@ -157,4 +157,33 @@ describe('the Tools page rows', () => {
     await assert.doesNotReject(async () => rows[1].action());
     assert.deepEqual(shellApi.files.get('odd-worktree').modules, { codegraph: true });
   });
+
+  test('onChange hears the key and the value after the switch was kept, and only then', async () => {
+    const heard = [];
+    const make = (bridge, cli) => modules.moduleRowsProvider({
+      api: bridge.api,
+      notify: () => {},
+      hasCodegraphCli: () => cli,
+      onChange: (key, on) => { heard.push([key, on]); },
+    }).rows({});
+    const bridge = fakeBridge();
+    const rows = make(bridge, true);
+    await rows[1].action();
+    await rows[3].action();
+    await rows[1].action();
+    assert.deepEqual(heard, [['codegraph', true], ['worktrees', true]], 'a repeated choice changes nothing, so it is not heard');
+    await make(fakeBridge(), false)[1].action();
+    const failing = { createStore: () => ({ get: (_k, fallback) => fallback, set: () => { throw new Error('disk'); } }) };
+    await modules.moduleRowsProvider({ api: failing, notify: () => {}, hasCodegraphCli: () => true, onChange: (key, on) => heard.push([key, on]) }).rows({})[1].action();
+    assert.equal(heard.length, 2, 'a refused switch and an unsaved one are not heard');
+  });
+
+  test('a throwing or rejecting onChange never fails the action, and the switch stays kept', async () => {
+    for (const onChange of [() => { throw new Error('wiring'); }, async () => { throw new Error('wiring'); }]) {
+      const bridge = fakeBridge();
+      const rows = modules.moduleRowsProvider({ api: bridge.api, notify: () => {}, hasCodegraphCli: () => true, onChange }).rows({});
+      await assert.doesNotReject(async () => rows[1].action());
+      assert.deepEqual(bridge.files.get('odd-worktree').modules, { codegraph: true });
+    }
+  });
 });

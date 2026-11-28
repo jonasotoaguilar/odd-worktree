@@ -6,7 +6,9 @@
 // whole thing; the cases here hand their own document in.
 const { test, describe, after, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const os = require('node:os');
+const path = require('node:path');
 
 const { SHELL_SLOT, defaultShellApi, loadExtension } = require('./fixtures/load-extension.js');
 
@@ -212,5 +214,113 @@ describe('both off', () => {
     assert.equal(await promptOf(off, ['codegraph']), '');
     assert.equal(off.tools.size, 0);
     for (const name of ['odd', 'files', 'issues']) assert.ok(off.commands.has(name), `${name} stays`);
+  });
+});
+
+// S2/S3: what the switch wires beyond its own value. The fixture points the agent directory and the config home at
+// scratch directories, so these cases read and write only those; the CLI is a file named `codegraph` on a scratch PATH.
+describe('Codegraph+ wiring', () => {
+  const AGENT_NAMES = ['gentle-ai-explore', 'gentle-ai-verify', 'gentle-ai-worker', 'jd-fix-agent'];
+  const mcpFile = () => path.join(process.env.PI_CODING_AGENT_DIR, 'mcp.json');
+  const toolsFile = () => path.join(process.env.GENTLE_PI_CONFIG_HOME, 'tools.json');
+  const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+  const clean = () => [mcpFile(), toolsFile()].forEach((file) => fs.rmSync(file, { force: true }));
+
+  /** Runs `body` with `codegraph` on PATH (or without it), then restores PATH. */
+  async function withCli(present, body) {
+    const saved = process.env.PATH;
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-cli-'));
+    if (present) fs.writeFileSync(path.join(bin, 'codegraph'), '#!/bin/sh\n', { mode: 0o755 });
+    process.env.PATH = bin;
+    try {
+      await body();
+    } finally {
+      process.env.PATH = saved;
+      fs.rmSync(bin, { recursive: true, force: true });
+    }
+  }
+
+  /** The page's rows over a store that keeps what the page writes. */
+  async function pageRows(initial) {
+    const loaded = await load(initial);
+    let document = initial === undefined ? undefined : { ...initial };
+    loaded.bridge.api.createStore = () => ({
+      get: (key, fallback) => (key === 'modules' && document !== undefined ? document : fallback),
+      set: (key, value) => { if (key === 'modules') document = value; },
+      delete: () => {},
+    });
+    return loaded.bridge.rows.find((provider) => provider.category === 'Tools').rows({});
+  }
+
+  const startSession = async (loaded) => {
+    for (const [name, handler] of loaded.hooks) {
+      if (name === 'session_start') {
+        try {
+          await handler({ reason: 'startup' }, { cwd: os.tmpdir(), ui: { notify: () => {} } });
+        } catch {
+          // Another handler of the same event is not what these cases look at.
+        }
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  };
+
+  test('turning Codegraph+ On adds the server to the MCP configuration and the agents to tools.json', async () => {
+    clean();
+    await withCli(true, async () => {
+      const rows = await pageRows({});
+      clean();
+      await rows[1].action();
+    });
+    assert.deepEqual(readJson(mcpFile()).mcpServers.codegraph.args, ['serve', '--mcp']);
+    assert.deepEqual(Object.keys(readJson(toolsFile())).sort(), AGENT_NAMES);
+    assert.deepEqual(readJson(toolsFile())['gentle-ai-explore'], { add: ['mcp__codegraph'] });
+  });
+
+  test('turning it On without the CLI writes neither file', async () => {
+    clean();
+    await withCli(false, async () => {
+      const rows = await pageRows({});
+      clean();
+      await rows[1].action();
+    });
+    assert.equal(fs.existsSync(mcpFile()), false);
+    assert.equal(fs.existsSync(toolsFile()), false);
+  });
+
+  test('turning it Off takes the agents out and leaves the MCP entry the user has', async () => {
+    clean();
+    await withCli(true, async () => {
+      const rows = await pageRows({ codegraph: true });
+      clean();
+      fs.writeFileSync(toolsFile(), JSON.stringify({ 'gentle-ai-explore': { add: ['mcp__codegraph', 'web_search'] }, other: { add: ['x'] } }));
+      fs.writeFileSync(mcpFile(), JSON.stringify({ mcpServers: { codegraph: { command: 'codegraph' } } }));
+      await rows[0].action();
+    });
+    assert.deepEqual(readJson(toolsFile()), { 'gentle-ai-explore': { add: ['web_search'] }, other: { add: ['x'] } });
+    assert.ok(readJson(mcpFile()).mcpServers.codegraph);
+  });
+
+  test('a session start checks the file: Off or no CLI takes the agents out, On with the CLI puts them back', async () => {
+    const seed = () => fs.writeFileSync(toolsFile(), JSON.stringify(Object.fromEntries(AGENT_NAMES.map((name) => [name, { add: ['mcp__codegraph'] }]))));
+    for (const [modules, cli, expected] of [
+      [{ codegraph: false, worktrees: true }, true, {}],
+      [{ codegraph: true, worktrees: true }, false, {}],
+      [{ codegraph: true, worktrees: true }, true, Object.fromEntries(AGENT_NAMES.map((name) => [name, { add: ['mcp__codegraph'] }]))],
+    ]) {
+      await withCli(cli, async () => {
+        const loaded = await load(modules);
+        clean();
+        seed();
+        await startSession(loaded);
+      });
+      assert.deepEqual(readJson(toolsFile()), expected, `${JSON.stringify(modules)} cli=${cli}`);
+    }
+    await withCli(true, async () => {
+      const loaded = await load({ codegraph: true, worktrees: true });
+      clean();
+      await startSession(loaded);
+    });
+    assert.deepEqual(Object.keys(readJson(toolsFile())).sort(), AGENT_NAMES, 'a missing file is created while On');
   });
 });

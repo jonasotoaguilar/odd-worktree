@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
-const { registerCodegraph } = require('../lib/codegraph-session.js');
+const { registerCodegraph, onCodegraphSwitch } = require('../lib/codegraph-session.js');
 
 function fakePi() {
   const handlers = new Map();
@@ -22,7 +22,7 @@ function fakePi() {
 
 function setup(overrides = {}) {
   const pi = fakePi();
-  const calls = { mcp: [], prepare: [], compaction: [], init: [], edit: [], card: [], dispose: 0, notices: [] };
+  const calls = { agentTools: [], mcp: [], prepare: [], compaction: [], init: [], edit: [], card: [], dispose: 0, notices: [] };
   const impl = {
     ensureCodegraphServer: async (input) => {
       calls.mcp.push(input);
@@ -50,6 +50,11 @@ function setup(overrides = {}) {
       },
     }),
     warmUpDaemon: async () => true,
+    // The agents' tools.json check is its own module's (tools/codegraph-agent-tools.test.js): here it only records.
+    registerAgentToolsSync: (_pi, options) => {
+      calls.agentTools.push(options);
+      return { registered: true };
+    },
     ...(overrides.impl || {}),
   };
   const result = registerCodegraph(pi, {
@@ -59,6 +64,7 @@ function setup(overrides = {}) {
     toplevel: overrides.toplevel,
     isDirectory: overrides.isDirectory || (() => true),
     hasBinary: overrides.hasBinary || (() => true),
+    enabled: overrides.enabled,
     joinIndexWork: overrides.joinIndexWork,
     delay: overrides.delay,
     impl,
@@ -76,10 +82,31 @@ function setup(overrides = {}) {
   return { pi, calls, ctx, run, result };
 }
 
-test('without the CodeGraph CLI nothing is registered at all', () => {
-  const { pi, result } = setup({ hasBinary: () => false });
+test('without the CodeGraph CLI nothing is registered at all, but the agents\' tools.json is still checked', () => {
+  const { pi, result, calls } = setup({ hasBinary: () => false });
   assert.equal(result.registered, false);
   assert.equal(pi.handlers.size, 0);
+  assert.equal(calls.agentTools.length, 1);
+  assert.equal(calls.agentTools[0].enabled, true);
+  assert.equal(calls.agentTools[0].hasCli(), false, 'a module On without its CLI takes the entry out');
+});
+
+test('with the module Off the one registration only checks tools.json: no handler, no index, no MCP entry', async () => {
+  const { pi, result, calls, run } = setup({ enabled: false });
+  assert.equal(result.registered, false);
+  assert.equal(pi.handlers.size, 0);
+  assert.equal(calls.agentTools.length, 1);
+  assert.equal(calls.agentTools[0].enabled, false);
+  await run('session_start', { reason: 'startup' });
+  assert.deepEqual([calls.mcp, calls.prepare], [[], []]);
+});
+
+test('with the module On and the CLI the agents\' tools.json check is registered with both facts', () => {
+  const { calls } = setup();
+  assert.equal(calls.agentTools.length, 1);
+  assert.equal(calls.agentTools[0].enabled, true);
+  assert.equal(calls.agentTools[0].hasCli(), true);
+  assert.equal(calls.agentTools[0].env.PI_CODING_AGENT_DIR, '/agent');
 });
 
 
@@ -743,4 +770,25 @@ test('S2: the join budget is five seconds, overridable, and 0 disables the join 
     assert.deepEqual(asked.pop(), ['/work/repo', expected], label);
   }
   assert.deepEqual(asked, []);
+});
+
+test('a kept Codegraph+ switch wires the MCP entry and the agents; any other switch is not CodeGraph\'s', async () => {
+  const fs = require('node:fs');
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-switch-agent-'));
+  const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-switch-home-'));
+  try {
+    const env = { PI_CODING_AGENT_DIR: agentDir, GENTLE_PI_CONFIG_HOME: configHome };
+    assert.equal(await onCodegraphSwitch('worktrees', true, { env }), undefined);
+    assert.deepEqual([fs.readdirSync(agentDir), fs.readdirSync(configHome)], [[], []], 'another switch writes nothing');
+    const on = await onCodegraphSwitch('codegraph', true, { env });
+    assert.equal(on.mcp.status, 'added');
+    assert.equal(on.tools.status, 'created');
+    assert.ok(JSON.parse(fs.readFileSync(path.join(agentDir, 'mcp.json'), 'utf8')).mcpServers.codegraph);
+    const off = await onCodegraphSwitch('codegraph', false, { env });
+    assert.equal(off.tools.status, 'updated');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(configHome, 'tools.json'), 'utf8')), {});
+  } finally {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+    fs.rmSync(configHome, { recursive: true, force: true });
+  }
 });

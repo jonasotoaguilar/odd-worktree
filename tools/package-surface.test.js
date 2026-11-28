@@ -272,18 +272,20 @@ describe('removed surface', () => {
 
   test('CodeGraph is wired through one registration and adds no command or tool (S2)', async () => {
     const source = stubbedSource();
-    // The extension mentions CodeGraph to require the prompt section, the one registration and the
-    // CARD — which is a design of the `Card activity` line, registered outside the module switch; the
-    // `Codegraph+` switch's own lines (`oddModules`) are the gate in front of the first two.
+    // The extension mentions CodeGraph to require the prompt section, the one registration (made with the
+    // module Off too, where it only keeps the agents' tools.json clean), the wiring a kept `Codegraph+` switch
+    // runs and the CARD — which is a design of the `Card activity` line, registered outside the module switch;
+    // the `Codegraph+` switch's own lines (`oddModules`) are the gate in front of the first two.
     const mentions = source.split('\n').filter((line) => !/oddModules/.test(line) && /codegraph/i.test(line.replace(/\/\/.*$/, '')));
     assert.deepEqual(
       mentions.map((line) => line.trim()),
       [
+        'onChange: (key, on) => libRequire("codegraph-session.js").onCodegraphSwitch(key, on),',
         'libRequire("codegraph-rules.js").appendCodegraphSection(event);',
-        'libRequire("codegraph-session.js").registerCodegraph(pi, { metrics: () => resolveWorktreeToolCardMetrics() });',
+        'libRequire("codegraph-session.js").registerCodegraph(pi, { enabled: codegraphOn, metrics: () => resolveWorktreeToolCardMetrics() });',
         'libRequire("codegraph-card.js").registerCodegraphCard(pi, {',
       ],
-      'the CodeGraph references in the extension are the prompt section, the one registration and the card',
+      'the CodeGraph references in the extension are the prompt section, the one registration, the switch wiring and the card',
     );
     const { commands, tools } = await loadExtension({});
     for (const gone of ['codegraph-hook', 'codegraph-init', 'codegraph-sync', 'codegraph']) {
@@ -317,7 +319,7 @@ describe('removed surface', () => {
     const lib = path.join(ROOT, 'lib');
     const shipped = fs.readdirSync(lib).filter((entry) => /^codegraph-/.test(entry)).sort();
     const allowed = [
-      'codegraph-card-preview.js', 'codegraph-card.js', 'codegraph-compaction.js', 'codegraph-daemon.js',
+      'codegraph-agent-tools.js', 'codegraph-card-preview.js', 'codegraph-card.js', 'codegraph-compaction.js', 'codegraph-daemon.js',
       'codegraph-edit-sync.js', 'codegraph-guard-target.js', 'codegraph-guard.js', 'codegraph-index.js',
       'codegraph-lock.js', 'codegraph-mcp-config.js', 'codegraph-mcp.js', 'codegraph-paths.js', 'codegraph-prompt',
       'codegraph-role.js', 'codegraph-rules.js', 'codegraph-session.js', 'codegraph-warmup.js',
@@ -341,6 +343,13 @@ describe('removed surface', () => {
     for (const entry of shipped.filter((name) => name.endsWith('.js') && name !== 'codegraph-mcp-config.js')) {
       assert.equal(/mcp\.json/.test(read(entry).replace(/\/\/.*$/gm, '')) && /writeFile|rename\(/.test(read(entry)), false, `${entry} does not write mcp.json`);
     }
+    // The agents' tools.json has exactly one writer too, and it goes through the one atomic writer of the MCP module.
+    for (const entry of shipped.filter((name) => name.endsWith('.js') && name !== 'codegraph-agent-tools.js')) {
+      assert.equal(/tools\.json|TOOLS_FILE/.test(code(entry)), false, `${entry} does not name tools.json`);
+    }
+    const agentTools = code('codegraph-agent-tools.js');
+    assert.equal(/writeFile|rename\(|appendFile/.test(agentTools), false, 'the tools.json writer only calls the shared atomic writer');
+    assert.ok(agentTools.includes('writeAtomically('), 'and it does write through it');
   });
 
   test('the two reminders advise only: one text, no surface, no child of their own', () => {

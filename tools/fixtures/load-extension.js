@@ -8,6 +8,22 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
+// The CodeGraph wiring writes `<agent dir>/mcp.json` and `<config home>/tools.json` when a session
+// starts, so no suite may reach the developer's real Pi directories: every process that loads this
+// fixture gets scratch ones, removed when it exits. A suite that needs its own sets them itself.
+const scratchPi = fs.mkdtempSync(path.join(os.tmpdir(), 'odd-fixture-pi-'));
+process.env.PI_CODING_AGENT_DIR = path.join(scratchPi, 'agent');
+process.env.GENTLE_PI_CONFIG_HOME = path.join(scratchPi, 'gentle-ai');
+fs.mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
+fs.mkdirSync(process.env.GENTLE_PI_CONFIG_HOME, { recursive: true });
+process.on('exit', () => {
+  try {
+    fs.rmSync(scratchPi, { recursive: true, force: true });
+  } catch {
+    // A scratch directory that cannot be removed is the OS temp directory's to clean.
+  }
+});
+
 const LIB_DIR = path.resolve(__dirname, '../../lib');
 const SRC = path.resolve(__dirname, '../../extensions/odd-worktree-tools.ts');
 // The shell API's real slot, read here the way the extension and its own suites read
@@ -155,6 +171,7 @@ async function withGhPath(mode, run) {
   // without the CLI registers — which is nothing, so no lookup may succeed.
   process.env.PATH = mode === 'absent' ? dir : `${dir}${path.delimiter}${saved === undefined ? '' : saved}`;
   try {
+    settleInstall();
     return await run();
   } finally {
     if (saved === undefined) delete process.env.PATH;
@@ -177,6 +194,23 @@ async function loadExtension(pi, options = {}) {
   const opts = options && typeof options === 'object' ? options : {};
   if (opts.shellApi !== false) installDefaultShellApi();
   return withGhPath(opts.gh === false ? 'absent' : 'present', () => loadWithPath(pi));
+}
+
+// The scratch directories hold what a settled install leaves, for the PATH this load runs under, so a session start in a
+// suite that asserts silence has nothing to report: with the CodeGraph CLI on PATH the MCP entry and the agents' tools.json
+// are already right, without it there is nothing to add and nothing to take out.
+function settleInstall() {
+  const mcp = path.join(process.env.PI_CODING_AGENT_DIR, 'mcp.json');
+  const tools = path.join(process.env.GENTLE_PI_CONFIG_HOME, 'tools.json');
+  if (require('../../lib/which-command.js').whichCommand('codegraph', { env: process.env }) === null) {
+    fs.rmSync(mcp, { force: true });
+    fs.writeFileSync(tools, '{}');
+    return;
+  }
+  const { CODEGRAPH_SERVER } = require('../../lib/codegraph-mcp-config.js');
+  const { CODEGRAPH_AGENTS, CODEGRAPH_SERVER_TOOL } = require('../../lib/codegraph-agent-tools.js');
+  fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { codegraph: CODEGRAPH_SERVER } }));
+  fs.writeFileSync(tools, JSON.stringify(Object.fromEntries(CODEGRAPH_AGENTS.map((name) => [name, { add: [CODEGRAPH_SERVER_TOOL] }]))));
 }
 
 async function loadWithPath(pi) {

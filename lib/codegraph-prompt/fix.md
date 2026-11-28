@@ -4,4 +4,4 @@
 
 Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` on the finding's code, in the checkout you are authorized to fix. Confirm the finding in the source: the answer says where code lives, not what it does, so the source is what proves the defect. Name the symbols or files when you know them; a plain question works when you do not.
 
-The blocks it shows are already read: do not read them again. Read the files it only names, or flags as changed on disk — and read a file before you edit it when it was not among them. This never widens the patch: stay within the authorized batch and its allowed edit surfaces.
+The blocks it shows are already read: do not read them again. Read the files it only names, or flags as changed on disk; an `edit` replaces exact text, so the bytes it replaces come from what you have read. This never widens the patch: stay within the authorized batch and its allowed edit surfaces.

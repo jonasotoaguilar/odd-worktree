@@ -99,7 +99,7 @@ describe('each role scopes the index to its own job', () => {
   test('the orchestrator keeps one exemption and one projectPath rule, and no concrete example', () => {
     const text = prose('orchestrator');
     assert.match(text, /Read an exact file path, or search an exact string, directly/, text);
-    assert.match(text, /read a file before you edit it/i, text);
+    assert.match(text, /`edit` replaces exact text, so the bytes it replaces come from what you have read/, text);
     assert.match(text, /Set `projectPath` when the code you need is in another worktree or another git project/, text);
     assert.match(text, /never present one workspace's answer as another's/, text);
     assert.match(text, /Refine a miss with a name the answer surfaced/, text);
@@ -133,7 +133,7 @@ describe('each role scopes the index to its own job', () => {
     assert.match(text, /what the edit has to keep working/, text);
     assert.match(text, /find the implementation you should reuse instead of writing a second one/, text);
     assert.match(text, /query the old name to find what still points at it/, text);
-    assert.match(text, /read a file before you edit it/i, text);
+    assert.match(text, /`edit` replaces exact text, so the bytes it replaces come from what you have read/, text);
     assert.match(text, /never widens the scope you were given/, text);
     assert.match(text, /stay as delegated, and you report a needed route instead of following it/, text);
   });
@@ -160,7 +160,7 @@ describe('each role scopes the index to its own job', () => {
     const text = prose('generic');
     assert.match(text, /about to change code you have not read, tracing a flow or an error across files/, text);
     assert.match(text, /Read an exact file path, or search an exact string, directly/, text);
-    assert.match(text, /read a file before you edit it/i, text);
+    assert.match(text, /`edit` replaces exact text, so the bytes it replaces come from what you have read/, text);
   });
 });
 

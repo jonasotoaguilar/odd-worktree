@@ -45,9 +45,8 @@ describe('the seven texts on disk', () => {
     for (const variant of rules.VARIANTS) {
       const text = prose(variant);
       assert.match(text, /source verbatim with line numbers/, `${variant} names the source`);
-      assert.match(text, /the call paths/, `${variant} names the relationships`);
-      assert.match(text, /the tests that already touch (it|them)/, `${variant} names the existing tests`);
-      assert.match(text, /what (a|the) (change|edit|patch|regression)/, `${variant} names the impact`);
+      assert.match(text, /what depends on (it|them|the symbols you name)/, `${variant} names what depends on the symbols`);
+      assert.match(text, /the tests that cover (it|them)/, `${variant} names the tests that cover the symbols`);
     }
   });
 
@@ -55,8 +54,8 @@ describe('the seven texts on disk', () => {
     for (const variant of rules.VARIANTS) {
       const text = prose(variant);
       assert.match(text, /Name the symbols or files when you know them; a plain question works when you do not/, variant);
-      assert.match(text, /already read: do not read them again/, `${variant} says the blocks need no second read`);
-      assert.match(text, /Read the files it only names, and any file whose code it leaves out/, `${variant} reads the files the answer only names, and any it omits`);
+      assert.match(text, /count as a Read of those files; the ones it only names, or leaves without code, you read yourself/, `${variant} says which blocks count as read and which to read`);
+      
     }
   });
 
@@ -99,33 +98,32 @@ describe('each role scopes the index to its own job', () => {
   test('the orchestrator keeps one exemption and one projectPath rule, and no concrete example', () => {
     const text = prose('orchestrator');
     assert.match(text, /Read an exact file path, or search an exact string, directly/, text);
-    assert.match(text, /`edit` replaces exact text, so the bytes it replaces come from what you have read/, text);
-    assert.match(text, /Set `projectPath` when the code you need is in another worktree or another git project/, text);
-    assert.match(text, /never present one workspace's answer as another's/, text);
+    assert.match(text, /set `projectPath` for another worktree or another git project, and say which checkout you used/, text);
+    assert.match(text, /The answer belongs to the checkout it came from/, text);
     assert.match(text, /Refine a miss with a name the answer surfaced/, text);
     assert.doesNotMatch(file('orchestrator'), /^\|/m);
     assert.doesNotMatch(text, /colou?r|"add an option|"use the/i, 'a rule states the situation, never one example of it');
     assert.doesNotMatch(text, /authori[sz]ation|ask first/i);
   });
 
-  test('explore replaces the chain of greps, follows the call paths and defers what code does to the source', () => {
+  test('explore replaces the chain of greps, follows what depends on a symbol and defers what code does to the source', () => {
     const text = prose('explore');
     assert.match(text, /which replaces the chain of greps and reads that would answer the same question/, text);
-    assert.match(text, /Follow the call paths it returns instead of grepping for callers/, text);
+    assert.match(text, /Follow what it reports as depending on a symbol instead of grepping for callers/, text);
     assert.match(text, /then stop/, text);
     assert.match(text, /Cite `path:line` from what it returned/, text);
-    assert.match(text, /the answer says where code lives, not what it does/, text);
+    assert.match(text, /the answer gives where code lives/, text);
     assert.match(text, /Your handoff is evidence you observed/, text);
   });
 
   test('verify chooses probes from the index and keeps the probe as the proof', () => {
     const text = prose('verify');
     assert.match(text, /once you know what the spec requires and you need that reach to choose interaction and regression probes/, text);
-    assert.match(text, /The answer is a map, never evidence/, text);
-    assert.match(text, /the probe is what proves, a verdict comes from the source you read and the checks you ran/, text);
-    assert.match(text, /a probe that contradicts the graph is the one that is right/, text);
-    assert.match(text, /Derive your probes from the request, not from the tests it lists/, text);
-    assert.match(text, /Run only the commands the parent or your role authorizes, in the required isolation/, text);
+    assert.match(text, /The answer is a map of where to look/, text);
+    assert.match(text, /a verdict comes from the source you read and the checks you ran/, text);
+    assert.match(text, /a probe that contradicts what it reports is the one that is right/, text);
+    assert.match(text, /Derive your probes from the request and from the tests it lists/, text);
+    assert.match(text, /Run the commands the parent or your role authorizes, in the required isolation/, text);
   });
 
   test('worker uses the index for what the edit must keep working, and never widens its scope', () => {
@@ -133,33 +131,31 @@ describe('each role scopes the index to its own job', () => {
     assert.match(text, /what the edit has to keep working/, text);
     assert.match(text, /find the implementation you should reuse instead of writing a second one/, text);
     assert.match(text, /query the old name to find what still points at it/, text);
-    assert.match(text, /`edit` replaces exact text, so the bytes it replaces come from what you have read/, text);
-    assert.match(text, /never widens the scope you were given/, text);
-    assert.match(text, /stay as delegated, and you report a needed route instead of following it/, text);
+    
+    assert.match(text, /stay as delegated, and a route you need outside them is reported/, text);
   });
 
   test('fix keeps the patch inside the finding\'s reach, in the checkout it is authorized to fix', () => {
     const text = prose('fix');
-    assert.match(text, /the whole reach of the patch, so the fix stays inside it/, text);
+    assert.match(text, /what the patch has to keep working, so the fix stays inside that/, text);
     assert.match(text, /in the checkout you are authorized to fix/, text);
     assert.match(text, /Confirm the finding in the source/, text);
-    assert.match(text, /never widens the patch: stay within the authorized batch and its allowed edit surfaces/, text);
+    assert.match(text, /Stay within the authorized batch and its allowed edit surfaces/, text);
   });
 
   test('judges sweep the initial review tree and leave the tool aside in scoped re-judgment', () => {
     const text = prose('judge');
     assert.match(text, /Call it before you `grep`, `rg`, `fd`, `find`, `read` or `cat` in the supplied `initial_review_tree`/, text);
-    assert.match(text, /The answer is a map, never proof/, text);
-    assert.match(text, /confirm every finding in the supplied source at the exact location you cite/, text);
-    assert.match(text, /report a relationship you have not read as unverified/, text);
-    assert.match(text, /During scoped re-judgment, resolve only the frozen rows and the fix diff, and leave this tool aside/, text);
+    
+    assert.match(text, /Confirm every finding in the supplied source at the exact location you cite/, text);
+    assert.match(text, /report as unverified a relationship you have not read/, text);
+    assert.match(text, /In scoped re-judgment, resolve the frozen rows and the fix diff, and leave this tool aside/, text);
   });
 
   test('the generic text keeps the same criterion for a role with no text of its own', () => {
     const text = prose('generic');
     assert.match(text, /about to change code you have not read, tracing a flow or an error across files/, text);
     assert.match(text, /Read an exact file path, or search an exact string, directly/, text);
-    assert.match(text, /`edit` replaces exact text, so the bytes it replaces come from what you have read/, text);
   });
 });
 

@@ -20,7 +20,7 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    Everything else it contributes to `/gentle:customize` is a DESIGN: the two
    (`activity` and `color`) on
    the shell API's own `Cards` page — a `Card activity` line, or its `Card bash`
-   line on a published object older than 0.6.0, and a `Card diff` line on 0.9.0 and later
+   line on a published object older than 0.6.0, and a `Card file` line on 0.9.0 and later
    (invariant 3). The skill/ODD file cards obey the `activity` design's line
    (invariant 23) and contribute no row of their own, and never the `color` one; neither design is a
    preference here, because the shell API owns those choices and its store. It registers no customize
@@ -49,7 +49,7 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    (`lib/bash-design.js`, `lib/diff-design.js`) on the two lines the shell API owns, one
    `Card activity` line over `bash`, `read`, `write`, `edit` and the three
    read-only shell tools `grep`, `find`, `ls` (the single `tool: "bash"` design on a shell API older
-   than 0.6.0) and one `Card diff` line over `write` and `edit`, the first claiming `write` and
+   than 0.6.0) and one `Card file` line over `write` and `edit`, the first claiming `write` and
    `edit` through a scope limited to skill and ODD paths so the file card's question is
    answered per call and the second claiming every other call of those two, which is
    neither a command nor a tool either and adds no name to either registry; and
@@ -141,7 +141,7 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    which is the API's business and not an error here. Its `/gentle:customize` → `Sections` visibility toggle is
    contributed by the shell API, not by this package (invariant 2 keeps every customize
    surface out of it except the two tool-design rows this package puts on the shell API's
-   own `Card activity` and `Card diff` lines), and the section declares NO
+   own `Card activity` and `Card file` lines), and the section declares NO
    preview: every `Sections` row draws the host's one shared list of active sections
    and the API adds this section's `rowLabel` to it itself, shown or left out
    with the row's own hypothetical (`registerSection` has no `preview` field — do
@@ -184,11 +184,11 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    later (one `Card activity` row), gaining `edit`, and the scope on `write` and `edit` limited to skill
    and ODD paths, from `0.9.0` on — six tools there, seven here — and the single `tool: "bash"` design on anything older (one
    `Card bash` row) or on a release it cannot read — never a grouped registration an older
-   shell API would refuse. A second design (`lib/diff-design.js`, id `odd-worktree.diff`, label
-   `color`) registers on its own `Card diff` line over `write` and `edit`, on `0.9.0` and later
+   shell API would refuse. A second design (`lib/diff-design.js`, id `odd-worktree.file`, label
+   `color`) registers on its own `Card file` line over `write` and `edit`, on `0.9.0` and later
    only, and draws nothing for a skill or an ODD path because those rows are the file card's. The shell API owns Pi's one tool-renderer resolver, builds the host's
    own card, reads the line it is painting (`default` | `activity`, or `default` | `color` on
-   `diff`, stored as `native` | the design id) on
+   `file`, stored as `native` | the design id) on
    every render pass and persists each choice in its own store. This package writes exactly three
    things to that store. The first is the first-run `activity` seed: `seedBashDesignSelection` selects `activity`
    once, for `bash`, only when the API holds no `bash` choice, and it does so BEFORE the
@@ -199,11 +199,15 @@ invariant 32). The one name it keeps from before is its store directory, spelled
    to `selections.$lines.tags`, ONLY when `tags` is absent, and BEFORE the registration, so the
    API's own migration finds the key taken and copies nothing over it; a store that is absent,
    unreadable, of another shape or that throws carries nothing over and throws nothing. The third
-   is the `diff` line's own first-run seed: `seedDiffDesignSelection` selects `color` on `diff`
-   once, only when the API holds no `diff` choice, and — because there is no legacy per-tool
-   value for that line to inherit — it runs AFTER the registration the API accepted, so a
+   is the `file` line's own first-run seed: `seedDiffDesignSelection` selects `color` on `file`
+   once, only when the API holds no `file` choice, carrying a value stored under the line's previous
+   key `diff` over to `file` — the id `odd-worktree.diff` mapped to `odd-worktree.file`, any other
+   stored value (`native` included) copied as it stands — and leaving the old key exactly as it
+   found it, never deleted, so a user's choice survives the rename; and — because there is no legacy
+   per-tool value for that line to inherit — it runs AFTER the registration the API accepted, so a
    refused registration never leaves a value naming a design nobody registered; its
-   `diffDesignSeeded` marker lives in that same `odd-worktree` store. A stored
+   `fileDesignSeeded` marker (the older `diffDesignSeeded` one is no longer read) lives in that same
+   `odd-worktree` store. A stored
    choice is never overwritten, a reserved line
    key is never written by the seed, a failure seeds nothing. It reads no other file, has no
    `/card:bash` command and depends on no extension load order.

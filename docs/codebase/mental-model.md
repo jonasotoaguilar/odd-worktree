@@ -12,7 +12,7 @@ optional sidebar sections — the `GITHUB` issues rail and the `ODD` rail — an
 value of its `Card activity` line (`bash`, the read-only shell tools `grep`, `find`,
 `ls`, and `read`, `write` and `edit`, the last two through a scope limited to
 skill and ODD paths, which is what lets the file cards ask about them) and the
-`color` value of its `Card diff` line (`write` and `edit`, drawn as an IDE pane
+`color` value of its `Card file` line (`write` and `edit`, drawn as an IDE pane
 in the active theme's own syntax roles) — and two stored values of its own behind two
 `Cards` rows: the user's name, kept by `/identity` in the shell API's store, which heads
 the prompt card instead of `You`, and the `Card message` Off/On switch, On by default
@@ -60,7 +60,7 @@ never added — every other surface keeps working.
   draw, the reminders only advise, the guards read command text and paths (invariants 20, 21,
   22, 23).
 - Every other customize surface, plugin-tools toggle and companion-app
-  integration: the bash activity is a design on the shell API, the diff card is the
+  integration: the bash activity is a design on the shell API, the `color` design is the
   second one, the file cards read the `activity` design's line and never the
   `color` one, and this package owns no
   preference at all (invariants 2, 3, 23).

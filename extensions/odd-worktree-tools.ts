@@ -11417,7 +11417,7 @@ function uninstallAssistantMessageCard() {
   }
 }
 
-// T2 (S1/S2): the `Card diff` design paints `write` and `edit` as an IDE pane in the
+// T2 (S1/S2): the `Card file` design paints `write` and `edit` as an IDE pane in the
 // active theme's own roles. Its syntax highlighting is the SAME seam `/files` opens
 // (`filesAgentSeam`, Pi's own `highlightCode` and `getLanguageFromPath`), resolved
 // behind a stable facade because the seam is an async import while a design is

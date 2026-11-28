@@ -1148,8 +1148,8 @@ describe('the `Card tools` -> `Card activity` carry-over', () => {
       {},
       { bash: 'native' },
       { bash: 'native', $lines: {} },
-      { bash: 'native', $lines: { diff: 'odd-worktree.diff-color' } },
-      { bash: 'native', $lines: { colour: 'odd-worktree.diff-color' } },
+      { bash: 'native', $lines: { file: 'someone.else' } },
+      { bash: 'native', $lines: { colour: 'someone.else' } },
     ];
     for (const selections of untouched) {
       const { api, files, writes } = fakeShellApi(stored(selections));
@@ -1326,7 +1326,7 @@ describe('the scoped claim', () => {
 // order, numbers first, and a prerelease or build suffix loses ONLY when the numbers are equal. Both
 // of this package's lines sit at the same `0.9.0` cutoff, so each version is read through both
 // registrations at once: a release that is below it keeps the unscoped `Card activity` line and gets no
-// `Card diff` row, and a newer one gets both the scope and the diff line.
+// `Card file` row, and a newer one gets both the scope and the file line.
 describe('the release rule is semver order, on both lines at once (S6)', () => {
   const registerBoth = (version) => {
     const seen = [];
@@ -1337,14 +1337,14 @@ describe('the release rule is semver order, on both lines at once (S6)', () => {
       if (typeof disposeTags === 'function') disposeTags();
       if (typeof disposeDiff === 'function') disposeDiff();
     };
-    return { seen, dispose, tags: seen.find((design) => design.line === 'activity'), diff: seen.find((design) => design.line === 'diff') };
+    return { seen, dispose, tags: seen.find((design) => design.line === 'activity'), diff: seen.find((design) => design.line === 'file') };
   };
 
-  test('a prerelease or a build suffix of 0.9.0 is BELOW it: unscoped `Card activity`, no `Card diff`', () => {
+  test('a prerelease or a build suffix of 0.9.0 is BELOW it: unscoped `Card activity`, no `Card file`', () => {
     for (const version of ['0.9.0-rc.1', '0.9.0-beta.1+build', '0.9.0+workstation']) {
       const registration = registerBoth(version);
       try {
-        assert.deepEqual(registration.seen.map((design) => design.line), ['activity'], `${version}: the grouped line, and no diff line`);
+        assert.deepEqual(registration.seen.map((design) => design.line), ['activity'], `${version}: the grouped line, and no file line`);
         assert.equal(registration.tags.scopes, undefined, `${version}: below 0.9.0, so no scope`);
         assert.deepEqual([...registration.tags.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list', ...CODEGRAPH_TOOLS], `${version}: ten tools, no edit`);
         assert.equal(registration.diff, undefined, `${version}: nothing is offered for a row the shell API would refuse`);
@@ -1354,14 +1354,14 @@ describe('the release rule is semver order, on both lines at once (S6)', () => {
     }
   });
 
-  test('a NEWER release carrying a suffix is ABOVE 0.9.0: the scoped `Card activity` line AND `Card diff`', () => {
+  test('a NEWER release carrying a suffix is ABOVE 0.9.0: the scoped `Card activity` line AND `Card file`', () => {
     for (const version of ['0.9.1-rc.1', '0.10.0+local.2']) {
       const registration = registerBoth(version);
       try {
-        assert.deepEqual(registration.seen.map((design) => design.line), ['activity', 'diff'], `${version}: both lines`);
+        assert.deepEqual(registration.seen.map((design) => design.line), ['activity', 'file'], `${version}: both lines`);
         assert.equal(registration.tags.scopes.write, registration.tags.scopes.edit, `${version}: the scope is on the line`);
         assert.deepEqual([...registration.tags.tools], ['bash', 'grep', 'find', 'ls', 'read', 'write', 'bash_background', 'monitor', 'job_stop', 'job_list', ...CODEGRAPH_TOOLS, 'edit'], `${version}: eleven tools`);
-        assert.equal(registration.diff.id, 'odd-worktree.diff', version);
+        assert.equal(registration.diff.id, 'odd-worktree.file', version);
         assert.equal(registration.diff.label, 'color', version);
         assert.deepEqual([...registration.diff.tools], ['write', 'edit'], version);
       } finally {

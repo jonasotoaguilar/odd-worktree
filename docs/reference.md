@@ -1909,14 +1909,17 @@ independently, `/reload` replaces only the live logic, and a second evaluation n
   answers, the `mdHeading` cells in `float` and `neon`, the zone markers, the heading's clock, the
   turn stats and the duration formatter, and the two cards' independent install/uninstall.
 
-## The diff card
+## The Card file line
 
-A second design, `lib/diff-design.js`, registers on the line `diff` through the same
-`registerToolDesign` API, so `/gentle:customize` → `Cards` grows the row `Card diff` over
+A second design, `lib/diff-design.js`, registers on the line `file` through the same
+`registerToolDesign` API, so `/gentle:customize` → `Cards` grows the row `Card file` over
 `write` and `edit` with the host's own card as `default` (stored `native`) and this package's
 `color` beside it. `color` is selected once, on the first load that finds no choice — the same
-first-run seed the `activity` design does — and a later `default` is never undone. The choice
-is read on every paint, so a mid-session switch repaints cards already on screen.
+first-run seed the `activity` design does — and a later `default` is never undone. A choice the
+line saved under its previous key, `diff`, is carried over to `file` once on that same load — the
+id `odd-worktree.diff` mapped to `odd-worktree.file`, any other stored value (`native` included)
+left as it stands — and the old key is never deleted, so nobody's cards turn off on the rename.
+The choice is read on every paint, so a mid-session switch repaints cards already on screen.
 
 What `color` draws is the same highlighter `/files` previews with, and never a palette:
 `agent.highlightCode(code, language)` answers one string per line with the ACTIVE theme's own
@@ -1967,13 +1970,13 @@ every other surface exactly as it was.
 
 The line needs shell API `0.9.0`, the release that introduced the per-`(line, tool)`
 claim: on an older shell API, or one whose release string cannot be read, NOTHING is registered
-and `Card diff` never appears, because a registration that release would refuse costs the
+and `Card file` never appears, because a registration that release would refuse costs the
 whole design. Releases are compared by semver order at both of this package's cutoffs, so a
 release whose own numbers equal `0.9.0` but carry a prerelease or a build suffix
 (`0.9.0-rc.1`, `0.9.0+build.7`) is BELOW it and registers nothing either, while `0.9.1-rc.1`
 and `0.10.0+local.2` are newer and register. An absent `registerToolDesign` or a refused
 registration is no design and never a throw; a shell API that cannot store the choice still gets
-the row — `Card diff` IS registered and only the first-run seed writes nothing, so the line
+the row — `Card file` IS registered and only the first-run seed writes nothing, so the line
 opens on the host's own card (`default`) until a choice is made.
 
 ## The module switches
@@ -2498,7 +2501,7 @@ toggles, no CodeGraph command or tool (only the prompt advice above), no
 companion-app integration, and no worktree↔issue association. Its
 customize-side contribution is the two values of the shell API's `Cards` page — `activity` on
 the `Card activity` line (or its `Card bash` line, on a shell API older than 0.6.0) and `color` on
-the `Card diff` line — which the skill/ODD file cards obey as well, plus ONE plain Off/On row of
+the `Card file` line — which the skill/ODD file cards obey as well, plus ONE plain Off/On row of
 its own on that page, [`Card message`](#the-card-message-switch), which gates the user prompt card
 and the identity line and no design at all. It adds no command or tool of its own, and the file
 picker's `alt+p` and the issues panel's `alt+i` are bound on the host directly

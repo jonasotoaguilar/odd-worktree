@@ -208,7 +208,7 @@ describe('registration', () => {
       await loadExtension({});
       assert.deepEqual(
         shellApi.designs.map((design) => [design.line, design.id, design.label]),
-        [['activity', 'odd-worktree.bash-activity', 'activity'], ['diff', 'odd-worktree.diff', 'color']],
+        [['activity', 'odd-worktree.bash-activity', 'activity'], ['file', 'odd-worktree.file', 'color']],
         'one design per line, once each',
       );
     } finally {

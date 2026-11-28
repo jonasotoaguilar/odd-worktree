@@ -1059,7 +1059,7 @@ no known-tool list, no branch on a name. The claim is the pair (`line`, `tool`) 
 to it: `scopes` maps each tool of `tools` to the scope of THAT claim, `scope` is the shorthand for the
 same scope on every tool of the registration, and a tool with no entry claims every call of it. One
 line may therefore own some of its tools unconditionally and narrow others — `Card tools` paints
-bash/grep/find/ls/read for every call and write/edit only under `skills/` or `odd/`, while `Card diff`
+bash/grep/find/ls/read for every call and write/edit only under `skills/` or `odd/`, while `Card file`
 carries the generic claim on write/edit. The claim table is applied per TOOL: a tool has at most ONE
 UNSCOPED claim, and only a tool's SECOND UNSCOPED claim refuses — that registration is refused whole
 and reported, even when the clash is on one tool of a registration that names several. One scope per

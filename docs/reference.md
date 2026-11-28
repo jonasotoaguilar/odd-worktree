@@ -1013,7 +1013,10 @@ worktrees the ORIGIN is drawn — the grouped checkout whose name equals the ODD
 as identical. A copy whose bytes are already in main is not a difference, so an ODD
 that a pull brought into main is drawn at `main` and the worktree that inherited it
 contributes no row; a document a worktree inherited from the branch it was chained
-off is drawn once, at its origin.
+off is drawn once, at its origin. A document main no longer holds competes from
+every worktree that kept it, so a deleted ODD is still drawn where it lives, while
+a copy that differs from main only because MAIN advanced — the worktree never
+touched the file — never enters the election, however recent its timestamp.
 
 - **One list, no division.** A frame is a list of document rows, newest first — the
 most recently created or modified document on top, an exact tie settled by the name
@@ -1024,8 +1027,9 @@ selected and read; with no target the newest row is the selection.
 - **Each row says where its copy lives.** At the pane's right, in the muted
 right-hand role the `ODD` rail uses for its own metadata, a row carries `main` or
 the worktree's own name — two worktrees sharing a basename are told apart by the
-shortest trailing path segments that distinguish them. A pane too narrow for both
-drops that cell before it narrows the name.
+shortest trailing path segments that distinguish them. The cell is reserved: a pane
+too narrow for both shortens the NAME — wrapped while it has room, then cut with the
+pane's own ellipsis — and never drops the checkout.
 - **The title counts the listing.** `43 documents` is how many documents the ONE
 listing holds; a live query narrows the rows on screen, never this count.
 - **`a` decides which checkouts are candidates.** It alternates the session's

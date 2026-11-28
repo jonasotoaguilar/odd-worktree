@@ -995,7 +995,8 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     row, no fold state, no chevron, and `enter` folds nothing. Each row reserves the
     pane's RIGHT-hand cell for the checkout that holds its copy — `main` or the
     worktree's own name, in the muted role the `ODD` rail uses for its own metadata —
-    and a pane too narrow for both drops that cell before it narrows the name. The
+    and a pane too narrow for both shortens the NAME, wrapped while it has room and
+    then cut with the pane's own ellipsis, never dropping the checkout. The
     title counts the listing (`43 documents`), and a live query narrows the rows on
     screen, never that count. `a` decides WHICH checkouts are candidates — the
     session's registered worktrees or every worktree Git lists — by having the caller

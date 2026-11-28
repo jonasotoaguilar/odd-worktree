@@ -462,6 +462,48 @@ describe('S1-S5: one ODD name is drawn once across main and every worktree', () 
     assert.deepEqual(drawn(groups), ['shared']);
   });
 
+  // S3, the other half of the gate: a worktree copy that differs only because MAIN
+  // advanced is no difference of the worktree's own, so it never enters the election
+  // — not even when its inherited mtime is the newer one.
+  test('S3: a worktree that never touched the document cannot win on mtime', async () => {
+    const box = machine('no-touch');
+    const worktree = box.worktree('odd-rail');
+    writeDoc(box.mainRoot, 'shared', { body: 'main\n', at: '2020-01-01T00:00:00.000Z' });
+    // Newer bytes, but nothing on the worktree's branch: Git names no path at all.
+    writeDoc(worktree, 'shared', { body: 'inherited\n', at: '2020-02-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, worktree] });
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync });
+
+    assert.deepEqual(groups.map((group) => group.docs.map((doc) => doc.name)), [['shared'], []]);
+    assert.deepEqual(drawn(groups), ['shared'], 'main keeps the only row');
+  });
+
+  // S4, the case the gate missed: main DELETED the ODD, so nothing on the worktree's
+  // branch changed and Git names no path — yet main's own listing proves the copies
+  // are `added`, so the origin is still the row.
+  test('S4: a document main no longer holds is a candidate without Git naming it', async () => {
+    const box = machine('dedupe-s4-deleted');
+    const origin = box.worktree('no-bridge-naming');
+    const chained = box.worktree('card-file');
+    writeDoc(origin, 'no-bridge-naming', { body: '# no-bridge-naming\n', at: '2020-01-01T00:00:00.000Z' });
+    writeDoc(chained, 'no-bridge-naming', { body: '# no-bridge-naming\n', at: '2020-05-01T00:00:00.000Z' });
+    const git = fakeGit({ paths: [box.mainRoot, chained, origin] });
+
+    const groups = await groupOddDocs({ repoRoot: box.mainRoot, runAsync: git.runAsync });
+
+    assert.deepEqual(groups.map((group) => group.checkoutName), ['main', 'card-file', 'no-bridge-naming']);
+    assert.deepEqual(contract(groups[1]).docs, [], 'the inheriting worktree loses the identical copy');
+    assert.deepEqual(contract(groups[2]).docs, [{ name: 'no-bridge-naming', status: 'added' }],
+      'the ORIGIN is drawn although Git named no path');
+    assert.deepEqual(drawn(groups), ['no-bridge-naming']);
+    // The cost model is untouched: the same three reads per worktree with documents.
+    assert.deepEqual(
+      git.verbs().filter((call) => call.cwd === origin).map((call) => call.verb),
+      ['merge-base', 'diff', 'status'],
+    );
+  });
+
   test('S4: identical copies with no main copy keep the origin worktree', async () => {
     const box = machine('dedupe-s4');
     // `no-bridge-naming` is the worktree that created the ODD, so it is the origin;

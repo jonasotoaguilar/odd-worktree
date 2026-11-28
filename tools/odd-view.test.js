@@ -2473,6 +2473,11 @@ describe('createOddView flat listing (T9 → T4: S6, S10, S11, S13)', () => {
   const checkout = (checkoutName, checkoutRoot, isMain, docs) => ({ checkoutName, checkoutRoot, isMain, docs });
   const MAIN = checkout('main', '/wt/main', true, [groupDoc('alpha'), groupDoc('bravo')]);
   const RAIL = checkout('odd-rail', '/wt/odd-rail', false, [groupDoc('delta', '/wt/odd-rail')]);
+  // S6: the longest checkout name the reported chain produces, which is the one a
+  // narrow list pane has to fit beside the document's own name.
+  const LONG_NAME = checkout('no-bridge-naming', '/wt/no-bridge-naming', false, [
+    groupDoc('no-bridge-naming', '/wt/no-bridge-naming'),
+  ]);
   const listCells = (lines) => lines.slice(2, -2).map((line) => strip(line).split('│')[1] || '');
   // A row reads its document at the LEFT and the checkout that holds it at the
   // RIGHT, at least two cells apart (S6), so one split answers both parts and the
@@ -2551,6 +2556,36 @@ describe('createOddView flat listing (T9 → T4: S6, S10, S11, S13)', () => {
     assert.ok(!bodyOf(lines).includes('odd-fix'), 'an empty worktree is never named');
     assert.match(bodyOf(lines), /✎ Odd · 2 documents/, 'the ordinary main-only count');
     assert.ok(!/\(\d+ odd\)/.test(bodyOf(lines)), 'and no group count anywhere');
+  });
+
+  // S6: the checkout cell is the one thing EVERY row has to say, so it is reserved
+  // rather than offered what the name leaves — at 80 columns, the width most
+  // terminals use, the name is the part that gives way.
+  test('S6: at 80 columns a row still names the checkout that holds its copy', async () => {
+    const view = build({ groups: [MAIN, LONG_NAME] });
+    await tick();
+    const lines = view.render(80);
+    for (const line of lines) assert.equal(helpers.visibleWidth(line), 80, `row is not 80 wide: ${strip(line)}`);
+    assert.equal(labelsOf(lines).length, 3, 'every document is still drawn');
+    assert.deepEqual(metasOf(lines), ['main', 'main', 'no-bridge-naming'],
+      'the cell survives at the wide default, worktree name and all');
+  });
+
+  // S6: the mirror — a pane too narrow to wrap the name beside the cell cuts the
+  // NAME with the pane's own ellipsis. The cell is never what is dropped.
+  test('S6: a narrow pane shortens the name instead of losing the checkout cell', async () => {
+    const view = build({ groups: [MAIN, LONG_NAME] });
+    await tick();
+    const full = 'no-bridge-naming';
+    const wide = view.render(100);
+    assert.deepEqual(labelsOf(wide), ['alpha', 'bravo', 'no-', 'bridge-', 'naming'],
+      'the premise: a wide pane wraps the whole label over its own rows');
+    const narrow = view.render(80);
+    const shortened = rowParts(narrow)[2].label;
+    assert.ok(shortened.endsWith('…'), `the name is cut with the pane's ellipsis: ${shortened}`);
+    assert.ok(full.startsWith(shortened.slice(0, -1)), `the cut name is the label's own start: ${shortened}`);
+    assert.ok(shortened.length < full.length, `the name gave way: ${shortened}`);
+    assert.deepEqual(metasOf(narrow), ['main', 'main', full], 'and the cell is still drawn');
   });
 
   // S6 rule 1 and 2: ONE flat list across checkouts, each row naming its own.

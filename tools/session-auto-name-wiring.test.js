@@ -39,6 +39,15 @@ function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 }
 
+// A checkout this package owns — `<repo-parent>/<repo-name>-worktrees/<odd>`, the
+// one path rule the registry has — with its own `odd/tasks/`.
+function makeWorktree(repo, odd) {
+  const dir = path.join(path.dirname(repo), `${path.basename(repo)}-worktrees`, odd);
+  git(repo, ['worktree', 'add', '-q', dir, '-b', `feat/${odd}`]);
+  fs.mkdirSync(path.join(dir, 'odd', 'tasks'), { recursive: true });
+  return dir;
+}
+
 // A repository whose principal checkout IS the ODD's home: one commit, `odd/tasks/`
 // present, nothing registered.
 function makeRepo() {
@@ -155,5 +164,35 @@ describe('naming from the principal checkout', () => {
       contextFor(host, repo),
     );
     assert.equal(host.state.name, 'Mi sesión de investigación');
+  });
+});
+
+describe('naming follows the document, not the checkout the call started in', () => {
+  test('a write into a registered worktree renames from the principal checkout', async () => {
+    const repo = makeRepo();
+    const worktree = makeWorktree(repo, 'older-session');
+    const host = makeHost();
+    const extension = await loadExtension(host);
+    // The harness keeps its session in the principal checkout and the agent writes
+    // the ODD document where the work actually lives: the worktree.
+    fireToolCall(
+      extension,
+      { toolName: 'write', arguments: { path: path.join(worktree, 'odd/tasks/prompt-card-fix.md') } },
+      contextFor(host, repo),
+    );
+    assert.equal(host.state.name, 'Prompt card fix');
+  });
+
+  test('a write from inside that same worktree still renames', async () => {
+    const repo = makeRepo();
+    const worktree = makeWorktree(repo, 'older-session');
+    const host = makeHost();
+    const extension = await loadExtension(host);
+    fireToolCall(
+      extension,
+      { toolName: 'edit', arguments: { path: 'odd/tasks/warp-odd-picker.md' } },
+      contextFor(host, worktree),
+    );
+    assert.equal(host.state.name, 'Warp odd picker');
   });
 });

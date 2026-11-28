@@ -2891,7 +2891,12 @@ function observeOddWriteForNaming(event, ctx, pi, allowPhaseTrigger) {
   if (ODD_NAMING_TOOLS.has(oddToolNameOf(event))) {
     for (const raw of oddTouchedPaths(oddArgsOf(event))) {
       const abs = path.isAbsolute(raw) ? raw : path.join(cwd, raw);
-      const rel = oddRelFor(abs, entry.path, principalRoot);
+      // Naming follows the DOCUMENT, not the checkout the call started in: an
+      // `odd/tasks/<name>.md` inside a registered worktree names the session even
+      // when the session's cwd is the principal checkout, which is how a harness
+      // that keeps its session in `main` writes its ODDs.
+      const documentEntry = oddEntryForCwd(rows, abs) || entry;
+      const rel = oddRelFor(abs, documentEntry.path, principalRoot);
       if (!rel) continue;
       touched.push(rel);
     }

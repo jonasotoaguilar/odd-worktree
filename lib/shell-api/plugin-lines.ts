@@ -159,11 +159,13 @@ type Owner =
   | { kind: "package"; root: string; name: string; modulePath: string }
   | { kind: "pi"; root: string; name: string; modulePath: string }
   | { kind: "module"; modulePath: string }
-  | { kind: "plumbing" };
+  // The literal is `bridge` on purpose: the cache this value lands in is a shared `Symbol.for` slot, and an
+  // older copy of this API reads and writes the same kind, so renaming it would make a reader throw.
+  | { kind: "bridge" };
 
 type Attribution =
   | (Extract<Owner, { kind: "package" | "pi" | "module" }> & { identity: PluginIdentity })
-  | Extract<Owner, { kind: "plumbing" }>;
+  | Extract<Owner, { kind: "bridge" }>;
 
 /**
  * What a plugin IS (I8, I10): its owning package root, or the registering module when no package
@@ -398,7 +400,7 @@ function resolveOwner(modulePath: string): Owner {
 /** Resolve the whole answer ONCE per module: owner, identity and (for a plugin) its record seed. */
 function resolveAttribution(modulePath: string): Attribution {
   const owner = resolveOwner(modulePath);
-  if (owner.kind === "plumbing") return owner;
+  if (owner.kind === "bridge") return owner;
   if (owner.kind === "package") return { ...owner, identity: packageIdentity(owner.root) };
   // A Pi-owned module fails closed exactly like an unattributable one (I11), so its plugin is the
   // module itself, never the Pi distribution's package root.
@@ -452,7 +454,7 @@ function attributionOfCaller(): Attribution {
     modulePath = undefined;
   }
   // No caller frame means the shell API itself (an internal helper): never a plugin line.
-  if (modulePath === undefined) return { kind: "plumbing" };
+  if (modulePath === undefined) return { kind: "bridge" };
 
   const state = pluginLinesState();
   const cached = state.modules.get(modulePath);
@@ -524,7 +526,7 @@ function rowNameRejectionFor(
   );
 }
 
-function ensureRecord(attribution: Exclude<Attribution, { kind: "plumbing" }>): PluginRecordInternal {
+function ensureRecord(attribution: Exclude<Attribution, { kind: "bridge" }>): PluginRecordInternal {
   const state = pluginLinesState();
   const identity = attribution.identity;
   const existing = state.plugins.find((record) => record.identity === identity.id);
@@ -829,7 +831,7 @@ export function attributeRegistration(
 ): () => void {
   const attribution = attributionOfCaller();
   // The shell API's own plumbing claims nothing; an unattributable internal helper claims nothing.
-  if (attribution.kind === "plumbing") return store();
+  if (attribution.kind === "bridge") return store();
 
   const record = ensureRecord(attribution);
   const id = registrationId(registration);

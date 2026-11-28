@@ -264,11 +264,19 @@ function readyState(): ReadyState {
 
 /** The schema and version an incompatible object actually carries, for the notice. */
 function foreignShape(): { schema: string; version: string } {
+  // The object is another plugin's, so reading it can throw (an accessor): describing it must never
+  // be the reason this package fails to load.
+  const read = (object: Record<string, unknown>, field: string): string => {
+    try {
+      const value = object[field];
+      return typeof value === "string" || typeof value === "number" ? String(value) : "none";
+    } catch {
+      return "unreadable";
+    }
+  };
   const existing = apiHost()[BRIDGE_API_KEY];
-  const read = (value: unknown): string =>
-    typeof value === "string" || typeof value === "number" ? String(value) : "none";
   const object = typeof existing === "object" && existing !== null ? (existing as Record<string, unknown>) : {};
-  return { schema: read(object.schema), version: read(object.version) };
+  return { schema: read(object, "schema"), version: read(object, "version") };
 }
 
 /** One clear notice per process, no matter how many copies ask. */

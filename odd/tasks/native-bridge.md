@@ -60,6 +60,8 @@ Verify 2 (independent `gentle-ai-verify` on the rework): S1-S3 and L2/L3-flatten
 - **T11** (S2) — DROPPED. Removing the five exports only `status.ts` read also removed fields on shared `Symbol.for` slots; an older copy of the API validates `adoptedMessages` and overwrites the slot when it is missing, and the `TOOL_DESIGN_INDEX_SHAPE` bump would make two copies rebuild each other's index. That breaks the documented coexistence, so the dead getters stay.
 - **T12** (S2) — pin it: `message-design-adoption.test.ts` asserts the adoption slot keeps `adoptedMessages`/`liveAdoptions`/`adoptedByContainer`; invariant 32 says the shape of every shared slot is frozen, not only its key. DONE.
 
+- **T13** (S2, S4) — independent verification of the audit found two regressions of mine, both fixed with a RED/GREEN test in `tools/shell-api/compatibility-regression.test.mjs`: the attribution kind in the shared plugin-lines cache was renamed (`bridge` -> `plumbing`), so a registration whose module an older copy had cached threw; and describing a foreign slot object read its getters unguarded, so a throwing `version` stopped the package loading. The kind is `bridge` again and the read is guarded. Docs corrected: missing-host notice is once per continuous absence, the foreign-object case takes the whole surface down, a shared notice's wording depends on which copy runs first, a registration validates synchronously, the gate is schema + version + members. T9's Symbol.for count was 37 from a single-line grep; the real count is 43 in both revisions (39 bridge keys, 4 host keys).
+
 ## Log
 
 - **L1** — "ya no quiero depender de /home/jona/dev/projects/gentle-shell-bridge para este plugin asi que lo que

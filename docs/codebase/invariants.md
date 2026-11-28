@@ -1011,19 +1011,27 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     words, naming the slot, the schema and version it actually holds, and the
     surfaces that are off. Its surfaces still arm only for a host that has
     `gentle-pi`, the package registering `/gentle:customize`: without it nothing arms
-    and the package says so once, naming `gentle-pi` and what is off. Neither notice
-    is silent, and neither affects the rest of the package. Its tests are
+    and the package says so once per continuous absence (a host that appears and
+    disappears again earns a new notice), naming `gentle-pi` and what is off. Neither
+    notice is silent. The missing-host case leaves the commands and tools working; the
+    foreign-object case does not (it takes the whole surface down, as stated above),
+    and describing that object can never throw, because it is another plugin's. Its tests are
     `tools/shell-api/*.test.ts` and `tools/shell-api/*.test.mjs`, run by
     `npm run test:shell-api` on Node >= 22.18 (the suite is TypeScript) in CI on 22.x
     and 24.x, while its core never runs in the plain-JS suite at all (the fixture
     stubs the one import). A standalone `gentle-shell-bridge` installed beside this
-    package is simply unnecessary: both copies share every piece of global state
-    ("first wins"), so this package's own surfaces are unaffected — and the older
-    package's extra command name is the one visible difference, which is why
-    uninstalling it is the recommendation and not a requirement. That harmlessness
-    is a property of the shared state, so the SHAPE of every `Symbol.for` slot is
-    frozen too, not only its key: an older copy re-validates a slot by a field
-    and overwrites it when the field is missing, so a field nothing here reads any
-    more (`adoptedMessages` in the message-design adoption state, `owner` in the
-    tool-design index and its `TOOL_DESIGN_INDEX_SHAPE` stamp) stays.
-    `tools/shell-api/message-design-adoption.test.ts` pins the adoption one.
+    package is simply unnecessary: both copies share the global state ("first wins"),
+    so this package's own surfaces are unaffected, and what differs is visible but
+    small — the older package's extra `/bridge-status` command, and which copy's words
+    a shared notice such as the missing-`gentle-pi` warning uses (whoever runs it
+    first). Uninstalling it is the recommendation and not a requirement. That
+    harmlessness is a property of the shared state, so the SHAPE of every
+    `Symbol.for` slot is frozen too, not only its key — including the values cached in
+    it. An older copy re-validates a slot by a field and overwrites it when the field
+    is missing, so a field nothing here reads any more (`adoptedMessages` in the
+    message-design adoption state, `owner` in the tool-design index and its
+    `TOOL_DESIGN_INDEX_SHAPE` stamp) stays, and the plugin-line attribution kind
+    stays `bridge`, because an older copy writes and reads it.
+    `tools/shell-api/message-design-adoption.test.ts` and
+    `tools/shell-api/compatibility-regression.test.mjs` pin the adoption slot, the
+    attribution kind and a foreign object that throws when described.

@@ -7,9 +7,10 @@ second plugin installed, no build step and no import: it reads one process-globa
 
 ## Quick path
 
-1. Read the slot and gate it on schema + version — nothing else tells you whether the API is there.
+1. Read the slot and gate it on schema, version `1` and the members you call (the snippet below checks all three) — a schema alone does not tell you the object is the API.
 2. Register what you contribute from `session_start`, or when the `gentle-shell-bridge:ready` event
-   announces a later publication — an absent symbol there is "not yet", never "not installed".
+   announces a later publication — an absent symbol there is "not yet" or "not installed"; the API cannot tell
+   which, so register again if the event arrives.
 3. Keep the disposer each `register*` returns, so a `/reload` replaces your registration instead of
    stacking a second one.
 
@@ -25,9 +26,10 @@ const isApi = (value: any): boolean =>
 const api = isApi((globalThis as any)[KEY]) ? (globalThis as any)[KEY] : undefined;
 ```
 
-A registration is evaluated when gentle-shell builds a menu or paints a frame, not when it is made, so
-rows and sections always reflect live state. Anything a registration throws costs that registration's
-own rows, never the menu.
+What a registration renders is evaluated when gentle-shell builds a menu or paints a frame, so rows and
+sections reflect live state, and anything a render callback throws costs that registration's own rows,
+never the menu. The registration call itself validates synchronously: an invalid `id`, for example, is
+rejected on the spot and nothing is registered.
 
 ## What you can extend
 
@@ -78,14 +80,15 @@ The public identity is frozen on purpose, so an existing plugin and a user's sav
 the slot `Symbol.for("gentle-shell-bridge/api/v1")`, the schema `gentle-shell-bridge/api` at version 1,
 `VERSION` `0.16.2`, every `Symbol.for("gentle-shell-bridge…")` key, the `gentle-shell-bridge:ready`
 event, `bridgeApi()`/`onBridgeApi`, and the store directory `<config home>/gentle-shell-bridge`. None of
-those names change when this package changes.
+those names change when this package changes, and neither does the shape of the shared state behind them.
 
 ## Origin and compatibility in one paragraph
 
 This API was born as the standalone `gentle-shell-bridge` package and odd-worktree now owns it, so
 nothing external is needed — a standalone bridge that is still installed is simply unnecessary, and if
 both are loaded they share the same global state ("first wins"), which is why the compatibility names
-above never move.
+and the state shapes above never move. The visible differences are the older package's extra
+`/bridge-status` command and whose wording a shared notice uses.
 
 ## Next step
 

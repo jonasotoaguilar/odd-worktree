@@ -440,7 +440,7 @@ describe('the module switch and the neighbouring observations', () => {
     await presentGh(async () => {
       publishShellApi(undefined);
       const on = await loadExtension({});
-      publishShellApi({ worktrees: false });
+      publishShellApi({ codegraph: true, worktrees: false });
       const off = await loadExtension({});
       const onToolResult = handlersOf(on, 'tool_result').length;
       const offToolResult = handlersOf(off, 'tool_result').length;
@@ -458,7 +458,7 @@ describe('the module switch and the neighbouring observations', () => {
     await presentGh(async () => {
       // All three halves on: `Skills+` is OFF by default, so its two read rules would not be
       // registered and this case is about a guard-free write with the whole package present.
-      publishShellApi({ skills: true });
+      publishShellApi({ skills: true, worktrees: true, codegraph: true });
       const loaded = await loadModule();
       const results = await fire(loaded, 'tool_call', writeEvent(), ctxOf());
       assert.ok(results.length >= 4, 'the guards are all still there');

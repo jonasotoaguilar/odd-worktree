@@ -11161,9 +11161,9 @@ function registerDiffDesignRows(api) {
 // modular-tools: the module switches. `Codegraph+`, `Worktrees+` and `Skills+` live on
 // the shell API's own `Tools` page as plain Off/On rows (`lib/modules.js`), persisted in this
 // package's store. They are read ONCE per registration episode, below: a change lands on
-// the next load, and the row says so through the session's own notifier. `Skills+` is the
-// one switch that is OFF until someone turns it on; the other two are on until turned off.
-let oddModules = { codegraph: true, worktrees: true, skills: false };
+// the next load, and the row says so through the session's own notifier. All three are OFF
+// until someone turns them on, and `Codegraph+` needs the CLI before it can be.
+let oddModules = { codegraph: false, worktrees: false, skills: false };
 
 function notifyModulesChange(text) {
   const ui = issuesSidebarCtx && issuesSidebarCtx.ui;
@@ -12030,7 +12030,7 @@ function registerOddWorktreeSurfaceEntries(pi) {
   try {
     oddModules = libRequire("modules.js").readModules(issuesSidebarShellApi());
   } catch {
-    oddModules = { codegraph: true, worktrees: true, skills: false };
+    oddModules = { codegraph: false, worktrees: false, skills: false };
   }
   // opencode-usage-alert: the OpenCode Go source registers at load AND at every
   // session start, so either load order works and a session switch re-targets the

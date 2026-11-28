@@ -1,8 +1,9 @@
 'use strict';
 // S1/S2 (modular-tools): what the extension registers for each setting of the two module
 // switches. The switches are read ONCE, when the extension registers, from the shell API's
-// store, and a missing document keeps everything on — so every other suite in this package
-// loads the whole thing.
+// store, and a missing document leaves all three out. The shared test bridge
+// (`fixtures/load-extension.js`) stores them On, so every other suite in this package loads the
+// whole thing; the cases here hand their own document in.
 const { test, describe, after, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
@@ -49,6 +50,8 @@ async function load(modules, { selection, host } = {}) {
   return { ...loaded, shellApi };
 }
 
+const BOTH = { codegraph: true, worktrees: true };
+
 /** The activity design, as the shell API answers it while `Card activity` is on `activity`. */
 const ACTIVITY = () => ({ kind: 'design', design: { id: 'odd-worktree.bash-activity' } });
 
@@ -82,8 +85,8 @@ describe('the Tools page', () => {
 });
 
 describe('Worktrees+', () => {
-  test('on (the default): the two tools, /warp, its card and every worktree guard and text', async () => {
-    const loaded = await load(undefined);
+  test('on: the two tools, /warp, its card and every worktree guard and text', async () => {
+    const loaded = await load(BOTH);
     assert.deepEqual([...loaded.tools.keys()].filter((name) => name.startsWith('worktree_')).sort(), ['worktree_create', 'worktree_list']);
     assert.ok(loaded.commands.has('warp'));
     assert.ok(loaded.messageRenderers.has('worktree-warp'));
@@ -91,8 +94,8 @@ describe('Worktrees+', () => {
   });
 
   test('off: no tools, no /warp, no warp card, no worktree text and fewer guards, while everything else stays', async () => {
-    const on = await load(undefined);
-    const off = await load({ worktrees: false });
+    const on = await load(BOTH);
+    const off = await load({ ...BOTH, worktrees: false });
     assert.equal([...off.tools.keys()].some((name) => name.startsWith('worktree_')), false);
     assert.equal(off.commands.has('warp'), false);
     assert.equal(off.messageRenderers.has('worktree-warp'), false);
@@ -109,7 +112,7 @@ describe('Worktrees+', () => {
   });
 
   test('off keeps the CodeGraph text and the issues surface', async () => {
-    const off = await load({ worktrees: false });
+    const off = await load({ ...BOTH, worktrees: false });
     assert.match(await promptOf(off, ['codegraph']), /## CodeGraph/);
     assert.ok(off.commands.has('issues'));
   });
@@ -117,11 +120,11 @@ describe('Worktrees+', () => {
 
 describe('Skills+', () => {
   test('off (the default): the two read rules are not registered, and no worktree surface moves', async () => {
-    const on = await load({ skills: true });
-    const off = await load(undefined);
+    const on = await load({ skills: true, worktrees: true, codegraph: true });
+    const off = await load({ skills: false, worktrees: true, codegraph: true });
     assert.equal(toolCallHandlers(on) - toolCallHandlers(off), 2, 'the skill-read guard and the whole-read rule');
-    assert.equal(toolCallHandlers(off), toolCallHandlers(await load({ skills: false })), 'an unset switch and a stored false are the same half');
-    for (const loaded of [off, await load({ skills: false })]) {
+    assert.equal(toolCallHandlers(off), toolCallHandlers(await load({ worktrees: true, codegraph: true })), 'an unset switch and a stored false are the same half');
+    for (const loaded of [off, await load({ skills: false, worktrees: true, codegraph: true })]) {
       assert.ok(loaded.tools.has('worktree_create'), 'the worktree tools stay');
       assert.ok(loaded.commands.has('warp'), '/warp stays');
       assert.match(await promptOf(loaded, []), /## ODD worktrees/, 'the worktree text stays');
@@ -129,20 +132,20 @@ describe('Skills+', () => {
   });
 
   test('on: the two read rules register without the worktree half', async () => {
-    const on = await load({ skills: true, worktrees: false });
+    const on = await load({ skills: true, worktrees: false, codegraph: true });
     // Two worktree guards gone, the two read rules still here.
-    assert.equal(toolCallHandlers(on) - toolCallHandlers(await load({ worktrees: false })), 2);
+    assert.equal(toolCallHandlers(on) - toolCallHandlers(await load({ worktrees: false, codegraph: true })), 2);
     assert.equal(on.commands.has('warp'), false, 'the worktree half is still off');
   });
 });
 
 describe('Codegraph+', () => {
-  test('on (the default): the role text rides the prompt of a session holding a CodeGraph tool', async () => {
-    assert.match(await promptOf(await load(undefined), ['codegraph']), /## CodeGraph/);
+  test('on: the role text rides the prompt of a session holding a CodeGraph tool', async () => {
+    assert.match(await promptOf(await load(BOTH), ['codegraph']), /## CodeGraph/);
   });
 
   test('off: no CodeGraph text, and the worktrees half is untouched', async () => {
-    const off = await load({ codegraph: false });
+    const off = await load({ ...BOTH, codegraph: false });
     const prompt = await promptOf(off, ['codegraph']);
     assert.doesNotMatch(prompt, /## CodeGraph/);
     assert.match(prompt, /## ODD worktrees/);
@@ -195,6 +198,15 @@ describe('the CodeGraph card', () => {
 });
 
 describe('both off', () => {
+  test('is the default: nothing stored leaves both halves out', async () => {
+    for (const modules of [undefined, {}, { codegraph: 'yes', worktrees: 1 }]) {
+      const loaded = await load(modules);
+      assert.equal(await promptOf(loaded, ['codegraph']), '', JSON.stringify(modules));
+      assert.equal([...loaded.tools.keys()].some((name) => name.startsWith('worktree_')), false, JSON.stringify(modules));
+      assert.equal(loaded.commands.has('warp'), false, JSON.stringify(modules));
+    }
+  });
+
   test('the package keeps its transversal surface and adds neither half', async () => {
     const off = await load({ codegraph: false, worktrees: false });
     assert.equal(await promptOf(off, ['codegraph']), '');

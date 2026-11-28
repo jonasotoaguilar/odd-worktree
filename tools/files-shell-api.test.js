@@ -85,7 +85,8 @@ function installShellApi({ members = {} } = {}) {
     registerSection: () => () => {},
     registerRows: () => () => {},
     registerToolDesign: () => () => {},
-    createStore: () => ({}),
+    // Both modules default Off in the real store; this bridge stores them On so the load keeps the whole surface.
+    createStore: () => ({ get: (key) => (key === 'modules' ? { codegraph: true, worktrees: true } : undefined) }),
     requestRepaint: () => {},
     registerKeymap: (registration) => {
       keymaps.push(registration);
@@ -528,7 +529,7 @@ test('S18/S19: a shell API whose members throw never breaks the extension', asyn
   const loaded = await loadExtension(host.pi);
 
   assert.equal(loaded.commands.has('files'), true, 'the command still registers');
-  assert.equal(loaded.tools.has('worktree_list'), true, 'the other surfaces still register');
+  assert.equal(loaded.tools.has('worktree_list'), false, 'an unreadable store is the default Off: no worktree tools');
   assert.equal(host.shortcuts.length, 2, 'and the host bound both keys anyway');
   assert.deepEqual(shellApi.keymaps, [], 'a throwing shell API contributed no row');
   assert.deepEqual(shellApi.commands, []);

@@ -103,8 +103,10 @@ function defaultShellApi() {
       return () => {};
     },
     resolveKeymap: () => ({ unavailable: 'the default test shell API publishes no key' }),
+    // All three modules default Off in the real store, so this bridge stores them On: every suite that
+    // loads the extension without asking about the switches keeps loading the whole package.
     createStore: () => ({
-      get: () => undefined,
+      get: (key) => (key === 'modules' ? { codegraph: true, worktrees: true, skills: true } : undefined),
       set: () => {},
       delete: () => {},
     }),

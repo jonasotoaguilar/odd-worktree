@@ -979,7 +979,9 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     that never wrote an ODD.
     `tools/session-auto-name.test.js` pins the label shape, the re-name on every write,
     the ownership cases and the resume path; `tools/session-auto-name-wiring.test.js`
-    pins that the primary checkout names too.
+    pins that the primary checkout names too, and that a write into a registered
+    worktree names from the principal checkout — the naming base is the DOCUMENT's own
+    checkout, never the one the call started in.
 
 31. **The ODD panel folds by default, counts what it lists, and lines a document up
     under its group's name.** `lib/odd-view.js` keeps the OPENED checkouts in one

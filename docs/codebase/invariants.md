@@ -77,11 +77,14 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
    `gentle-agents.result` `custom_message`, and the `Spec: odd/tasks/<name>.md` line
    of a successful `subagent_run`/`subagent_continue` task — so a subagent's write
    counts for the parent. A path with `..` or one that is not exactly
-   `odd/tasks/<name>.md` associates nothing. Within that scope the election, the
-   order and the four-row body are unchanged, a touched name no longer on disk stays
-   hidden, and the `/odd` panel is untouched (it still lists main whole plus each
-   worktree's delta). `filesSessionWorktreeRoots` reads the same active branch, so a
-   worktree registered only on an abandoned branch is out of scope.
+   `odd/tasks/<name>.md` associates nothing. Within that scope the order and the
+   four-row body are unchanged, a touched name no longer on disk stays hidden, and
+   the copies it chooses among are the ones the grouped model ELECTED — one copy per
+   ODD name across main and every grouped worktree, so a name is drawn once and the
+   `/odd` panel reads that same election. Main's group is therefore the copies main
+   WINS, not main whole, and a worktree group is the copies that worktree wins, not
+   only its delta against main. `filesSessionWorktreeRoots` reads the same active
+   branch, so a worktree registered only on an abandoned branch is out of scope.
 
    **Three switches are optional, and nothing else is.** The `Tools` page of
    `/gentle:customize` (`lib/modules.js`, a plain `registerRows` provider) holds the
@@ -983,21 +986,24 @@ invariant 32). The names it publishes keep the `gentle-shell-bridge` spelling on
     worktree names from the principal checkout — the naming base is the DOCUMENT's own
     checkout, never the one the call started in.
 
-31. **The ODD panel folds by default, counts what it lists, and lines a document up
-    under its group's name.** `lib/odd-view.js` keeps the OPENED checkouts in one
-    set (`expandedCheckouts`), so a group is folded unless something opened it: the
-    panel mounts with every group folded, and a target expands ONLY the group that
-    owns that document. Each header carries its group's TOTAL as `(N odd)`, the title
-    sums those totals (folding never moves the number), and a document row is
-    indented so its text starts at the column its group's name starts at — the flat,
-    ungrouped listing stays byte-identical, which is what the pinned frames measure.
-    A group whose filtered rows are empty is not drawn, no worktree group means a flat
-    listing, and two drawn groups sharing a name are qualified with their parent
-    directory so a folded header is never its twin's equal. The rail's heading answers
-    the same count through `meta()` — `N odd`, `N odd · stale` — and starts no read.
-    `tools/odd-view.test.js` (S1-S5 of odd-panel-groups) and
-    `tools/odd-rail-section.test.js` (S7) pin the shapes; `tools/odd-panel-wiring.test.js`
-    pins that a scope is read from the headers it draws.
+31. **The ODD panel is ONE flat listing, with a checkout cell on every row and a
+    count of the rows.** `lib/odd-view.js` hands the caller's elected groups to
+    `lib/odd-listing.js` and draws the entries it answers, in that module's ONE
+    comparator — most recently created or modified first, then the name, then the
+    checkout, all code units — so a row's label and its place are decided once for the
+    panel and the degraded `/odd` menu. Nothing divides the list: no checkout header
+    row, no fold state, no chevron, and `enter` folds nothing. Each row reserves the
+    pane's RIGHT-hand cell for the checkout that holds its copy — `main` or the
+    worktree's own name, in the muted role the `ODD` rail uses for its own metadata —
+    and a pane too narrow for both drops that cell before it narrows the name. The
+    title counts the listing (`43 documents`), and a live query narrows the rows on
+    screen, never that count. `a` decides WHICH checkouts are candidates — the
+    session's registered worktrees or every worktree Git lists — by having the caller
+    reload the model in the scope it names; it folds, adds and removes nothing inside
+    the list. The rail's heading answers its own count through `meta()` — `N odd`,
+    `N odd · stale` — and starts no read. `tools/odd-view.test.js` and
+    `tools/odd-panel-wiring.test.js` pin the rows, the checkout cell and the order;
+    `tools/odd-rail-section.test.js` (S7) pins the rail's own shapes.
 
 32. **The shell API is native.** `lib/shell-api/` is this package's own code — no
     nested package, no manifest of its own, no second copy anywhere, and no
